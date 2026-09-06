@@ -25,6 +25,7 @@ internal data class AndroidFileSyncCapabilityRecord(
     val processGeneration: String,
     val preExistingReadGrant: Boolean,
     val preExistingWriteGrant: Boolean,
+    val accountId: AndroidFileSyncCapabilityAccountId? = null,
     val pairIds: Set<String> = emptySet(),
 ) {
     init {
@@ -63,6 +64,15 @@ internal interface AndroidFileSyncGrantAccess {
 }
 
 internal data class AndroidFileSyncGrantState(val read: Boolean, val write: Boolean)
+
+@JvmInline
+internal value class AndroidFileSyncCapabilityAccountId(val value: String) {
+    init {
+        require(value.isNotBlank() && value.length <= MAX_CAPABILITY_ACCOUNT_ID_CHARACTERS) {
+            "The folder capability account is invalid."
+        }
+    }
+}
 
 internal fun hasDuplicateAndroidFileSyncRoot(
     pairs: List<FileSyncPair>,
@@ -177,7 +187,11 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         PROCESS_GENERATION,
     )
 
-    fun acquire(exactUri: String, displayName: String): FileSyncLocalRoot = synchronized(LIFECYCLE_LOCK) {
+    fun acquire(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        exactUri: String,
+        displayName: String,
+    ): FileSyncLocalRoot = synchronized(LIFECYCLE_LOCK) {
         val preExisting = grants.exactGrant(exactUri)
         val record = AndroidFileSyncCapabilityRecord(
             id = UUID.randomUUID().toString(),
@@ -187,6 +201,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             processGeneration = processGeneration,
             preExistingReadGrant = preExisting.read,
             preExistingWriteGrant = preExisting.write,
+            accountId = accountId,
         )
         try {
             store.add(record)
@@ -205,9 +220,15 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         }
     }
 
-    fun bindReady(localRootId: String, pairId: String) = synchronized(LIFECYCLE_LOCK) {
+    fun bindReady(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        localRootId: String,
+        pairId: String,
+    ) = synchronized(LIFECYCLE_LOCK) {
         val record = store.list().singleOrNull {
-            it.uri == localRootId && it.phase == AndroidFileSyncCapabilityPhase.Ready
+            it.uri == localRootId &&
+                it.accountId == accountId &&
+                it.phase == AndroidFileSyncCapabilityPhase.Ready
         } ?: error("The selected local folder is no longer available.")
         store.replace(record.id, AndroidFileSyncCapabilityPhase.Ready) {
             it.copy(phase = AndroidFileSyncCapabilityPhase.Owned, pairIds = setOf(pairId))
@@ -303,14 +324,29 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             val matchingPairs = safPairs.filter { it.localRootId == record.uri }
             val matchingIds = matchingPairs.mapTo(linkedSetOf(), FileSyncPair::id)
             when (record.phase) {
-                AndroidFileSyncCapabilityPhase.Ready,
-                AndroidFileSyncCapabilityPhase.Acquiring,
-                -> if (record.processGeneration != processGeneration) {
+                AndroidFileSyncCapabilityPhase.Acquiring -> if (record.processGeneration != processGeneration) {
                     if (matchingIds.isNotEmpty()) {
                         store.replace(record.id, record.phase) {
-                            it.copy(phase = AndroidFileSyncCapabilityPhase.Owned, pairIds = matchingIds)
+                            it.copy(
+                                phase = AndroidFileSyncCapabilityPhase.Owned,
+                                accountId = matchingPairs.singleAccountOwner(),
+                                pairIds = matchingIds,
+                            )
                         }
                     } else {
+                        check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
+                    }
+                }
+                AndroidFileSyncCapabilityPhase.Ready -> if (record.processGeneration != processGeneration) {
+                    if (matchingIds.isNotEmpty()) {
+                        store.replace(record.id, record.phase) {
+                            it.copy(
+                                phase = AndroidFileSyncCapabilityPhase.Owned,
+                                accountId = matchingPairs.singleAccountOwner(),
+                                pairIds = matchingIds,
+                            )
+                        }
+                    } else if (record.accountId == null) {
                         check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
@@ -334,11 +370,62 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         }
     }
 
+    fun reconcileRestoredSetup(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        restoredLocalRootId: String?,
+        state: AndroidFileSyncPersistedState,
+    ): Boolean = reconcileSetup(accountId, restoredLocalRootId, state, includeCurrentGeneration = false)
+
+    fun retireAccountSetup(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        state: AndroidFileSyncPersistedState,
+    ) = reconcileSetup(accountId, restoredLocalRootId = null, state, includeCurrentGeneration = true)
+
+    private fun reconcileSetup(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        restoredLocalRootId: String?,
+        state: AndroidFileSyncPersistedState,
+        includeCurrentGeneration: Boolean,
+    ): Boolean = synchronized(LIFECYCLE_LOCK) {
+        reconcile(state)
+        val restoredContentRoot = restoredLocalRootId?.takeIf { it.startsWith("content://") }
+        val records = store.list()
+        val restored = restoredContentRoot?.let { uri ->
+            records.singleOrNull { record ->
+                record.uri == uri &&
+                    record.accountId == accountId &&
+                    record.phase == AndroidFileSyncCapabilityPhase.Ready
+            }
+        }
+        if (restored != null && restored.processGeneration != processGeneration) {
+            store.replace(restored.id, AndroidFileSyncCapabilityPhase.Ready) {
+                it.copy(processGeneration = processGeneration)
+            }
+        }
+        records.asSequence()
+            .filter { record ->
+                record.accountId == accountId &&
+                    record.phase == AndroidFileSyncCapabilityPhase.Ready &&
+                    (includeCurrentGeneration || record.processGeneration != processGeneration) &&
+                    record.id != restored?.id
+            }
+            .forEach { record ->
+                check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
+            }
+        restoredContentRoot == null || restored != null
+    }
+
     private fun hasConflictingOwnership(
         records: List<AndroidFileSyncCapabilityRecord>,
         pairs: List<FileSyncPair>,
     ): Boolean = records.any { record ->
-        record.pairIds.any { pairId -> pairs.any { it.id == pairId && it.localRootId != record.uri } }
+        record.pairIds.any { pairId ->
+            pairs.any { pair ->
+                pair.id == pairId &&
+                    (pair.localRootId != record.uri ||
+                        record.accountId?.value?.let { owner -> owner != pair.accountId } == true)
+            }
+        }
     }
 
     private fun adoptLegacyCapability(
@@ -358,6 +445,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             processGeneration = processGeneration,
             preExistingReadGrant = false,
             preExistingWriteGrant = false,
+            accountId = pairs.singleAccountOwner(),
             pairIds = pairIds,
         ))
     }
@@ -470,6 +558,7 @@ private fun AndroidFileSyncCapabilityRecord.toJson(): JSONObject = JSONObject()
     .put("processGeneration", processGeneration)
     .put("preExistingReadGrant", preExistingReadGrant)
     .put("preExistingWriteGrant", preExistingWriteGrant)
+    .put("accountId", accountId?.value)
     .put("pairIds", JSONArray().also { array -> pairIds.sorted().forEach(array::put) })
 
 private fun JSONObject.toCapabilityRecord(): AndroidFileSyncCapabilityRecord = AndroidFileSyncCapabilityRecord(
@@ -480,6 +569,7 @@ private fun JSONObject.toCapabilityRecord(): AndroidFileSyncCapabilityRecord = A
     processGeneration = getString("processGeneration"),
     preExistingReadGrant = getBoolean("preExistingReadGrant"),
     preExistingWriteGrant = getBoolean("preExistingWriteGrant"),
+    accountId = optionalCapabilityAccountId(),
     pairIds = when {
         has("pairIds") -> getJSONArray("pairIds").let { array ->
             buildSet { repeat(array.length()) { add(array.getString(it)) } }
@@ -498,3 +588,14 @@ private const val MAX_CAPABILITY_RECORDS = 64
 private const val MAX_CAPABILITY_URI_CHARACTERS = 8 * 1024
 private const val MAX_CAPABILITY_DISPLAY_NAME_CHARACTERS = 256
 private const val CLEANUP_RETRY_MESSAGE = "Saved folder access cleanup is still pending."
+private const val MAX_CAPABILITY_ACCOUNT_ID_CHARACTERS = 256
+
+private fun List<FileSyncPair>.singleAccountOwner(): AndroidFileSyncCapabilityAccountId? =
+    map(FileSyncPair::accountId).distinct().singleOrNull()?.let(::AndroidFileSyncCapabilityAccountId)
+
+private fun JSONObject.optionalCapabilityAccountId(): AndroidFileSyncCapabilityAccountId? =
+    when (val stored = opt("accountId")) {
+        null, JSONObject.NULL -> null
+        is String -> AndroidFileSyncCapabilityAccountId(stored)
+        else -> error("Saved folder capability account is invalid.")
+    }

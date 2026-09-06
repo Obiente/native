@@ -21,34 +21,43 @@ internal class AndroidFileSyncRootPicker(
     private val capabilities: AndroidFileSyncCapabilityLifecycle = AndroidFileSyncCapabilityLifecycle(context),
 ) {
     private var launcher: ActivityResultLauncher<Uri?>? = null
-    private var pending: CancellableContinuation<FileSyncLocalRoot?>? = null
+    private var pending: PendingFileSyncRootSelection? = null
 
     fun attach(launcher: ActivityResultLauncher<Uri?>) {
         check(this.launcher == null) { "The sync-root picker is already attached." }
         this.launcher = launcher
     }
 
-    suspend fun choose(initialRootHint: String? = null): FileSyncLocalRoot? =
+    suspend fun choose(
+        accountId: AndroidFileSyncCapabilityAccountId,
+        initialRootHint: String? = null,
+    ): FileSyncLocalRoot? =
         suspendCancellableCoroutine { continuation ->
         check(pending == null) { "A folder chooser is already open." }
         val activeLauncher = checkNotNull(launcher) { "The folder chooser is not attached." }
-        pending = continuation
+        val selection = PendingFileSyncRootSelection(accountId, continuation)
+        pending = selection
         continuation.invokeOnCancellation {
-            if (pending === continuation) pending = null
+            if (pending === selection) pending = null
         }
         activeLauncher.launch(initialRootHint?.let(Uri::parse))
     }
 
     fun complete(uri: Uri?) {
-        val continuation = pending ?: return
+        val selection = pending ?: return
         pending = null
+        val continuation = selection.continuation
         if (!continuation.isActive) return
         if (uri == null) {
             continuation.resume(null)
             return
         }
         val result = runCatching {
-            capabilities.acquire(uri.toString(), queryDisplayName(context.contentResolver, uri))
+            capabilities.acquire(
+                selection.accountId,
+                uri.toString(),
+                queryDisplayName(context.contentResolver, uri),
+            )
         }
         result.onSuccess { localRoot ->
             resumeFileSyncRootSelection(continuation, localRoot, capabilities::abandonSelection)
@@ -57,7 +66,7 @@ internal class AndroidFileSyncRootPicker(
     }
 
     fun abandon(localRootId: String): Boolean =
-        runCatching { capabilities.abandonSelection(localRootId) }.getOrDefault(false)
+        abandonAndroidFileSyncRoot(localRootId, capabilities::abandonSelection)
 
     private fun queryDisplayName(resolver: ContentResolver, treeUri: Uri): String {
         val documentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -73,6 +82,20 @@ internal class AndroidFileSyncRootPicker(
         }.orEmpty().ifBlank { "Selected folder" }
     }
 }
+
+internal fun abandonAndroidFileSyncRoot(
+    localRootId: String,
+    abandonContentRoot: (String) -> Boolean,
+): Boolean = if (localRootId.startsWith("content://")) {
+    runCatching { abandonContentRoot(localRootId) }.getOrDefault(false)
+} else {
+    true
+}
+
+private data class PendingFileSyncRootSelection(
+    val accountId: AndroidFileSyncCapabilityAccountId,
+    val continuation: CancellableContinuation<FileSyncLocalRoot?>,
+)
 
 internal fun resumeFileSyncRootSelection(
     continuation: CancellableContinuation<FileSyncLocalRoot?>,

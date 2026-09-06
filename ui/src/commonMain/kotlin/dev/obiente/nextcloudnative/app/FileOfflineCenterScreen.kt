@@ -201,7 +201,7 @@ internal fun FileOfflineCenterScreen(
         syncBusyPairIds += ADD_PAIR_BUSY_ID
         scope.launch {
             try {
-                runCatching { services.chooseFileSyncLocalRoot() }
+                runCatching { services.chooseFileSyncLocalRoot(session) }
                     .onSuccess { selected ->
                         pendingMediaSuggestionJson = null
                         pendingLocalRoot = selected
@@ -472,6 +472,10 @@ internal fun FileOfflineCenterScreen(
         if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
         syncLoading = true
         try {
+            if (!services.reconcileFileSyncRootSetup(session, pendingLocalRoot)) {
+                setupDraft.clear()
+                actionMessage = "Select the local folder again to restore folder access."
+            }
             syncSnapshot = services.loadFileSyncCenter(session, userId)
         } catch (cancelled: CancellationException) {
             throw cancelled

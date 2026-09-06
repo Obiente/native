@@ -12,7 +12,11 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -53,7 +57,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     fun `acquisition records intent before taking and ends ready`() {
         val fixture = fixture()
 
-        val root = fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        val root = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
 
         assertEquals(ROOT_URI, root.localRootId)
         assertEquals(listOf("query", "take", "query"), fixture.grants.events)
@@ -63,7 +67,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `pre-existing exact grant is never taken or revoked`() {
         val fixture = fixture(readGranted = true, writeGranted = true)
-        val root = fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        val root = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
 
         assertTrue(fixture.lifecycle.abandonSelection(root.localRootId))
 
@@ -76,7 +80,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `cleanup releases only the permission mode acquired for sync`() {
         val fixture = fixture(readGranted = true)
-        val root = fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        val root = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
 
         assertTrue(fixture.lifecycle.abandonSelection(root.localRootId))
 
@@ -91,7 +95,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         fixture.grants.failQuery = true
 
         assertFailsWith<IllegalStateException> {
-            fixture.lifecycle.acquire(ROOT_URI, "Notes")
+            fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         }
 
         assertEquals(listOf("query"), fixture.grants.events)
@@ -101,11 +105,11 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `duplicate exact uri is rejected before a second grant is taken`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         fixture.grants.events.clear()
 
         assertFailsWith<IllegalArgumentException> {
-            fixture.lifecycle.acquire(ROOT_URI, "Notes again")
+            fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes again")
         }
 
         assertEquals(listOf("query"), fixture.grants.events)
@@ -115,6 +119,30 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `saf roots cannot be shared by a second pair`() {
         assertTrue(hasDuplicateAndroidFileSyncRoot(listOf(pair()), "other-account", ROOT_URI, "Archive"))
+    }
+
+    @Test
+    fun `media root dismissal succeeds without touching saf capabilities`() {
+        var safAbandonCalls = 0
+
+        assertTrue(abandonAndroidFileSyncRoot("media-store://primary/DCIM/Camera") {
+            safAbandonCalls += 1
+            false
+        })
+
+        assertEquals(0, safAbandonCalls)
+    }
+
+    @Test
+    fun `content root dismissal still delegates to saf abandonment`() {
+        var safAbandonCalls = 0
+
+        assertFalse(abandonAndroidFileSyncRoot(ROOT_URI) {
+            safAbandonCalls += 1
+            false
+        })
+
+        assertEquals(1, safAbandonCalls)
     }
 
     @Test
@@ -145,7 +173,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         fixture.storage.failWriteNumber = 2
 
         assertFailsWith<IllegalStateException> {
-            fixture.lifecycle.acquire(ROOT_URI, "Notes")
+            fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         }
 
         assertFalse(fixture.grants.readGranted)
@@ -160,7 +188,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         fixture.storage.persistFailedWrite = true
 
         assertFailsWith<IllegalStateException> {
-            fixture.lifecycle.acquire(ROOT_URI, "Notes")
+            fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         }
 
         assertEquals(listOf("query", "query"), fixture.grants.events)
@@ -173,7 +201,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         fixture.storage.failWritesFrom = 2
 
         assertFailsWith<IllegalStateException> {
-            fixture.lifecycle.acquire(ROOT_URI, "Notes")
+            fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         }
 
         assertTrue(fixture.grants.readGranted)
@@ -185,8 +213,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `pair cleanup is durable before release and retries a failed release`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
-        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
 
         assertTrue(fixture.lifecycle.preparePairCleanup(PAIR_ID))
         assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
@@ -204,7 +232,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `failed setup abandonment remains retryable without restart`() {
         val fixture = fixture()
-        val root = fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        val root = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         fixture.grants.failReleaseCount = 1
 
         assertFalse(fixture.lifecycle.abandonSelection(root.localRootId))
@@ -217,15 +245,91 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
-    fun `prior process ready record is released when no pair owns it`() {
+    fun `prior process ready record waits for restored setup reconciliation`() {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)
 
         fixture.lifecycle.reconcile(state())
 
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.grants.writeGranted)
+        assertEquals(AndroidFileSyncCapabilityPhase.Ready, fixture.store.list().single().phase)
+
+        assertTrue(fixture.lifecycle.reconcileRestoredSetup(ACCOUNT_ID, null, state()))
+
         assertFalse(fixture.grants.readGranted)
         assertFalse(fixture.grants.writeGranted)
         assertTrue(fixture.store.list().isEmpty())
+    }
+
+    @Test
+    fun `restored setup claim races startup reconcile and remains bindable`() = runBlocking {
+        val fixture = fixture(generation = NEW_GENERATION)
+        fixture.seedReady(OLD_GENERATION)
+        val restored = dev.obiente.nextcloudnative.app.FileSyncLocalRoot(ROOT_URI, "Notes")
+        val start = CompletableDeferred<Unit>()
+
+        listOf(
+            async(Dispatchers.Default) {
+                start.await()
+                fixture.lifecycle.reconcile(state())
+            },
+            async(Dispatchers.Default) {
+                start.await()
+                assertTrue(
+                    fixture.lifecycle.reconcileRestoredSetup(
+                        ACCOUNT_ID,
+                        restored.localRootId,
+                        state(),
+                    ),
+                )
+            },
+        ).also { jobs ->
+            start.complete(Unit)
+            jobs.awaitAll()
+        }
+
+        val claimed = fixture.store.list().single()
+        assertEquals(NEW_GENERATION, claimed.processGeneration)
+        assertEquals(ACCOUNT_ID, claimed.accountId)
+        fixture.lifecycle.bindReady(ACCOUNT_ID, restored.localRootId, PAIR_ID)
+        fixture.lifecycle.reconcile(state(pair()))
+
+        assertEquals(setOf(PAIR_ID), fixture.store.list().single().pairIds)
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `restored setup cannot claim another accounts ready capability`() {
+        val fixture = fixture(generation = NEW_GENERATION)
+        fixture.seedReady(OLD_GENERATION)
+
+        assertFalse(
+            fixture.lifecycle.reconcileRestoredSetup(
+                AndroidFileSyncCapabilityAccountId("other-account"),
+                ROOT_URI,
+                state(),
+            ),
+        )
+
+        val retained = fixture.store.list().single()
+        assertEquals(ACCOUNT_ID, retained.accountId)
+        assertEquals(OLD_GENERATION, retained.processGeneration)
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `legacy ownerless ready capability is not claimable`() {
+        val fixture = fixture(generation = NEW_GENERATION)
+        fixture.seedReady(OLD_GENERATION, accountId = null)
+
+        assertFalse(fixture.lifecycle.reconcileRestoredSetup(ACCOUNT_ID, ROOT_URI, state()))
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
     }
 
     @Test
@@ -241,9 +345,33 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `current selection delivery is not cleaned by an empty restored snapshot`() {
+        val fixture = fixture(generation = NEW_GENERATION)
+        fixture.seedReady(NEW_GENERATION)
+
+        assertTrue(fixture.lifecycle.reconcileRestoredSetup(ACCOUNT_ID, null, state()))
+
+        assertEquals(AndroidFileSyncCapabilityPhase.Ready, fixture.store.list().single().phase)
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `account retirement cleans a current selection`() {
+        val fixture = fixture(generation = NEW_GENERATION)
+        fixture.seedReady(NEW_GENERATION)
+
+        fixture.lifecycle.retireAccountSetup(ACCOUNT_ID, state())
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `reselect before startup reconcile remains abandonable`() {
         val fixture = fixture(generation = NEW_GENERATION, readGranted = true, writeGranted = true)
-        val selection = fixture.lifecycle.acquire(ROOT_URI, "Notes again")
+        val selection = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes again")
 
         fixture.lifecycle.reconcile(state(pair()))
 
@@ -409,6 +537,28 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `malformed capability owner releases nothing`() {
+        val malformed = record(OLD_GENERATION, AndroidFileSyncCapabilityPhase.Ready)
+            .toTestJson()
+            .put("accountId", 42)
+        val storage = FakeStorage(org.json.JSONArray().put(malformed).toString())
+        val grants = FakeGrantAccess(readGranted = true, writeGranted = true)
+        val lifecycle = AndroidFileSyncCapabilityLifecycle(
+            AndroidFileSyncCapabilityStore(storage, IdentityCipher),
+            grants,
+            NEW_GENERATION,
+        )
+
+        assertFailsWith<AndroidFileSyncCapabilityRecoveryException> {
+            lifecycle.reconcileRestoredSetup(ACCOUNT_ID, ROOT_URI, state())
+        }
+
+        assertTrue(grants.readGranted)
+        assertTrue(grants.writeGranted)
+        assertTrue(grants.events.isEmpty())
+    }
+
+    @Test
     fun `startup leaves grants unchanged when pair state is unreadable`() = runBlocking {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)
@@ -429,8 +579,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `failed pair save retains ownership when authoritative reload contains the pair`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
-        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
 
         recoverFailedFileSyncPairSave(PAIR_ID, { state(pair()) }, fixture.lifecycle::abandonUncommittedPair)
 
@@ -442,7 +592,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `ambiguous bind failure reloads authoritative pairs and abandons uncommitted ownership`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
         fixture.storage.failWriteNumber = fixture.storage.writes + 1
         fixture.storage.persistFailedWrite = true
         var reloads = 0
@@ -451,7 +601,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         assertFailsWith<IllegalStateException> {
             bindAndPersistFileSyncPair(
                 pairId = PAIR_ID,
-                bindReady = { fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID) },
+                bindReady = { fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID) },
                 persist = { pairPersisted = true },
                 load = {
                     reloads += 1
@@ -471,8 +621,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `failed pair save releases ownership only when authoritative reload excludes the pair`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
-        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
 
         recoverFailedFileSyncPairSave(PAIR_ID, { state() }, fixture.lifecycle::abandonUncommittedPair)
 
@@ -484,8 +634,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `failed pair save retains ownership when authoritative reload is unreadable`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
-        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
 
         recoverFailedFileSyncPairSave(
             PAIR_ID,
@@ -501,8 +651,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     @Test
     fun `postcommit pair removal failure releases from the authoritative state immediately`() {
         val fixture = fixture()
-        fixture.lifecycle.acquire(ROOT_URI, "Notes")
-        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
         fixture.lifecycle.preparePairCleanup(PAIR_ID)
 
         assertFailsWith<IllegalStateException> {
@@ -554,8 +704,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     private fun preparedCleanup(): Fixture = fixture().also {
-        it.lifecycle.acquire(ROOT_URI, "Notes")
-        it.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        it.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        it.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
         it.lifecycle.preparePairCleanup(PAIR_ID)
     }
 
@@ -589,8 +739,11 @@ class AndroidFileSyncCapabilityLifecycleTest {
         val grants: FakeGrantAccess,
         val lifecycle: AndroidFileSyncCapabilityLifecycle,
     ) {
-        fun seedReady(generation: String) {
-            store.add(record(generation, AndroidFileSyncCapabilityPhase.Ready))
+        fun seedReady(
+            generation: String,
+            accountId: AndroidFileSyncCapabilityAccountId? = ACCOUNT_ID,
+        ) {
+            store.add(record(generation, AndroidFileSyncCapabilityPhase.Ready, accountId = accountId))
             grants.readGranted = true
             grants.writeGranted = true
         }
@@ -669,6 +822,17 @@ class AndroidFileSyncCapabilityLifecycleTest {
         override fun decrypt(value: String): String = error("cipher unavailable")
     }
 
+    private fun AndroidFileSyncCapabilityRecord.toTestJson() = org.json.JSONObject()
+        .put("id", id)
+        .put("uri", uri)
+        .put("displayName", displayName)
+        .put("phase", phase.name)
+        .put("processGeneration", processGeneration)
+        .put("preExistingReadGrant", preExistingReadGrant)
+        .put("preExistingWriteGrant", preExistingWriteGrant)
+        .put("accountId", accountId?.value)
+        .put("pairIds", org.json.JSONArray().also { array -> pairIds.forEach(array::put) })
+
     private class PausedDispatcher : CoroutineDispatcher() {
         private val tasks = ArrayDeque<Runnable>()
 
@@ -683,6 +847,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
 
     private companion object {
         const val ROOT_URI = "content://example.documents/tree/notes"
+        val ACCOUNT_ID = AndroidFileSyncCapabilityAccountId("account")
         val RECORD_ID: String = UUID.randomUUID().toString()
         val PAIR_ID: String = UUID.randomUUID().toString()
         val OTHER_PAIR_ID: String = UUID.randomUUID().toString()
@@ -693,6 +858,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
             generation: String,
             phase: AndroidFileSyncCapabilityPhase,
             pairIds: Set<String> = emptySet(),
+            accountId: AndroidFileSyncCapabilityAccountId? = ACCOUNT_ID,
         ) = AndroidFileSyncCapabilityRecord(
             id = RECORD_ID,
             uri = ROOT_URI,
@@ -701,6 +867,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
             processGeneration = generation,
             preExistingReadGrant = false,
             preExistingWriteGrant = false,
+            accountId = accountId,
             pairIds = pairIds,
         )
     }

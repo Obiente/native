@@ -94,6 +94,7 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
     private val loadCapabilityState = store::loadAndReconcileUploadCleanups
     init { reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, loadCapabilityState, capabilities) } }
+
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
@@ -278,7 +279,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         if (localRoot.localRootId.startsWith("content://")) {
             bindAndPersistFileSyncPair(
                 pairId = pair.id,
-                bindReady = { capabilities.bindReady(localRoot.localRootId, pair.id) },
+                bindReady = { capabilities.bindReady(AndroidFileSyncCapabilityAccountId(accountId), localRoot.localRootId, pair.id) },
                 persist = { store.save(updated) },
                 load = store::load,
                 abandonUncommittedPair = capabilities::abandonUncommittedPair,

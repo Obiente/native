@@ -113,6 +113,18 @@ internal suspend fun reconcileFileSyncCapabilities(
     }
 }
 
+internal suspend fun reconcileRestoredFileSyncSetup(
+    context: Context,
+    session: dev.obiente.nextcloudnative.app.NextcloudSession,
+    restoredLocalRoot: dev.obiente.nextcloudnative.app.FileSyncLocalRoot?,
+): Boolean = AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+    AndroidFileSyncCapabilityLifecycle(context).reconcileRestoredSetup(
+        accountId = AndroidFileSyncCapabilityAccountId(NextcloudDocumentIds.accountKey(session)),
+        restoredLocalRootId = restoredLocalRoot?.localRootId,
+        state = AndroidFileSyncStore(context).load(),
+    )
+}
+
 internal fun recoverFailedFileSyncPairSave(
     pairId: String,
     load: () -> AndroidFileSyncPersistedState,
@@ -261,6 +273,10 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
         val store = AndroidFileSyncStore(context)
         val current = store.loadAndReconcileUploadCleanups()
         val capabilities = AndroidFileSyncCapabilityLifecycle(context)
+        capabilities.retireAccountSetup(
+            AndroidFileSyncCapabilityAccountId(accountId),
+            state = current,
+        )
         val retiredPairs = reconcileAndroidFileSyncAccountRetirement(current, accountId, capabilities)
         if (retiredPairs.isEmpty()) return@withLock
         val scheduler = AndroidFileSyncScheduler(context)
