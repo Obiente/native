@@ -652,7 +652,7 @@ class AndroidAccountOperationGuardTest {
                     expectedSession = original,
                     resolveSession = { current },
                     guard = guard,
-                ) {
+                ) { _, _ ->
                     requestMethod = method
                 }
             }
@@ -664,5 +664,29 @@ class AndroidAccountOperationGuardTest {
         transitionJob.await()
         assertTrue(mutation.await().isFailure)
         assertEquals(null, requestMethod)
+    }
+
+    @Test
+    fun authenticatedFileMutationPropagatesItsHeldLeaseToTheRequestBoundary() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "fixture-password")
+        var requestObservedSerializedLease = false
+
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld = false,
+            expectedSession = session,
+            resolveSession = { session },
+            guard = guard,
+        ) { _, accountMutationSerialized ->
+            requestObservedSerializedLease = accountMutationSerialized
+            val nestedLeaseAvailable = guard.tryWithAccount(
+                NextcloudDocumentIds.accountKey(session),
+                unavailable = { false },
+                action = { true },
+            )
+            assertFalse(nestedLeaseAvailable)
+        }
+
+        assertTrue(requestObservedSerializedLease)
     }
 }

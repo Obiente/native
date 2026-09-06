@@ -49,8 +49,8 @@ class AccountPrivateMemoryCleanupTest {
             ContactsWorkspaceMemoryCache.store(
                 retained, "retained", ContactsLoadState.Ready(emptyList(), emptyList()), retainedProducer,
             )
-            DeckWorkspaceMemoryCache.store(removed, deckSnapshot())
-            DeckWorkspaceMemoryCache.store(retained, deckSnapshot())
+            DeckWorkspaceMemoryCache.store(removed, deckSnapshot(), removedProducer)
+            DeckWorkspaceMemoryCache.store(retained, deckSnapshot(), retainedProducer)
             sharedDocumentEditingCapabilitiesCache.store(
                 removed, NextcloudDocumentEditingCapabilities.Unavailable, null, removedProducer,
             )
@@ -141,6 +141,7 @@ class AccountPrivateMemoryCleanupTest {
         sharedDocumentEditingCapabilitiesCache.store(
             account, NextcloudDocumentEditingCapabilities.Unavailable, null, staleProducer,
         )
+        DeckWorkspaceMemoryCache.store(account, deckSnapshot(), staleProducer)
         PreviewMemoryCache.put(
             PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64), byteArrayOf(1), staleProducer,
         )
@@ -149,6 +150,7 @@ class AccountPrivateMemoryCleanupTest {
         assertNull(ContactsWorkspaceMemoryCache.get(account, "user"))
         assertNull(UserStatusWorkspaceMemoryCache.get(account))
         assertNull(sharedDocumentEditingCapabilitiesCache.get(account))
+        assertNull(DeckWorkspaceMemoryCache.get(account))
         assertNull(PreviewMemoryCache.get(PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64)))
 
         val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
@@ -158,11 +160,13 @@ class AccountPrivateMemoryCleanupTest {
         sharedDocumentEditingCapabilitiesCache.store(
             account, NextcloudDocumentEditingCapabilities.Unavailable, null, currentProducer,
         )
+        DeckWorkspaceMemoryCache.store(account, deckSnapshot(), currentProducer)
 
         assertNotNull(sharedDashboardStatusMemoryCache.get(account, 2L))
         assertNotNull(ContactsWorkspaceMemoryCache.get(account, "user"))
         assertNotNull(UserStatusWorkspaceMemoryCache.get(account))
         assertNotNull(sharedDocumentEditingCapabilitiesCache.get(account))
+        assertNotNull(DeckWorkspaceMemoryCache.get(account))
         AccountPrivateMemoryCleanup.removeAccount(accountKey)
         AccountPrivateMemoryLifecycle.activateAccount(accountKey)
     }

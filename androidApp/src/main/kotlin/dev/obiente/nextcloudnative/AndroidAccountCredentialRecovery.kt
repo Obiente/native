@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.restoreNextcloudAccountRegistry
+import java.security.MessageDigest
 import kotlinx.coroutines.sync.Mutex
 
 internal sealed interface AndroidAccountCredentialStoreRead {
@@ -61,6 +62,7 @@ internal data class AndroidPendingAccountRemovalCleanup(
     val workIdentity: String,
     val previewCacheIdentity: String? = null,
     val durableMutationIdentity: String? = null,
+    val legacyAccountScopeDigest: String? = null,
 ) {
     init {
         require(ACCOUNT_STORAGE_KEY_PATTERN.matches(accountStorageKey))
@@ -72,6 +74,10 @@ internal data class AndroidPendingAccountRemovalCleanup(
         durableMutationIdentity?.let { identity ->
             require(ACCOUNT_STORAGE_KEY_PATTERN.matches(identity))
             require(previewCacheIdentity != null)
+        }
+        legacyAccountScopeDigest?.let { identity ->
+            require(ACCOUNT_STORAGE_KEY_PATTERN.matches(identity))
+            require(durableMutationIdentity != null)
         }
     }
 }
@@ -111,7 +117,15 @@ internal fun pendingAndroidAccountRemovalCleanup(
     workIdentity = NextcloudDocumentIds.accountKey(session),
     previewCacheIdentity = NextcloudDocumentIds.cacheAccountId(session),
     durableMutationIdentity = durableMutationAccountScope(session),
+    legacyAccountScopeDigest = legacyAndroidAccountPersistenceScopeDigest(session),
 )
+
+internal fun legacyAndroidAccountPersistenceScopeDigest(session: NextcloudSession): String? {
+    val identity = session.serverUrl.trimEnd('/') + "\u0000" + session.loginName
+    val digest = MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    return digest.takeUnless { it == session.accountId.storageKey }
+}
 
 internal fun encodeAndroidPendingAccountRemovalCleanup(
     cleanup: AndroidPendingAccountRemovalCleanup,
@@ -120,19 +134,21 @@ internal fun encodeAndroidPendingAccountRemovalCleanup(
     cleanup.workIdentity,
     cleanup.previewCacheIdentity,
     cleanup.durableMutationIdentity,
+    cleanup.legacyAccountScopeDigest,
 ).joinToString(":")
 
 internal fun decodeAndroidPendingAccountRemovalCleanup(
     encoded: String,
 ): AndroidPendingAccountRemovalCleanup? {
     val fields = encoded.split(':')
-    if (fields.size !in 2..4) return null
+    if (fields.size !in 2..5) return null
     return runCatching {
         AndroidPendingAccountRemovalCleanup(
             accountStorageKey = fields[0],
             workIdentity = fields[1],
             previewCacheIdentity = fields.getOrNull(2),
             durableMutationIdentity = fields.getOrNull(3),
+            legacyAccountScopeDigest = fields.getOrNull(4),
         )
     }.getOrNull()
 }

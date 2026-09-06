@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.AccountPrivateMemoryCleanup
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
+import dev.obiente.nextcloudnative.app.removeAndroidHomeWorkspaceAccountPreferences
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import java.io.File
 import kotlinx.coroutines.NonCancellable
@@ -25,7 +26,7 @@ internal class AndroidAccountOwnedStateCleanup(
     private val dynamicDiscoveryCache: AndroidDynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
         File(context.applicationContext.filesDir, "contracts/discoveries-v1"),
     ),
-    private val removeSupportAccount: suspend (String) -> Unit = {},
+    private val removeSupportAccount: suspend (String) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
@@ -45,6 +46,13 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                {
+                    removeAndroidHomeWorkspaceAccountPreferences(
+                        appContext,
+                        session.accountId.storageKey,
+                        legacyAndroidAccountPersistenceScopeDigest(session),
+                    )
+                },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
@@ -68,6 +76,7 @@ internal class AndroidAccountOwnedStateCleanup(
         accountIdentity: String,
         previewCacheIdentity: String?,
         durableMutationIdentity: String?,
+        legacyAccountScopeDigest: String?,
     ) {
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
@@ -80,6 +89,13 @@ internal class AndroidAccountOwnedStateCleanup(
                 },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                {
+                    removeAndroidHomeWorkspaceAccountPreferences(
+                        appContext,
+                        session.accountId.storageKey,
+                        legacyAccountScopeDigest,
+                    )
+                },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
@@ -103,6 +119,7 @@ internal class AndroidAccountOwnedStateCleanup(
         accountIdentity: String,
         previewCacheIdentity: String? = null,
         durableMutationIdentity: String? = null,
+        legacyAccountScopeDigest: String? = null,
     ) {
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
@@ -115,6 +132,13 @@ internal class AndroidAccountOwnedStateCleanup(
                 },
                 { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                {
+                    removeAndroidHomeWorkspaceAccountPreferences(
+                        appContext,
+                        accountStorageKey,
+                        legacyAccountScopeDigest,
+                    )
+                },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },

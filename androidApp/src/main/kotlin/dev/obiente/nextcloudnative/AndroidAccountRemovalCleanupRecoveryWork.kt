@@ -87,7 +87,12 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
         val registry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
             ?.let(::restoreAndroidCredentialFreeRegistry)
             ?.registry
-        val cleanup = AndroidAccountOwnedStateCleanup(applicationContext)
+        val cleanup = AndroidAccountOwnedStateCleanup(
+            applicationContext,
+            removeSupportAccount = { accountIdentity ->
+                AndroidSupportIntakeCoordinator.removeAccount(applicationContext, accountIdentity)
+            },
+        )
         val snapshot = try {
             journal.snapshot()
         } catch (failure: Exception) {
@@ -106,6 +111,7 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
                         pending.workIdentity,
                         pending.previewCacheIdentity,
                         pending.durableMutationIdentity,
+                        pending.legacyAccountScopeDigest,
                     )
                 }
             },
