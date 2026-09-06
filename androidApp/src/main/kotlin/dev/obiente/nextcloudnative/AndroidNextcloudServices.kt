@@ -381,7 +381,7 @@ internal class AndroidNextcloudServices(
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
     private val activity = context as? Activity
-    private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
+    private val preferences = appContext.getSharedPreferences(ANDROID_ACCOUNT_PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val httpClient = OkHttpClient.Builder()
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
@@ -437,6 +437,8 @@ internal class AndroidNextcloudServices(
     }
     private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
+    internal fun isDurableUploadAccountResolutionAvailable() = preferences.durableUploadAccountResolutionAvailable()
+    internal fun durableUploadAccountRegistry() = accountCredentials.durableUploadAccountRegistry()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
     }
@@ -2883,7 +2885,6 @@ internal class AndroidNextcloudServices(
     override fun releaseLocalUploadFile(file: LocalUploadFile) {
         localUploadPicker?.release(file)
     }
-
     override suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,
         request: NextcloudMultipartUploadRequest,
@@ -2934,7 +2935,6 @@ internal class AndroidNextcloudServices(
             }
         }
     }
-
     override suspend fun enqueueDurableMultipartUpload(
         session: NextcloudSession,
         scope: DurableUploadScope,

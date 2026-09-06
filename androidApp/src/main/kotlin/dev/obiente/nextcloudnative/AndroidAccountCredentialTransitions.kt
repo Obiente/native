@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import android.content.SharedPreferences
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -25,6 +27,37 @@ internal suspend fun replaceAndroidActiveStateWithAccountLeases(
         quiesceAndroidFileRangesBeforeCredentialReplacement(replacedSession, replacementSession, coordinator)
         replace(replacement, previousSession, suspectEncrypted, replacedSession)
     }
+}
+
+internal fun NextcloudAccountRegistry?.asDurableRegistry(): DurableUploadAccountRegistry =
+    this?.let { registry ->
+        DurableUploadAccountRegistry.Available(
+            accounts = registry.accounts,
+            activeAccountId = registry.activeAccountId,
+        )
+    }
+        ?: DurableUploadAccountRegistry.Unavailable
+
+internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAccountRetentionSnapshot =
+    this?.let { registry ->
+        AndroidAccountRetentionSnapshot.Available(
+            accounts = registry.accounts,
+            activeAccountId = registry.activeAccountId,
+        )
+    }
+        ?: AndroidAccountRetentionSnapshot.Unavailable
+
+internal fun SharedPreferences.durableUploadAccountResolutionAvailable(): Boolean =
+    durableUploadAccountResolutionAvailable {
+        getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
+    }
+
+internal fun durableUploadAccountResolutionAvailable(
+    readRegistry: () -> String?,
+): Boolean = try {
+    androidCredentialFreeRegistryAllowsAccountResolution(readRegistry())
+} catch (_: ClassCastException) {
+    false
 }
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
