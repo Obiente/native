@@ -21,16 +21,25 @@ internal class AccountPrivateMemoryGate {
         if (accountStorageKey in closedAccounts) unavailable else action()
     }
 
+    fun <T> read(
+        producer: AccountPrivateMemoryProducer?,
+        unavailable: T,
+        action: () -> T,
+    ): T = lock.withLock {
+        val currentProducer = producer ?: return@withLock unavailable
+        if (!accepts(currentProducer)) unavailable else action()
+    }
+
     fun mutate(
         accountStorageKey: String,
         producer: AccountPrivateMemoryProducer?,
         action: () -> Unit,
     ): Boolean = lock.withLock {
-        val current = producer ?: return@withLock false
-        require(current.accountStorageKey == accountStorageKey) {
+        val currentProducer = producer ?: return@withLock false
+        require(currentProducer.accountStorageKey == accountStorageKey) {
             "The private-memory producer belongs to another account."
         }
-        if (!accepts(current)) return@withLock false
+        if (!accepts(currentProducer)) return@withLock false
         action()
         true
     }
@@ -46,6 +55,8 @@ internal class AccountPrivateMemoryGate {
         prepare()
         closedAccounts.remove(accountStorageKey)
     }
+
+    fun <T> withLock(action: () -> T): T = lock.withLock(action)
 
     private fun accepts(producer: AccountPrivateMemoryProducer): Boolean =
         producer.accountStorageKey !in closedAccounts &&

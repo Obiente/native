@@ -7,39 +7,54 @@ import kotlinx.coroutines.CancellationException
  * between grids and viewers. Persistent encrypted/offline caching remains a separate repository
  * concern because it needs account lifecycle, quotas, and platform storage policies.
  */
-internal object PreviewMemoryCache {
-    private const val MAX_BYTES = 24 * 1024 * 1024
-    private val gate = sharedAccountPrivateMemoryGate
+internal class PreviewMemoryCache(
+    private val gate: AccountPrivateMemoryGate = AccountPrivateMemoryGate(),
+    private val maximumBytes: Int = MAX_PREVIEW_MEMORY_CACHE_BYTES,
+) {
     private val entries = linkedMapOf<PreviewCacheKey, ByteArray>()
     private var bytes = 0
 
-    fun producer(accountStorageKey: String): AccountPrivateMemoryProducer? = gate.producer(accountStorageKey)
+    init {
+        require(maximumBytes > 0)
+    }
+
+    fun producer(key: PreviewCacheKey): AccountPrivateMemoryProducer? = gate.producer(key.account)
 
     fun get(key: PreviewCacheKey): ByteArray? = gate.read(key.account, null) {
-        val value = entries.remove(key) ?: return@read null
-        entries[key] = value
+        val value = entries.remove(key)
+        if (value != null) entries[key] = value
         value
     }
 
     fun put(key: PreviewCacheKey, value: ByteArray, producer: AccountPrivateMemoryProducer?) {
-        if (value.size > MAX_BYTES) return
+        if (value.size > maximumBytes) return
         gate.mutate(key.account, producer) {
             entries.remove(key)?.let { bytes -= it.size }
             entries[key] = value
             bytes += value.size
-            while (bytes > MAX_BYTES && entries.isNotEmpty()) {
+            while (bytes > maximumBytes && entries.isNotEmpty()) {
                 val oldestKey = entries.keys.first()
                 bytes -= entries.remove(oldestKey)?.size ?: 0
             }
         }
     }
 
+    fun retireAccount(accountStorageKey: String) = gate.retireAccount(accountStorageKey) {
+        purgeRetiredAccount(accountStorageKey)
+    }
+
+    fun activateAccount(accountStorageKey: String) = gate.activateAccount(accountStorageKey)
+
     internal fun purgeRetiredAccount(accountStorageKey: String) {
-        entries.keys.filter { key -> key.account == accountStorageKey }.forEach { key ->
-            bytes -= entries.remove(key)?.size ?: 0
+        val retired = entries.filterKeys { key -> key.account == accountStorageKey }
+        retired.forEach { (key, value) ->
+            entries.remove(key)
+            bytes -= value.size
         }
     }
 }
+
+internal val sharedPreviewMemoryCache = PreviewMemoryCache(sharedAccountPrivateMemoryGate)
 
 internal data class PreviewCacheKey(
     val account: String,
@@ -71,11 +86,12 @@ internal fun previewCacheKeyOrNull(
 
 internal suspend fun loadPreviewMemoryCached(
     key: PreviewCacheKey?,
+    cache: PreviewMemoryCache = sharedPreviewMemoryCache,
     load: suspend () -> ByteArray,
 ): ByteArray {
     if (key == null) return load()
-    val producer = PreviewMemoryCache.producer(key.account)
-    return PreviewMemoryCache.get(key) ?: load().also { PreviewMemoryCache.put(key, it, producer) }
+    val producer = cache.producer(key)
+    return cache.get(key) ?: load().also { cache.put(key, it, producer) }
 }
 
 internal suspend fun NextcloudPlatformServices.loadPreviewCached(
@@ -217,3 +233,5 @@ internal fun accountPersistenceScopeDigests(session: NextcloudSession): AccountP
 }
 
 internal expect fun legacyPreviewCacheDigest(session: NextcloudSession): String
+
+private const val MAX_PREVIEW_MEMORY_CACHE_BYTES = 24 * 1024 * 1024
