@@ -16,7 +16,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1386
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt|567
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|1070
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt|1105
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt|1104
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt|1293
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt|2646
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt|909
