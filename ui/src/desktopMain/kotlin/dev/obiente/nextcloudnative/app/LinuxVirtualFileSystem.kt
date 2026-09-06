@@ -125,6 +125,7 @@ internal interface LinuxVirtualMetadataStore {
 internal class DesktopLinuxVirtualMetadataStore(
     private val cache: DesktopFileReadCache,
     private val accountId: String,
+    private val cacheProducer: DesktopFileReadCacheProducer? = cache.producer(accountId),
 ) : LinuxVirtualMetadataStore {
     override fun load(path: String): LinuxVirtualDirectorySnapshot? {
         val listing = cache.cachedVirtualListingSnapshot(accountId, path) ?: return null
@@ -134,7 +135,6 @@ internal class DesktopLinuxVirtualMetadataStore(
             freshAtEpochMillis = listing.freshAtEpochMillis,
         )
     }
-
     override fun store(path: String, snapshot: LinuxVirtualDirectorySnapshot): Boolean =
         cache.storeVirtualListingUnlessNewer(
             accountId = accountId,
@@ -142,8 +142,8 @@ internal class DesktopLinuxVirtualMetadataStore(
             nodes = snapshot.nodes,
             fetchedAtEpochMillis = snapshot.fetchedAtEpochMillis,
             freshAtEpochMillis = snapshot.freshAtEpochMillis,
+            cacheProducer = cacheProducer,
         )
-
     override fun invalidate(path: String) = cache.invalidate(accountId, path)
 
     override fun retainedPaths(): Set<String> = cache.cachedVirtualListingPaths(accountId)
@@ -151,7 +151,7 @@ internal class DesktopLinuxVirtualMetadataStore(
     override fun failedInvalidations(): Set<String> = cache.failedVirtualListingInvalidations(accountId)
 
     override fun replaceFailedInvalidations(paths: Set<String>) =
-        cache.replaceFailedVirtualListingInvalidations(accountId, paths)
+        cache.replaceFailedVirtualListingInvalidations(accountId, paths, cacheProducer)
 }
 
 internal class RetainedLinuxVirtualMetadataStore(

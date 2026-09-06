@@ -1030,12 +1030,45 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
-    fun malformedCleanupUsesCredentialFreeOwnershipToRecover() = runBlocking {
+    fun futureCleanupFormatRemainsBlockedAndUntouchedWhenCredentialsAreAbsent() = runBlocking {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val futureValue = "v99|committed|future-private-state"
+        preferences.put("fsac.$CLEANUP_ACCOUNT_ID", futureValue)
+        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+        var ownershipChecks = 0
+        val events = mutableListOf<String>()
+
+        try {
+            val cleanup = journal.pending().single()
+            assertEquals(DesktopAccountSyncPairCleanupPhase.Unknown, cleanup.phase)
+            assertTrue(journal.blocksAccountActivation(CLEANUP_ACCOUNT_ID))
+
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = cleanup,
+                accountOwnership = {
+                    ownershipChecks += 1
+                    DesktopAccountOwnership.Absent
+                },
+                removeSyncPairs = { events += "remove-pairs" },
+                clearCleanup = { events += "clear-cleanup" },
+            )
+
+            assertEquals(0, ownershipChecks)
+            assertTrue(events.isEmpty())
+            assertEquals(futureValue, preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null))
+            assertTrue(journal.blocksAccountActivation(CLEANUP_ACCOUNT_ID))
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun preparedCleanupUsesCredentialFreeOwnershipToRecover() = runBlocking {
         val absentEvents = mutableListOf<String>()
         retryDesktopAccountSyncPairCleanup(
             cleanup = DesktopAccountSyncPairCleanup(
                 CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Unknown,
+                DesktopAccountSyncPairCleanupPhase.Prepared,
             ),
             accountOwnership = { DesktopAccountOwnership.Absent },
             removeSyncPairs = { absentEvents += "remove-pairs" },
@@ -1047,7 +1080,7 @@ class DesktopAccountOperationGuardTest {
         retryDesktopAccountSyncPairCleanup(
             cleanup = DesktopAccountSyncPairCleanup(
                 CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Unknown,
+                DesktopAccountSyncPairCleanupPhase.Prepared,
             ),
             accountOwnership = { DesktopAccountOwnership.Present },
             removeSyncPairs = { presentEvents += "remove-pairs" },

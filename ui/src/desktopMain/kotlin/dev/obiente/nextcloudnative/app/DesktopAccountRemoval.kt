@@ -459,16 +459,20 @@ internal suspend fun retryDesktopAccountSyncPairCleanup(
     clearCleanup: suspend (String) -> Unit,
     reactivatePresentAccount: (DesktopAccountSyncPairCleanup) -> Unit = {},
 ) {
-    if (cleanup.phase != DesktopAccountSyncPairCleanupPhase.Committed) {
-        when (accountOwnership(cleanup.accountId)) {
-            DesktopAccountOwnership.Present -> {
-                clearCleanup(cleanup.accountId)
-                reactivatePresentAccount(cleanup)
-                return
+    when (cleanup.phase) {
+        DesktopAccountSyncPairCleanupPhase.Unknown -> return
+        DesktopAccountSyncPairCleanupPhase.Prepared -> {
+            when (accountOwnership(cleanup.accountId)) {
+                DesktopAccountOwnership.Present -> {
+                    clearCleanup(cleanup.accountId)
+                    reactivatePresentAccount(cleanup)
+                    return
+                }
+                DesktopAccountOwnership.Unknown -> return
+                DesktopAccountOwnership.Absent -> Unit
             }
-            DesktopAccountOwnership.Unknown -> return
-            DesktopAccountOwnership.Absent -> Unit
         }
+        DesktopAccountSyncPairCleanupPhase.Committed -> Unit
     }
     removeSyncPairs(cleanup)
     clearCleanup(cleanup.accountId)

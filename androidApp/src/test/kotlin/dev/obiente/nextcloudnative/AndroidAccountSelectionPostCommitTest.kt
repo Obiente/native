@@ -40,6 +40,36 @@ class AndroidAccountSelectionPostCommitTest {
     }
 
     @Test
+    fun cancellationAfterCredentialCommitActivatesThePersistedAccountBeforePropagating() = runBlocking {
+        val events = mutableListOf<String>()
+        val cancellation = CancellationException("login owner stopped after credential commit")
+        val save = async {
+            val owner = currentCoroutineContext()
+            completeAndroidAccountSelectionTransition(
+                transitionDispatcher = Dispatchers.Default,
+                commitTransition = { markCommitted ->
+                    events += "persist"
+                    markCommitted()
+                    owner.cancel(cancellation)
+                },
+                finishMaintenance = {
+                    assertTrue(currentCoroutineContext().isActive)
+                    events += "activate-dynamic"
+                    yield()
+                    events += "activate-private"
+                    events += "activate-discovery"
+                },
+            )
+        }
+
+        assertFailsWith<CancellationException> { save.await() }
+        assertEquals(
+            listOf("persist", "activate-dynamic", "activate-private", "activate-discovery"),
+            events,
+        )
+    }
+
+    @Test
     fun cancellationBeforeCommitDoesNotRunTransitionOrMaintenance() = runBlocking {
         val events = mutableListOf<String>()
         val selection = async {

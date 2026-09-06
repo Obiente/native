@@ -3477,7 +3477,7 @@ class DesktopNextcloudServices(
             activate = {
                 AccountPrivateMemoryLifecycle.activateAccount(it.accountId.storageKey)
                 dynamicDiscoveryCache.activateAccount(it.accountId.storageKey)
-                dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it))
+                dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it).also(fileReadCache::activateAccount))
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
                 startDesktopSyncLifecycle()
             },
@@ -3823,6 +3823,7 @@ class DesktopNextcloudServices(
 
     private fun reactivateDesktopMemoryAfterAbortedRemoval(cleanup: DesktopAccountSyncPairCleanup) {
         cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::activateAccount)
+        fileReadCache.activateAccount(cleanup.accountId)
     }
 
     private fun schedulePendingAccountSyncPairCleanupRetry() = serviceScope.launch {
@@ -4115,7 +4116,7 @@ class DesktopNextcloudServices(
         userId: String,
         path: String,
     ): NextcloudFileListing = withContext(Dispatchers.IO) {
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         val requestStartedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         try {
             val response = request(
@@ -4130,7 +4131,7 @@ class DesktopNextcloudServices(
                         accountId = accountId,
                         path = path,
                         files = files,
-                        fetchedAtEpochMillis = requestStartedAtEpochMillis,
+                        fetchedAtEpochMillis = requestStartedAtEpochMillis, cacheProducer = cacheProducer,
                     )
                 }
                 NextcloudFileListing(files, NextcloudFileListingSource.Network)
@@ -4400,7 +4401,7 @@ class DesktopNextcloudServices(
         maxBytes: Long,
     ): NextcloudFileContent = withContext(Dispatchers.IO) {
         require(maxBytes > 0) { "The download size limit must be greater than zero." }
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         val cached = fileReadCache.cachedContent(accountId, path, maxBytes)
         try {
             var response = request(
@@ -4434,7 +4435,7 @@ class DesktopNextcloudServices(
                 response.status !in 200..299 ->
                     error("Downloading the file failed (HTTP ${response.status}).")
                 else -> NextcloudFileContent(response.body, response.contentType, response.etag).also { content ->
-                    runCatching { fileReadCache.storeContent(accountId, path, content) }
+                    runCatching { fileReadCache.storeContent(accountId, path, content, cacheProducer = cacheProducer) }
                 }
             }
         } catch (failure: IOException) {
@@ -4752,7 +4753,7 @@ class DesktopNextcloudServices(
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
         val specification = textFileDavSaveRequest(text, expectedEtag)
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
@@ -4772,9 +4773,9 @@ class DesktopNextcloudServices(
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             etag?.let {
                 fileReadCache.storeContent(
-                    accountId,
-                    path,
+                    accountId, path,
                     NextcloudFileContent(specification.body, specification.contentType, it),
+                    cacheProducer = cacheProducer,
                 )
             }
         }
@@ -4791,7 +4792,7 @@ class DesktopNextcloudServices(
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
@@ -4811,9 +4812,9 @@ class DesktopNextcloudServices(
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             response.etag?.let {
                 fileReadCache.storeContent(
-                    accountId,
-                    path,
+                    accountId, path,
                     NextcloudFileContent(utf8, "text/plain; charset=utf-8", it),
+                    cacheProducer = cacheProducer,
                 )
             }
         }
