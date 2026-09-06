@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.AbstractApplier
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composition
 import androidx.compose.runtime.Recomposer
+import androidx.compose.runtime.snapshots.Snapshot
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -161,17 +163,26 @@ class SupportSettingsDraftRegistryTest {
             appPassword = "password",
         )
         val account = session.accountId.storageKey
-        val recomposer = Recomposer(coroutineContext)
-        val recomposerJob = launch(start = CoroutineStart.UNDISPATCHED) {
+        val frameClock = BroadcastFrameClock()
+        val recomposer = Recomposer(coroutineContext + frameClock)
+        val recomposerJob = launch(frameClock, start = CoroutineStart.UNDISPATCHED) {
             recomposer.runRecomposeAndApplyChanges()
         }
         val composition = Composition(EmptyUnitApplier(), recomposer)
+        var frameTime = 0L
+        suspend fun advanceComposition() {
+            yield()
+            Snapshot.sendApplyNotifications()
+            yield()
+            frameClock.sendFrame(frameTime++)
+            recomposer.awaitIdle()
+        }
         var rendered: SupportSettingsDraftState? = null
         try {
             composition.setContent {
                 rendered = rememberAccountSupportSettingsDraftState(session)
             }
-            recomposer.awaitIdle()
+            advanceComposition()
             val retiredHolder = requireNotNull(rendered)
             val staleCallback = retiredHolder::updateReportDraft
             retiredHolder.updateReportDraft("Private text before removal")
@@ -181,9 +192,8 @@ class SupportSettingsDraftRegistryTest {
             assertFalse(retiredHolder.hasDraftContent())
             AccountPrivateMemoryLifecycle.activateAccount(account)
             withTimeout(5_000L) {
-                while (rendered === retiredHolder) yield()
+                while (rendered === retiredHolder) advanceComposition()
             }
-            recomposer.awaitIdle()
             val currentHolder = requireNotNull(rendered)
             assertNotSame(retiredHolder, currentHolder)
 
