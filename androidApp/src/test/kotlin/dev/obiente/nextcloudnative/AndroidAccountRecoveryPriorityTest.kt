@@ -45,6 +45,47 @@ class AndroidAccountRecoveryPriorityTest {
     }
 
     @Test
+    fun offlineJobRetriesUntilTheExpectedAccountIsConfirmedAbsent() {
+        val expected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
+        val other = NextcloudSession("https://cloud.example.test/nextcloud", "bob", "other-secret")
+        val expectedIdentity = NextcloudDocumentIds.accountKey(expected)
+
+        assertTrue(
+            shouldRetryAndroidOfflineJobForMissingSession(
+                expectedIdentity,
+                AndroidAccountRetentionSnapshot.Available(
+                    accounts = listOf(expected.accountRecord(), other.accountRecord()),
+                    activeAccountId = expected.accountId,
+                ),
+            ),
+        )
+        assertTrue(
+            shouldRetryAndroidOfflineJobForMissingSession(
+                expectedIdentity,
+                AndroidAccountRetentionSnapshot.Unavailable,
+            ),
+        )
+        assertTrue(
+            shouldRetryAndroidOfflineJobForMissingSession(
+                expectedIdentity,
+                AndroidAccountRetentionSnapshot.Available(
+                    accounts = listOf(expected.accountRecord(), other.accountRecord()),
+                    activeAccountId = other.accountId,
+                ),
+            ),
+        )
+        assertFalse(
+            shouldRetryAndroidOfflineJobForMissingSession(
+                expectedIdentity,
+                AndroidAccountRetentionSnapshot.Available(
+                    accounts = listOf(other.accountRecord()),
+                    activeAccountId = other.accountId,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun accountRetirementRetainsPairMappingUntilEverySafGrantReleaseIsAttempted() = runBlocking {
         val retiredPairs = listOf(
             fileSyncPair("retired-a", "content://documents/first"),
