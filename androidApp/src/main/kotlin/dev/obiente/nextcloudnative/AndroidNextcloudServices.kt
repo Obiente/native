@@ -451,7 +451,7 @@ internal class AndroidNextcloudServices(
         requestPermissions = requestPlatformPermissions,
     )
     private val projectContent = AndroidProjectContentClient(appContext, activity)
-    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
+    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext, localUploadPicker)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -2939,7 +2939,7 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
-    ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
+    ): DurableUploadEnqueueResult = durableMultipartUploads.runEnqueueWithCancellationCleanup(request.file) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
             resolveSession = ::loadSession,

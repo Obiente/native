@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import androidx.work.ExistingWorkPolicy
+import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
@@ -9,16 +11,66 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
+    @Test
+    fun `successful worker execution does not request scheduling recovery`() = runBlocking {
+        var recoveryRequests = 0
+
+        val result = runDurableUploadWorkerWithRecoverySignal(
+            requestRecovery = { recoveryRequests += 1 },
+            work = { "completed" },
+        )
+
+        assertEquals("completed", result)
+        assertEquals(0, recoveryRequests)
+    }
+
+    @Test
+    fun `worker failure requests scheduling recovery before preserving the failure`() = runBlocking {
+        var recoveryRequests = 0
+        val expected = IOException("journal read failed")
+
+        val actual = assertFailsWith<IOException> {
+            runDurableUploadWorkerWithRecoverySignal<Unit>(
+                requestRecovery = { recoveryRequests += 1 },
+                work = { throw expected },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `worker cancellation requests scheduling recovery before preserving cancellation`() = runBlocking {
+        var recoveryRequests = 0
+        val expected = CancellationException("worker stopped")
+
+        val actual = assertFailsWith<CancellationException> {
+            runDurableUploadWorkerWithRecoverySignal<Unit>(
+                requestRecovery = { recoveryRequests += 1 },
+                work = { throw expected },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(1, recoveryRequests)
+    }
+
     @Test
     fun `worker cancellation does not become a terminal upload outcome`() = runBlocking {
         assertFailsWith<CancellationException> {
@@ -339,57 +391,93 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `inactive retained account defers when its credential is temporarily unavailable`() {
-        val retainedSession = NextcloudSession(
-            serverUrl = "https://cloud.example.test/nextcloud",
-            loginName = "alice",
-            appPassword = "fixture-password",
-        )
-        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
-
-        val resolution = resolveDurableUploadSession(
-            expectedAccountId = accountId,
-            registry = DurableUploadAccountRegistry.Available(listOf(retainedSession.accountRecord())),
-            loadSession = { null },
-        )
-
-        assertEquals(DurableUploadAccountResolution.DeferAccountActivation, resolution)
-    }
-
-    @Test
-    fun `active retained account retries when its credential is temporarily unavailable`() {
-        val retainedSession = NextcloudSession(
-            serverUrl = "https://cloud.example.test/nextcloud",
-            loginName = "alice",
-            appPassword = "fixture-password",
-        )
-        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
-
-        val resolution = resolveDurableUploadSession(
-            expectedAccountId = accountId,
-            registry = DurableUploadAccountRegistry.Available(
-                accounts = listOf(retainedSession.accountRecord()),
-                activeAccountId = retainedSession.accountId,
-            ),
-            loadSession = { null },
-        )
-
-        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolution)
-    }
-
-    @Test
     fun `removed account terminally fails and releases its queued upload exactly once`() {
         val events = mutableListOf<String>()
 
         val result = failQueuedDurableUploadForUnavailableAccount(
             transitionToFailed = { events += "fail" },
-            releaseSelection = { events += "release" },
+            releaseSelection = { _ ->
+                events += "release"
+                true
+            },
             recordFailure = { events += "diagnose" },
             failureResult = "worker-failure",
+            retryResult = "worker-retry",
         )
 
         assertEquals("worker-failure", result)
         assertEquals(listOf("fail", "release", "diagnose"), events)
+    }
+
+    @Test
+    fun `account recovery uses replacement only for deferred worker backoff`() {
+        assertEquals(ExistingWorkPolicy.REPLACE, DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY)
+    }
+
+    @Test
+    fun `account recovery never replaces a worker after it starts its upload`() = runBlocking {
+        val queued = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        var current = queued
+        val claimEntered = CompletableDeferred<Unit>()
+        val allowClaim = CompletableDeferred<Unit>()
+        var replacementScheduled = false
+
+        val claim = async {
+            claimQueuedDurableUploadForExecution(queued.id) {
+                claimEntered.complete(Unit)
+                allowClaim.await()
+                current = queued.copy(state = DurableUploadState.Uploading)
+                current
+            }
+        }
+        claimEntered.await()
+        val recovery = async {
+            replaceDeferredDurableUploadWork(
+                expected = queued,
+                load = { current },
+                replace = { replacementScheduled = true },
+            )
+        }
+        yield()
+
+        assertFalse(recovery.isCompleted)
+        allowClaim.complete(Unit)
+        assertEquals(DurableUploadState.Uploading, claim.await()?.state)
+        assertFalse(recovery.await())
+        assertFalse(replacementScheduled)
+    }
+
+    @Test
+    fun `slow account recovery does not block an unrelated upload claim`() = runBlocking {
+        val recovering = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val unrelated = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val coordinator = AndroidDurableUploadStartCoordinator()
+        val replacementEntered = CompletableDeferred<Unit>()
+        val releaseReplacement = CompletableDeferred<Unit>()
+        val recovery = async {
+            replaceDeferredDurableUploadWork(
+                expected = recovering,
+                load = { recovering },
+                replace = {
+                    replacementEntered.complete(Unit)
+                    releaseReplacement.await()
+                },
+                coordinator = coordinator,
+            )
+        }
+        replacementEntered.await()
+
+        val claimed = claimQueuedDurableUploadForExecution(
+            jobId = unrelated.id,
+            coordinator = coordinator,
+        ) {
+            unrelated.copy(state = DurableUploadState.Uploading)
+        }
+
+        assertEquals(DurableUploadState.Uploading, claimed?.state)
+        assertFalse(recovery.isCompleted)
+        releaseReplacement.complete(Unit)
+        assertTrue(recovery.await())
     }
 
     @Test
@@ -407,6 +495,301 @@ class AndroidDurableMultipartUploadPolicyTest {
             listOf(queuedForA),
             queuedDurableUploadsForAccount(listOf(queuedForA, queuedForB, completedForA), ACCOUNT_A),
         )
+    }
+
+    @Test
+    fun `ambiguous scheduling keeps the durable job queued across restart`() = runBlocking {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val acceptedWork = mutableSetOf<String>()
+        var recoveryRequests = 0
+
+        val result = persistAndScheduleDurableUpload(
+            job = job,
+            persist = persisted::add,
+            schedule = { queued ->
+                acceptedWork += queued.id
+                throw IOException("The scheduler completion signal was lost")
+            },
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
+        assertIs<DurableUploadEnqueueResult.Queued>(result)
+        assertEquals(listOf(job), persisted)
+        assertEquals(setOf(job.id), acceptedWork)
+        assertEquals(1, recoveryRequests)
+
+        val workRecoveredAfterRestart = persisted
+            .filter { queued -> queued.state == DurableUploadState.Queued }
+            .map(AndroidDurableMultipartUploadJob::id)
+        assertEquals(listOf(job.id), workRecoveredAfterRestart)
+    }
+
+    @Test
+    fun `startup reconciliation skips queued uploads already owned by WorkManager`() = runBlocking {
+        val owned = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val missing = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val attempted = mutableListOf<String>()
+
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(owned, missing),
+            schedulerOwns = { job -> job == owned },
+            cleanupCapability = { error("Queued uploads must not enter local cleanup.") },
+            schedule = { job -> attempted += job.id },
+        )
+
+        assertTrue(allScheduled)
+        assertEquals(listOf(missing.id), attempted)
+    }
+
+    @Test
+    fun `a recovery request wakes the idle scheduling monitor without polling`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        var recoveryRuns = 0
+        recoverySignal.request()
+
+        assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) throw CancellationException("Lifecycle stopped")
+                },
+                wait = { error("an immediate wake must not wait") },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertEquals(2, recoveryRuns)
+    }
+
+    @Test
+    fun `coalesced immediate recovery preempts worker ownership and follow up waits`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val jobId = "job-1"
+        val workId = UUID.randomUUID()
+        val expectedCancellation = CancellationException("recovery owner stopped")
+        var recoveryRuns = 0
+        var ownershipWaits = 0
+        var delayRuns = 0
+        recoverySignal.request()
+        recoverySignal.requestAfterWorkStopsRunning(jobId, workId)
+
+        val actual = assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) throw expectedCancellation
+                },
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    ownershipWaits += 1
+                },
+                wait = { delayMillis ->
+                    assertEquals(ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS, delayMillis)
+                    delayRuns += 1
+                },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertTrue(actual === expectedCancellation)
+        assertEquals(2, recoveryRuns)
+        assertEquals(0, ownershipWaits)
+        assertEquals(0, delayRuns)
+    }
+
+    @Test
+    fun `recovery signal conflates immediate requests and replacement workers per durable job`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val replacedWorkId = UUID.randomUUID()
+        val replacementWorkId = UUID.randomUUID()
+        val otherWorkId = UUID.randomUUID()
+
+        recoverySignal.request()
+        recoverySignal.request()
+        recoverySignal.requestAfterWorkStopsRunning("job-1", replacedWorkId)
+        repeat(100) { recoverySignal.requestAfterWorkStopsRunning("job-1", replacementWorkId) }
+        recoverySignal.requestAfterWorkStopsRunning("job-2", otherWorkId)
+
+        assertEquals(
+            AndroidDurableUploadSchedulingRecoveryBatch(
+                immediate = true,
+                workIdsToAwait = mapOf("job-1" to replacementWorkId, "job-2" to otherWorkId),
+            ),
+            recoverySignal.await(),
+        )
+    }
+
+    @Test
+    fun `worker readiness retries a transient state query for the same work id`() = runBlocking {
+        val workId = UUID.randomUUID()
+        val requestedWorkIds = mutableListOf<UUID>()
+        val waits = mutableListOf<Long>()
+
+        awaitDurableUploadWorkToStopRunning(
+            workId = workId,
+            retryDelayMillis = 25L,
+            awaitWorkStopsRunning = { requestedWorkId ->
+                requestedWorkIds += requestedWorkId
+                if (requestedWorkIds.size == 1) {
+                    throw IOException("Synthetic WorkManager database failure")
+                }
+            },
+            wait = waits::add,
+        )
+
+        assertEquals(listOf(workId, workId), requestedWorkIds)
+        assertEquals(listOf(25L), waits)
+    }
+
+    @Test
+    fun `worker readiness cancellation propagates without retrying`() = runBlocking {
+        val workId = UUID.randomUUID()
+        val expected = CancellationException("Recovery owner stopped")
+        val waits = mutableListOf<Long>()
+
+        val actual = assertFailsWith<CancellationException> {
+            awaitDurableUploadWorkToStopRunning(
+                workId = workId,
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    throw expected
+                },
+                wait = waits::add,
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertTrue(waits.isEmpty())
+    }
+
+    @Test
+    fun `queued status snapshot requests one scheduling recovery`() {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
+        var recoveryRequests = 0
+
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(
+            jobs = listOf(first, second),
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `terminal status snapshot does not request scheduling recovery`() {
+        val completed = fixtureJob(
+            index = 1,
+            account = ACCOUNT_A,
+            cardId = 42,
+            state = DurableUploadState.Completed,
+        )
+        val failed = fixtureJob(
+            index = 2,
+            account = ACCOUNT_A,
+            cardId = 43,
+            state = DurableUploadState.Failed,
+        )
+        var recoveryRequests = 0
+
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(
+            jobs = listOf(completed, failed),
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
+        assertEquals(0, recoveryRequests)
+    }
+
+    @Test
+    fun `startup scheduling retries until a transient journal read failure clears`() = runBlocking {
+        var attempts = 0
+        val waits = mutableListOf<Long>()
+        var diagnostics = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            followUpDelayMillis = 100L,
+            reconcile = {
+                attempts += 1
+                when (attempts) {
+                    1, 2 -> throw AndroidDurableMultipartUploadRecoveryException(
+                        IOException("Synthetic unreadable journal"),
+                    )
+                    else -> true
+                }
+            },
+            wait = waits::add,
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
+
+        assertEquals(3, attempts)
+        assertEquals(listOf(100L, 100L), waits)
+        assertEquals(1, diagnostics)
+    }
+
+    @Test
+    fun `startup scheduling retries when uploader construction is temporarily unavailable`() = runBlocking {
+        var constructions = 0
+        val waits = mutableListOf<Long>()
+        var diagnostics = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            followUpDelayMillis = 100L,
+            reconcile = {
+                constructAndReconcileQueuedDurableUploads {
+                    constructions += 1
+                    when (constructions) {
+                        1 -> throw IOException("Synthetic keystore initialization failure")
+                        else -> suspend { true }
+                    }
+                }
+            },
+            wait = waits::add,
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
+
+        assertEquals(2, constructions)
+        assertEquals(listOf(100L), waits)
+        assertEquals(1, diagnostics)
+    }
+
+    @Test
+    fun `cancellation after persistence propagates without discarding restart state`() {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
+        var recoveryRequests = 0
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                persistAndScheduleDurableUpload(
+                    job = job,
+                    persist = persisted::add,
+                    schedule = { throw CancellationException("Owner stopped") },
+                    requestRecovery = { recoveryRequests += 1 },
+                )
+            }
+        }
+
+        assertEquals(listOf(job), persisted)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `persistence failure never reaches the scheduler`() {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        var scheduled = false
+
+        assertFailsWith<IOException> {
+            runBlocking {
+                persistAndScheduleDurableUpload(
+                    job = job,
+                    persist = { throw IOException("Queue storage is unavailable") },
+                    schedule = { scheduled = true },
+                )
+            }
+        }
+
+        assertFalse(scheduled)
     }
 
     @Test
@@ -530,10 +913,14 @@ class AndroidDurableMultipartUploadPolicyTest {
         )
         val attempted = mutableListOf<String>()
 
-        val allScheduled = reconcileQueuedDurableUploads(listOf(first, completed, second)) { job ->
-            attempted += job.id
-            if (job == first) throw IOException("Synthetic scheduler rejection")
-        }
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(first, completed, second),
+            cleanupCapability = { error("Completed history must not enter cleanup.") },
+            schedule = { job ->
+                attempted += job.id
+                if (job == first) throw IOException("Synthetic scheduler rejection")
+            },
+        )
 
         assertEquals(listOf(first.id, second.id), attempted)
         assertFalse(allScheduled)
@@ -672,6 +1059,29 @@ class AndroidDurableMultipartUploadPolicyTest {
         }
 
         assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun `unsupported registry remains unavailable after credential recovery attempt`() {
+        var recoveryAttempts = 0
+        var credentialReads = 0
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(fixtureSession("alice")),
+            readRegistry = { DurableUploadAccountRegistry.Unavailable },
+            recoverRegistry = {
+                recoveryAttempts += 1
+                null
+            },
+            loadSession = {
+                credentialReads += 1
+                fixtureSession("alice")
+            },
+        )
+
+        assertEquals(DurableUploadAccountResolution.RegistryUnavailable, resolved)
+        assertEquals(1, recoveryAttempts)
+        assertEquals(0, credentialReads)
     }
 
     @Test

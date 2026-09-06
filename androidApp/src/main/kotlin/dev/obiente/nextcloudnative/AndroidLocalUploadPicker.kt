@@ -15,6 +15,7 @@ import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import kotlin.coroutines.resume
@@ -31,7 +32,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
     private val resolver = context.applicationContext.contentResolver
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val cipher = SessionCipher()
-    private val selections = ConcurrentHashMap<String, SelectedSource>()
+    private val selections = PROCESS_SELECTIONS
     private var launcher: ActivityResultLauncher<Array<String>>? = null
     private var pending: PendingSelection? = null
 
@@ -51,6 +52,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         pending = selection
         continuation.invokeOnCancellation {
             if (pending === selection) pending = null
+            runCatching { selection.readyFile?.let(::release) }
         }
         activeLauncher.launch(accepted.toTypedArray())
     }
@@ -63,16 +65,16 @@ internal class AndroidLocalUploadPicker(context: Context) {
             selection.continuation.resume(LocalUploadSelectionResult.Cancelled)
             return
         }
-        val result = runCatching {
+        val result = runCatching selectionResult@{
             val metadata = resolver.queryUploadMetadata(uri)
             val mimeType = resolver.getType(uri)?.trim()?.lowercase()?.takeIf(String::isNotBlank)
             if (!isAcceptedUploadMimeType(mimeType, selection.acceptedMimeTypes)) {
-                return@runCatching LocalUploadSelectionResult.Rejected(
+                return@selectionResult LocalUploadSelectionResult.Rejected(
                     "The selected file type is not accepted.",
                 )
             }
             if (metadata.sizeBytes != null && metadata.sizeBytes > selection.maximumBytes) {
-                return@runCatching LocalUploadSelectionResult.Rejected(
+                return@selectionResult LocalUploadSelectionResult.Rejected(
                     "The selected file is larger than the allowed upload limit.",
                 )
             }
@@ -83,36 +85,88 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 mimeType = mimeType,
                 sizeBytes = metadata.sizeBytes,
             )
-            runCatching {
-                acquireDurableUploadCapability(
-                    takePermission = {
-                        resolver.takePersistableUriPermission(
-                            uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                        )
-                    },
-                    persistMetadata = { persist(source = SelectedSource(uri, file)) },
-                    releasePermission = {
-                        resolver.releasePersistableUriPermission(
-                            uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                        )
-                    },
-                )
-            }.getOrElse {
-                return@runCatching LocalUploadSelectionResult.Rejected(
+            val source = SelectedSource(uri, file)
+            var cancelledAfterAcquire = false
+            val acquisitionFailure = runCatching {
+                synchronized(CAPABILITY_LOCK) {
+                    val snapshot = loadCapabilitySnapshot()
+                    val existing = snapshot.capabilities
+                    check(
+                        durableUploadCapabilityHasCapacity(
+                            trackedCapabilityCount = snapshot.trackedCapabilityCount,
+                            maximumTrackedCapabilities = MAX_TRACKED_CAPABILITIES,
+                        ),
+                    ) {
+                        "Too many picker capabilities are tracked."
+                    }
+                    check(
+                        !durableUploadCapabilityPermissionOwnedByAnother(
+                            capabilities = existing,
+                            targetSelectionId = token,
+                            targetPermission = uri,
+                            permissionOf = SelectedSource::uri,
+                            samePermission = { first, second -> first == second },
+                        ),
+                    ) {
+                        "The selected file already has an active picker capability."
+                    }
+                    val grantPreExisting = !exactReadPermissionIsAbsent(uri)
+                    val acquiring = source.copy(
+                        phase = CapabilityPhase.Acquiring,
+                        processGeneration = PROCESS_GENERATION,
+                        grantPreExisting = grantPreExisting,
+                    )
+                    val ready = acquiring.copy(phase = CapabilityPhase.Ready)
+                    val cleanupPending = acquiring.copy(phase = CapabilityPhase.CleanupPending)
+                    acquireDurableUploadCapability(
+                        persistAcquiring = { persist(acquiring) },
+                        takePermission = {
+                            resolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            )
+                        },
+                        persistMetadata = { persist(ready) },
+                        markCleanupPending = {
+                            PENDING_CLEANUP_SELECTIONS += token
+                            persist(cleanupPending)
+                        },
+                        releasePermission = {
+                            if (shouldReleaseDurableUploadPermission(grantPreExisting, false)) {
+                                releasePermission(uri)
+                            }
+                        },
+                        isPermissionAbsent = { exactReadPermissionIsAbsent(uri) },
+                        removeCapability = { removeMetadata(token) },
+                        onRollbackRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    )
+                    cancelledAfterAcquire = !finalizeDurableUploadCapabilityDelivery(
+                        publishReady = {
+                            selections[token] = ready
+                            selection.readyFile = file
+                        },
+                        continuationIsActive = { selection.continuation.isActive },
+                        cleanupUndelivered = { release(file) },
+                    )
+                }
+            }.exceptionOrNull()
+            if (acquisitionFailure != null) {
+                return@selectionResult LocalUploadSelectionResult.Rejected(
                     "The selected file provider cannot keep access for a background upload.",
                 )
             }
-            val source = SelectedSource(uri, file)
-            selections[token] = source
+            if (cancelledAfterAcquire) return@selectionResult LocalUploadSelectionResult.Cancelled
             LocalUploadSelectionResult.Selected(file)
         }.getOrElse {
             LocalUploadSelectionResult.Rejected(
                 "The selected file could not be opened.",
             )
         }
-        selection.continuation.resume(result)
+        resumeLocalUploadSelectionResult(
+            continuation = selection.continuation,
+            result = result,
+            releaseSelected = { file -> release(file) },
+        )
     }
 
     fun open(file: LocalUploadFile): InputStream {
@@ -125,30 +179,240 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     fun requirePersisted(file: LocalUploadFile) {
-        val source = load(file.selectionId)
-            ?: error("The local file selection was not durably saved.")
-        require(source.file == file) { "The persisted local file metadata changed." }
+        requiredSource(file, useCachedSource = false)
     }
 
-    fun release(file: LocalUploadFile): Boolean {
-        val source = selections[file.selectionId] ?: load(file.selectionId)
-        return releaseDurableUploadCapability(
+    fun release(file: LocalUploadFile, onQuarantined: () -> Unit = {}): Boolean = synchronized(CAPABILITY_LOCK) {
+        val source = try {
+            selections[file.selectionId] ?: load(file.selectionId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (malformed: AndroidLocalUploadCapabilityMalformedException) {
+            return@synchronized releaseMalformedCapability(file.selectionId, malformed, onQuarantined)
+        } catch (_: Exception) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        if (source == null) {
+            val removed = durableUploadCleanupStep {
+                removeMetadata(file.selectionId)
+            }
+            return@synchronized if (removed) true else retainCapabilityCleanup(file.selectionId)
+        }
+        val cleanupPending = source.copy(phase = CapabilityPhase.CleanupPending)
+        PENDING_CLEANUP_SELECTIONS += file.selectionId
+        selections[file.selectionId] = cleanupPending
+        if (!durableUploadCleanupStep { persist(cleanupPending) }) {
+            requestQueuedDurableUploadSchedulingRecovery()
+            return@synchronized false
+        }
+        val snapshot = try {
+            loadCapabilitySnapshot()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: DurableUploadCapabilityOverflowException) {
+            return@synchronized quarantineCapabilityCleanup(file.selectionId, onQuarantined)
+        } catch (_: Exception) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        when (malformedPeerCleanupDisposition(
+            malformedCapabilities = snapshot.malformedCapabilities,
+            targetSelectionId = file.selectionId,
+            targetPermissionIdentity = source.uri.toString(),
+        )) {
+            DurableUploadMalformedPeerCleanupDisposition.Quarantine ->
+                return@synchronized quarantineCapabilityCleanup(file.selectionId, onQuarantined)
+            DurableUploadMalformedPeerCleanupDisposition.Retry ->
+                return@synchronized retainCapabilityCleanup(file.selectionId)
+            DurableUploadMalformedPeerCleanupDisposition.Proceed -> Unit
+        }
+        val cleanupPlan = durableUploadPermissionCleanupPlan(
+            grantPreExisting = source.grantPreExisting,
+            peerProtection = permissionPeerProtection(
+                capabilities = snapshot.capabilities,
+                malformedCapabilities = emptyMap(),
+                targetSelectionId = file.selectionId,
+                targetPermissionIdentity = source.uri.toString(),
+            ),
+        )
+        if (cleanupPlan == DurableUploadPermissionCleanupPlan.Retain) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        releaseDurableUploadCapability(
             releasePermission = {
-                source?.let {
-                    resolver.releasePersistableUriPermission(
-                        it.uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
+                if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) {
+                    releasePermission(source.uri)
                 }
             },
-            removeMetadata = {
-                preferences.edit()
-                    .remove(preferenceKey(file.selectionId))
-                    .commit()
+            isPermissionAbsent = {
+                cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease ||
+                    exactReadPermissionIsAbsent(source.uri)
             },
+            removeMetadata = { removeMetadata(file.selectionId) },
         ).also { released ->
-            if (released) selections.remove(file.selectionId)
+            if (released) {
+                selections.remove(file.selectionId)
+            } else {
+                requestQueuedDurableUploadSchedulingRecovery()
+            }
         }
+    }
+
+    fun markOwnershipCheckPending(file: LocalUploadFile): Boolean = synchronized(CAPABILITY_LOCK) {
+        val source = try {
+            selections[file.selectionId] ?: load(file.selectionId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        if (source == null || source.file != file) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        if (source.phase != CapabilityPhase.Ready) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        val ownershipCheckPending = source.copy(phase = CapabilityPhase.OwnershipCheckPending)
+        selections[file.selectionId] = ownershipCheckPending
+        val persisted = durableUploadCleanupStep { persist(ownershipCheckPending) }
+        requestQueuedDurableUploadSchedulingRecovery()
+        persisted
+    }
+
+    fun reconcileCapabilities(ownedSelectionIds: Set<String>): Boolean = synchronized(CAPABILITY_LOCK) {
+        val snapshot = try {
+            loadCapabilityRecoverySnapshot()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return@synchronized false
+        }
+        if (snapshot.malformedCapabilities.isNotEmpty()) {
+            PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
+        }
+        if (snapshot.recoveryQuarantined) return@synchronized true
+        if (!snapshot.scanComplete) {
+            requestQueuedDurableUploadSchedulingRecovery()
+            return@synchronized false
+        }
+        val capabilities = snapshot.capabilities.toMutableMap()
+        val malformedCapabilities = snapshot.malformedCapabilities.toMutableMap()
+        var allRecovered = true
+        var remainingRecoveryActions = MAX_RECOVERY_ROWS_PER_PASS
+        val malformedRecovery = malformedDurableUploadCapabilitiesForRecovery(
+            malformedCapabilities,
+            ownedSelectionIds,
+        )
+        malformedRecovery.forEach { malformed ->
+            val disposition = malformedRecoveryDisposition(malformed, capabilities, malformedCapabilities)
+            if (disposition != DurableUploadMalformedRecoveryDisposition.Recover) {
+                if (disposition == DurableUploadMalformedRecoveryDisposition.Retry) allRecovered = false
+                else PENDING_CLEANUP_SELECTIONS.remove(malformed.selectionId)
+                return@forEach
+            }
+            if (remainingRecoveryActions == 0) {
+                allRecovered = false
+                return@forEach
+            }
+            remainingRecoveryActions -= 1
+            val recovered = recoverMalformedCapability(
+                malformed,
+                capabilities,
+                malformedCapabilities,
+            )
+            if (recovered) {
+                malformedCapabilities.remove(malformed.selectionId)
+                selections.remove(malformed.selectionId)
+                PENDING_CLEANUP_SELECTIONS.remove(malformed.selectionId)
+            } else {
+                allRecovered = false
+            }
+        }
+        capabilities.values
+            .sortedWith(
+                compareByDescending<SelectedSource> { capability -> capability.grantPreExisting }
+                    .thenBy { capability -> capability.file.selectionId },
+            )
+            .forEach { capability ->
+                val selectionId = capability.file.selectionId
+                val ownedByDurableJob = selectionId in ownedSelectionIds
+                if (
+                    shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+                        phase = capability.phase,
+                        ownedByDurableJob = ownedByDurableJob,
+                    )
+                ) {
+                    if (remainingRecoveryActions == 0) {
+                        allRecovered = false
+                        return@forEach
+                    }
+                    remainingRecoveryActions -= 1
+                    val ready = capability.copy(
+                        phase = CapabilityPhase.Ready,
+                        processGeneration = PROCESS_GENERATION,
+                    )
+                    if (durableUploadCleanupStep { persist(ready) }) {
+                        capabilities[selectionId] = ready
+                        selections[selectionId] = ready
+                    } else {
+                        allRecovered = false
+                    }
+                    return@forEach
+                }
+                if (!shouldRecoverDurableUploadCapability(
+                    phase = capability.phase,
+                    processGeneration = capability.processGeneration,
+                    currentProcessGeneration = PROCESS_GENERATION,
+                    ownedByDurableJob = ownedByDurableJob,
+                    cleanupExplicitlyPending = selectionId in PENDING_CLEANUP_SELECTIONS,
+                )) return@forEach
+                if (
+                    malformedPeerCleanupDisposition(
+                        malformedCapabilities,
+                        selectionId,
+                        capability.uri.toString(),
+                    ) == DurableUploadMalformedPeerCleanupDisposition.Quarantine
+                ) {
+                    PENDING_CLEANUP_SELECTIONS.remove(selectionId)
+                    return@forEach
+                }
+                val cleanupPlan = durableUploadPermissionCleanupPlan(
+                    grantPreExisting = capability.grantPreExisting,
+                    peerProtection = permissionPeerProtection(
+                        capabilities = capabilities,
+                        malformedCapabilities = malformedCapabilities,
+                        targetSelectionId = selectionId,
+                        targetPermissionIdentity = capability.uri.toString(),
+                    ),
+                )
+                if (cleanupPlan == DurableUploadPermissionCleanupPlan.Retain) {
+                    allRecovered = false
+                    return@forEach
+                }
+                if (remainingRecoveryActions == 0) {
+                    allRecovered = false
+                    return@forEach
+                }
+                remainingRecoveryActions -= 1
+                val released = releaseDurableUploadCapability(
+                    releasePermission = {
+                        if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) {
+                            releasePermission(capability.uri)
+                        }
+                    },
+                    isPermissionAbsent = {
+                        cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease ||
+                            exactReadPermissionIsAbsent(capability.uri)
+                    },
+                    removeMetadata = { removeMetadata(selectionId) },
+                )
+                if (released) {
+                    capabilities.remove(selectionId)
+                    selections.remove(selectionId)
+                } else {
+                    allRecovered = false
+                }
+        }
+        allRecovered
     }
 
     private fun persist(source: SelectedSource): Boolean {
@@ -158,23 +422,262 @@ internal class AndroidLocalUploadPicker(context: Context) {
             .put("displayName", source.file.displayName)
             .put("mimeType", source.file.mimeType)
             .put("sizeBytes", source.file.sizeBytes)
-            .toString()
+            .put("phase", source.phase.persistedValue)
+            .put("grantPreExisting", source.grantPreExisting)
+        source.processGeneration?.let { generation -> payload.put("processGeneration", generation) }
+        val encrypted = cipher.encrypt(payload.toString())
         return preferences.edit()
-            .putString(preferenceKey(source.file.selectionId), cipher.encrypt(payload))
+            .putString(preferenceKey(source.file.selectionId), encrypted)
             .commit()
     }
 
+    private fun removeMetadata(selectionId: String): Boolean = preferences.edit()
+        .remove(preferenceKey(selectionId))
+        .commit()
+        .also { removed -> if (removed) PENDING_CLEANUP_SELECTIONS.remove(selectionId) }
+
+    private fun retainCapabilityCleanup(selectionId: String): Boolean {
+        PENDING_CLEANUP_SELECTIONS += selectionId
+        return retainDurableUploadCapabilityCleanup(::requestQueuedDurableUploadSchedulingRecovery)
+    }
+
+    private fun quarantineCapabilityCleanup(selectionId: String, onQuarantined: () -> Unit): Boolean {
+        PENDING_CLEANUP_SELECTIONS.remove(selectionId)
+        onQuarantined()
+        return false
+    }
+
+    private fun releasePermission(uri: Uri) {
+        resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    private fun exactReadPermissionIsAbsent(uri: Uri): Boolean = resolver.persistedUriPermissions.none {
+        it.uri == uri && it.isReadPermission
+    }
+
+    private fun loadCapabilitySnapshot(): DurableUploadCapabilitySnapshot<SelectedSource> {
+        val storedSelectionIds = storedCapabilitySelectionIds(MAX_RECOVERABLE_CAPABILITIES)
+        val snapshot = loadDurableUploadCapabilitySnapshot(
+            cachedCapabilities = selections.toMap(),
+            storedSelectionIds = storedSelectionIds,
+            maximumRecoverableCapabilities = MAX_RECOVERABLE_CAPABILITIES,
+            loadStoredCapability = ::load,
+        )
+        if (snapshot.malformedCapabilities.isNotEmpty()) {
+            PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
+            if (snapshot.malformedCapabilities.values.any(::malformedDurableUploadCapabilityCanBecomeActionable)) {
+                requestQueuedDurableUploadSchedulingRecovery()
+            }
+        }
+        return snapshot
+    }
+
+    private fun loadCapabilityRecoverySnapshot(): DurableUploadCapabilitySnapshot<SelectedSource> =
+        RECOVERY_SCAN.loadPage(
+            cachedCapabilities = selections.toMap(),
+            storedSelectionIds = storedCapabilitySelectionIds(MAX_RECOVERY_ROWS_PER_PASS),
+            maximumRows = MAX_RECOVERY_ROWS_PER_PASS,
+            loadStoredCapability = ::load,
+        )
+
+    private fun storedCapabilitySelectionIds(maximumRows: Int? = null): List<String> {
+        val selectionIds = preferences.all.keys.asSequence()
+            .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
+            .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
+        return maximumRows?.let { limit -> selectionIds.take(limit + 1).toList() } ?: selectionIds.toList()
+    }
+
+    private fun releaseMalformedCapability(
+        selectionId: String,
+        malformed: AndroidLocalUploadCapabilityMalformedException,
+        onQuarantined: () -> Unit,
+    ): Boolean {
+        PENDING_CLEANUP_SELECTIONS += selectionId
+        val snapshot = try {
+            loadCapabilitySnapshot()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: DurableUploadCapabilityOverflowException) {
+            return quarantineCapabilityCleanup(selectionId, onQuarantined)
+        } catch (_: Exception) {
+            return retainCapabilityCleanup(selectionId)
+        }
+        val isolated = snapshot.malformedCapabilities[selectionId]
+            ?: MalformedDurableUploadCapability(
+                selectionId,
+                malformed.cleanupPermissionIdentity,
+                malformed.grantPreExisting,
+            )
+        return when (releaseMalformedDurableUploadCapability(
+            disposition = malformedRecoveryDisposition(
+                isolated,
+                snapshot.capabilities,
+                snapshot.malformedCapabilities,
+            ),
+            recover = {
+                recoverMalformedCapability(
+                    isolated,
+                    snapshot.capabilities,
+                    snapshot.malformedCapabilities,
+                )
+            },
+        )) {
+            DurableUploadMalformedReleaseResult.Released -> true.also {
+                selections.remove(selectionId)
+                PENDING_CLEANUP_SELECTIONS.remove(selectionId)
+            }
+            DurableUploadMalformedReleaseResult.Retry -> retainCapabilityCleanup(selectionId)
+            DurableUploadMalformedReleaseResult.Quarantine ->
+                quarantineCapabilityCleanup(selectionId, onQuarantined)
+        }
+    }
+
+    private fun recoverMalformedCapability(
+        malformed: MalformedDurableUploadCapability,
+        capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+    ): Boolean {
+        val permission = malformed.cleanupPermissionIdentity?.let(Uri::parse)
+        val peerProtection = permission?.let { target ->
+            permissionPeerProtection(
+                capabilities = capabilities,
+                malformedCapabilities = malformedCapabilities,
+                targetSelectionId = malformed.selectionId,
+                targetPermissionIdentity = target.toString(),
+            )
+        } ?: DurableUploadPermissionPeerProtection.Ambiguous
+        return recoverMalformedDurableUploadCapability(
+            capability = malformed,
+            permission = permission,
+            peerProtection = peerProtection,
+            releasePermission = ::releasePermission,
+            isPermissionAbsent = ::exactReadPermissionIsAbsent,
+            removeMetadata = ::removeMetadata,
+        )
+    }
+
+    private fun malformedRecoveryDisposition(
+        malformed: MalformedDurableUploadCapability,
+        capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+    ): DurableUploadMalformedRecoveryDisposition {
+        val permission = malformed.cleanupPermissionIdentity?.let(Uri::parse)
+            ?: return DurableUploadMalformedRecoveryDisposition.Quarantine
+        if (malformedPeerCleanupDisposition(malformedCapabilities, malformed.selectionId, permission.toString()) ==
+            DurableUploadMalformedPeerCleanupDisposition.Quarantine
+        ) return DurableUploadMalformedRecoveryDisposition.Quarantine
+        val peerProtection = permissionPeerProtection(
+            capabilities = capabilities,
+            malformedCapabilities = malformedCapabilities,
+            targetSelectionId = malformed.selectionId,
+            targetPermissionIdentity = permission.toString(),
+        )
+        val permissionAbsent: Boolean? = if (
+            malformed.grantPreExisting == null &&
+            peerProtection == DurableUploadPermissionPeerProtection.None
+        ) {
+            try {
+                exactReadPermissionIsAbsent(permission)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            false
+        }
+        return durableUploadMalformedRecoveryDisposition(malformed.grantPreExisting, peerProtection, permissionAbsent)
+    }
+
+    private fun permissionPeerProtection(
+        capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+        targetSelectionId: String,
+        targetPermissionIdentity: String,
+    ): DurableUploadPermissionPeerProtection = durableUploadPermissionPeerProtection(
+        peers = (
+            capabilities.asSequence().map { (selectionId, capability) ->
+                DurableUploadPermissionPeer(
+                    selectionId,
+                    capability.uri.toString(),
+                    capability.grantPreExisting,
+                )
+            } + malformedCapabilities.asSequence().map { (_, capability) ->
+                DurableUploadPermissionPeer(
+                    capability.selectionId,
+                    capability.cleanupPermissionIdentity,
+                    capability.grantPreExisting,
+                )
+            }
+        ).asIterable(),
+        targetSelectionId = targetSelectionId,
+        targetPermission = targetPermissionIdentity,
+        samePermission = String::equals,
+    )
+
+    private fun malformedPeerCleanupDisposition(
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+        targetSelectionId: String,
+        targetPermissionIdentity: String,
+    ): DurableUploadMalformedPeerCleanupDisposition = durableUploadMalformedPeerCleanupDisposition(
+        malformedPeers = malformedCapabilities.values.asSequence().map { capability ->
+            DurableUploadPermissionPeer(
+                capability.selectionId,
+                capability.cleanupPermissionIdentity,
+                capability.grantPreExisting,
+            )
+        }.asIterable(),
+        targetSelectionId = targetSelectionId,
+        targetPermission = targetPermissionIdentity,
+        samePermission = String::equals,
+    )
+
     private fun persistedSource(file: LocalUploadFile): SelectedSource {
-        val source = selections[file.selectionId] ?: load(file.selectionId)
-            ?: error("The local file selection has expired.")
-        require(source.file == file) { "The local file selection metadata changed." }
+        return requiredSource(file, useCachedSource = true)
+    }
+
+    private fun requiredSource(
+        file: LocalUploadFile,
+        useCachedSource: Boolean,
+    ): SelectedSource {
+        val source = readAndroidLocalUploadCapability {
+            selections[file.selectionId].takeIf { useCachedSource } ?: load(file.selectionId)
+        } ?: throw AndroidLocalUploadCapabilityUnavailableException(
+            "The local file selection was not durably saved.",
+        )
+        if (source.file != file) {
+            throw AndroidLocalUploadCapabilityUnavailableException(
+                "The persisted local file metadata changed.",
+            )
+        }
+        requireDurableUploadCapabilityReady(source.phase)
         return source
     }
 
     private fun load(selectionId: String): SelectedSource? {
-        val encrypted = preferences.getString(preferenceKey(selectionId), null) ?: return null
-        return runCatching {
-            val payload = JSONObject(cipher.decrypt(encrypted))
+        val encrypted = readAndroidLocalUploadCapabilityPreference {
+            preferences.getString(preferenceKey(selectionId), null)
+        } ?: return null
+        val decrypted = decryptAndroidLocalUploadCapability { cipher.decrypt(encrypted) }
+        val payload = try {
+            JSONObject(decrypted)
+        } catch (failure: Exception) {
+            throw AndroidLocalUploadCapabilityMalformedException(
+                "The local file selection metadata is invalid.",
+                failure,
+            )
+        }
+        val cleanupPermissionIdentity = try {
+            payload.requireStrictString("uri")
+        } catch (_: Exception) {
+            null
+        }
+        val cleanupGrantPreExisting = try {
+            persistedDurableUploadGrantPreExisting(payload)
+        } catch (_: Exception) {
+            null
+        }
+        return try {
             val file = localUploadFile(
                 selectionId = payload.getString("selectionId"),
                 displayName = payload.getString("displayName"),
@@ -182,57 +685,82 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
             )
             require(file.selectionId == selectionId) { "The persisted upload capability changed." }
-            SelectedSource(Uri.parse(payload.getString("uri")), file)
-        }.getOrNull()
+            val phase = if (payload.has("phase")) {
+                CapabilityPhase.fromPersistedValue(payload.requireStrictString("phase"))
+            } else {
+                CapabilityPhase.Ready
+            }
+            val processGeneration = payload.optionalStrictString("processGeneration")
+                ?.also(::requireSafeProcessGeneration)
+            val grantPreExisting = persistedDurableUploadGrantPreExisting(payload)
+            SelectedSource(
+                uri = Uri.parse(payload.getString("uri")),
+                file = file,
+                phase = phase,
+                processGeneration = processGeneration,
+                grantPreExisting = grantPreExisting,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw AndroidLocalUploadCapabilityMalformedException(
+                "The local file selection metadata is invalid.",
+                failure,
+                cleanupPermissionIdentity,
+                cleanupGrantPreExisting,
+            )
+        }
     }
 
     private fun preferenceKey(selectionId: String): String = "$PREFERENCE_PREFIX$selectionId"
 
-    private data class PendingSelection(
+    private class PendingSelection(
         val continuation: CancellableContinuation<LocalUploadSelectionResult>,
         val acceptedMimeTypes: List<String>,
         val maximumBytes: Long,
-    )
+    ) {
+        @Volatile
+        var readyFile: LocalUploadFile? = null
+    }
 
     private data class SelectedSource(
         val uri: Uri,
         val file: LocalUploadFile,
+        val phase: CapabilityPhase = CapabilityPhase.Ready,
+        val processGeneration: String? = PROCESS_GENERATION,
+        val grantPreExisting: Boolean = false,
     )
 
     private companion object {
         const val PREFERENCES = "nextcloud_native_upload_capabilities"
         const val PREFERENCE_PREFIX = "upload_"
+        const val MAX_TRACKED_CAPABILITIES = 64
+        const val MAX_RECOVERABLE_CAPABILITIES = 1_024
+        const val MAX_RECOVERY_ROWS_PER_PASS = 1_024
+        val PROCESS_GENERATION = UUID.randomUUID().toString()
+        val PROCESS_SELECTIONS = ConcurrentHashMap<String, SelectedSource>()
+        val PENDING_CLEANUP_SELECTIONS = ConcurrentHashMap.newKeySet<String>()
+        val CAPABILITY_LOCK = Any()
+        val RECOVERY_SCAN = DurableUploadCapabilityRecoveryScan<SelectedSource>()
     }
 }
 
-/**
- * Acquires a durable picker capability without exposing an interval where a successful selection
- * can be reported before its metadata reaches app-private storage.
- */
-internal fun acquireDurableUploadCapability(
-    takePermission: () -> Unit,
-    persistMetadata: () -> Boolean,
-    releasePermission: () -> Unit,
-) {
-    takePermission()
-    val persisted = runCatching { persistMetadata() }
-    if (persisted.getOrNull() == true) return
-    runCatching(releasePermission)
-    persisted.exceptionOrNull()?.let { throw it }
-    error("The durable upload capability could not be saved.")
+private fun requireSafeProcessGeneration(value: String) {
+    require(value.length in 16..96 && value.all { it.isLetterOrDigit() || it == '-' }) {
+        "The picker capability process generation is invalid."
+    }
 }
 
-/**
- * Revokes the URI grant before synchronously deleting capability metadata. A failed grant release
- * is still followed by metadata deletion because Android also throws when the grant was already
- * absent; in either case the app must not retain an indefinitely reusable picker capability.
- */
-internal fun releaseDurableUploadCapability(
-    releasePermission: () -> Unit,
-    removeMetadata: () -> Boolean,
-): Boolean {
-    runCatching(releasePermission)
-    return runCatching(removeMetadata).getOrDefault(false)
+internal fun resumeLocalUploadSelectionResult(
+    continuation: CancellableContinuation<LocalUploadSelectionResult>,
+    result: LocalUploadSelectionResult,
+    releaseSelected: (LocalUploadFile) -> Unit,
+) {
+    continuation.resume(result) { _, undeliveredResult, _ ->
+        if (undeliveredResult is LocalUploadSelectionResult.Selected) {
+            runCatching { releaseSelected(undeliveredResult.file) }
+        }
+    }
 }
 
 private data class AndroidUploadMetadata(

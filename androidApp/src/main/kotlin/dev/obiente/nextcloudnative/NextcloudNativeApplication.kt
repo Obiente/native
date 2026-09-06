@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
@@ -11,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class NextcloudNativeApplication : Application() {
@@ -40,25 +43,43 @@ class NextcloudNativeApplication : Application() {
             runAndroidDurableUploadStartupRecovery(
                 recover = {
                     var uploads: AndroidDurableMultipartUploads? = null
-                    keepRetryingQueuedDurableUploadScheduling(
-                        reconcile = {
-                            constructAndReconcileQueuedDurableUploads {
-                                val accountPreferences = getSharedPreferences(
-                                    ANDROID_ACCOUNT_PREFERENCES_NAME,
-                                    Context.MODE_PRIVATE,
-                                )
-                                if (accountPreferences.durableUploadAccountResolutionAvailable()) {
-                                    val available = uploads ?: AndroidDurableMultipartUploads(
-                                        this@NextcloudNativeApplication,
-                                    ).also { uploads = it }
-                                    available::reconcileQueuedUploads
-                                } else {
-                                    suspend { true }
-                                }
-                            }
+                    monitorQueuedDurableUploadScheduling(
+                        recover = {
+                            keepRetryingQueuedDurableUploadScheduling(
+                                reconcile = {
+                                    constructAndReconcileQueuedDurableUploads {
+                                        val accountPreferences = getSharedPreferences(
+                                            ANDROID_ACCOUNT_PREFERENCES_NAME,
+                                            Context.MODE_PRIVATE,
+                                        )
+                                        val accountResolutionAvailable =
+                                            accountPreferences.durableUploadAccountResolutionAvailable()
+                                        val available = uploads ?: AndroidDurableMultipartUploads(
+                                            this@NextcloudNativeApplication,
+                                        ).also { uploads = it }
+                                        suspend {
+                                            available.reconcileQueuedUploads(
+                                                allowQueuedScheduling = accountResolutionAvailable,
+                                            )
+                                        }
+                                    }
+                                },
+                                wait = { delayMillis -> delay(delayMillis) },
+                                recordRecoveryFailure = recordRecoveryFailure,
+                            )
                         },
-                        wait = { delayMillis -> delay(delayMillis) },
-                        recordRecoveryFailure = recordRecoveryFailure,
+                        awaitWorkStopsRunning = { workId ->
+                            awaitDurableUploadWorkToStopRunning(
+                                workId = workId,
+                                awaitWorkStopsRunning = { requestedWorkId ->
+                                    WorkManager.getInstance(this@NextcloudNativeApplication)
+                                        .getWorkInfoByIdFlow(requestedWorkId)
+                                        .first { work -> work == null || work.state != WorkInfo.State.RUNNING }
+                                },
+                                wait = { retryDelayMillis -> delay(retryDelayMillis) },
+                            )
+                        },
+                        wait = { retryDelayMillis -> delay(retryDelayMillis) },
                     )
                 },
                 recordRecoveryFailure = recordRecoveryFailure,
