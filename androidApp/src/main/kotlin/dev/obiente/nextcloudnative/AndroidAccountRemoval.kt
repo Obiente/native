@@ -30,6 +30,33 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     action = action,
 )
 
+internal suspend fun <Result> withPreparedAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    prepare: suspend () -> Unit,
+    revalidate: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result {
+    prepare()
+    return withAndroidAccountRemovalLease(accountIdentity, guard) {
+        revalidate()
+        action()
+    }
+}
+
+internal suspend fun <Result> withUnavailableAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    preflight: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result = withPreparedAndroidAccountRemovalLease(
+    accountIdentity = accountIdentity,
+    guard = guard,
+    prepare = preflight,
+    revalidate = preflight,
+    action = action,
+)
+
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
@@ -64,11 +91,55 @@ internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
 internal suspend fun revokeAndroidSessionWithAccountLease(
     accountIdentity: String,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
-    preflight: suspend () -> Unit,
+    prepare: suspend () -> Unit,
+    revalidate: suspend () -> Unit,
     revoke: suspend () -> Unit,
     removeLocalAccount: suspend () -> Unit,
-) = withAndroidAccountRemovalLease(accountIdentity, guard) {
-    revokeAndroidSessionAfterRemovalPreflight(preflight, revoke, removeLocalAccount)
+) = withPreparedAndroidAccountRemovalLease(accountIdentity, guard, prepare, revalidate) {
+    revokeAndroidSessionAfterRemovalPreflight({}, revoke, removeLocalAccount)
+}
+
+internal class AndroidAccountRemovalLeaseCoordinator(
+    context: Context,
+    private val guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+) {
+    private val appContext = context.applicationContext
+
+    suspend fun <Result> withLease(
+        session: NextcloudSession,
+        action: suspend () -> Result,
+    ): Result = withPreparedAndroidAccountRemovalLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        prepare = { prepareAndroidAccountRemoval(appContext, session) },
+        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        action = action,
+    )
+
+    // Missing credentials cannot safely repair legacy self-provider downloads before removal.
+    // Commit first; durable owned-state cleanup remains fail-closed and can resume after re-add.
+    suspend fun <Result> withUnavailableLease(
+        session: NextcloudSession,
+        action: suspend () -> Result,
+    ): Result = withUnavailableAndroidAccountRemovalLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        preflight = { preflightAndroidAccountRemoval(appContext, session) },
+        action = action,
+    )
+
+    suspend fun revoke(
+        session: NextcloudSession,
+        revoke: suspend () -> Unit,
+        removeLocalAccount: suspend () -> Unit,
+    ) = revokeAndroidSessionWithAccountLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        prepare = { prepareAndroidAccountRemoval(appContext, session) },
+        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        revoke = revoke,
+        removeLocalAccount = removeLocalAccount,
+    )
 }
 
 internal enum class AndroidAccountDocumentGrantScope(val pathSegment: String) {
@@ -88,6 +159,11 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
 
 internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     preflightAndroidAccountRemoval(context, session)
+    reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
+        context,
+        NextcloudDocumentIds.accountKey(session),
+        session,
+    )
 }
 
 internal fun revokeAndroidAccountDocumentGrants(context: Context, accountIdentity: String) {

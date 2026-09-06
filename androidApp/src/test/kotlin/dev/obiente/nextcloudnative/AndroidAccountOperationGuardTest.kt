@@ -265,7 +265,8 @@ class AndroidAccountOperationGuardTest {
             revokeAndroidSessionWithAccountLease(
                 accountIdentity = "account-a",
                 guard = guard,
-                preflight = {},
+                prepare = {},
+                revalidate = {},
                 revoke = { remoteRevoked.complete(Unit) },
                 removeLocalAccount = {
                     allowLocalRemoval.await()
@@ -392,6 +393,111 @@ class AndroidAccountOperationGuardTest {
             withAndroidAccountRemovalLease(accountIdentity, guard) { removalEntered = true }
         }
         assertTrue(removalEntered)
+    }
+
+    @Test
+    fun removalPreparationCanUseTheRetainedReadLeaseBeforeRemovalBecomesExclusive() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        val events = mutableListOf<String>()
+
+        withTimeout(1_000L) {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = {
+                    guard.withAccount(accountIdentity) { events += "provider-read" }
+                },
+                revalidate = { events += "revalidate" },
+            ) {
+                events += "remove"
+            }
+        }
+
+        assertEquals(listOf("provider-read", "revalidate", "remove"), events)
+    }
+
+    @Test
+    fun unavailableRemovalUsesOnlyCredentialFreePreflight() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val events = mutableListOf<String>()
+
+        withUnavailableAndroidAccountRemovalLease(
+            accountIdentity = "account-a",
+            guard = guard,
+            preflight = { events += "preflight" },
+        ) {
+            events += "remove"
+        }
+
+        assertEquals(listOf("preflight", "preflight", "remove"), events)
+    }
+
+    @Test
+    fun accountWorkStartedAfterPreparationMakesRemovalFailClosed() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalEntered = false
+        var competingLease: AndroidAccountOperationLease? = null
+
+        val failure = try {
+            assertFailsWith<IllegalStateException> {
+                withTimeout(1_000L) {
+                    withPreparedAndroidAccountRemovalLease(
+                        accountIdentity = accountIdentity,
+                        guard = guard,
+                        prepare = {
+                            competingLease = guard.acquireBlocking(accountIdentity)
+                        },
+                        revalidate = {},
+                    ) {
+                        removalEntered = true
+                    }
+                }
+            }
+        } finally {
+            competingLease?.close()
+        }
+
+        assertEquals(
+            "Finish or discard pending document changes before removing this account.",
+            failure.message,
+        )
+        assertFalse(removalEntered)
+    }
+
+    @Test
+    fun removalStateIsRevalidatedAfterTheAccountLeaseIsAcquired() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalReady = true
+        var removalEntered = false
+        var revalidationHeldLease = false
+
+        val failure = assertFailsWith<IllegalStateException> {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = { removalReady = false },
+                revalidate = {
+                    revalidationHeldLease = guard.tryWithAccount(
+                        accountIdentity,
+                        unavailable = { true },
+                        action = { false },
+                    )
+                    check(removalReady) { "Account state changed after preparation." }
+                },
+            ) {
+                removalEntered = true
+            }
+        }
+
+        assertEquals("Account state changed after preparation.", failure.message)
+        assertTrue(revalidationHeldLease)
+        assertFalse(removalEntered)
+        withTimeout(1_000L) {
+            guard.withAccount(accountIdentity) { }
+        }
     }
 
     @Test

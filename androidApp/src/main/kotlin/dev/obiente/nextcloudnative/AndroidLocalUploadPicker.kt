@@ -66,6 +66,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             return
         }
         val result = runCatching selectionResult@{
+            requireExternalAndroidPickerUri(uri.toString(), appContext.packageName)
             val metadata = resolver.queryUploadMetadata(uri)
             val mimeType = resolver.getType(uri)?.trim()?.lowercase()?.takeIf(String::isNotBlank)
             if (!isAcceptedUploadMimeType(mimeType, selection.acceptedMimeTypes)) {
@@ -157,9 +158,13 @@ internal class AndroidLocalUploadPicker(context: Context) {
             }
             if (cancelledAfterAcquire) return@selectionResult LocalUploadSelectionResult.Cancelled
             LocalUploadSelectionResult.Selected(file)
-        }.getOrElse {
+        }.getOrElse { failure ->
             LocalUploadSelectionResult.Rejected(
-                "The selected file could not be opened.",
+                if (failure is AndroidPickerUriRejectedException) {
+                    failure.rejection.message
+                } else {
+                    "The selected file could not be opened."
+                },
             )
         }
         resumeLocalUploadSelectionResult(
@@ -622,6 +627,14 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 "The persisted local file metadata changed.",
             )
         }
+        try {
+            requireExternalAndroidPickerUri(source.uri.toString(), appContext.packageName)
+        } catch (failure: AndroidPickerUriRejectedException) {
+            throw AndroidLocalUploadCapabilityUnavailableException(
+                "The persisted local file provider is not allowed.",
+                failure,
+            )
+        }
         if (!isDurableUploadCapabilityReady(source.phase)) {
             throw AndroidLocalUploadCapabilityUnavailableException(
                 "The local file selection is pending capability cleanup.",
@@ -718,45 +731,6 @@ internal class AndroidLocalUploadPicker(context: Context) {
         val PENDING_CLEANUP_SELECTIONS = ConcurrentHashMap.newKeySet<String>()
         val CAPABILITY_LOCK = Any()
         val RECOVERY_SCAN = DurableUploadCapabilityRecoveryScan<SelectedSource>()
-    }
-}
-
-private fun requireSafeProcessGeneration(value: String) {
-    require(value.length in 16..96 && value.all { it.isLetterOrDigit() || it == '-' }) {
-        "The picker capability process generation is invalid."
-    }
-}
-
-internal fun JSONObject.optionalStrictString(key: String): String? {
-    if (!has(key) || isNull(key)) return null
-    return requireStrictString(key)
-}
-
-internal fun JSONObject.requireStrictString(key: String): String = get(key).let { value ->
-    require(value is String) { "The $key value changed type." }
-    value
-}
-
-internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
-    if (!has(key) || isNull(key)) return null
-    return get(key).let { value ->
-        require(value is Boolean) { "The $key value changed type." }
-        value
-    }
-}
-
-internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
-    payload.optionalStrictBoolean("grantPreExisting") ?: false
-
-internal fun resumeLocalUploadSelectionResult(
-    continuation: CancellableContinuation<LocalUploadSelectionResult>,
-    result: LocalUploadSelectionResult,
-    releaseSelected: (LocalUploadFile) -> Unit,
-) {
-    continuation.resume(result) { _, undeliveredResult, _ ->
-        if (undeliveredResult is LocalUploadSelectionResult.Selected) {
-            runCatching { releaseSelected(undeliveredResult.file) }
-        }
     }
 }
 

@@ -28,6 +28,9 @@ internal interface AndroidSafDownloadOwnership {
 
 internal interface AndroidSafDownloadOwnershipDirectory {
     fun hasPendingTransactions(): Boolean
+    fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean =
+        forDirectory(directoryIdentity).transactions().isNotEmpty()
+    fun observedPendingDirectoryIdentities(): Set<String> = emptySet()
     fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership
     fun observeRecoveryNames(directoryIdentity: String, observedNames: Set<String>) = Unit
 }

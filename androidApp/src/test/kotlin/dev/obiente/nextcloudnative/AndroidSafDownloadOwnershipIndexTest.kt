@@ -206,10 +206,42 @@ class AndroidSafDownloadOwnershipIndexTest {
             index.observeRecoveryNames(relocatedScope, setOf(relocatedName))
 
             assertEquals(emptyList(), index.forDirectory(originalScope).transactions())
+            assertEquals(setOf(relocatedScope), index.observedPendingDirectoryIdentities())
             assertEquals(
                 listOf(transaction),
                 index.forDirectory(relocatedScope).transactions(setOf(relocatedName)),
             )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `indexed directory membership does not relist ownership rows`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-membership-").toFile()
+        try {
+            val pendingScope = "content://provider/tree/root/document/pending"
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory(pendingScope).add(authenticatedRelocationTransaction())
+            var listingCount = 0
+            val indexed = AndroidSafDownloadOwnershipStore(
+                directory = root,
+                listFiles = {
+                    listingCount += 1
+                    root.listFiles()
+                },
+            ).indexed()
+
+            repeat(20_000) { candidate ->
+                assertEquals(
+                    candidate == 17,
+                    indexed.hasPendingTransactionsForDirectory(
+                        if (candidate == 17) pendingScope else "content://provider/tree/root/document/$candidate",
+                    ),
+                )
+            }
+
+            assertEquals(1, listingCount)
         } finally {
             root.deleteRecursively()
         }
