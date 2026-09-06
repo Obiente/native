@@ -91,7 +91,9 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduledMediaReconciliations = ConcurrentHashMap.newKeySet<String>()
     private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
-
+    private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
+    private val loadCapabilityState = store::loadAndReconcileUploadCleanups
+    init { reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, loadCapabilityState, capabilities) } }
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
@@ -257,14 +259,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val current = store.load()
-        if (current.coordinator.pairs.any {
-                it.accountId == accountId &&
-                    it.localRootId == localRoot.localRootId &&
-                    it.remoteRootPath == normalizedRemote
-            }
-        ) {
+        if (hasDuplicateAndroidFileSyncRoot(current.coordinator.pairs, accountId, localRoot.localRootId, normalizedRemote)) {
             return@withLock FileSyncCenterActionResult.Rejected(
-                "That local and Nextcloud folder pair already exists.",
+                "That local folder already belongs to a folder sync pair.",
             )
         }
         val pair = FileSyncPair(
@@ -274,12 +271,21 @@ internal class AndroidFileSyncEngine(context: Context) {
             remoteRootPath = normalizedRemote,
             configuration = configuration,
         )
-        store.save(
-            current.copy(
-                coordinator = addFileSyncPair(current.coordinator, pair),
-                localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
-            ),
+        val updated = current.copy(
+            coordinator = addFileSyncPair(current.coordinator, pair),
+            localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
         )
+        if (localRoot.localRootId.startsWith("content://")) {
+            bindAndPersistFileSyncPair(
+                pairId = pair.id,
+                bindReady = { capabilities.bindReady(localRoot.localRootId, pair.id) },
+                persist = { store.save(updated) },
+                load = store::load,
+                abandonUncommittedPair = capabilities::abandonUncommittedPair,
+            )
+        } else {
+            store.save(updated)
+        }
         scheduler.schedule(pair.id, accountId, userId, pair.configuration)
         FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
     }
@@ -312,8 +318,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val releasesLocalGrant = pair.localRootId.startsWith("content://") &&
-                current.coordinator.pairs.none { it.id != pairId && it.localRootId == pair.localRootId }
+            capabilities.reconcile(current)
             var cleanedCoordinator: FileSyncCoordinatorState? = null
             var remoteCleanupRejected = false
             val removed = removeConfiguredFileSyncPair(
@@ -351,18 +356,14 @@ internal class AndroidFileSyncEngine(context: Context) {
                     }
                 },
                 persistRemoval = {
+                    capabilities.preparePairCleanup(pairId)
                     val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
-                    store.save(
-                        current.copy(
-                            coordinator = remaining,
-                            localDisplayNames = current.localDisplayNames - pairId,
-                        ),
-                    )
+                    capabilities.persistPairRemoval(store::loadAndReconcileUploadCleanups) {
+                        store.save(current.copy(coordinator = remaining, localDisplayNames = current.localDisplayNames - pairId))
+                    }
                 },
                 cancelSchedule = { scheduler.cancel(pairId) },
-                releaseLocalGrant = {
-                    releaseSafGrantAfterPairRemoval(appContext, pair.localRootId, releasesLocalGrant)
-                },
+                releaseLocalGrant = { capabilities.finishPairCleanupOrRetry(pairId, store::load) },
             )
             if (!removed) {
                 return@withLock FileSyncCenterActionResult.Rejected(if (remoteCleanupRejected) {

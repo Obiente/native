@@ -98,7 +98,7 @@ class AndroidAccountRecoveryPriorityTest {
     }
 
     @Test
-    fun accountRetirementRetainsPairMappingUntilEverySafGrantReleaseIsAttempted() = runBlocking {
+    fun accountRetirementPersistsAfterEveryGrantCleanupIsPrepared() = runBlocking {
         val retiredPairs = listOf(
             fileSyncPair("retired-a", "content://documents/first"),
             fileSyncPair("retired-b", "content://documents/second"),
@@ -108,19 +108,22 @@ class AndroidAccountRecoveryPriorityTest {
         assertFailsWith<IllegalStateException> {
             retireConfiguredFileSyncAccountPairs(
                 retiredPairs = retiredPairs,
-                retainedPairs = emptyList(),
                 reconcileLocalDownloads = { true },
                 cancelSchedule = {},
                 cancelNotification = {},
+                prepareLocalGrantCleanup = { pairId -> events += "prepare-$pairId" },
                 persistRetirement = { events += "persist-retirement" },
-                releaseLocalGrant = { localRootId ->
-                    events += "release-$localRootId"
-                    if (localRootId.endsWith("first")) error("synthetic grant release interruption")
+                finishLocalGrantCleanup = { pairId ->
+                    events += "finish-$pairId"
+                    if (pairId == "retired-a") error("synthetic grant release interruption")
                 },
             )
         }
 
-        assertEquals(listOf("release-content://documents/first"), events)
+        assertEquals(
+            listOf("prepare-retired-a", "prepare-retired-b", "persist-retirement", "finish-retired-a"),
+            events,
+        )
     }
 
     private fun fileSyncPair(id: String, localRootId: String) = FileSyncPair(

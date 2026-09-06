@@ -99,27 +99,20 @@ internal fun FileOfflineCenterScreen(
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
     var syncBusyPairIds by remember(session, userId) { mutableStateOf<Set<String>>(emptySet()) }
-    var pendingLocalRootJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf<String?>(null)
+    val setupDraft = rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        userId,
+        saver = FileSyncSetupDraftSaver,
+    ) {
+        FileSyncSetupDraftState()
     }
-    var pendingMediaSuggestionJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf<String?>(null)
-    }
-    var pendingRemotePath by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf<String?>(null)
-    }
-    var pendingSyncConfigurationJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf<String?>(null)
-    }
-    var remoteFolderPickerVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf(false)
-    }
-    var syncSelectionPickerVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
-        mutableStateOf(false)
-    }
-    val pendingLocalRoot = pendingLocalRootJson?.let { encoded ->
-        runCatching { fileSyncSetupJson.decodeFromString<FileSyncLocalRoot>(encoded) }.getOrNull()
-    }
+    var pendingLocalRoot by setupDraft.localRoot
+    var pendingMediaSuggestionJson by setupDraft.mediaSuggestionJson
+    var pendingRemotePath by setupDraft.remotePath
+    var pendingSyncConfigurationJson by setupDraft.configurationJson
+    var remoteFolderPickerVisible by setupDraft.remoteFolderPickerVisible
+    var syncSelectionPickerVisible by setupDraft.selectionPickerVisible
     val pendingMediaSuggestion = pendingMediaSuggestionJson?.let { encoded ->
         runCatching { fileSyncSetupJson.decodeFromString<MediaSyncFolderSuggestion>(encoded) }.getOrNull()
     }
@@ -151,7 +144,15 @@ internal fun FileOfflineCenterScreen(
     var virtualFolderPickerError by remember(session, userId) { mutableStateOf<String?>(null) }
     var releaseVirtualFolderPath by remember(session, userId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
+    fun abandonPendingFolderSync(): Boolean {
+        val abandoned = setupDraft.abandon(services::abandonFileSyncLocalRoot)
+        if (!abandoned) {
+            actionMessage = "Could not release the selected folder. Choose Add folder to retry cleanup."
+        }
+        pendingMediaPreview = null
+        return abandoned
+    }
+    AbandonFileSyncRootOnDispose(services, setupDraft.localRoot)
     fun runItemAction(item: FileOfflineCenterItem, remove: Boolean) {
         if (actionKey != null) return
         actionKey = item.key
@@ -196,13 +197,14 @@ internal fun FileOfflineCenterScreen(
 
     fun beginAddFolderSync() {
         if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return
+        if (pendingLocalRoot != null && !abandonPendingFolderSync()) return
         syncBusyPairIds += ADD_PAIR_BUSY_ID
         scope.launch {
             try {
                 runCatching { services.chooseFileSyncLocalRoot() }
                     .onSuccess { selected ->
                         pendingMediaSuggestionJson = null
-                        pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
+                        pendingLocalRoot = selected
                         pendingRemotePath = selected?.let { "" }
                         pendingSyncConfigurationJson = selected
                             ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
@@ -223,7 +225,7 @@ internal fun FileOfflineCenterScreen(
         pendingMediaPreview = null
         mediaPreviewError = null
         pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
-        pendingLocalRootJson = fileSyncSetupJson.encodeToString(suggestion.localRoot)
+        pendingLocalRoot = suggestion.localRoot
         pendingRemotePath = suggestion.suggestedRemoteRootPath
         pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(
             defaultFileSyncConfiguration(isMediaSuggestion = true),
@@ -1005,9 +1007,7 @@ internal fun FileOfflineCenterScreen(
             onDismiss = {
                 remoteFolderPickerVisible = false
                 if (pendingRemotePath == null) {
-                    pendingLocalRootJson = null
-                    pendingMediaSuggestionJson = null
-                    pendingSyncConfigurationJson = null
+                    abandonPendingFolderSync()
                 }
             },
             onSelected = { selectedPath ->
@@ -1064,12 +1064,7 @@ internal fun FileOfflineCenterScreen(
             busy = ADD_PAIR_BUSY_ID in syncBusyPairIds,
             onDismiss = {
                 if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) {
-                    pendingLocalRootJson = null
-                    pendingMediaSuggestionJson = null
-                    pendingRemotePath = null
-                    pendingSyncConfigurationJson = null
-                    pendingMediaPreview = null
-                    syncSelectionPickerVisible = false
+                    abandonPendingFolderSync()
                 }
             },
             onChooseDestination = {
@@ -1097,16 +1092,15 @@ internal fun FileOfflineCenterScreen(
                     }.onSuccess { result ->
                         actionMessage = result.fileSyncCenterMessage()
                         if (result is FileSyncCenterActionResult.Completed) {
-                            pendingLocalRootJson = null
-                            pendingMediaSuggestionJson = null
-                            pendingRemotePath = null
-                            pendingSyncConfigurationJson = null
+                            setupDraft.clear()
                             pendingMediaPreview = null
-                            syncSelectionPickerVisible = false
                             refreshAttempt += 1
+                        } else {
+                            abandonPendingFolderSync()
                         }
                     }.onFailure { failure ->
                         actionMessage = failure.message ?: "Could not add this folder sync pair."
+                        abandonPendingFolderSync()
                     }
                     syncBusyPairIds -= ADD_PAIR_BUSY_ID
                 }
