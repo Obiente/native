@@ -39,6 +39,7 @@ internal data class DesktopAccountSyncPairCleanup(
     val phase: DesktopAccountSyncPairCleanupPhase,
     val durableMutationAccountScope: String? = null,
     val accountStorageKey: String? = null,
+    val legacyAccountScopeDigest: String? = null,
 )
 
 internal fun DesktopAccountSyncPairCleanup.matchesAccountActivation(
@@ -56,7 +57,20 @@ internal class DesktopAccountSyncPairCleanupJournal(
         accountId: String,
         durableMutationAccountScope: String? = null,
         accountStorageKey: String? = null,
-    ) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Prepared, durableMutationAccountScope, accountStorageKey)
+    ) = prepare(accountId, durableMutationAccountScope, accountStorageKey, legacyAccountScopeDigest = null)
+
+    fun prepare(
+        accountId: String,
+        durableMutationAccountScope: String?,
+        accountStorageKey: String?,
+        legacyAccountScopeDigest: String?,
+    ) = persist(
+        accountId,
+        DesktopAccountSyncPairCleanupPhase.Prepared,
+        durableMutationAccountScope,
+        accountStorageKey,
+        legacyAccountScopeDigest,
+    )
 
     fun commit(accountId: String) {
         val current = decode(accountId, preferences.get(cleanupKey(accountId), null))
@@ -68,6 +82,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
             DesktopAccountSyncPairCleanupPhase.Committed,
             current.durableMutationAccountScope,
             current.accountStorageKey,
+            current.legacyAccountScopeDigest,
         )
     }
 
@@ -122,6 +137,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
         phase: DesktopAccountSyncPairCleanupPhase,
         durableMutationAccountScope: String?,
         accountStorageKey: String?,
+        legacyAccountScopeDigest: String?,
     ) {
         validateDesktopSyncPairCleanupAccountId(accountId)
         require(
@@ -129,6 +145,9 @@ internal class DesktopAccountSyncPairCleanupJournal(
         ) { "The desktop durable mutation cleanup identity is invalid." }
         require(accountStorageKey == null || accountStorageKey.matches(ACCOUNT_STORAGE_KEY_PATTERN)) {
             "The desktop account storage cleanup identity is invalid."
+        }
+        require(legacyAccountScopeDigest == null || legacyAccountScopeDigest.matches(ACCOUNT_STORAGE_KEY_PATTERN)) {
+            "The desktop legacy workspace cleanup identity is invalid."
         }
         val key = cleanupKey(accountId)
         val current = preferences.get(key, null)?.let { decode(accountId, it) }
@@ -141,7 +160,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
         }
         preferences.put(
             key,
-            encode(phase, durableMutationAccountScope, accountStorageKey),
+            encode(phase, durableMutationAccountScope, accountStorageKey, legacyAccountScopeDigest),
         )
         preferences.flush()
     }
@@ -161,6 +180,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
         }
         val scope = fields.getOrNull(2)?.takeIf(String::isCanonicalGroupwareMutationAccountScope)
         val accountStorageKey = fields.getOrNull(3)?.takeIf { it.matches(ACCOUNT_STORAGE_KEY_PATTERN) }
+        val legacyAccountScopeDigest = fields.getOrNull(4)?.takeIf { it.matches(ACCOUNT_STORAGE_KEY_PATTERN) }
         return if (fields.size == 3 && fields[0] == VALUE_VERSION && scope != null) {
             DesktopAccountSyncPairCleanup(accountId, phase, scope)
         } else if (
@@ -168,6 +188,11 @@ internal class DesktopAccountSyncPairCleanupJournal(
             scope != null && accountStorageKey != null
         ) {
             DesktopAccountSyncPairCleanup(accountId, phase, scope, accountStorageKey)
+        } else if (
+            fields.size == 5 && fields[0] == VALUE_VERSION_WITH_LEGACY_ACCOUNT_SCOPE &&
+            scope != null && accountStorageKey != null && legacyAccountScopeDigest != null
+        ) {
+            DesktopAccountSyncPairCleanup(accountId, phase, scope, accountStorageKey, legacyAccountScopeDigest)
         } else {
             DesktopAccountSyncPairCleanup(accountId, DesktopAccountSyncPairCleanupPhase.Unknown)
         }
@@ -177,8 +202,20 @@ internal class DesktopAccountSyncPairCleanupJournal(
         phase: DesktopAccountSyncPairCleanupPhase,
         scope: String?,
         accountStorageKey: String?,
+        legacyAccountScopeDigest: String?,
     ): String {
         val encodedPhase = if (phase == DesktopAccountSyncPairCleanupPhase.Prepared) PREPARED else COMMITTED
+        if (legacyAccountScopeDigest != null) {
+            requireNotNull(scope)
+            requireNotNull(accountStorageKey)
+            return listOf(
+                VALUE_VERSION_WITH_LEGACY_ACCOUNT_SCOPE,
+                encodedPhase,
+                scope,
+                accountStorageKey,
+                legacyAccountScopeDigest,
+            ).joinToString(VALUE_SEPARATOR)
+        }
         if (accountStorageKey != null) {
             requireNotNull(scope)
             return listOf(VALUE_VERSION_WITH_ACCOUNT_STORAGE, encodedPhase, scope, accountStorageKey)
@@ -201,6 +238,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
         const val COMMITTED = "committed"
         const val VALUE_VERSION = "v2"
         const val VALUE_VERSION_WITH_ACCOUNT_STORAGE = "v3"
+        const val VALUE_VERSION_WITH_LEGACY_ACCOUNT_SCOPE = "v4"
         const val VALUE_SEPARATOR = "|"
         val ACCOUNT_STORAGE_KEY_PATTERN = Regex("[0-9a-f]{64}")
     }
@@ -276,7 +314,8 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     accountId: String,
     durableMutationAccountScope: String? = null,
     accountStorageKey: String? = null,
-    prepareCleanup: suspend (String, String?, String?) -> Unit,
+    legacyAccountScopeDigest: String? = null,
+    prepareCleanup: suspend (String, String?, String?, String?) -> Unit,
     commitCleanup: suspend (String) -> Unit,
     clearCleanup: suspend (String) -> Unit,
     accountOwnership: (String) -> DesktopAccountOwnership,
@@ -285,7 +324,7 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     retireCommittedAccount: () -> Unit = {},
     recordCleanupFailure: suspend (Exception) -> Unit,
 ): Boolean {
-    prepareCleanup(accountId, durableMutationAccountScope, accountStorageKey)
+    prepareCleanup(accountId, durableMutationAccountScope, accountStorageKey, legacyAccountScopeDigest)
     val removed = try {
         removeCredential()
     } catch (failure: Throwable) {
@@ -315,6 +354,7 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
                 DesktopAccountSyncPairCleanupPhase.Committed,
                 durableMutationAccountScope,
                 accountStorageKey,
+                legacyAccountScopeDigest,
             ),
         )
         clearCleanup(accountId)
@@ -330,6 +370,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
     accountId: String?,
     durableMutationAccountScope: String? = null,
     accountStorageKey: String? = null,
+    legacyAccountScopeDigest: String? = null,
     cleanupJournal: DesktopAccountSyncPairCleanupJournal,
     accountOwnership: (String) -> DesktopAccountOwnership,
     commitRemoval: suspend () -> Unit,
@@ -345,6 +386,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
         accountId = accountId,
         durableMutationAccountScope = durableMutationAccountScope,
         accountStorageKey = accountStorageKey,
+        legacyAccountScopeDigest = legacyAccountScopeDigest,
         prepareCleanup = cleanupJournal::prepare,
         commitCleanup = cleanupJournal::commit,
         clearCleanup = cleanupJournal::clear,

@@ -729,7 +729,7 @@ class DesktopAccountOperationGuardTest {
 
         val removed = removeDesktopAccountBeforeSyncPairCleanup(
             accountId = CLEANUP_ACCOUNT_ID,
-            prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
+            prepareCleanup = { _, _, _, _ -> events += "prepare-cleanup" },
             commitCleanup = { events += "commit-cleanup" },
             clearCleanup = { events += "clear-cleanup" },
             accountOwnership = { DesktopAccountOwnership.Absent },
@@ -764,7 +764,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<CancellationException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
+                prepareCleanup = { _, _, _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -793,7 +793,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<IllegalStateException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
+                prepareCleanup = { _, _, _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -941,6 +941,7 @@ class DesktopAccountOperationGuardTest {
                     accountId = CLEANUP_ACCOUNT_ID,
                     durableMutationAccountScope = MUTATION_SCOPE,
                     accountStorageKey = ACCOUNT_STORAGE_KEY,
+                    legacyAccountScopeDigest = LEGACY_ACCOUNT_SCOPE,
                     prepareCleanup = firstJournal::prepare,
                     commitCleanup = firstJournal::commit,
                     clearCleanup = firstJournal::clear,
@@ -960,12 +961,13 @@ class DesktopAccountOperationGuardTest {
                         DesktopAccountSyncPairCleanupPhase.Committed,
                         MUTATION_SCOPE,
                         ACCOUNT_STORAGE_KEY,
+                        LEGACY_ACCOUNT_SCOPE,
                     ),
                 ),
                 restored.pending(),
             )
             assertEquals(
-                "v3|committed|$MUTATION_SCOPE|$ACCOUNT_STORAGE_KEY",
+                "v4|committed|$MUTATION_SCOPE|$ACCOUNT_STORAGE_KEY|$LEGACY_ACCOUNT_SCOPE",
                 preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null),
             )
 
@@ -973,7 +975,10 @@ class DesktopAccountOperationGuardTest {
             retryDesktopAccountSyncPairCleanup(
                 cleanup = restored.pending().single(),
                 accountOwnership = { DesktopAccountOwnership.Present },
-                removeSyncPairs = { retryEvents += "remove-pairs-${it.accountId}" },
+                removeSyncPairs = {
+                    assertEquals(LEGACY_ACCOUNT_SCOPE, it.legacyAccountScopeDigest)
+                    retryEvents += "remove-pairs-${it.accountId}"
+                },
                 clearCleanup = {
                     retryEvents += "clear-cleanup-$it"
                     restored.clear(it)
@@ -1055,5 +1060,6 @@ class DesktopAccountOperationGuardTest {
         const val CLEANUP_ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         const val MUTATION_SCOPE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         const val ACCOUNT_STORAGE_KEY = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        const val LEGACY_ACCOUNT_SCOPE = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
 }

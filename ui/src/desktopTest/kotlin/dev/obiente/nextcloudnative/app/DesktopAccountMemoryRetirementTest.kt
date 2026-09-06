@@ -15,7 +15,7 @@ class DesktopAccountMemoryRetirementTest {
         val removed = removeDesktopAccountBeforeSyncPairCleanup(
             accountId = "a".repeat(64),
             accountStorageKey = "b".repeat(64),
-            prepareCleanup = { _, _, _ -> events += "prepare" },
+            prepareCleanup = { _, _, _, _ -> events += "prepare" },
             commitCleanup = { events += "commit"; throw IOException("disk full") },
             clearCleanup = { events += "clear" },
             accountOwnership = { DesktopAccountOwnership.Absent },
@@ -36,7 +36,7 @@ class DesktopAccountMemoryRetirementTest {
             runCatching {
                 removeDesktopAccountBeforeSyncPairCleanup(
                     accountId = "c".repeat(64),
-                    prepareCleanup = { _, _, _ -> },
+                    prepareCleanup = { _, _, _, _ -> },
                     commitCleanup = {},
                     clearCleanup = {},
                     accountOwnership = { ownership },
