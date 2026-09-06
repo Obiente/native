@@ -106,6 +106,13 @@ internal class DynamicNativeMemoryCache(
         }
     }
 
+    fun removeAccount(accountStorageKey: String) {
+        discoveries.keys.removeAll { key -> key.account == accountStorageKey }
+        discoveryMetadata.keys.removeAll { key -> key.account == accountStorageKey }
+        discoveryFailures.keys.removeAll { key -> key.account == accountStorageKey }
+        screens.keys.removeAll { key -> key.account == accountStorageKey }
+    }
+
     private fun DynamicScreenSnapshot.bounded(): DynamicScreenSnapshot {
         val boundedRelated = relatedRecords.entries
             .take(MAXIMUM_RELATED_RESOURCES)

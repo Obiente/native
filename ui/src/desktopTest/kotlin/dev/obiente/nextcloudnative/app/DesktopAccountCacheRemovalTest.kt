@@ -71,6 +71,28 @@ class DesktopAccountCacheRemovalTest {
         }
     }
 
+    @Test
+    fun accountRemovalPurgesVirtualFileLocationPreferences() {
+        val preferences = Preferences.userRoot().node("desktop-account-locations-${UUID.randomUUID()}")
+        try {
+            val rootKey = virtualFileProviderRootPreferenceKey(ACCOUNT_ID)
+            val primaryKey = "vfpc-primary.$ACCOUNT_ID"
+            val overflowKey = "vfpc-overflow.$ACCOUNT_ID"
+            preferences.put(rootKey, "/private/mount")
+            preferences.put(primaryKey, "/private/primary")
+            preferences.put(overflowKey, "/private/overflow")
+            preferences.flush()
+
+            removeDesktopAccountVirtualFilePreferences(preferences, ACCOUNT_ID)
+
+            assertNull(preferences.get(rootKey, null))
+            assertNull(preferences.get(primaryKey, null))
+            assertNull(preferences.get(overflowKey, null))
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
     private companion object {
         const val ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 

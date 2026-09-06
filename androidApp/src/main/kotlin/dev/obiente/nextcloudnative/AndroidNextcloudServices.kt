@@ -3738,25 +3738,6 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    private fun elapsedMillis(startedNanos: Long): Long =
-        (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L
-
-    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
-        val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            if (total > maxBytes) {
-                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
-            }
-            output.write(buffer, 0, read)
-        }
-        return output.toByteArray()
-    }
-
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {
         val document = SafeXmlParser.parse(xml)
         val responses = document.getElementsByTagNameNS(DAV_NAMESPACE, "response")

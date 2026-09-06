@@ -125,7 +125,6 @@ private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
-private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
 private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
 private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
 private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
@@ -158,16 +157,6 @@ private fun desktopLinuxVirtualFileMountPoint(
     accountId: String,
 ): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
     File(location.parentPath, location.folderName).absoluteFile.normalize()
-}
-
-private fun virtualFileProviderRootPreferenceKey(accountId: String): String {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return "$KEY_VIRTUAL_FILE_ROOT_PREFIX$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
-}
-
-private fun virtualFileCachePreferenceKey(prefix: String, accountId: String): String {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return "$prefix$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
 }
 
 private data class DesktopVirtualFileCacheTiers(
@@ -3871,8 +3860,11 @@ class DesktopNextcloudServices(
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
+        cleanup.accountStorageKey?.let(AccountPrivateMemoryCleanup::removeAccount)
         externalFileHandoff.removeAccount(accountId)
-        removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
+        removeDesktopAccountPrivateStorage(
+            accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId), preferences,
+        )
         if (!isWindowsDesktop()) return
         try {
             unregisterWindowsCloudFilesRootsForAccountRemoval(
