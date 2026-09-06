@@ -565,13 +565,14 @@ class AndroidDurableMultipartUploadPolicyTest {
     @Test
     fun `coalesced immediate recovery preempts worker ownership and follow up waits`() = runBlocking {
         val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val jobId = "job-1"
         val workId = UUID.randomUUID()
         val expectedCancellation = CancellationException("recovery owner stopped")
         var recoveryRuns = 0
         var ownershipWaits = 0
         var delayRuns = 0
         recoverySignal.request()
-        recoverySignal.requestAfterWorkStopsRunning(workId)
+        recoverySignal.requestAfterWorkStopsRunning(jobId, workId)
 
         val actual = assertFailsWith<CancellationException> {
             monitorQueuedDurableUploadScheduling(
@@ -598,21 +599,22 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `recovery signal conflates immediate requests and deduplicates worker ids`() = runBlocking {
+    fun `recovery signal conflates immediate requests and replacement workers per durable job`() = runBlocking {
         val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
-        val firstWorkId = UUID.randomUUID()
-        val secondWorkId = UUID.randomUUID()
+        val replacedWorkId = UUID.randomUUID()
+        val replacementWorkId = UUID.randomUUID()
+        val otherWorkId = UUID.randomUUID()
 
         recoverySignal.request()
         recoverySignal.request()
-        recoverySignal.requestAfterWorkStopsRunning(firstWorkId)
-        recoverySignal.requestAfterWorkStopsRunning(firstWorkId)
-        recoverySignal.requestAfterWorkStopsRunning(secondWorkId)
+        recoverySignal.requestAfterWorkStopsRunning("job-1", replacedWorkId)
+        repeat(100) { recoverySignal.requestAfterWorkStopsRunning("job-1", replacementWorkId) }
+        recoverySignal.requestAfterWorkStopsRunning("job-2", otherWorkId)
 
         assertEquals(
             AndroidDurableUploadSchedulingRecoveryBatch(
                 immediate = true,
-                workIdsToAwait = listOf(firstWorkId, secondWorkId),
+                workIdsToAwait = mapOf("job-1" to replacementWorkId, "job-2" to otherWorkId),
             ),
             recoverySignal.await(),
         )

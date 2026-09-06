@@ -22,7 +22,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
             releaseBatchClaim.await()
         }
         val workId = UUID.randomUUID()
-        recoverySignal.requestAfterWorkStopsRunning(workId)
+        recoverySignal.requestAfterWorkStopsRunning("job-1", workId)
         val firstBatch = async { recoverySignal.await() }
         wakeupConsumed.await()
 
@@ -32,7 +32,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertEquals(
             AndroidDurableUploadSchedulingRecoveryBatch(
                 immediate = true,
-                workIdsToAwait = listOf(workId),
+                workIdsToAwait = mapOf("job-1" to workId),
             ),
             firstBatch.await(),
         )
@@ -50,7 +50,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         val expected = CancellationException("monitor stopped after immediate recovery")
         var recoveryRuns = 0
 
-        recoverySignal.requestAfterWorkStopsRunning(workId)
+        recoverySignal.requestAfterWorkStopsRunning("job-1", workId)
         val monitoring = async {
             assertFailsWith<CancellationException> {
                 monitorQueuedDurableUploadScheduling(
