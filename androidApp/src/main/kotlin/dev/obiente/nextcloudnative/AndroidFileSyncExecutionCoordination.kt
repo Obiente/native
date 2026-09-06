@@ -305,6 +305,11 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
         }
         currentCoroutineContext().ensureActive()
     }
+    withContext(NonCancellable) {
+        retiredPairs.forEach { pair -> prepareLocalGrantCleanup(pair.id) }
+    }
+    currentCoroutineContext().ensureActive()
+
     retiredPairs.forEach { pair ->
         cancelSchedule(pair)
         cancelNotification(pair)
@@ -312,7 +317,6 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
     currentCoroutineContext().ensureActive()
 
     withContext(NonCancellable) {
-        retiredPairs.forEach { pair -> prepareLocalGrantCleanup(pair.id) }
         persistRetirement()
         retiredPairs.forEach { pair -> finishLocalGrantCleanup(pair.id) }
     }

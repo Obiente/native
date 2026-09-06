@@ -936,14 +936,14 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
 
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
     suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
-    fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = Unit
+    fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot): Boolean = true
+    fun retainFileSyncRootOnDispose(): Boolean = false
     /** Lists durable share-sheet uploads that still need progress or user review. */
     suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
         cursor: String?,
     ): IncomingShareRecoveryPage = IncomingShareRecoveryPage()
-
     /** Opens the platform-owned recovery surface for one durable share-sheet upload. */
     fun openIncomingShareRecovery(requestId: String) = Unit
 

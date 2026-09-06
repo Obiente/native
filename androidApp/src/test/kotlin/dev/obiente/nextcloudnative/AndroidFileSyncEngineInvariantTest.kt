@@ -568,15 +568,15 @@ class AndroidFileSyncEngineInvariantTest {
                 "reconcile-retired-a",
                 "reconcile-retired-b",
                 "reconcile-retired-c",
+                "prepare-retired-a",
+                "prepare-retired-b",
+                "prepare-retired-c",
                 "cancel-retired-a",
                 "cancel-notification-retired-a",
                 "cancel-retired-b",
                 "cancel-notification-retired-b",
                 "cancel-retired-c",
                 "cancel-notification-retired-c",
-                "prepare-retired-a",
-                "prepare-retired-b",
-                "prepare-retired-c",
                 "persist-retirement",
                 "finish-retired-a",
                 "finish-retired-b",
@@ -632,7 +632,10 @@ class AndroidFileSyncEngineInvariantTest {
             )
         }
 
-        assertEquals(listOf("cancel-pair-a", "cancel-notification-pair-a", "cancel-pair-b"), events)
+        assertEquals(
+            listOf("prepare-pair-a", "prepare-pair-b", "cancel-pair-a", "cancel-notification-pair-a", "cancel-pair-b"),
+            events,
+        )
     }
 
     @Test
@@ -655,7 +658,7 @@ class AndroidFileSyncEngineInvariantTest {
             )
         }
 
-        assertEquals(listOf("cancel-schedule", "cancel-notification"), events)
+        assertEquals(listOf("prepare-grant", "cancel-schedule", "cancel-notification"), events)
     }
 
     @Test

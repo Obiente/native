@@ -202,6 +202,21 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `failed setup abandonment remains retryable without restart`() {
+        val fixture = fixture()
+        val root = fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        fixture.grants.failReleaseCount = 1
+
+        assertFalse(fixture.lifecycle.abandonSelection(root.localRootId))
+        assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
+
+        assertTrue(fixture.lifecycle.abandonSelection(root.localRootId))
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `prior process ready record is released when no pair owns it`() {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)

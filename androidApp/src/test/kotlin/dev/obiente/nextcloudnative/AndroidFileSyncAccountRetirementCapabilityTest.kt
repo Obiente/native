@@ -76,6 +76,29 @@ class AndroidFileSyncAccountRetirementCapabilityTest {
     }
 
     @Test
+    fun `failed grant preparation leaves account sync schedules active`() = runBlocking {
+        val retired = listOf(pair(FIRST_PAIR_ID, REMOVED_ACCOUNT))
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            retireConfiguredFileSyncAccountPairs(
+                retiredPairs = retired,
+                reconcileLocalDownloads = { true },
+                cancelSchedule = { events += "cancel-schedule" },
+                cancelNotification = { events += "cancel-notification" },
+                prepareLocalGrantCleanup = {
+                    events += "prepare-grant"
+                    error("synthetic grant preparation failure")
+                },
+                persistRetirement = { events += "persist-retirement" },
+                finishLocalGrantCleanup = { events += "finish-grant" },
+            )
+        }
+
+        assertEquals(listOf("prepare-grant"), events)
+    }
+
+    @Test
     fun `failed precommit save restores ownership from the authoritative pair on restart`() = runBlocking {
         val fixture = fixture(OLD_GENERATION)
         val retired = listOf(pair(FIRST_PAIR_ID, REMOVED_ACCOUNT))

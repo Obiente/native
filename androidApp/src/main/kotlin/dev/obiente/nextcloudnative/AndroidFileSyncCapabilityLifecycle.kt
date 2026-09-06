@@ -221,6 +221,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                 it.phase in setOf(
                     AndroidFileSyncCapabilityPhase.Acquiring,
                     AndroidFileSyncCapabilityPhase.Ready,
+                    AndroidFileSyncCapabilityPhase.CleanupPending,
                 )
         } ?: return@synchronized false
         prepareAndFinishCleanup(record)

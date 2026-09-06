@@ -56,9 +56,8 @@ internal class AndroidFileSyncRootPicker(
             .onFailure { continuation.cancel(it) }
     }
 
-    fun abandon(localRootId: String) {
-        runCatching { capabilities.abandonSelection(localRootId) }
-    }
+    fun abandon(localRootId: String): Boolean =
+        runCatching { capabilities.abandonSelection(localRootId) }.getOrDefault(false)
 
     private fun queryDisplayName(resolver: ContentResolver, treeUri: Uri): String {
         val documentId = DocumentsContract.getTreeDocumentId(treeUri)
