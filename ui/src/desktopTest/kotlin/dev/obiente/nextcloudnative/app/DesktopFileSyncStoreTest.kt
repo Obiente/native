@@ -21,6 +21,85 @@ import kotlinx.serialization.json.put
 
 class DesktopFileSyncStoreTest {
     @Test
+    fun `account removal deletes only that account's sync pairs and roots`() {
+        val directory = Files.createTempDirectory("desktop-sync-account-removal-").toFile()
+        try {
+            val first = FileSyncPair(
+                id = "first-pair",
+                accountId = "account-a",
+                localRootId = "first-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val second = FileSyncPair(
+                id = "second-pair",
+                accountId = "account-b",
+                localRootId = "second-root",
+                remoteRootPath = "Photos",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val roots = listOf(
+                DesktopFileSyncRootRecord(first.localRootId, directory.resolve("first").absolutePath, "First"),
+                DesktopFileSyncRootRecord(second.localRootId, directory.resolve("second").absolutePath, "Second"),
+            )
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(first)), roots.take(1)), first.id)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(second)), roots.drop(1)), second.id)
+
+            store.removeDesktopFileSyncAccountPairs("account-a")
+
+            val retained = store.load()
+            assertEquals(listOf(second), retained.coordinator.pairs)
+            assertEquals(roots.drop(1), retained.roots)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `account removal retains every pair when one owns an unfinished remote upload`() {
+        val directory = Files.createTempDirectory("desktop-sync-account-upload-removal-").toFile()
+        try {
+            val owned = FileSyncPair(
+                id = "owned-pair",
+                accountId = "account-a",
+                localRootId = "owned-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                pendingUploadCleanups = listOf(
+                    FileSyncPendingUploadCleanup(
+                        uploadId = "11111111-1111-4111-8111-111111111111",
+                        relativePath = "draft.txt",
+                    ),
+                ),
+            )
+            val clear = FileSyncPair(
+                id = "clear-pair",
+                accountId = "account-a",
+                localRootId = "clear-root",
+                remoteRootPath = "Photos",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val roots = listOf(
+                DesktopFileSyncRootRecord(owned.localRootId, directory.resolve("owned").absolutePath, "Owned"),
+                DesktopFileSyncRootRecord(clear.localRootId, directory.resolve("clear").absolutePath, "Clear"),
+            )
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(owned)), roots.take(1)), owned.id)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(clear)), roots.drop(1)), clear.id)
+
+            assertFails { store.requireDesktopFileSyncAccountRemovalReady("account-a") }
+            assertFails { store.removeDesktopFileSyncAccountPairs("account-a") }
+
+            val retained = store.load()
+            assertEquals(setOf(owned, clear), retained.coordinator.pairs.toSet())
+            assertEquals(roots.toSet(), retained.roots.toSet())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `legacy json state imports once into the transactional database`() {
         val directory = Files.createTempDirectory("desktop-sync-legacy-import-").toFile()
         try {

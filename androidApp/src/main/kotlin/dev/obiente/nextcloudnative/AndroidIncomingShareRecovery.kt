@@ -101,75 +101,78 @@ internal class AndroidIncomingShareChunkCleanupWorker(
         val chunk = request.chunkSession ?: return@withContext Result.success()
         val claimed = store.claimChunkSessionForCleanup(requestId, chunk.uploadId)
             ?: return@withContext Result.success()
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
-        if (session == null) {
-            return@withContext retryOrReleaseIncomingShareChunkCleanup(
+        val services = AndroidNextcloudServices(applicationContext)
+        val unavailable = {
+            retryOrReleaseIncomingShareChunkCleanup(
                 store,
                 requestId,
                 claimed,
                 cleanupAttempt,
             )
         }
-        if (
-            request.accountId != NextcloudDocumentIds.accountKey(session) ||
-            request.userId.isNullOrBlank()
-        ) {
-            return@withContext retryOrReleaseIncomingShareChunkCleanup(
-                store,
-                requestId,
-                claimed,
-                cleanupAttempt,
-            )
-        }
-        val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
-        try {
-            val remote = AndroidFileSyncRemoteTree(
-                session = session,
-                userId = request.userId,
-                remoteRootPath = request.destinationPath.orEmpty(),
-                webDav = NextcloudDocumentWebDav(
-                    client = OkHttpClient.Builder()
-                        .followRedirects(false)
-                        .followSslRedirects(false)
-                        .retryOnConnectionFailure(false)
-                        .useAndroidNextcloudCertificateTrust(applicationContext)
-                        .build(),
-                    cloudMutationsAllowed = applicationContext.cloudMutationGate(),
-                ),
-            )
-            remote.deleteChunkUpload(claimed.uploadId, cancellation)
-            store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
-            releaseDiscardedIncomingShare(store, requestId)
-            Result.success()
-        } catch (failure: Throwable) {
-            cancellation.throwIfCancelled()
-            if (
-                failure.isRetryableIncomingShareChunkCleanupFailure() &&
-                canRetryIncomingShareChunkCleanup(cleanupAttempt)
-            ) {
-                val nowEpochMillis = System.currentTimeMillis()
-                val retryDelayMillis = failure.incomingShareChunkCleanupRetryDelayMillis(nowEpochMillis)
-                if (retryDelayMillis != null) {
-                    scheduleIncomingShareChunkCleanup(
-                        context = applicationContext,
-                        requestId = requestId,
-                        initialDelayMillis = retryDelayMillis,
-                        cleanupAttempt = cleanupAttempt + 1,
-                        policy = ExistingWorkPolicy.APPEND_OR_REPLACE,
-                    )
-                    Result.success()
-                } else {
-                    Result.retry()
-                }
-            } else {
-                // Nextcloud expires abandoned upload collections server-side. Once cleanup is
-                // definitively rejected or exhausts its bounded retries, release local staging.
+        val accountIdentity = request.accountId ?: return@withContext unavailable()
+        val userId = request.userId?.takeIf(String::isNotBlank) ?: return@withContext unavailable()
+        return@withContext ANDROID_ACCOUNT_OPERATION_GUARD.withAccountSession(
+            accountId = accountIdentity,
+            resolveSession = {
+                resolveStoredAndroidAccountSession(
+                    accountIdentity = accountIdentity,
+                    listAccounts = services::listAccounts,
+                    loadSession = { accountId -> services.loadSession(accountId) },
+                )
+            },
+            unavailable = unavailable,
+        ) { session ->
+            val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
+            try {
+                val remote = AndroidFileSyncRemoteTree(
+                    session = session,
+                    userId = userId,
+                    remoteRootPath = request.destinationPath.orEmpty(),
+                    webDav = NextcloudDocumentWebDav(
+                        client = OkHttpClient.Builder()
+                            .followRedirects(false)
+                            .followSslRedirects(false)
+                            .retryOnConnectionFailure(false)
+                            .useAndroidNextcloudCertificateTrust(applicationContext)
+                            .build(),
+                        cloudMutationsAllowed = applicationContext.cloudMutationGate(),
+                    ),
+                )
+                remote.deleteChunkUpload(claimed.uploadId, cancellation)
                 store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
                 releaseDiscardedIncomingShare(store, requestId)
                 Result.success()
+            } catch (failure: Throwable) {
+                cancellation.throwIfCancelled()
+                if (
+                    failure.isRetryableIncomingShareChunkCleanupFailure() &&
+                    canRetryIncomingShareChunkCleanup(cleanupAttempt)
+                ) {
+                    val nowEpochMillis = System.currentTimeMillis()
+                    val retryDelayMillis = failure.incomingShareChunkCleanupRetryDelayMillis(nowEpochMillis)
+                    if (retryDelayMillis != null) {
+                        scheduleIncomingShareChunkCleanup(
+                            context = applicationContext,
+                            requestId = requestId,
+                            initialDelayMillis = retryDelayMillis,
+                            cleanupAttempt = cleanupAttempt + 1,
+                            policy = ExistingWorkPolicy.APPEND_OR_REPLACE,
+                        )
+                        Result.success()
+                    } else {
+                        Result.retry()
+                    }
+                } else {
+                    // Nextcloud expires abandoned upload collections server-side. Once cleanup is
+                    // definitively rejected or exhausts its bounded retries, release local staging.
+                    store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+                    releaseDiscardedIncomingShare(store, requestId)
+                    Result.success()
+                }
+            } finally {
+                cancellation.close()
             }
-        } finally {
-            cancellation.close()
         }
     }
 
@@ -227,7 +230,7 @@ internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
 
 internal fun scheduleIncomingShareAbandonedStagingCleanup(context: Context, requestId: String) {
     WorkManager.getInstance(context).enqueueUniqueWork(
-        "incoming-share-abandoned-staging-$requestId",
+        incomingShareAbandonedStagingWorkName(requestId),
         ExistingWorkPolicy.KEEP,
         OneTimeWorkRequestBuilder<AndroidIncomingShareAbandonedStagingCleanupWorker>()
             .setInitialDelay(ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS, TimeUnit.MILLISECONDS)
@@ -265,6 +268,9 @@ internal fun scheduleIncomingShareChunkCleanup(
 internal fun incomingShareCleanupWorkName(requestId: String) = "incoming-share-cleanup-$requestId"
 
 internal fun incomingShareChunkCleanupWorkName(requestId: String) = "incoming-share-chunk-cleanup-$requestId"
+
+internal fun incomingShareAbandonedStagingWorkName(requestId: String) =
+    "incoming-share-abandoned-staging-$requestId"
 
 internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: String): PendingIntent =
     PendingIntent.getActivity(

@@ -428,8 +428,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-
-interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
+interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -625,6 +624,7 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     ): String? = null
 
     suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
@@ -646,6 +646,7 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: DynamicNativeMemoryCacheProducer? = null,
     ) = Unit
 
     /** Loads one exact account/app/action/record mutation staged before a non-idempotent send. */
@@ -674,12 +675,6 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
         actionId: String,
         targetRecordId: String,
     ) = Unit
-
-    fun loadSession(): NextcloudSession?
-
-    suspend fun saveSession(session: NextcloudSession)
-
-    suspend fun clearSession()
 
     fun openExternalUrl(url: String)
 

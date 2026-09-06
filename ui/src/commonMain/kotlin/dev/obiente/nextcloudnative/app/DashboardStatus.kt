@@ -665,44 +665,6 @@ fun planUserStatusEdit(
     return request.requireSafe()
 }
 
-data class CachedDashboardStatus(
-    val dashboard: NativeDashboardSnapshot,
-    val status: NativeUserStatus?,
-    val storedAtEpochSeconds: Long,
-)
-
-/** Account-private process cache. It stores no password and expires quickly. */
-internal class DashboardStatusMemoryCache(
-    private val ttlSeconds: Long = DASHBOARD_STATUS_CACHE_TTL_SECONDS,
-) {
-    private val entries = mutableMapOf<NextcloudAccountId, CachedDashboardStatus>()
-
-    fun get(session: NextcloudSession, nowEpochSeconds: Long): CachedDashboardStatus? {
-        val entry = entries[session.accountId] ?: return null
-        return entry.takeIf {
-            nowEpochSeconds >= it.storedAtEpochSeconds &&
-                nowEpochSeconds - it.storedAtEpochSeconds <= ttlSeconds
-        } ?: run {
-            entries.remove(session.accountId)
-            null
-        }
-    }
-
-    fun store(
-        session: NextcloudSession,
-        dashboard: NativeDashboardSnapshot,
-        status: NativeUserStatus?,
-        nowEpochSeconds: Long,
-    ) {
-        require(nowEpochSeconds >= 0L) { "The dashboard cache timestamp is invalid." }
-        entries[session.accountId] = CachedDashboardStatus(dashboard, status, nowEpochSeconds)
-    }
-
-    fun invalidate(session: NextcloudSession) {
-        entries.remove(session.accountId)
-    }
-}
-
 internal fun retainedDashboardRefreshSnapshot(
     cached: CachedDashboardStatus?,
     displayed: NativeDashboardSnapshot?,
@@ -726,8 +688,6 @@ internal fun DashboardResponseBudget.settleFailedRead(
         releaseFailed(reservedBytes)
     }
 }
-
-internal val sharedDashboardStatusMemoryCache = DashboardStatusMemoryCache()
 
 private fun statusMutationRequest(
     method: NextcloudApiMethod,
@@ -909,5 +869,5 @@ private const val MAX_PREDEFINED_STATUSES = 128
 private const val MAX_STATUS_MESSAGE_LENGTH = 512
 private const val MAX_STATUS_ICON_LENGTH = 32
 private const val MAX_STATUS_EXPIRY_SECONDS = 366L * 24L * 60L * 60L
-private const val DASHBOARD_STATUS_CACHE_TTL_SECONDS = 60L
+internal const val DASHBOARD_STATUS_CACHE_TTL_SECONDS = 60L
 private const val STATUS_HEX = "0123456789ABCDEF"

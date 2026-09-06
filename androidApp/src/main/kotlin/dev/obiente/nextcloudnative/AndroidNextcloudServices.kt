@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
+import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
 import dev.obiente.nextcloudnative.app.DeckAttachment
@@ -23,6 +24,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
+import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.LoginTransportSecurity
@@ -55,6 +57,7 @@ import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
+import dev.obiente.nextcloudnative.app.NextcloudAccountId
 import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSession
@@ -73,7 +76,6 @@ import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.FileVersionRestoreHttpResult
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
 import dev.obiente.nextcloudnative.app.classifyFileVersionRestoreHttpResponse
-import dev.obiente.nextcloudnative.app.isSafeDynamicDiscoveryCacheAppId
 import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_MUTATION_BYTES
 import dev.obiente.nextcloudnative.app.decodePersistedDynamicMutation
 import dev.obiente.nextcloudnative.app.encodePersistedDynamicMutation
@@ -88,6 +90,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
@@ -249,9 +252,6 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -371,45 +371,17 @@ internal suspend fun executeAndroidDynamicApiGet(
     )
 }
 
-/** Publishes a pre-synced mutation marker before its non-idempotent request may start. */
-internal fun publishAndroidPendingMutation(temporary: File, target: File) {
-    require(temporary.isFile)
-    require(temporary.parentFile == target.parentFile)
-    try {
-        Files.move(
-            temporary.toPath(),
-            target.toPath(),
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING,
-        )
-    } catch (_: AtomicMoveNotSupportedException) {
-        copyAndSyncAndroidPendingMutation(temporary, target)
-    }
-}
-
-internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
-    require(temporary.isFile)
-    require(temporary.parentFile == target.parentFile)
-    FileInputStream(temporary).use { input ->
-        FileOutputStream(target).use { output ->
-            input.copyTo(output)
-            output.fd.sync()
-        }
-    }
-    check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
-}
-
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
     private val localUploadPicker: AndroidLocalUploadPicker? = null,
     private val requestPlatformPermissions: ((Array<String>) -> Boolean)? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
+    private val accountMutationLeaseHeld: Boolean = false,
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
     private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
-    private val sessionCipher = SessionCipher()
     private val httpClient = OkHttpClient.Builder()
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
@@ -444,17 +416,26 @@ internal class AndroidNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
-    private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
+    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
+        File(appContext.filesDir, "contracts/discoveries-v1"),
+    )
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
-    private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
         File(appContext.cacheDir, "native-media-previews-v1"),
     )
+    private val dynamicApiState = androidDynamicApiProcessState(File(appContext.cacheDir, "dynamic-api-v1"))
+    private val dynamicApiReadCache = dynamicApiState.cache
+    private val dynamicApiRequestCoalescer = dynamicApiState.coalescer
+    private val accountOwnedStateCleanup by lazy {
+        AndroidAccountOwnedStateCleanup(
+            appContext, fileReadCache, virtualFileCache, nativeMediaPreviewCache::clearAccount,
+            dynamicApiState, dynamicDiscoveryCache, supportIntake::removeAccount,
+        )
+    }
     private val nativeMediaPreviewDecodeMutex = Mutex()
-    private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
@@ -480,6 +461,29 @@ internal class AndroidNextcloudServices(
         context = appContext,
         diagnostics = supportDiagnostics,
         client = httpClient,
+    )
+    private val accountCredentials = AndroidAccountCredentialController(
+        context = appContext,
+        preferences = preferences,
+        sessionCipher = SessionCipher(),
+        registerSessionPrivateValues = ::registerSessionPrivateValues,
+        recordDiagnostic = ::recordSupportDiagnostic,
+        publishAccountIdentity = { accountIdentity ->
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
+        },
+        clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
+        notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
+        resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
+        prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
+        removeQueuedUploads = accountOwnedStateCleanup::remove,
+        retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
+        retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,
+        activatePersistedAccount = { session ->
+            dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(session))
+            AccountPrivateMemoryLifecycle.activateAccount(session.accountId.storageKey)
+            dynamicDiscoveryCache.activateAccount(session.accountId.storageKey)
+        },
     )
 
     init {
@@ -757,25 +761,35 @@ internal class AndroidNextcloudServices(
         kind: DurableMutationRecoveryKind,
     ): String? = withContext(Dispatchers.IO) {
         if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext null
-        preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
+        preferences.getString(androidDurableMutationRecoveryKey(accountScope, kind), null)
             ?.takeIf { encoded ->
                 encoded.isNotEmpty() && encoded.encodeToByteArray().size <= MAX_ANDROID_MUTATION_RECOVERY_BYTES
             }
     }
 
     override suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (durableMutationAccountScope(session) != accountScope) return@withContext false
         if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
             return@withContext false
         }
-        synchronized(androidDurableMutationRecoveryLock) {
-            val key = durableMutationRecoveryKey(accountScope, kind)
-            if (preferences.contains(key)) return@synchronized false
-            preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { false },
+        ) {
+            synchronized(androidDurableMutationRecoveryLock) {
+                val key = androidDurableMutationRecoveryKey(accountScope, kind)
+                if (preferences.contains(key)) return@synchronized false
+                preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+            }
         }
     }
 
@@ -788,7 +802,7 @@ internal class AndroidNextcloudServices(
         if (expectedEncoded.isEmpty() ||
             expectedEncoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES
         ) return@withContext false
-        val key = durableMutationRecoveryKey(accountScope, kind)
+        val key = androidDurableMutationRecoveryKey(accountScope, kind)
         synchronized(androidDurableMutationRecoveryLock) {
             val actual = preferences.getString(key, null) ?: return@synchronized true
             if (actual != expectedEncoded) return@synchronized false
@@ -796,51 +810,30 @@ internal class AndroidNextcloudServices(
         }
     }
 
-    private fun durableMutationRecoveryKey(
-        accountScope: String,
-        kind: DurableMutationRecoveryKind,
-    ): String = "durable-mutation-${kind.storageKey}-$accountScope"
-
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
         appId: String,
     ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
-        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
-        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
-            return@withContext null
-        }
-        runCatching { target.readText() }
-            .getOrNull()
+        dynamicDiscoveryCache.load(
+            session.accountId.storageKey,
+            NextcloudDocumentIds.cacheAccountId(session),
+            appId,
+        )
             ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
     }
 
     override suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: dev.obiente.nextcloudnative.app.DynamicNativeMemoryCacheProducer?,
     ) = withContext(Dispatchers.IO) {
         val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
-        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
-        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
-            "Could not create the dynamic contract cache."
-        }
-        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.fd.sync()
-        }
-        check(temporary.renameTo(target) || runCatching {
-            temporary.copyTo(target, overwrite = true)
-            temporary.delete()
-        }.isSuccess) {
-            "Could not publish the dynamic contract cache."
-        }
-    }
-
-    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
-        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
-        return File(
-            dynamicDiscoveryCacheDirectory,
-            "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",
+        dynamicDiscoveryCache.save(
+            session.accountId.storageKey,
+            NextcloudDocumentIds.cacheAccountId(session),
+            discovery.descriptor.app.id,
+            encoded,
+            producer,
         )
     }
 
@@ -871,21 +864,29 @@ internal class AndroidNextcloudServices(
         targetRecordId: String,
         values: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
-        val encoded = requireNotNull(
-            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
-        ) { "The pending dynamic mutation is invalid." }
-        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
-            "The pending dynamic mutation identity is invalid."
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be recorded.") },
+        ) {
+            val encoded = requireNotNull(
+                encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+            ) { "The pending dynamic mutation is invalid." }
+            val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+                "The pending dynamic mutation identity is invalid."
+            }
+            check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
+                "Could not create the pending mutation store."
+            }
+            val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded.encodeToByteArray())
+                output.fd.sync()
+            }
+            publishAndroidPendingMutation(temporary, target)
         }
-        check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
-            "Could not create the pending mutation store."
-        }
-        val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.fd.sync()
-        }
-        publishAndroidPendingMutation(temporary, target)
     }
 
     override suspend fun clearPendingDynamicMutation(
@@ -894,8 +895,16 @@ internal class AndroidNextcloudServices(
         actionId: String,
         targetRecordId: String,
     ) = withContext(Dispatchers.IO) {
-        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
-            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be cleared.") },
+        ) {
+            pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+                check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+            }
         }
         Unit
     }
@@ -918,98 +927,39 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    override fun loadSession(): NextcloudSession? {
-        return ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
-            load = {
-                val encrypted = preferences.getString(KEY_SESSION, null)
-                    ?: return@restorePersistedSession null
-                runCatching {
-                    restoreAndroidPersistedSession(
-                        encoded = sessionCipher.decrypt(encrypted),
-                        persistMigrated = { migrated ->
-                            preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).commit()
-                        },
-                        recordDiagnostic = ::recordSupportDiagnostic,
-                    )
-                }.onFailure { failure ->
-                    recordSupportDiagnostic(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Error,
-                            component = SupportDiagnosticComponent.Authentication,
-                            operation = "session.load",
-                            outcome = "failed",
-                            exception = failure.toSupportDiagnosticExceptionDraft(),
-                        ),
-                    )
-                }.getOrNull()
-            },
-            accountIdOf = NextcloudDocumentIds::accountKey,
-            publishAccount = { session, accountIdentity ->
-                session?.let(::registerSessionPrivateValues)
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            },
-        )
-    }
+    override fun loadSession(): NextcloudSession? = accountCredentials.loadSession()
 
     override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
         withContext(Dispatchers.IO) {
-            deckCardDrafts.migrateLegacyEntries(session)
+            withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.migrateLegacyEntries(session) }
         }
 
-    override suspend fun saveSession(session: NextcloudSession) {
-        registerSessionPrivateValues(session)
-        val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
-        val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
-        val encrypted = runCatching { sessionCipher.encrypt(encodeAndroidPersistedSession(session)) }
-            .onFailure { failure ->
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "session.save",
-                        outcome = "failed",
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-            }
-            .getOrThrow()
-        withContext(Dispatchers.IO) {
-            AndroidExternalFileHandoffRegistry.clear()
-        }
-        val scheduler = AndroidFileSyncScheduler(appContext)
-        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
-            replacementAccountId = NextcloudDocumentIds.accountKey(session),
-            persist = {
-                preferences.edit()
-                    .putString(KEY_SESSION, encrypted)
-                    .remove(KEY_TEST_READ_ONLY)
-                    .apply()
-            },
-            cancelAll = scheduler::cancelAll,
-            publishAccount = { accountIdentity ->
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            },
-        )
-        if (previousAccountId != null && previousAccountId != replacementAccountId) {
-            nativeMediaPreviewCache.clearAccount(previousAccountId)
-        }
-        notifyDocumentsRootsChanged()
-    }
+    override suspend fun saveSession(session: NextcloudSession): NextcloudSession = accountCredentials.saveSession(session)
+
+    internal fun accountRetentionSnapshot() = accountCredentials.accountRetentionSnapshot()
+
+    override fun listAccounts() = accountRetentionSnapshot().accountsOrEmpty()
+
+    override fun activeAccountId() = accountCredentials.activeAccountId()
+
+    override fun loadSession(accountId: NextcloudAccountId) = accountCredentials.loadSession(accountId)
+
+    override suspend fun selectAccount(accountId: NextcloudAccountId) = accountCredentials.selectAccount(accountId)
+
+    override suspend fun removeAccount(accountId: NextcloudAccountId) = accountCredentials.removeAccount(accountId)
 
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
-        deckCardDrafts.load(session, key)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.load(session, key) }
     }
 
     override suspend fun saveDeckCardDraft(
         session: NextcloudSession,
         draft: PersistedDeckCardDraft,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.save(session, draft)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.save(session, draft) }
     }
 
     override suspend fun clearDeckCardDraft(
@@ -1017,55 +967,21 @@ internal class AndroidNextcloudServices(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key, discardUnreadable)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.clear(session, key, discardUnreadable) }
     }
 
     override suspend fun quarantineSubmittedDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.quarantineAfterSubmit(session, key)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.quarantineAfterSubmit(session, key) }
     }
 
     override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
         deckCardDrafts.discardAll()
     }
 
-    override suspend fun clearSession() {
-        try {
-            val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
-            withContext(Dispatchers.IO) {
-                AndroidExternalFileHandoffRegistry.clear()
-            }
-            val scheduler = AndroidFileSyncScheduler(appContext)
-            ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
-                persist = {
-                    preferences.edit()
-                        .remove(KEY_SESSION)
-                        .remove(KEY_TEST_READ_ONLY)
-                        .apply()
-                },
-                cancelAll = scheduler::cancelAll,
-                clearPublishedAccount = {
-                    supportDiagnostics.setActiveAccountIdentity(null)
-                    supportIntake.setActiveAccountIdentity(null)
-                },
-            )
-            accountId?.let(nativeMediaPreviewCache::clearAccount)
-            notifyDocumentsRootsChanged()
-        } catch (failure: Throwable) {
-            recordSupportDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Authentication,
-                    operation = "session.clear",
-                    outcome = "failed",
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
-        }
-    }
+    override suspend fun clearSession() = accountCredentials.clearSession()
 
     override fun openExternalUrl(url: String) {
         appContext.startActivity(
@@ -1431,7 +1347,7 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
         path: String,
-    ): NextcloudFileListing = withContext(Dispatchers.IO) {
+    ): NextcloudFileListing = withRetainedAndroidAccountFileRead(session, { loadSession(session.accountId) }) read@{
         val accountId = NextcloudDocumentIds.accountKey(session)
         try {
             val response = request(
@@ -1450,7 +1366,7 @@ internal class AndroidNextcloudServices(
             } else {
                 if (response.status >= 500) {
                     fileReadCache.cachedListing(accountId, path)?.files?.let {
-                        return@withContext NextcloudFileListing(it, NextcloudFileListingSource.Cache)
+                        return@read NextcloudFileListing(it, NextcloudFileListingSource.Cache)
                     }
                 }
                 throw NextcloudFileListingHttpException(response.status)
@@ -1564,7 +1480,13 @@ internal class AndroidNextcloudServices(
         file: NextcloudFile,
         available: Boolean,
     ): FileOfflineAvailability = withContext(Dispatchers.IO) {
-        fileOfflineRepository.setAvailable(session, userId, file, available)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = ::loadSession,
+            unavailable = { error("The account changed before offline storage could be updated.") },
+        ) { current ->
+            fileOfflineRepository.setAvailable(current, userId, file, available)
+        }
     }
 
     override suspend fun loadFileOfflineCenter(
@@ -1579,7 +1501,13 @@ internal class AndroidNextcloudServices(
         userId: String,
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
-        fileOfflineRepository.retryCenterItem(session, userId, key)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = ::loadSession,
+            unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before this retry started.") },
+        ) { current ->
+            fileOfflineRepository.retryCenterItem(current, userId, key)
+        }
     }
 
     override suspend fun removeFileOfflineItem(
@@ -1587,7 +1515,13 @@ internal class AndroidNextcloudServices(
         userId: String,
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
-        fileOfflineRepository.removeCenterItem(session, userId, key)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = ::loadSession,
+            unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before offline storage was removed.") },
+        ) { current ->
+            fileOfflineRepository.removeCenterItem(current, userId, key)
+        }
     }
 
     override suspend fun loadVirtualFileStorage(
@@ -1598,64 +1532,69 @@ internal class AndroidNextcloudServices(
         val offline = fileOfflineRepository.loadCenter(session)
         val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
         if (documentWritebacks.isNotEmpty()) {
-            val webDav = NextcloudDocumentWebDav(
-                client = OkHttpClient.Builder()
-                    .useAndroidNextcloudCertificateTrust(appContext)
-                    .build(),
-                cloudMutationsAllowed = appContext.cloudMutationGate(),
-            )
-            documentWritebacks.forEach { discovered ->
-                currentCoroutineContext().ensureActive()
-                val pending = claimAndroidDocumentPendingWritebackForRecovery(
-                    appContext,
-                    session,
-                    discovered.remotePath,
-                ) ?: return@forEach
-                runCatching {
-                    if (pending.conflict) {
-                        pending.releaseActive()
-                        return@runCatching
-                    }
-                    requireAndroidDocumentStagedWritebackCapacity(
-                        stagedBytes = pending.staging.length(),
-                        availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
-                    )
-                    CoroutineDocumentRequestCancellation(
-                        requireNotNull(currentCoroutineContext()[Job]),
-                    ).use { cancellation ->
-                        val remote = compareAndroidDocumentWriteback(
-                            webDav = webDav,
-                            session = session,
-                            userId = userId,
-                            pending = pending,
-                            cancellation = cancellation,
-                        )
-                        currentCoroutineContext().ensureActive()
-                        if (remote.contentsMatch) {
-                            virtualFileCache.invalidate(session, pending.remotePath)
-                            notifyDocumentsDocumentChanged(session, pending.remotePath)
-                            pending.complete()
-                            return@runCatching
-                        }
-                        if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
-                            pending.markConflict(remote.etag)
+            ANDROID_ACCOUNT_OPERATION_GUARD.withAuthenticatedMutationSession(
+                expectedSession = session,
+                resolveSession = ::loadSession,
+            ) { current ->
+                val webDav = NextcloudDocumentWebDav(
+                    client = OkHttpClient.Builder()
+                        .useAndroidNextcloudCertificateTrust(appContext)
+                        .build(),
+                    cloudMutationsAllowed = appContext.cloudMutationGate(),
+                )
+                documentWritebacks.forEach { discovered ->
+                    currentCoroutineContext().ensureActive()
+                    val pending = claimAndroidDocumentPendingWritebackForRecovery(
+                        appContext,
+                        current,
+                        discovered.remotePath,
+                    ) ?: return@forEach
+                    runCatching {
+                        if (pending.conflict) {
                             pending.releaseActive()
                             return@runCatching
                         }
-                        webDav.replaceFileAtomically(
-                            session = session,
-                            userId = userId,
-                            path = pending.remotePath,
-                            source = pending.staging,
-                            expectedEtag = pending.expectedRemoteEtag,
-                            cancellation = cancellation,
+                        requireAndroidDocumentStagedWritebackCapacity(
+                            stagedBytes = pending.staging.length(),
+                            availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
                         )
+                        CoroutineDocumentRequestCancellation(
+                            requireNotNull(currentCoroutineContext()[Job]),
+                        ).use { cancellation ->
+                            val remote = compareAndroidDocumentWriteback(
+                                webDav = webDav,
+                                session = current,
+                                userId = userId,
+                                pending = pending,
+                                cancellation = cancellation,
+                            )
+                            currentCoroutineContext().ensureActive()
+                            if (remote.contentsMatch) {
+                                virtualFileCache.invalidate(current, pending.remotePath)
+                                notifyDocumentsDocumentChanged(current, pending.remotePath)
+                                pending.complete()
+                                return@runCatching
+                            }
+                            if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
+                                pending.markConflict(remote.etag)
+                                pending.releaseActive()
+                                return@runCatching
+                            }
+                            webDav.replaceFileAtomically(
+                                session = current,
+                                userId = userId,
+                                path = pending.remotePath,
+                                source = pending.staging,
+                                expectedEtag = pending.expectedRemoteEtag,
+                                cancellation = cancellation,
+                            )
+                        }
+                        virtualFileCache.invalidate(current, pending.remotePath)
+                        notifyDocumentsDocumentChanged(current, pending.remotePath)
+                        pending.complete()
+                    }.onFailure { failure ->
+                        handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
                     }
-                    virtualFileCache.invalidate(session, pending.remotePath)
-                    notifyDocumentsDocumentChanged(session, pending.remotePath)
-                    pending.complete()
-                }.onFailure { failure ->
-                    handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
                 }
             }
         }
@@ -1781,7 +1720,18 @@ internal class AndroidNextcloudServices(
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
         diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-add", fields) {
-            fileSyncEngine.addPair(session, userId, localRoot, remoteRootPath, configuration)
+            ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+                expectedSession = session,
+                resolveSession = ::loadSession,
+                unavailable = {
+                    FileSyncCenterActionResult.Rejected(
+                        "The account changed before this folder sync could be added.",
+                        FileSyncRejectionScope.Preflight,
+                    )
+                },
+            ) { current ->
+                fileSyncEngine.addPair(current, userId, localRoot, remoteRootPath, configuration)
+            }
         }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-add", fields, result) }
     }
 
@@ -1792,9 +1742,19 @@ internal class AndroidNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
-            fileSyncEngine.runPair(session, userId, pairId)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-run", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before folder sync could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
+                    fileSyncEngine.runPair(current, userId, pairId)
+                }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-run", fields, result) }
+            }
+        }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -1814,9 +1774,19 @@ internal class AndroidNextcloudServices(
             ),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
-            fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before conflict resolution could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
+                    fileSyncEngine.resolveConflictAndRun(current, userId, pairId, workId, choice)
+                }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
+            }
+        }
     }
 
     override suspend fun resolveFileSyncConflicts(
@@ -1830,15 +1800,25 @@ internal class AndroidNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
             SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
         )
-        diagnoseSupportFailure(
-            accountIdentity,
-            SupportDiagnosticComponent.Sync,
-            "sync.conflict-resolve-batch",
-            fields,
-        ) {
-            fileSyncEngine.resolveConflictsAndRun(session, userId, pairId, resolutions)
-        }.also { result ->
-            recordFileSyncResult(accountIdentity, "sync.conflict-resolve-batch", fields, result)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before conflict resolution could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(
+                    accountIdentity,
+                    SupportDiagnosticComponent.Sync,
+                    "sync.conflict-resolve-batch",
+                    fields,
+                ) {
+                    fileSyncEngine.resolveConflictsAndRun(current, userId, pairId, resolutions)
+                }.also { result ->
+                    recordFileSyncResult(accountIdentity, "sync.conflict-resolve-batch", fields, result)
+                }
+            }
         }
     }
 
@@ -1849,9 +1829,20 @@ internal class AndroidNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
-            fileSyncEngine.removePair(session, userId, pairId)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccountSession(
+            accountId = accountIdentity,
+            resolveSession = { loadSession() },
+            unavailable = {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before folder sync removal could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            },
+        ) { current ->
+            diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
+                fileSyncEngine.removePair(current, userId, pairId)
+            }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
+        }
     }
 
     override suspend fun listMedia(
@@ -2380,13 +2371,11 @@ internal class AndroidNextcloudServices(
         require(size > 0L) { "The file range session size must be positive." }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
         val url = buildNextcloudFileUrl(session.serverUrl, userId, path)
-        val authorization = Base64.encodeToString(
-            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-            Base64.NO_WRAP,
-        )
+        val authorization = androidFileRangeAuthorization(session)
         val closed = AtomicBoolean(false)
-        val activeCalls = ConcurrentHashMap.newKeySet<okhttp3.Call>()
-        return NextcloudFileRangeSession(
+        val activity = AndroidFileRangeSessionActivity()
+        return openTrackedAndroidFileRangeSession(session, { loadSession(session.accountId) }, activity) {
+            NextcloudFileRangeSession(
             size = size,
             readBlock = { offset, length ->
                 withContext(Dispatchers.IO) {
@@ -2408,8 +2397,8 @@ internal class AndroidNextcloudServices(
                         .header("If-Match", safeEtag)
                         .build()
                     val call = noRedirectHttpClient.newCall(request)
-                    activeCalls += call
-                    if (closed.get()) {
+                    val finishCall = activity.start(call::cancel)
+                    if (finishCall == null) {
                         call.cancel()
                     }
                     try {
@@ -2456,17 +2445,17 @@ internal class AndroidNextcloudServices(
                         )
                         throw failure
                     } finally {
-                        activeCalls -= call
+                        finishCall?.invoke()
                     }
                 }
             },
             closeBlock = {
                 if (closed.compareAndSet(false, true)) {
-                    activeCalls.forEach { call -> call.cancel() }
-                    activeCalls.clear()
+                    activity.close()
                 }
             },
-        )
+            )
+        }
     }
 
     override suspend fun downloadMemoriesFileRange(
@@ -2672,112 +2661,120 @@ internal class AndroidNextcloudServices(
         }
     }
 
-    override suspend fun saveTextFile(
-        session: NextcloudSession,
-        userId: String,
+    override suspend fun saveTextFile(session: NextcloudSession, userId: String,
         path: String,
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        withNoBlockingAndroidDocumentWriteback(appContext, session, path) {
-            val specification = textFileDavSaveRequest(text, expectedEtag)
-            val response = request(
-                method = "PUT",
-                url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-                session = session,
-                rawBody = specification.body,
-                contentType = specification.contentType,
-                headers = specification.headers,
-            )
-            val confirmation = confirmTextFileDavSave(response.status)
-            val etag = response.etag ?: try {
-                loadFileEtag(session, userId, path)
-            } catch (failure: Exception) {
-                if (failure is CancellationException) throw failure
-                null
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
+            withNoBlockingAndroidDocumentWritebackSuspending(appContext, currentSession, path) {
+                val specification = textFileDavSaveRequest(text, expectedEtag)
+                val response = request(
+                    method = "PUT",
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                    session = currentSession,
+                    rawBody = specification.body,
+                    contentType = specification.contentType,
+                    headers = specification.headers,
+                    accountMutationSerialized = accountMutationSerialized,
+                )
+                val confirmation = confirmTextFileDavSave(response.status)
+                val etag = response.etag ?: try {
+                    loadFileEtag(currentSession, userId, path)
+                } catch (failure: Exception) {
+                    if (failure is CancellationException) throw failure
+                    null
+                }
+                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+                SavedTextFile(etag, confirmation.created)
             }
-            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-            SavedTextFile(etag, confirmation.created)
         }
     }
 
-    override suspend fun createTextFileIfAbsent(
-        session: NextcloudSession,
-        userId: String,
-        path: String,
-        text: String,
-    ): SavedTextFile = withContext(Dispatchers.IO) {
+    override suspend fun createTextFileIfAbsent(session: NextcloudSession, userId: String, path: String, text: String):
+        SavedTextFile = withContext(Dispatchers.IO) {
         val utf8 = text.toByteArray(StandardCharsets.UTF_8)
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
-        val response = request(
-            method = "PUT",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-        )
-        if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
-        check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
-        check(response.status == 201) { "The server did not confirm that a new text file was created." }
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        SavedTextFile(response.etag, wasCreated = true)
-    }
-
-    override suspend fun createDirectoryIfAbsent(
-        session: NextcloudSession,
-        userId: String,
-        path: String,
-    ): Boolean = withContext(Dispatchers.IO) {
-        val response = request(
-            method = "MKCOL",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-            maxResponseBytes = 64 * 1024,
-        )
-        if (response.status in setOf(405, 412)) return@withContext false
-        if (response.status !in 200..299) throw fileOperationException(response.status)
-        check(response.status == 201) { "The server did not confirm that a new folder was created." }
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        true
-    }
-
-    override suspend fun executeFileMutation(
-        session: NextcloudSession,
-        userId: String,
-        mutation: NextcloudFileMutation,
-    ): NextcloudFileMutationResult = withContext(Dispatchers.IO) {
-        val spec = mutation.toWebDavMutationSpec()
-        withNoBlockingAndroidDocumentWriteback(
-            appContext,
-            session,
-            *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
-        ) {
-            val headers = buildMap {
-                put("Accept", "*/*")
-                putAll(spec.conflictConditionHeaders())
-                spec.destinationPath?.let { destinationPath ->
-                    put("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                    put("Overwrite", if (spec.overwrite) "T" else "F")
-                }
-            }
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
             val response = request(
-                method = spec.method,
-                url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
-                session = session,
-                headers = headers,
-                maxResponseBytes = 64 * 1024,
+                method = "PUT",
+                url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                session = currentSession,
+                rawBody = utf8,
+                contentType = "text/plain; charset=utf-8",
+                headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+                accountMutationSerialized = accountMutationSerialized,
             )
-            if (response.status !in 200..299) throw fileOperationException(response.status)
-            val accountId = NextcloudDocumentIds.accountKey(session)
-            runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
-            spec.destinationPath?.let { destination ->
-                runCatching { fileReadCache.invalidate(accountId, destination) }
+            if (response.status == 412) return@withAndroidAuthenticatedFileMutation SavedTextFile(null, false)
+            check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
+            check(response.status == 201) { "The server did not confirm that a new text file was created." }
+            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+            SavedTextFile(response.etag, wasCreated = true)
+        }
+    }
+
+    override suspend fun createDirectoryIfAbsent(session: NextcloudSession, userId: String, path: String): Boolean =
+        withContext(Dispatchers.IO) {
+            withAndroidAuthenticatedFileMutation(
+                accountMutationLeaseHeld, session, accountCredentials::loadSession,
+            ) { currentSession, accountMutationSerialized ->
+                val response = request(
+                    method = "MKCOL",
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                    session = currentSession,
+                    headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+                    maxResponseBytes = 64 * 1024,
+                    accountMutationSerialized = accountMutationSerialized,
+                )
+                if (response.status in setOf(405, 412)) return@withAndroidAuthenticatedFileMutation false
+                if (response.status !in 200..299) throw fileOperationException(response.status)
+                check(response.status == 201) { "The server did not confirm that a new folder was created." }
+                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+                true
             }
-            NextcloudFileMutationResult(spec.destinationPath, response.etag)
+        }
+
+    override suspend fun executeFileMutation(session: NextcloudSession, userId: String, mutation: NextcloudFileMutation):
+        NextcloudFileMutationResult = withContext(Dispatchers.IO) {
+        val spec = mutation.toWebDavMutationSpec()
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
+            withNoBlockingAndroidDocumentWritebackSuspending(
+                appContext,
+                currentSession,
+                *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
+            ) {
+                val headers = buildMap {
+                    put("Accept", "*/*")
+                    putAll(spec.conflictConditionHeaders())
+                    spec.destinationPath?.let { destinationPath ->
+                        put("Destination", buildNextcloudFileUrl(currentSession.serverUrl, userId, destinationPath))
+                        put("Overwrite", if (spec.overwrite) "T" else "F")
+                    }
+                }
+                val response = request(
+                    method = spec.method,
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, spec.sourcePath),
+                    session = currentSession,
+                    headers = headers,
+                    maxResponseBytes = 64 * 1024,
+                    accountMutationSerialized = accountMutationSerialized,
+                )
+                if (response.status !in 200..299) throw fileOperationException(response.status)
+                val accountId = NextcloudDocumentIds.accountKey(currentSession)
+                runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
+                spec.destinationPath?.let { destination ->
+                    runCatching { fileReadCache.invalidate(accountId, destination) }
+                }
+                NextcloudFileMutationResult(spec.destinationPath, response.etag)
+            }
         }
     }
 
@@ -2922,6 +2919,7 @@ internal class AndroidNextcloudServices(
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
                 client = noRedirectHttpClient,
+                accountMutationSerialized = accountMutationLeaseHeld,
             )
             NextcloudApiResponse(
                 response.status,
@@ -2942,7 +2940,15 @@ internal class AndroidNextcloudServices(
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
     ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
-        durableMultipartUploads.enqueue(session, scope, request)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = ::loadSession,
+            unavailable = {
+                DurableUploadEnqueueResult.Rejected("The account changed before the upload could be queued.")
+            },
+        ) { current ->
+            durableMultipartUploads.enqueue(current, scope, request)
+        }
     }
 
     override suspend fun durableMultipartUploadStatuses(
@@ -3435,18 +3441,19 @@ internal class AndroidNextcloudServices(
         check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
         Unit
     }
-
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        request(
-            method = "DELETE",
-            url = session.serverUrl + "/ocs/v2.php/core/apppassword",
-            session = session,
-            ocsRequest = true,
-        )
-        Unit
+        accountCredentials.revokeSession(session) {
+            request(
+                method = "DELETE",
+                url = session.serverUrl + "/ocs/v2.php/core/apppassword",
+                session = session,
+                ocsRequest = true,
+                accountMutationSerialized = true,
+            )
+        }
     }
 
-    private fun ocsGet(session: NextcloudSession, path: String): JSONObject {
+    private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
         val separator = if ('?' in path) '&' else '?'
         val response = request(
             method = "GET",
@@ -3458,7 +3465,7 @@ internal class AndroidNextcloudServices(
         return JSONObject(response.text)
     }
 
-    private fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
+    private suspend fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
         val response = request(
             method = "PROPFIND",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -3471,7 +3478,7 @@ internal class AndroidNextcloudServices(
         return SafeXmlParser.parse(response.body).documentElement.firstText(DAV_NAMESPACE, "getetag")
     }
 
-    private fun request(
+    private suspend fun request(
         method: String,
         url: String,
         session: NextcloudSession? = null,
@@ -3488,7 +3495,16 @@ internal class AndroidNextcloudServices(
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
         diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
+        accountMutationSerialized: Boolean = false,
     ): HttpResponse {
+        if (session != null && !method.isReadOnlyJvmNetworkMethod() && !accountMutationSerialized) {
+            return ANDROID_ACCOUNT_OPERATION_GUARD.withAuthenticatedMutationSession(session, ::loadSession) { current ->
+                request(
+                    method, url, current, body, contentType, ocsRequest, headers, rawBody, maxResponseBytes, expectedSuccessResponseBytes, expectedSuccessResponseStatus,
+                    client, streamingBody, onNetworkFailure, onFailurePhase, diagnosticIgnoredHttpStatuses, true,
+                )
+            }
+        }
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         check(appContext.isAllowedTestRequest(method, url)) {
@@ -3716,25 +3732,6 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    private fun elapsedMillis(startedNanos: Long): Long =
-        (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L
-
-    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
-        val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            if (total > maxBytes) {
-                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
-            }
-            output.write(buffer, 0, read)
-        }
-        return output.toByteArray()
-    }
-
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {
         val document = SafeXmlParser.parse(xml)
         val responses = document.getElementsByTagNameNS(DAV_NAMESPACE, "response")
@@ -3887,8 +3884,6 @@ internal class AndroidNextcloudServices(
     private companion object {
         const val KEY_THEME = "theme_preference"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
-        const val KEY_SESSION = "encrypted_session"
-        const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android)"
         const val DAV_NAMESPACE = "DAV:"
         const val OWNCLOUD_NAMESPACE = "http://owncloud.org/ns"
@@ -3947,9 +3942,6 @@ private fun NextcloudFile.isNativeTiffPreviewFormat(): Boolean {
 }
 
 private const val MAX_ANDROID_MUTATION_RECOVERY_BYTES = 1024 * 1024
-
-private fun String.isCanonicalAndroidMutationAccountScope(): Boolean =
-    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
 
 internal sealed interface NativeTiffRangeReadPlan {
     val fileId: Long
@@ -4234,7 +4226,6 @@ private fun org.w3c.dom.Node.systemTagFirstText(namespace: String, localName: St
 private const val SYSTEM_TAG_DAV_NAMESPACE = "DAV:"
 private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
-private val androidDurableMutationRecoveryLock = Any()
 private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
 private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
         private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v4"

@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-
 /** Durable manual desktop executor. The common coordinator owns all planning and conflict rules. */
 internal class DesktopFileSyncEngine(
     private val store: DesktopFileSyncStore = DesktopFileSyncStore(),
@@ -23,7 +22,6 @@ internal class DesktopFileSyncEngine(
 ) {
     private val selectedRoots = ConcurrentHashMap<String, File>()
     private val lock = Mutex()
-
     suspend fun chooseLocalRoot(initialRootHint: String?): FileSyncLocalRoot? = withContext(Dispatchers.IO) {
         val initialDirectory = initialRootHint?.let(selectedRoots::get)?.takeIf(File::isDirectory)
         val chosen = folderPicker.choose(initialDirectory) ?: return@withContext null
@@ -216,7 +214,10 @@ internal class DesktopFileSyncEngine(
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
     }
-
+    suspend fun removeAccountPairs(accountId: String) = lock.withLock { store.removeDesktopFileSyncAccountPairs(accountId) }
+    suspend fun requireAccountRemovalReady(accountId: String) = lock.withLock {
+        store.requireDesktopFileSyncAccountRemovalReady(accountId)
+    }
     suspend fun runPair(
         session: NextcloudSession,
         userId: String,
@@ -826,7 +827,6 @@ internal class DesktopFileSyncEngine(
 
     private fun filesMatch(first: File, second: File): Boolean =
         first.length() == second.length() && Files.mismatch(first.toPath(), second.toPath()) == -1L
-
     private fun synchronizedResult(
         path: String,
         local: DesktopFileSyncLocalTree,

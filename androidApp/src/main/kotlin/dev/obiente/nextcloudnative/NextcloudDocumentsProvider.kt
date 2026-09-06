@@ -462,88 +462,88 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         throw failure
     }
 
-    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
-        val session = requireSession()
-        val parent = requireReference(parentDocumentId, session)
-        val account = resolveAccount(session)
-        requireDirectory(session, account, parent)
-        val path = childPath(parent.path, requireSafeDisplayName(displayName))
-        withNoBlockingAndroidDocumentWriteback(context, session, path) {
-            mutationCall {
-                if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    webDav.createFolder(session, account.userId, path)
-                } else {
-                    val empty = createLocalStagingFile()
-                    try { webDav.createFile(session, account.userId, path, empty) } finally { empty.delete() }
+    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String =
+        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
+            val parent = requireReference(parentDocumentId, session)
+            val account = resolveAccount(session)
+            requireDirectory(session, account, parent)
+            val path = childPath(parent.path, requireSafeDisplayName(displayName))
+            withNoBlockingAndroidDocumentWriteback(context, session, path) {
+                mutationCall {
+                    if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        webDav.createFolder(session, account.userId, path)
+                    } else {
+                        val empty = createLocalStagingFile()
+                        try { webDav.createFile(session, account.userId, path, empty) } finally { empty.delete() }
+                    }
                 }
             }
+            notifyDocumentChanged(session, path)
+            NextcloudDocumentIds.documentId(session, path)
         }
-        notifyDocumentChanged(session, path)
-        return NextcloudDocumentIds.documentId(session, path)
-    }
 
-    override fun renameDocument(documentId: String, displayName: String): String {
-        val session = requireSession()
-        val reference = requireReference(documentId, session)
-        if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be renamed.")
-        val account = resolveAccount(session)
-        val file = findDocument(session, account, reference.path)
-        val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
-        if (destination == reference.path) return documentId
-        val etag = requireMutationEtag(file)
-        withNoBlockingAndroidDocumentWriteback(context, session, reference.path, destination) {
-            mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
-        }
-        notifyMove(session, reference.path, destination)
-        return NextcloudDocumentIds.documentId(session, destination)
-    }
-
-    override fun deleteDocument(documentId: String) {
-        val session = requireSession()
-        val reference = requireReference(documentId, session)
-        if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be deleted.")
-        val account = resolveAccount(session)
-        val file = findDocument(session, account, reference.path)
-        withNoBlockingAndroidDocumentWriteback(context, session, reference.path) {
-            mutationCall {
-                webDav.delete(
-                    session,
-                    account.userId,
-                    reference.path,
-                    requireMutationEtag(file),
-                    isDirectory = file.isDirectory,
-                )
+    override fun renameDocument(documentId: String, displayName: String): String =
+        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
+            val reference = requireReference(documentId, session)
+            if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be renamed.")
+            val account = resolveAccount(session)
+            val file = findDocument(session, account, reference.path)
+            val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
+            if (destination == reference.path) return@withAndroidDocumentMutation documentId
+            val etag = requireMutationEtag(file)
+            withNoBlockingAndroidDocumentWriteback(context, session, reference.path, destination) {
+                mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
             }
+            notifyMove(session, reference.path, destination)
+            NextcloudDocumentIds.documentId(session, destination)
         }
-        notifyDocumentChanged(session, reference.path)
-    }
+
+    override fun deleteDocument(documentId: String) =
+        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
+            val reference = requireReference(documentId, session)
+            if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be deleted.")
+            val account = resolveAccount(session)
+            val file = findDocument(session, account, reference.path)
+            withNoBlockingAndroidDocumentWriteback(context, session, reference.path) {
+                mutationCall {
+                    webDav.delete(
+                        session,
+                        account.userId,
+                        reference.path,
+                        requireMutationEtag(file),
+                        isDirectory = file.isDirectory,
+                    )
+                }
+            }
+            notifyDocumentChanged(session, reference.path)
+        }
 
     override fun moveDocument(
         sourceDocumentId: String,
         sourceParentDocumentId: String,
         targetParentDocumentId: String,
-    ): String {
-        val session = requireSession()
-        val source = requireReference(sourceDocumentId, session)
-        val sourceParent = requireReference(sourceParentDocumentId, session)
-        val targetParent = requireReference(targetParentDocumentId, session)
-        if (source.isRoot) throw SecurityException("The Nextcloud root cannot be moved.")
-        require(NextcloudDocumentIds.parentPath(source.path) == sourceParent.path) {
-            "The supplied source parent does not contain this document."
-        }
-        val account = resolveAccount(session)
-        requireDirectory(session, account, targetParent)
-        val file = findDocument(session, account, source.path)
-        val destination = childPath(targetParent.path, file.name)
-        if (destination == source.path) return sourceDocumentId
-        withNoBlockingAndroidDocumentWriteback(context, session, source.path, destination) {
-            mutationCall {
-                webDav.move(session, account.userId, source.path, destination, requireMutationEtag(file))
+    ): String =
+        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
+            val source = requireReference(sourceDocumentId, session)
+            val sourceParent = requireReference(sourceParentDocumentId, session)
+            val targetParent = requireReference(targetParentDocumentId, session)
+            if (source.isRoot) throw SecurityException("The Nextcloud root cannot be moved.")
+            require(NextcloudDocumentIds.parentPath(source.path) == sourceParent.path) {
+                "The supplied source parent does not contain this document."
             }
+            val account = resolveAccount(session)
+            requireDirectory(session, account, targetParent)
+            val file = findDocument(session, account, source.path)
+            val destination = childPath(targetParent.path, file.name)
+            if (destination == source.path) return@withAndroidDocumentMutation sourceDocumentId
+            withNoBlockingAndroidDocumentWriteback(context, session, source.path, destination) {
+                mutationCall {
+                    webDav.move(session, account.userId, source.path, destination, requireMutationEtag(file))
+                }
+            }
+            notifyMove(session, source.path, destination)
+            NextcloudDocumentIds.documentId(session, destination)
         }
-        notifyMove(session, source.path, destination)
-        return NextcloudDocumentIds.documentId(session, destination)
-    }
 
     private fun openWritableDocument(
         session: NextcloudSession,
@@ -552,7 +552,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
-        reserveAndroidDocumentWritebackPath(session, file.path)
+        val accountLease = acquireAndroidDocumentWritebackAccountLease(
+            session,
+            file.path,
+            services::loadSession,
+        )
         val recovered: AndroidDocumentPendingWriteback?
         val writeback: AndroidDocumentPendingWriteback
         try {
@@ -563,7 +567,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
             writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
         } catch (failure: Throwable) {
-            releaseAndroidDocumentWritebackPath(session, file.path)
+            releaseAndroidDocumentWritebackSetup(accountLease) {
+                releaseAndroidDocumentWritebackPath(session, file.path)
+            }
             throw failure
         }
         val expectedEtag = writeback.expectedRemoteEtag
@@ -619,6 +625,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     retainFailedWriteback(writeback, failure)
                 } finally {
                     writeback.releaseActive()
+                    accountLease.close()
                 }
             }
             return try {
@@ -632,17 +639,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             if (writeback.manifest.isFile) {
                 if (recovered == null) writeback.discard() else writeback.releaseActive()
             }
+            accountLease.close()
             throw failure
         }
-    }
-
-    private fun descriptorMode(mode: String): Int = when (mode) {
-        "w" -> ParcelFileDescriptor.MODE_WRITE_ONLY
-        "wt" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_TRUNCATE
-        "wa" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_APPEND
-        "rw" -> ParcelFileDescriptor.MODE_READ_WRITE
-        "rwt" -> ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE
-        else -> error("Unsupported writable mode: $mode")
     }
 
     private fun createLocalStagingFile(): File {

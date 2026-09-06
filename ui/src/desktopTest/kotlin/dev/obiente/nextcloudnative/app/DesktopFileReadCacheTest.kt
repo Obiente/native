@@ -18,6 +18,46 @@ import kotlinx.serialization.json.jsonObject
 
 class DesktopFileReadCacheTest {
     @Test
+    fun `stale producers cannot recreate cache files across retirement and reactivation`() = withCache { root, cache ->
+        val accountId = desktopFileCacheAccountId(session())
+        val staleProducer = checkNotNull(cache.producer(accountId))
+        val content = NextcloudFileContent("private".encodeToByteArray(), "text/plain", "\"etag-stale\"")
+        val listing = listOf(file("Notes/private.txt", "\"etag-stale\""))
+
+        assertTrue(cache.storeContent(accountId, "Notes/private.txt", content, cacheProducer = staleProducer))
+        cache.removeAccount(accountId)
+
+        assertFalse(cache.storeContent(accountId, "Notes/private.txt", content, cacheProducer = staleProducer))
+        assertFalse(
+            cache.storeListingUnlessNewer(
+                accountId,
+                "Notes",
+                listing,
+                fetchedAtEpochMillis = 10,
+                cacheProducer = staleProducer,
+            ),
+        )
+        assertFalse(root.resolve(accountId).exists())
+
+        cache.activateAccount(accountId)
+        assertFalse(cache.storeContent(accountId, "Notes/private.txt", content, cacheProducer = staleProducer))
+        val currentProducer = checkNotNull(cache.producer(accountId))
+        assertTrue(cache.storeContent(accountId, "Notes/private.txt", content, cacheProducer = currentProducer))
+        assertTrue(
+            cache.storeListingUnlessNewer(
+                accountId,
+                "Notes",
+                listing,
+                fetchedAtEpochMillis = 20,
+                cacheProducer = currentProducer,
+            ),
+        )
+        assertFalse(cache.invalidate(accountId, "Notes", staleProducer))
+        assertContentEquals(content.bytes, cache.cachedContent(accountId, "Notes/private.txt", 64)?.bytes)
+        assertEquals(listing, cache.cachedListing(accountId, "Notes"))
+    }
+
+    @Test
     fun `metadata and content survive a new cache instance without storing credentials`() = withCache { root, cache ->
         val session = session(password = "first-secret")
         val accountId = desktopFileCacheAccountId(session)
