@@ -34,10 +34,14 @@ internal suspend fun <Result> withPreparedAndroidAccountRemovalLease(
     accountIdentity: String,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     prepare: suspend () -> Unit,
+    revalidate: suspend () -> Unit,
     action: suspend () -> Result,
 ): Result {
     prepare()
-    return withAndroidAccountRemovalLease(accountIdentity, guard, action)
+    return withAndroidAccountRemovalLease(accountIdentity, guard) {
+        revalidate()
+        action()
+    }
 }
 
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
@@ -74,11 +78,43 @@ internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
 internal suspend fun revokeAndroidSessionWithAccountLease(
     accountIdentity: String,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
-    preflight: suspend () -> Unit,
+    prepare: suspend () -> Unit,
+    revalidate: suspend () -> Unit,
     revoke: suspend () -> Unit,
     removeLocalAccount: suspend () -> Unit,
-) = withPreparedAndroidAccountRemovalLease(accountIdentity, guard, preflight) {
+) = withPreparedAndroidAccountRemovalLease(accountIdentity, guard, prepare, revalidate) {
     revokeAndroidSessionAfterRemovalPreflight({}, revoke, removeLocalAccount)
+}
+
+internal class AndroidAccountRemovalLeaseCoordinator(
+    context: Context,
+    private val guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+) {
+    private val appContext = context.applicationContext
+
+    suspend fun <Result> withLease(
+        session: NextcloudSession,
+        action: suspend () -> Result,
+    ): Result = withPreparedAndroidAccountRemovalLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        prepare = { prepareAndroidAccountRemoval(appContext, session) },
+        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        action = action,
+    )
+
+    suspend fun revoke(
+        session: NextcloudSession,
+        revoke: suspend () -> Unit,
+        removeLocalAccount: suspend () -> Unit,
+    ) = revokeAndroidSessionWithAccountLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        prepare = { prepareAndroidAccountRemoval(appContext, session) },
+        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        revoke = revoke,
+        removeLocalAccount = removeLocalAccount,
+    )
 }
 
 internal enum class AndroidAccountDocumentGrantScope(val pathSegment: String) {
