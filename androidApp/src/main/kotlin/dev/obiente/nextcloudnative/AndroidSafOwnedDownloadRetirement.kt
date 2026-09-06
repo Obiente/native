@@ -120,6 +120,24 @@ internal fun requireAndroidSafRetirementContinuation(shouldContinue: () -> Boole
     if (!shouldContinue()) throw CancellationException("Folder sync recovery was cancelled.")
 }
 
+internal fun hasRelevantAndroidSafOwnedDownloadRecovery(
+    treeScopedPending: Boolean,
+    legacyTransactions: List<AndroidSafOwnedDownloadTransaction>,
+    identityBelongsToTree: (String) -> Boolean?,
+): Boolean = treeScopedPending || legacyTransactions.any { transaction ->
+    !androidSafOwnedDownloadIsProvenUnrelatedToTree(transaction, identityBelongsToTree)
+}
+
+internal fun androidSafOwnedDownloadIsProvenUnrelatedToTree(
+    transaction: AndroidSafOwnedDownloadTransaction,
+    identityBelongsToTree: (String) -> Boolean?,
+): Boolean {
+    val identities = listOfNotNull(transaction.stageDocumentIdentity, transaction.backupDocumentIdentity)
+    if (identities.isEmpty()) return false
+    val memberships = identities.map { identity -> identityBelongsToTree(identity) ?: return false }
+    return memberships.none { it }
+}
+
 internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
@@ -158,7 +176,25 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
     ).map { candidate ->
         candidate to DocumentsContract.buildDocumentUriUsingTree(treeUri, candidate.documentId)
     }
-    val hasRelevantPendingRecovery = indexedOwnership::hasPendingTransactions
+    val identityBelongsToTree: (String) -> Boolean? = identity@{ identity ->
+        if (
+            androidPickerUriRejection(identity, appContext.packageName) !=
+            AndroidPickerUriRejection.OwnDocumentsProvider
+        ) return@identity null
+        val documentId = runCatching { DocumentsContract.getDocumentId(Uri.parse(identity)) }.getOrNull()
+            ?: return@identity null
+        androidSafOwnedDownloadRecoveryDirectory(
+            DocumentsContract.getTreeDocumentId(treeUri),
+            documentId,
+        ) != null
+    }
+    val hasRelevantPendingRecovery = {
+        hasRelevantAndroidSafOwnedDownloadRecovery(
+            treeScopedPending = ownership.hasTreeScopedPendingTransactions(),
+            legacyTransactions = ownership.legacyPendingTransactions(),
+            identityBelongsToTree = identityBelongsToTree,
+        )
+    }
     check(
         reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
             recordedCandidates = recordedCandidates,

@@ -67,6 +67,57 @@ class AndroidSafDownloadOwnershipIndexTest {
     }
 
     @Test
+    fun `selected tree ignores only legacy ownership proven to belong elsewhere`() {
+        val unrelated = AndroidSafOwnedDownloadTransaction(
+            "Elsewhere.txt",
+            FIRST_TOKEN,
+            stageDocumentIdentity = "document:other-tree",
+        )
+        val unclassified = AndroidSafOwnedDownloadTransaction("Unknown.txt", SECOND_TOKEN)
+
+        assertFalse(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unclassified),
+                identityBelongsToTree = { null },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = true,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+    }
+
+    @Test
+    fun `selected tree reads legacy and tree scoped ownership separately`() {
+        val base = Files.createTempDirectory("saf-download-selected-tree-").toFile()
+        try {
+            val legacy = AndroidSafDownloadOwnershipStore(base)
+            val selected = androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/selected")
+            val legacyTransaction = AndroidSafOwnedDownloadTransaction("Legacy.txt", FIRST_TOKEN)
+            val selectedTransaction = AndroidSafOwnedDownloadTransaction("Selected.txt", SECOND_TOKEN)
+            legacy.forDirectory("content://provider/tree/other/document/parent").add(legacyTransaction)
+            selected.forDirectory("content://provider/tree/selected/document/parent").add(selectedTransaction)
+
+            assertEquals(listOf(legacyTransaction), selected.legacyPendingTransactions())
+            assertEquals(listOf(selectedTransaction, legacyTransaction), selected.pendingTransactions())
+            assertTrue(selected.hasTreeScopedPendingTransactions())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `tree-wide recovery indexing is skipped without pending ownership`() {
         val root = Files.createTempDirectory("saf-download-empty-index-").toFile()
         try {

@@ -30,7 +30,11 @@ internal class AndroidSafDownloadOwnershipStore(
     }
 
     fun pendingTransactions(): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
-        ownershipRows().map(StoredOwnershipRow::transaction)
+        ownershipRows(includeAll = true).map(StoredOwnershipRow::transaction)
+    }
+
+    fun legacyPendingTransactions(): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+        ownershipRows(files = legacyOwnershipFiles(), includeAll = true).map(StoredOwnershipRow::transaction)
     }
 
     override fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
@@ -275,9 +279,11 @@ internal class AndroidSafDownloadOwnershipStore(
     private fun ownershipRows(
         scope: String? = null,
         tokens: Set<String> = emptySet(),
-    ): List<StoredOwnershipRow> = ownershipFiles()
+        files: List<File> = ownershipFiles(),
+        includeAll: Boolean = false,
+    ): List<StoredOwnershipRow> = files
         .mapNotNull(::ownershipReference)
-        .filter { reference -> reference.scope == scope || reference.token in tokens }
+        .filter { reference -> includeAll || reference.scope == scope || reference.token in tokens }
         .map { reference ->
             val transaction = readRow(reference.file)
             check(transaction.token == reference.token) { "SAF download recovery row name is invalid." }
@@ -286,10 +292,13 @@ internal class AndroidSafDownloadOwnershipStore(
 
     private fun ownershipFiles(): List<File> = buildList {
         addAll(ownershipFiles(directory, listFiles))
-        legacyDirectory?.takeIf { it != directory }?.let { legacy ->
-            addAll(ownershipFiles(legacy, legacy::listFiles))
-        }
+        addAll(legacyOwnershipFiles())
     }.distinctBy(File::getAbsolutePath)
+
+    private fun legacyOwnershipFiles(): List<File> = legacyDirectory
+        ?.takeIf { it != directory }
+        ?.let { legacy -> ownershipFiles(legacy, legacy::listFiles) }
+        .orEmpty()
 
     private fun ownershipFiles(
         rowDirectory: File,
