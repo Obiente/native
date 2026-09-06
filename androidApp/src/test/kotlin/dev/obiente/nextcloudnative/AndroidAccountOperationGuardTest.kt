@@ -418,6 +418,22 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun unavailableRemovalUsesOnlyCredentialFreePreflight() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val events = mutableListOf<String>()
+
+        withUnavailableAndroidAccountRemovalLease(
+            accountIdentity = "account-a",
+            guard = guard,
+            preflight = { events += "preflight" },
+        ) {
+            events += "remove"
+        }
+
+        assertEquals(listOf("preflight", "preflight", "remove"), events)
+    }
+
+    @Test
     fun accountWorkStartedAfterPreparationMakesRemovalFailClosed() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val accountIdentity = "account-a"

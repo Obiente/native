@@ -82,6 +82,32 @@ internal fun <Directory> reconcileRecordedAndroidSafDownloadDirectories(
     return !hasPendingRecovery()
 }
 
+internal fun <Directory> reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
+    recordedCandidates: List<Directory>,
+    discoverCandidates: () -> List<Directory>,
+    hasPendingRecovery: () -> Boolean,
+    hasPendingForDirectory: (Directory) -> Boolean,
+    shouldContinue: () -> Boolean = { true },
+    reconcileDirectory: (Directory) -> Unit,
+): Boolean {
+    if (
+        reconcileRecordedAndroidSafDownloadDirectories(
+            candidates = recordedCandidates,
+            hasPendingRecovery = hasPendingRecovery,
+            hasPendingForDirectory = hasPendingForDirectory,
+            shouldContinue = shouldContinue,
+            reconcileDirectory = reconcileDirectory,
+        )
+    ) return true
+    return reconcileRecordedAndroidSafDownloadDirectories(
+        candidates = recordedCandidates + discoverCandidates(),
+        hasPendingRecovery = hasPendingRecovery,
+        hasPendingForDirectory = hasPendingForDirectory,
+        shouldContinue = shouldContinue,
+        reconcileDirectory = reconcileDirectory,
+    )
+}
+
 internal fun requireAndroidSafRetirementContinuation(shouldContinue: () -> Boolean) {
     if (!shouldContinue()) throw CancellationException("Folder sync recovery was cancelled.")
 }
@@ -103,7 +129,6 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         downloadOwnershipStore = ownership,
         providerRecoverySession = providerRecoverySession,
     )
-    localTree.indexRecoveryLocationsIfNeeded(indexedOwnership, shouldContinue)
     val recordedDocumentIds = ownership.pendingTransactions().asSequence()
         .flatMap { transaction ->
             sequenceOf(transaction.stageDocumentIdentity, transaction.backupDocumentIdentity)
@@ -125,20 +150,23 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
     ).map { candidate ->
         candidate to DocumentsContract.buildDocumentUriUsingTree(treeUri, candidate.documentId)
     }
-    val relocatedCandidates = indexedOwnership.observedPendingDirectoryIdentities().mapNotNull { identity ->
-        val directoryUri = runCatching { Uri.parse(identity) }.getOrNull() ?: return@mapNotNull null
-        val documentId = runCatching { DocumentsContract.getDocumentId(directoryUri) }.getOrNull()
-            ?: return@mapNotNull null
-        androidSafOwnedDownloadRecoveryDirectory(
-            rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
-            directoryDocumentId = documentId,
-        )?.let { candidate -> candidate to directoryUri }
-    }
-    val candidates = recordedCandidates + relocatedCandidates
     val hasRelevantPendingRecovery = indexedOwnership::hasPendingTransactions
     check(
-        reconcileRecordedAndroidSafDownloadDirectories(
-            candidates = candidates,
+        reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
+            recordedCandidates = recordedCandidates,
+            discoverCandidates = {
+                localTree.indexRecoveryLocationsIfNeeded(indexedOwnership, shouldContinue)
+                indexedOwnership.observedPendingDirectoryIdentities().mapNotNull { identity ->
+                    val directoryUri = runCatching { Uri.parse(identity) }.getOrNull()
+                        ?: return@mapNotNull null
+                    val documentId = runCatching { DocumentsContract.getDocumentId(directoryUri) }.getOrNull()
+                        ?: return@mapNotNull null
+                    androidSafOwnedDownloadRecoveryDirectory(
+                        rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
+                        directoryDocumentId = documentId,
+                    )?.let { candidate -> candidate to directoryUri }
+                }
+            },
             hasPendingRecovery = hasRelevantPendingRecovery,
             hasPendingForDirectory = { (_, directoryUri) ->
                 indexedOwnership.hasPendingTransactionsForDirectory(directoryUri.toString())

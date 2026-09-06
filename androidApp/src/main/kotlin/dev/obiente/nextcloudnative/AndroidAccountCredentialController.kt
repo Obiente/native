@@ -188,7 +188,7 @@ internal class AndroidAccountCredentialController(
         val unavailableSession = NextcloudSession(target.record.serverUrl, target.record.loginName, appPassword = "")
         val accountIdentity = NextcloudDocumentIds.accountKey(unavailableSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(unavailableSession)
-        accountRemovalLeases.withLease(unavailableSession) {
+        accountRemovalLeases.withUnavailableLease(unavailableSession) {
             removeUnavailableAndroidAccountCredentialData(
                 accountIdentity = accountIdentity,
                 active = target.wasActive,

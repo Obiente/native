@@ -166,6 +166,49 @@ class AndroidFileSyncProviderFeedbackRecoveryTest {
     }
 
     @Test
+    fun `recorded recovery completes before full tree discovery`() {
+        var pending = true
+        var discoveryCalls = 0
+
+        val reconciled = reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
+            recordedCandidates = listOf("recorded"),
+            discoverCandidates = {
+                discoveryCalls += 1
+                error("The unrelated tree is not inspectable")
+            },
+            hasPendingRecovery = { pending },
+            hasPendingForDirectory = { it == "recorded" && pending },
+            reconcileDirectory = { pending = false },
+        )
+
+        assertTrue(reconciled)
+        assertEquals(0, discoveryCalls)
+    }
+
+    @Test
+    fun `unresolved recorded recovery discovers a relocated directory`() {
+        var pending = true
+        val events = mutableListOf<String>()
+
+        val reconciled = reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
+            recordedCandidates = listOf("recorded"),
+            discoverCandidates = {
+                events += "discover"
+                listOf("relocated")
+            },
+            hasPendingRecovery = { pending },
+            hasPendingForDirectory = { it == "relocated" && pending },
+            reconcileDirectory = {
+                events += "reconcile:$it"
+                pending = false
+            },
+        )
+
+        assertTrue(reconciled)
+        assertEquals(listOf("discover", "reconcile:relocated"), events)
+    }
+
+    @Test
     fun `relocated recovery directory keeps its exact relative path`() {
         val root = NextcloudDocumentIds.documentId(accountKey, "Sync")
         val relocated = NextcloudDocumentIds.documentId(accountKey, "Sync/Moved/Parent")
