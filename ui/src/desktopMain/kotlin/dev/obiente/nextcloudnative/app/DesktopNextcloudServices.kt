@@ -1681,8 +1681,8 @@ class DesktopNextcloudServices(
         }
         val accountId = desktopFileCacheAccountId(session)
         val cacheProducer = fileReadCache.producer(accountId)
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) {
-            return unknownCleanupStateRejection()
+        accountSyncPairCleanupJournal.accountActivationBlock(accountId, session.accountId.storageKey)?.let {
+            return desktopAccountCleanupStateRejection(it)
         }
         runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
             return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
@@ -2709,8 +2709,8 @@ class DesktopNextcloudServices(
                     ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
-                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) {
-                    return@syncRun FileSyncCenterActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
+                accountSyncPairCleanupJournal.accountActivationBlock(accountId, session.accountId.storageKey)?.let {
+                    return@syncRun FileSyncCenterActionResult.Rejected(it.message)
                 }
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
                     return@syncRun FileSyncCenterActionResult.Rejected(
@@ -3813,7 +3813,7 @@ class DesktopNextcloudServices(
             )
         }
         requireDesktopAccountActivationAllowed(
-            accountSyncPairCleanupJournal.blocksAccountActivation(accountId, accountStorageKey),
+            accountSyncPairCleanupJournal.accountActivationBlock(accountId, accountStorageKey),
         )
     }
     private suspend fun retryPendingAccountSyncPairCleanups() =
