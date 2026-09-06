@@ -32,7 +32,7 @@ class AndroidDocumentProviderReadAccessTest {
         var removalEntered = false
         val removal = async(Dispatchers.Default) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) { removalEntered = true }
@@ -53,9 +53,8 @@ class AndroidDocumentProviderReadAccessTest {
         val removalEntered = CompletableDeferred<Unit>()
         val finishRemoval = CompletableDeferred<Unit>()
         var currentSession: NextcloudSession? = original
-        val accountIdentity = NextcloudDocumentIds.accountKey(original)
         val removal = async(start = CoroutineStart.UNDISPATCHED) {
-            withAndroidAccountRemovalLease(accountIdentity, guard, lifetimeGuard) {
+            withAndroidAccountRemovalLease(original, guard, lifetimeGuard) {
                 currentSession = null
                 removalEntered.complete(Unit)
                 finishRemoval.await()
@@ -122,7 +121,7 @@ class AndroidDocumentProviderReadAccessTest {
         openDescriptor.close()
         withTimeout(1_000L) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) {}
@@ -138,7 +137,7 @@ class AndroidDocumentProviderReadAccessTest {
         var commitEntered = false
         val removal = async(start = CoroutineStart.UNDISPATCHED) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) { currentSession = null }
@@ -172,7 +171,7 @@ class AndroidDocumentProviderReadAccessTest {
         var commitEntered = false
         val removal = launch(start = CoroutineStart.UNDISPATCHED) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) { error("Cancelled removal must not enter") }
@@ -190,7 +189,7 @@ class AndroidDocumentProviderReadAccessTest {
         assertTrue(commitEntered)
         withTimeout(1_000L) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) {}
@@ -206,7 +205,7 @@ class AndroidDocumentProviderReadAccessTest {
         var currentIncarnation = originalIncarnation
         val removal = async {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) {
@@ -262,7 +261,7 @@ class AndroidDocumentProviderReadAccessTest {
         searchEntered.await()
         val removal = async {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) { removalEntered = true }
@@ -294,7 +293,7 @@ class AndroidDocumentProviderReadAccessTest {
 
         withTimeout(1_000L) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) {}
@@ -316,6 +315,29 @@ class AndroidDocumentProviderReadAccessTest {
 
         assertTrue(selectionEntered)
         lease.close()
+    }
+
+    @Test
+    fun canonicallyEquivalentRemovalWaitsForTheOriginalDescriptorLease() = runBlocking {
+        val equivalent = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443///")
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val lease = readLease(guard, lifetimeGuard)
+        var removalEntered = false
+
+        assertEquals(original.accountId, equivalent.accountId)
+        assertNotEquals(NextcloudDocumentIds.accountKey(original), NextcloudDocumentIds.accountKey(equivalent))
+        val removal = async(Dispatchers.Default) {
+            withAndroidAccountRemovalLease(equivalent, guard, lifetimeGuard) {
+                removalEntered = true
+            }
+        }
+        yield()
+
+        assertFalse(removalEntered)
+        lease.close()
+        removal.await()
+        assertTrue(removalEntered)
     }
 
     @Test

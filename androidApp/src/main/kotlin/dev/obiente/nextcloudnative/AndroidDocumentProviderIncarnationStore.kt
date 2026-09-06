@@ -7,7 +7,9 @@ import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 
 internal sealed interface AndroidDocumentProviderIncarnationRecord {
     val incarnation: NextcloudDocumentIncarnation
@@ -160,6 +162,46 @@ internal class AndroidDocumentProviderIncarnationStore(
         (readRecord(accountIdentity) as? AndroidDocumentProviderIncarnationRecord.Retired)?.incarnation
     }
 
+    fun activeAccountIdentitiesForCredentialReset(): List<String> = synchronized(LOCK) {
+        keys().asSequence()
+            .filter(ACCOUNT_IDENTITY_PATTERN::matches)
+            .filter { accountIdentity ->
+                try {
+                    readRecord(accountIdentity) is AndroidDocumentProviderIncarnationRecord.Active
+                } catch (_: IllegalArgumentException) {
+                    false
+                } catch (_: ClassCastException) {
+                    false
+                }
+            }
+            .sorted()
+            .toList()
+    }
+
+    fun retireActiveForCredentialReset(
+        accountIdentities: Collection<String>,
+    ): List<AndroidDocumentProviderIncarnationRetirement> = synchronized(LOCK) {
+        val retirements = mutableListOf<AndroidDocumentProviderIncarnationRetirement>()
+        try {
+            accountIdentities.distinct().sorted().forEach { accountIdentity ->
+                requireAccountIdentity(accountIdentity)
+                if (readRecord(accountIdentity) is AndroidDocumentProviderIncarnationRecord.Active) {
+                    retirements += retireForRemoval(accountIdentity)
+                }
+            }
+            retirements
+        } catch (failure: Throwable) {
+            retirements.asReversed().forEach { retirement ->
+                try {
+                    rollback(retirement)
+                } catch (rollbackFailure: Throwable) {
+                    failure.addSuppressed(rollbackFailure)
+                }
+            }
+            throw failure
+        }
+    }
+
     private fun readRecord(accountIdentity: String): AndroidDocumentProviderIncarnationRecord? {
         requireAccountIdentity(accountIdentity)
         return read(accountIdentity)?.let(::decodeAndroidDocumentProviderIncarnationRecord)
@@ -239,6 +281,35 @@ internal class AndroidDocumentProviderIncarnationStore(
 
         fun retirementJournalKey(accountIdentity: String): String =
             "$RETIREMENT_JOURNAL_KEY_PREFIX$accountIdentity"
+    }
+}
+
+internal suspend fun retireAndroidDocumentProviderIncarnationsForCredentialReset(
+    store: AndroidDocumentProviderIncarnationStore,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard,
+    clearCredentials: suspend () -> Unit,
+    recordCompletionFailure: (Exception) -> Unit = {},
+) {
+    val accountIdentities = store.activeAccountIdentitiesForCredentialReset()
+    lifetimeGuard.withRemovals(accountIdentities) {
+        val retirements = store.retireActiveForCredentialReset(accountIdentities)
+        withContext(NonCancellable) {
+            try {
+                clearCredentials()
+            } catch (failure: Exception) {
+                retirements.asReversed().forEach { retirement ->
+                    runCatching { store.rollback(retirement) }.onFailure(failure::addSuppressed)
+                }
+                throw failure
+            }
+            retirements.forEach { retirement ->
+                try {
+                    store.complete(retirement)
+                } catch (failure: Exception) {
+                    recordCompletionFailure(failure)
+                }
+            }
+        }
     }
 }
 
