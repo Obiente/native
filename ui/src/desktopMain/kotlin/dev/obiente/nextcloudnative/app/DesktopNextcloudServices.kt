@@ -124,7 +124,6 @@ private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_00
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
-private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
 private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
 private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
 private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
@@ -455,23 +454,6 @@ internal fun persistedWindowsCloudFilesRecoveryRoots(
         accountId to path
     }
     .toMap()
-
-internal fun pageWindowsCloudFilesRecoveryRoots(
-    roots: Map<String, Path>,
-    startAfterAccountId: String?,
-    limit: Int = MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT,
-): Map<String, Path> {
-    require(limit > 0)
-    if (roots.isEmpty()) return emptyMap()
-    val ordered = roots.entries.sortedBy(Map.Entry<String, Path>::key)
-    val startIndex = startAfterAccountId
-        ?.let { cursor -> ordered.indexOfFirst { it.key > cursor } }
-        ?.takeIf { it >= 0 }
-        ?: 0
-    return (0 until minOf(limit, ordered.size))
-        .map { offset -> ordered[(startIndex + offset) % ordered.size] }
-        .associate(Map.Entry<String, Path>::toPair)
-}
 
 internal fun pagedPersistedWindowsCloudFilesRecoveryRoots(
     preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
@@ -3356,10 +3338,10 @@ class DesktopNextcloudServices(
             .getOrNull()
             ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
     }
-
     override suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: DynamicNativeMemoryCacheProducer?,
     ) = withContext(Dispatchers.IO) {
         val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
         val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
@@ -3510,6 +3492,7 @@ class DesktopNextcloudServices(
                 }
             },
             activate = {
+                AccountPrivateMemoryLifecycle.activateAccount(it.accountId.storageKey)
                 dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it))
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
                 startDesktopSyncLifecycle()
@@ -3606,6 +3589,9 @@ class DesktopNextcloudServices(
                             }
                         } },
                         removeSyncPairs = ::removeDesktopAccountOwnedState,
+                        retireCommittedAccount = {
+                            AccountPrivateMemoryLifecycle.retireAccount(account.id.storageKey)
+                        },
                     ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
                     }
@@ -3794,7 +3780,11 @@ class DesktopNextcloudServices(
                                 teardownVirtualFiles = finishCommittedRemoval,
                             )
                         },
-                        ::removeDesktopAccountOwnedState, ::recordSupportDiagnostic,
+                        ::removeDesktopAccountOwnedState,
+                        ::recordSupportDiagnostic,
+                        retireCommittedAccount = {
+                            accountStorageKey?.let(AccountPrivateMemoryLifecycle::retireAccount)
+                        },
                     )
                 } finally {
                     if (cleared && accountId != null) schedulePendingAccountSyncPairCleanupRetry()
@@ -3826,19 +3816,24 @@ class DesktopNextcloudServices(
     private suspend fun retryPendingAccountSyncPairCleanup(accountId: String, accountStorageKey: String) {
         accountSyncPairCleanupJournal.pendingForAccountActivation(accountId, accountStorageKey).forEach { cleanup ->
             retryDesktopAccountSyncPairCleanup(
-                cleanup, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState, accountSyncPairCleanupJournal::clear,
+                cleanup, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState,
+                accountSyncPairCleanupJournal::clear, ::reactivateDesktopMemoryAfterAbortedRemoval,
             )
         }
         requireDesktopAccountActivationAllowed(accountSyncPairCleanupJournal.blocksAccountActivation(accountId))
     }
-
     private suspend fun retryPendingAccountSyncPairCleanups() =
         retryPendingDesktopAccountSyncPairCleanups(
             accountSyncPairCleanupJournal, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState,
             { accountId, failure ->
                 recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
             },
+            ::reactivateDesktopMemoryAfterAbortedRemoval,
         )
+
+    private fun reactivateDesktopMemoryAfterAbortedRemoval(cleanup: DesktopAccountSyncPairCleanup) {
+        cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::activateAccount)
+    }
 
     private fun schedulePendingAccountSyncPairCleanupRetry() = serviceScope.launch {
         retryDesktopAccountSyncPairCleanupsBounded {
@@ -3853,14 +3848,14 @@ class DesktopNextcloudServices(
             pending
         }
     }
-
     private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
         val accountId = cleanup.accountId
         clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        supportIntake.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
-        cleanup.accountStorageKey?.let(AccountPrivateMemoryCleanup::removeAccount)
+        cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::retireAccount)
         externalFileHandoff.removeAccount(accountId)
         removeDesktopAccountPrivateStorage(
             accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId), preferences,

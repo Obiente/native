@@ -646,6 +646,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
     suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: DynamicNativeMemoryCacheProducer? = null,
     ) = Unit
 
     /** Loads one exact account/app/action/record mutation staged before a non-idempotent send. */
