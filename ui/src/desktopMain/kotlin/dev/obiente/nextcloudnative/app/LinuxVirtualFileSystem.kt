@@ -144,7 +144,7 @@ internal class DesktopLinuxVirtualMetadataStore(
             freshAtEpochMillis = snapshot.freshAtEpochMillis,
             cacheProducer = cacheProducer,
         )
-    override fun invalidate(path: String) = cache.invalidate(accountId, path)
+    override fun invalidate(path: String) { cache.invalidate(accountId, path, cacheProducer) }
 
     override fun retainedPaths(): Set<String> = cache.cachedVirtualListingPaths(accountId)
 

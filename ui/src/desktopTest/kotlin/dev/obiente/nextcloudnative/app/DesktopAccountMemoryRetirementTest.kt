@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
+import java.nio.file.Files
+import java.util.UUID
+import java.util.prefs.Preferences
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -51,5 +54,59 @@ class DesktopAccountMemoryRetirementTest {
 
         assertTrue(attempt(DesktopAccountOwnership.Absent))
         assertFalse(attempt(DesktopAccountOwnership.Present))
+    }
+
+    @Test
+    fun `committed removal fences file cache before physical cleanup can fail`() = runBlocking {
+        val root = Files.createTempDirectory("desktop-file-cache-commit-fence-").toFile()
+        val preferences = Preferences.userRoot().node("desktop-file-cache-commit-fence-${UUID.randomUUID()}")
+        val accountId = "d".repeat(64)
+        val cache = DesktopFileReadCache(root, preferences = preferences)
+        val staleProducer = checkNotNull(cache.producer(accountId))
+        val privateContent = NextcloudFileContent(
+            "private".encodeToByteArray(),
+            "text/plain",
+            "etag-private",
+        )
+        try {
+            assertTrue(
+                cache.storeContent(
+                    accountId,
+                    "Notes/private.txt",
+                    privateContent,
+                    cacheProducer = staleProducer,
+                ),
+            )
+
+            val removed = removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = accountId,
+                prepareCleanup = { _, _, _, _ -> },
+                commitCleanup = {},
+                clearCleanup = {},
+                accountOwnership = { DesktopAccountOwnership.Absent },
+                removeCredential = { true },
+                removeSyncPairs = {
+                    assertTrue(root.resolve(accountId).isDirectory)
+                    assertFalse(
+                        cache.storeContent(
+                            accountId,
+                            "Notes/late.txt",
+                            privateContent,
+                            cacheProducer = staleProducer,
+                        ),
+                    )
+                    error("synthetic cleanup failure before physical cache removal")
+                },
+                retireCommittedAccount = { cache.retireAccount(accountId) },
+                recordCleanupFailure = {},
+            )
+
+            assertTrue(removed)
+            assertFalse(root.resolve(accountId).resolve("index-v1.json").readText().contains("late.txt"))
+        } finally {
+            runCatching { cache.removeAccount(accountId) }
+            preferences.removeNode()
+            root.deleteRecursively()
+        }
     }
 }

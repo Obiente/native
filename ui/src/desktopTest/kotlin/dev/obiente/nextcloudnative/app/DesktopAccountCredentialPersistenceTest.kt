@@ -365,19 +365,32 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
-    fun malformedRegistryWithoutLegacyCredentialIsReplacedByFreshSignIn() = withStore { preferences, secrets ->
+    fun malformedRegistryWithoutLegacyCredentialRejectsFreshSignInWithoutOrphaningState() =
+        withStore { preferences, secrets ->
         val session = firstSession()
-        preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, "{not-json")
+        val malformedRegistry = "{not-json"
+        preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, malformedRegistry)
+        secrets.save(
+            desktopAccountSecretReference(secondSession().accountId), "bob", "existing-secret".encodeToByteArray(),
+        )
+        val savesBefore = secrets.saveCount
+        val clearsBefore = secrets.clearCount
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
         val persistence = persistence(preferences, secrets, diagnostics)
 
         assertEquals(DesktopAccountOwnership.Unknown, persistence.accountOwnership(desktopFileCacheAccountId(session)))
-        assertEquals(session, persistence.saveSession(session))
+        assertFailsWith<IllegalStateException> { persistence.saveSession(session) }
 
-        assertEquals(session.accountId, decodeRegistry(preferences).activeAccountId)
-        assertEquals(session, persistence(preferences, secrets).loadActiveSession())
+        assertEquals(malformedRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
+        assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertEquals(
+            "existing-secret",
+            secrets.load(desktopAccountSecretReference(secondSession().accountId))?.decodeToString(),
+        )
+        assertEquals(savesBefore, secrets.saveCount)
+        assertEquals(clearsBefore, secrets.clearCount)
         assertTrue(diagnostics.any { it.code == "ACCOUNT_REGISTRY_MALFORMED" })
-    }
+        }
 
     @Test
     fun malformedRegistryFallsBackWithoutDiscardingTheLegacyCredential() = withStore { preferences, secrets ->

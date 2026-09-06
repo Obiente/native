@@ -93,7 +93,7 @@ internal class DesktopAccountCredentialPersistence(
             ?: when {
                 read.encoded == null -> NextcloudAccountRegistry.Empty
                 read.unsupportedVersion -> throw unsupportedRegistryForMutation()
-                else -> NextcloudAccountRegistry.Empty
+                else -> throw malformedRegistryForMutation()
             }
         val previousRecord = registry.accounts.firstOrNull { account -> account.id == session.accountId }
         val persistedSession = previousRecord
@@ -678,6 +678,11 @@ internal class DesktopAccountCredentialPersistence(
     private fun unsupportedRegistryForMutation(): IllegalStateException {
         recordCredentialDiagnostic("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED", "account-registry.persist")
         return IllegalStateException("The local account registry was written by a newer app version.")
+    }
+
+    private fun malformedRegistryForMutation(): IllegalStateException {
+        recordCredentialDiagnostic("ACCOUNT_REGISTRY_MALFORMED", "account-registry.persist")
+        return IllegalStateException("The local account registry is malformed and cannot be replaced safely.")
     }
 
     private fun recordCredentialDiagnostic(

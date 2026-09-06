@@ -931,6 +931,88 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun futureCleanupPreservesCanonicalIdentityAndBlocksEquivalentReactivation() = runBlocking {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val oldCacheIdentity = "1".repeat(64)
+        val canonicalCacheIdentity = "2".repeat(64)
+        val futureValue = "v4|committed|$MUTATION_SCOPE|$ACCOUNT_STORAGE_KEY|$LEGACY_ACCOUNT_SCOPE|future"
+        preferences.put("fsac.$oldCacheIdentity", futureValue)
+        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+
+        try {
+            val cleanup = journal.pendingForAccountActivation(canonicalCacheIdentity, ACCOUNT_STORAGE_KEY).single()
+            assertEquals(DesktopAccountSyncPairCleanupPhase.Unknown, cleanup.phase)
+            assertEquals(ACCOUNT_STORAGE_KEY, cleanup.accountStorageKey)
+            assertTrue(journal.blocksAccountActivation(canonicalCacheIdentity, ACCOUNT_STORAGE_KEY))
+
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = cleanup,
+                accountOwnership = { error("future cleanup ownership must not be queried") },
+                removeSyncPairs = { error("future cleanup must not remove state") },
+                clearCleanup = { error("future cleanup must not be cleared") },
+            )
+
+            assertEquals(futureValue, preferences.get("fsac.$oldCacheIdentity", null))
+            assertTrue(journal.blocksAccountActivation(canonicalCacheIdentity, ACCOUNT_STORAGE_KEY))
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun futureCleanupBlocksCredentialLoadAndPrivateSessionPublication() {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val session = NextcloudSession("https://cloud.example.test", "alice", "private-password")
+        val record = session.accountRecord()
+        val cacheIdentity = desktopFileCacheAccountId(record)
+        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+        var loads = 0
+        var publications = 0
+
+        try {
+            listOf(
+                "v4|committed|$MUTATION_SCOPE|${record.id.storageKey}|$LEGACY_ACCOUNT_SCOPE|future",
+                "v99|committed|${"a".repeat(64)}|${"b".repeat(64)}",
+            ).forEach { futureValue ->
+                preferences.put("fsac.$cacheIdentity", futureValue)
+                assertFailsWith<IllegalStateException> {
+                    loadDesktopSessionAfterCleanupGate(
+                        record,
+                        journal,
+                        load = { loads += 1; session },
+                        publish = { publications += 1 },
+                    )
+                }
+            }
+            preferences.put("fsac.$cacheIdentity", "v99|committed|unknown-layout")
+            assertFailsWith<IllegalStateException> {
+                loadDesktopSessionAfterCleanupGate(
+                    record = null,
+                    cleanupJournal = journal,
+                    load = { loads += 1; session },
+                    publish = { publications += 1 },
+                )
+            }
+            preferences.remove("fsac.$cacheIdentity")
+            preferences.put("fsac.not-a-valid-account-id", "committed")
+            assertFailsWith<IllegalStateException> {
+                loadDesktopSessionAfterCleanupGate(
+                    record = null,
+                    cleanupJournal = journal,
+                    load = { loads += 1; session },
+                    publish = { publications += 1 },
+                )
+            }
+            assertEquals("committed", preferences.get("fsac.not-a-valid-account-id", null))
+
+            assertEquals(0, loads)
+            assertEquals(0, publications)
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
     fun committedPairCleanupFailureSurvivesRestartAndBlocksReactivationUntilRetry() = runBlocking {
         val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
         val firstJournal = DesktopAccountSyncPairCleanupJournal(preferences)
@@ -1057,6 +1139,7 @@ class DesktopAccountOperationGuardTest {
             assertTrue(events.isEmpty())
             assertEquals(futureValue, preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null))
             assertTrue(journal.blocksAccountActivation(CLEANUP_ACCOUNT_ID))
+            assertTrue(journal.blocksAccountActivation("9".repeat(64), ACCOUNT_STORAGE_KEY))
         } finally {
             preferences.removeNode()
         }
