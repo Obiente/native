@@ -302,6 +302,7 @@ class AndroidVirtualFileProxyCallbackTest {
 
             allowed = false
             callback.cancel()
+            assertEquals(1, released)
             assertFailsWith<OperationCanceledException> {
                 callback.onRead(0L, 1, ByteArray(1))
             }
