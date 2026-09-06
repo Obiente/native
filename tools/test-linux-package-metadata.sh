@@ -110,7 +110,7 @@ EOF
 cat >"$deb_root/opt/nextcloudnative/lib/app/nextcloudnative-NextcloudNative.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=nati.ve
+Name=NextcloudNative
 Comment=Test package
 Categories=Network;
 Icon=nextcloudnative-NextcloudNative
@@ -123,6 +123,9 @@ bash "$project_root/tools/enrich-deb-appstream.sh" \
   "$rendered_metadata" \
   "$project_root/LICENSE" \
   "$project_root/website/public/icon-512.png" >/dev/null
+dpkg-deb --extract "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" "$temporary/branded-deb"
+grep -Fxq 'Name=nati.ve' \
+  "$temporary/branded-deb/usr/share/applications/nextcloudnative-NextcloudNative.desktop"
 deb_dependencies="$(
   dpkg-deb --field "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" Depends
 )"

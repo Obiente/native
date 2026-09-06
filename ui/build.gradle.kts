@@ -257,9 +257,15 @@ compose.desktop {
         nativeDistributions {
             modules("jdk.security.auth")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
-            packageName = "NextcloudNative"
+            // Preserve Windows/Linux launcher paths used by existing integrations.
+            packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
             packageVersion = ncDesktopPackageVersion
-            description = "One native client for your complete Nextcloud account"
+            // Windows uses the launcher description as its friendly process name.
+            description = if (System.getProperty("os.name").startsWith("Windows")) {
+                "nati.ve"
+            } else {
+                "One native client for your complete Nextcloud account"
+            }
             vendor = "Obiente"
             copyright = "Copyright 2026 Obiente"
             licenseFile.set(rootProject.file("LICENSE"))
@@ -278,6 +284,8 @@ compose.desktop {
                 upgradeUuid = "81237d85-c511-47a7-b8dc-c87a5f5c5823"
             }
             macOS {
+                packageName = "nati.ve"
+                dockName = "nati.ve"
                 packageVersion = ncMacosPackageVersion
             }
         }
@@ -320,6 +328,7 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
 val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
     dependsOn(stageWindowsShellAssets)
     inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
+    inputs.file(rootProject.file("tools/set-windows-package-display-name.ps1"))
     doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
     onlyIf {
         System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
