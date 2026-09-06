@@ -685,6 +685,36 @@ class AndroidDocumentProviderIncarnationStoreTest {
     }
 
     @Test
+    fun credentialResetQuarantinesMalformedRetirementJournalsBeforeSafeReadd() = runBlocking {
+        listOf("broken", "2:unsupported").forEach { malformed ->
+            val active = AndroidDocumentProviderIncarnationRecord.Active(
+                NextcloudDocumentIncarnation.Versioned("1".repeat(32)),
+            )
+            val records = mutableMapOf(
+                accountIdentity to encodeAndroidDocumentProviderIncarnationRecord(active),
+                "retirement:$accountIdentity" to malformed,
+            )
+            val fixture = fixture(records, incarnations = listOf("2".repeat(32)))
+            var credentialsCleared = false
+
+            retireAndroidDocumentProviderIncarnationsForCredentialReset(
+                fixture.store,
+                AndroidAccountRemovalLifetimeGuard(),
+                clearCredentials = { credentialsCleared = true },
+            )
+
+            assertTrue(credentialsCleared)
+            assertFalse("retirement:$accountIdentity" in records)
+            assertEquals(malformed, records["quarantined-retirement:$accountIdentity"])
+            assertFailsWith<IllegalStateException> { fixture.store.activeIncarnation(accountIdentity) }
+            assertEquals(
+                NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
+                fixture.store.prepareForAccountSave(accountIdentity, accountAlreadyStored = false),
+            )
+        }
+    }
+
+    @Test
     fun credentialResetTombstonesWrongTypedStateBeforeSafeReadd() = runBlocking {
         val values = mutableMapOf<String, Any>(accountIdentity to setOf("wrong-type"))
         val incarnations = ArrayDeque(listOf("2".repeat(32)))
