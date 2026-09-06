@@ -3659,32 +3659,31 @@ class DesktopNextcloudServices(
         )
     }
 
-    override fun loadSession(): NextcloudSession? {
-        return sessionPublicationGuard.serialize {
-            val server = preferences.get(KEY_SERVER, null)
-            val login = preferences.get(KEY_LOGIN, null)
-            if (server == null || login == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            val password = secretStore.load(desktopSessionSecretReference(server, login))
-                ?.decodeToString()
-                ?.takeIf(String::isNotBlank)
-            if (password == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-            NextcloudSession(server, login, password).also { session ->
-                restoreDesktopAccountRegistry(preferences, session, supportDiagnostics::record)
-                val accountIdentity = desktopFileCacheAccountId(session)
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            }
+    override fun loadSession(): NextcloudSession? = sessionPublicationGuard.serialize {
+        val server = preferences.get(KEY_SERVER, null)
+        val login = preferences.get(KEY_LOGIN, null)
+        if (server == null || login == null) {
+            supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
+            return@serialize null
+        }
+        val password = secretStore.load(desktopSessionSecretReference(server, login))
+            ?.decodeToString()
+            ?.takeIf(String::isNotBlank)
+        if (password == null) {
+            supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
+            return@serialize null
+        }
+        listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+        NextcloudSession(server, login, password).also { session ->
+            restoreDesktopAccountRegistry(preferences, session, supportDiagnostics::record)
+            val accountIdentity = desktopFileCacheAccountId(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
         }
     }
+
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         sessionPublicationGuard.serialize {
             val encodedRegistry = prepareDesktopAccountRegistry(session)
