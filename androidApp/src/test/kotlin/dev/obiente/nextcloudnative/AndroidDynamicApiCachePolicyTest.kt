@@ -168,7 +168,7 @@ class AndroidDynamicApiCachePolicyTest {
     }
 
     @Test
-    fun `Android memory retirement survives a rejected disk cache purge`() = runBlocking {
+    fun `Android memory retirement survives a rejected disk cache purge`(): Unit = runBlocking {
         val root = Files.createTempDirectory("android-dynamic-cache-rejected-cleanup-").toFile()
         try {
             val accountId = "e".repeat(64)

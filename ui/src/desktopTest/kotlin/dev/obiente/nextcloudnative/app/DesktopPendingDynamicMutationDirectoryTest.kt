@@ -171,7 +171,7 @@ class DesktopPendingDynamicMutationDirectoryTest {
     }
 
     @Test
-    fun `desktop memory retirement survives a rejected disk cache purge`() = runBlocking {
+    fun `desktop memory retirement survives a rejected disk cache purge`(): Unit = runBlocking {
         val root = createTempDirectory("desktop-dynamic-cache-rejected-cleanup-").toFile()
         try {
             val accountId = "e".repeat(64)
