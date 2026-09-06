@@ -955,7 +955,9 @@ class DesktopAccountOperationGuardTest {
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals("v2|committed|$MUTATION_SCOPE", preferences.get("fsac.$validAccountId", null))
             assertTrue(journal.blocksAccountActivation(malformedAccountId))
-            assertFailsWith<IllegalStateException> { requireDesktopAccountActivationAllowed(true) }
+            assertFailsWith<IllegalStateException> {
+                requireDesktopAccountActivationAllowed(DesktopAccountActivationBlock.UnknownJournalData)
+            }
             assertTrue(journal.blocksAccountActivation(validAccountId))
             assertEquals(1, malformedCount)
 
