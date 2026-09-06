@@ -9,6 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -611,5 +612,57 @@ class AndroidAccountOperationGuardTest {
         selection.await()
         assertTrue(mutation.await().isFailure)
         assertFalse(requestSent)
+    }
+
+    @Test
+    fun textFileCreationWaitsForSelectionAndRejectsTheStaleSession() = runBlocking {
+        assertCreateMutationWaitsForAccountTransition(
+            transition = { NextcloudSession("https://other.example.test", "bob", "new-password") },
+            method = "PUT",
+        )
+    }
+
+    @Test
+    fun directoryCreationWaitsForRemovalAndRejectsTheStaleSession() = runBlocking {
+        assertCreateMutationWaitsForAccountTransition(transition = { null }, method = "MKCOL")
+    }
+
+    private suspend fun assertCreateMutationWaitsForAccountTransition(
+        transition: () -> NextcloudSession?,
+        method: String,
+    ) = coroutineScope {
+        val guard = AndroidAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val transitionEntered = CompletableDeferred<Unit>()
+        val releaseTransition = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = original
+        var requestMethod: String? = null
+        val transitionJob = async {
+            guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+                current = transition()
+                transitionEntered.complete(Unit)
+                releaseTransition.await()
+            }
+        }
+        transitionEntered.await()
+        val mutation = async {
+            runCatching {
+                withAndroidAuthenticatedFileMutation(
+                    accountMutationLeaseHeld = false,
+                    expectedSession = original,
+                    resolveSession = { current },
+                    guard = guard,
+                ) {
+                    requestMethod = method
+                }
+            }
+        }
+        yield()
+
+        assertFalse(mutation.isCompleted)
+        releaseTransition.complete(Unit)
+        transitionJob.await()
+        assertTrue(mutation.await().isFailure)
+        assertEquals(null, requestMethod)
     }
 }

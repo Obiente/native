@@ -2706,49 +2706,48 @@ internal class AndroidNextcloudServices(
         }
     }
 
-    override suspend fun createTextFileIfAbsent(
-        session: NextcloudSession,
-        userId: String,
-        path: String,
-        text: String,
-    ): SavedTextFile = withContext(Dispatchers.IO) {
+    override suspend fun createTextFileIfAbsent(session: NextcloudSession, userId: String, path: String, text: String):
+        SavedTextFile = withContext(Dispatchers.IO) {
         val utf8 = text.toByteArray(StandardCharsets.UTF_8)
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
-        val response = request(
-            method = "PUT",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-        )
-        if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
-        check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
-        check(response.status == 201) { "The server did not confirm that a new text file was created." }
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        SavedTextFile(response.etag, wasCreated = true)
+        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+            val response = request(
+                method = "PUT",
+                url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                session = currentSession,
+                rawBody = utf8,
+                contentType = "text/plain; charset=utf-8",
+                headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+            )
+            if (response.status == 412) return@withAndroidAuthenticatedFileMutation SavedTextFile(null, false)
+            check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
+            check(response.status == 201) { "The server did not confirm that a new text file was created." }
+            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+            SavedTextFile(response.etag, wasCreated = true)
+        }
     }
 
-    override suspend fun createDirectoryIfAbsent(
-        session: NextcloudSession,
-        userId: String,
-        path: String,
-    ): Boolean = withContext(Dispatchers.IO) {
-        val response = request(
-            method = "MKCOL",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-            maxResponseBytes = 64 * 1024,
-        )
-        if (response.status in setOf(405, 412)) return@withContext false
-        if (response.status !in 200..299) throw fileOperationException(response.status)
-        check(response.status == 201) { "The server did not confirm that a new folder was created." }
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        true
-    }
+    override suspend fun createDirectoryIfAbsent(session: NextcloudSession, userId: String, path: String): Boolean =
+        withContext(Dispatchers.IO) {
+            withAndroidAuthenticatedFileMutation(
+                accountMutationLeaseHeld, session, accountCredentials::loadSession,
+            ) { currentSession ->
+                val response = request(
+                    method = "MKCOL",
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                    session = currentSession,
+                    headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+                    maxResponseBytes = 64 * 1024,
+                )
+                if (response.status in setOf(405, 412)) return@withAndroidAuthenticatedFileMutation false
+                if (response.status !in 200..299) throw fileOperationException(response.status)
+                check(response.status == 201) { "The server did not confirm that a new folder was created." }
+                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+                true
+            }
+        }
 
     override suspend fun executeFileMutation(session: NextcloudSession, userId: String, mutation: NextcloudFileMutation):
         NextcloudFileMutationResult = withContext(Dispatchers.IO) {
