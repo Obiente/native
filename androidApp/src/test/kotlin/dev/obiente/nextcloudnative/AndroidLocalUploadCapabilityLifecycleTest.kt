@@ -426,7 +426,7 @@ class AndroidLocalUploadCapabilityLifecycleTest {
         val recovered = recoverMalformedDurableUploadCapability(
             capability = capability,
             permission = checkNotNull(capability.cleanupPermissionIdentity),
-            ownedByAnotherCapability = false,
+            peerProtection = DurableUploadPermissionPeerProtection.None,
             releasePermission = { events += "release:$it" },
             isPermissionAbsent = { false },
             removeMetadata = {
@@ -456,7 +456,7 @@ class AndroidLocalUploadCapabilityLifecycleTest {
                 grantPreExisting = null,
             ),
             permission = "content://synthetic/malformed",
-            ownedByAnotherCapability = false,
+            peerProtection = DurableUploadPermissionPeerProtection.None,
             releasePermission = { error("unknown ownership must not release") },
             isPermissionAbsent = { false },
             removeMetadata = { true.also { metadataPresent = false } },

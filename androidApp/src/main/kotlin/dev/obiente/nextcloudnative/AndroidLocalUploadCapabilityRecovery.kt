@@ -86,19 +86,27 @@ internal data class MalformedDurableUploadCapability(
 internal data class DurableUploadCapabilitySnapshot<Capability>(
     val capabilities: Map<String, Capability>,
     val malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+    private val storedCapabilityCount: Int? = null,
+    val scanComplete: Boolean = true,
 ) {
     val trackedCapabilityCount: Int
-        get() = (capabilities.keys + malformedCapabilities.keys).size
+        get() = storedCapabilityCount ?: (capabilities.keys + malformedCapabilities.keys).size
 }
 
 internal fun <Capability> loadDurableUploadCapabilitySnapshot(
     cachedCapabilities: Map<String, Capability>,
     storedSelectionIds: Iterable<String>,
+    maximumRecoverableCapabilities: Int = Int.MAX_VALUE,
     loadStoredCapability: (String) -> Capability?,
 ): DurableUploadCapabilitySnapshot<Capability> {
+    require(maximumRecoverableCapabilities > 0)
+    val storedIds = storedSelectionIds.toList()
+    require((cachedCapabilities.keys + storedIds).size <= maximumRecoverableCapabilities) {
+        "Too many picker capabilities are pending bounded recovery."
+    }
     val capabilities = cachedCapabilities.toMutableMap()
     val malformed = linkedMapOf<String, MalformedDurableUploadCapability>()
-    storedSelectionIds.forEach { selectionId ->
+    storedIds.forEach { selectionId ->
         if (selectionId in capabilities) return@forEach
         val stored = try {
             checkNotNull(loadStoredCapability(selectionId)) {
@@ -119,36 +127,131 @@ internal fun <Capability> loadDurableUploadCapabilitySnapshot(
     return DurableUploadCapabilitySnapshot(capabilities.toMap(), malformed.toMap())
 }
 
+internal fun malformedDurableUploadCapabilitiesForRecovery(
+    capabilities: Map<String, MalformedDurableUploadCapability>,
+    ownedSelectionIds: Set<String>,
+): List<MalformedDurableUploadCapability> = capabilities.values
+    .filterNot { capability -> capability.selectionId in ownedSelectionIds }
+    .sortedWith(
+        compareBy<MalformedDurableUploadCapability> { capability ->
+            when (capability.grantPreExisting) {
+                true -> 0
+                null -> 1
+                false -> 2
+            }
+        }.thenBy(MalformedDurableUploadCapability::selectionId),
+    )
+
+internal enum class DurableUploadPermissionPeerProtection {
+    None,
+    RetainedAppOwnedGrant,
+    Ambiguous,
+}
+
+internal data class DurableUploadPermissionPeer<Permission>(
+    val selectionId: String,
+    val permission: Permission?,
+    val grantPreExisting: Boolean?,
+)
+
+internal fun <Permission> durableUploadPermissionPeerProtection(
+    peers: Iterable<DurableUploadPermissionPeer<Permission>>,
+    targetSelectionId: String,
+    targetPermission: Permission,
+    samePermission: (Permission, Permission) -> Boolean,
+): DurableUploadPermissionPeerProtection {
+    var ambiguous = false
+    peers.forEach { peer ->
+        if (peer.selectionId == targetSelectionId) return@forEach
+        val permission = peer.permission
+        if (permission == null) {
+            ambiguous = true
+        } else if (samePermission(targetPermission, permission)) {
+            if (peer.grantPreExisting == false) {
+                return DurableUploadPermissionPeerProtection.RetainedAppOwnedGrant
+            }
+            ambiguous = true
+        }
+    }
+    return if (ambiguous) {
+        DurableUploadPermissionPeerProtection.Ambiguous
+    } else {
+        DurableUploadPermissionPeerProtection.None
+    }
+}
+
+internal fun <Permission> malformedDurableUploadPeerBlocksDirectCleanup(
+    malformedPeers: Iterable<DurableUploadPermissionPeer<Permission>>,
+    targetSelectionId: String,
+    targetPermission: Permission,
+    samePermission: (Permission, Permission) -> Boolean,
+): Boolean = durableUploadPermissionPeerProtection(
+    peers = malformedPeers,
+    targetSelectionId = targetSelectionId,
+    targetPermission = targetPermission,
+    samePermission = samePermission,
+) != DurableUploadPermissionPeerProtection.None
+
+internal enum class DurableUploadPermissionCleanupPlan {
+    ReleaseThenRemove,
+    RemoveWithoutRelease,
+    Retain,
+}
+
+internal fun durableUploadPermissionCleanupPlan(
+    grantPreExisting: Boolean?,
+    peerProtection: DurableUploadPermissionPeerProtection,
+    permissionAbsent: Boolean = false,
+): DurableUploadPermissionCleanupPlan = when {
+    grantPreExisting == true -> DurableUploadPermissionCleanupPlan.RemoveWithoutRelease
+    peerProtection == DurableUploadPermissionPeerProtection.RetainedAppOwnedGrant ->
+        DurableUploadPermissionCleanupPlan.RemoveWithoutRelease
+    peerProtection == DurableUploadPermissionPeerProtection.Ambiguous ->
+        DurableUploadPermissionCleanupPlan.Retain
+    grantPreExisting == false -> DurableUploadPermissionCleanupPlan.ReleaseThenRemove
+    permissionAbsent -> DurableUploadPermissionCleanupPlan.RemoveWithoutRelease
+    else -> DurableUploadPermissionCleanupPlan.Retain
+}
+
 internal fun <Permission> recoverMalformedDurableUploadCapability(
     capability: MalformedDurableUploadCapability,
     permission: Permission?,
-    ownedByAnotherCapability: Boolean,
+    peerProtection: DurableUploadPermissionPeerProtection,
     releasePermission: (Permission) -> Unit,
     isPermissionAbsent: (Permission) -> Boolean,
     removeMetadata: (String) -> Boolean,
 ): Boolean {
     permission ?: return false
     val grantPreExisting = capability.grantPreExisting
-    if (grantPreExisting == null) {
-        val permissionCanRemain = ownedByAnotherCapability || try {
+    val permissionAbsent = if (
+        grantPreExisting == null &&
+        peerProtection == DurableUploadPermissionPeerProtection.None
+    ) {
+        try {
             isPermissionAbsent(permission)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             false
         }
-        return permissionCanRemain && durableUploadCleanupStep {
-            removeMetadata(capability.selectionId)
-        }
+    } else {
+        false
     }
+    val cleanupPlan = durableUploadPermissionCleanupPlan(
+        grantPreExisting = grantPreExisting,
+        peerProtection = peerProtection,
+        permissionAbsent = permissionAbsent,
+    )
+    if (cleanupPlan == DurableUploadPermissionCleanupPlan.Retain) return false
     return releaseDurableUploadCapability(
         releasePermission = {
-            if (shouldReleaseDurableUploadPermission(grantPreExisting, ownedByAnotherCapability)) {
+            if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) {
                 releasePermission(permission)
             }
         },
         isPermissionAbsent = {
-            grantPreExisting || ownedByAnotherCapability || isPermissionAbsent(permission)
+            cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease ||
+                isPermissionAbsent(permission)
         },
         removeMetadata = { removeMetadata(capability.selectionId) },
     )
@@ -180,4 +283,114 @@ internal fun durableUploadCleanupStep(action: () -> Boolean): Boolean = try {
     throw cancelled
 } catch (_: Exception) {
     false
+}
+
+/**
+ * Acquires a durable picker capability without exposing an interval where a successful selection
+ * can be reported before its metadata reaches app-private storage.
+ */
+internal fun acquireDurableUploadCapability(
+    takePermission: () -> Unit,
+    persistMetadata: () -> Boolean,
+    releasePermission: () -> Unit,
+    persistAcquiring: () -> Boolean = { true },
+    markCleanupPending: () -> Boolean = { true },
+    isPermissionAbsent: () -> Boolean = { false },
+    removeCapability: () -> Boolean = { true },
+    onRollbackRetained: () -> Unit = {},
+) {
+    val acquiringPersisted = try {
+        persistAcquiring()
+    } catch (cancelled: CancellationException) {
+        durableUploadCleanupStep(removeCapability)
+        runCatching(onRollbackRetained)
+        throw cancelled
+    } catch (failure: Exception) {
+        durableUploadCleanupStep(removeCapability)
+        runCatching(onRollbackRetained)
+        throw failure
+    }
+    if (!acquiringPersisted) {
+        durableUploadCleanupStep(removeCapability)
+        runCatching(onRollbackRetained)
+        error("The picker capability rollback could not be saved.")
+    }
+    try {
+        takePermission()
+    } catch (cancelled: CancellationException) {
+        runCatching(onRollbackRetained)
+        throw cancelled
+    } catch (failure: Exception) {
+        runCatching(onRollbackRetained)
+        throw failure
+    }
+    val persisted = runCatching { persistMetadata() }
+    if (persisted.getOrNull() == true) return
+    if (!durableUploadCleanupStep(markCleanupPending)) runCatching(onRollbackRetained)
+    val released = try {
+        releaseDurableUploadPermission(releasePermission, isPermissionAbsent)
+    } catch (cancelled: CancellationException) {
+        runCatching(onRollbackRetained)
+        throw cancelled
+    }
+    if (released) {
+        if (!durableUploadCleanupStep(removeCapability)) runCatching(onRollbackRetained)
+    } else {
+        runCatching(onRollbackRetained)
+    }
+    persisted.exceptionOrNull()?.let { throw it }
+    error("The durable upload capability could not be saved.")
+}
+
+internal enum class CapabilityPhase(val persistedValue: String) {
+    Acquiring("acquiring"),
+    Ready("ready"),
+    OwnershipCheckPending("ownership-check-pending"),
+    CleanupPending("cleanup-pending");
+
+    companion object {
+        fun fromPersistedValue(value: String): CapabilityPhase = entries.singleOrNull {
+            phase -> phase.persistedValue == value
+        } ?: error("The picker capability phase is invalid.")
+    }
+}
+
+internal fun shouldRecoverDurableUploadCapability(
+    phase: CapabilityPhase,
+    processGeneration: String?,
+    currentProcessGeneration: String,
+    ownedByDurableJob: Boolean,
+    cleanupExplicitlyPending: Boolean,
+): Boolean = !ownedByDurableJob && (
+    cleanupExplicitlyPending ||
+        phase != CapabilityPhase.Ready ||
+        processGeneration != currentProcessGeneration
+)
+
+internal fun shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+    phase: CapabilityPhase,
+    ownedByDurableJob: Boolean,
+): Boolean = phase == CapabilityPhase.OwnershipCheckPending && ownedByDurableJob
+
+internal fun isDurableUploadCapabilityReady(phase: CapabilityPhase): Boolean =
+    phase == CapabilityPhase.Ready
+
+internal fun durableUploadCapabilityHasCapacity(
+    trackedCapabilityCount: Int,
+    maximumTrackedCapabilities: Int,
+): Boolean {
+    require(trackedCapabilityCount >= 0)
+    require(maximumTrackedCapabilities > 0)
+    return trackedCapabilityCount < maximumTrackedCapabilities
+}
+
+internal fun finalizeDurableUploadCapabilityDelivery(
+    publishReady: () -> Unit,
+    continuationIsActive: () -> Boolean,
+    cleanupUndelivered: () -> Unit,
+): Boolean {
+    publishReady()
+    if (continuationIsActive()) return true
+    runCatching(cleanupUndelivered)
+    return false
 }

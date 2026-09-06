@@ -118,14 +118,7 @@ internal class AndroidDurableMultipartUploads(
     suspend fun reconcileQueuedUploads(allowQueuedScheduling: Boolean = true): Boolean {
         val (jobs, capabilitiesRecovered) = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
             val snapshot = store.list()
-            val retainedSelectionIds = snapshot.asSequence()
-                .filter { job ->
-                    job.state == DurableUploadState.Queued ||
-                        job.state == DurableUploadState.Uploading ||
-                        job.capabilityCleanupPending
-                }
-                .map { job -> job.request.file.selectionId }
-                .toSet()
+            val retainedSelectionIds = durableUploadCapabilityRetainedSelectionIds(snapshot)
             snapshot to picker.reconcileCapabilities(retainedSelectionIds)
         }
         val uploadsRecovered = reconcileQueuedDurableUploads(
@@ -278,6 +271,15 @@ internal data class AndroidDurableMultipartUploadJob(
         message = message,
     )
 }
+
+internal fun durableUploadCapabilityRetainedSelectionIds(
+    jobs: Iterable<AndroidDurableMultipartUploadJob>,
+): Set<String> = jobs.asSequence()
+    .filter { job ->
+        job.state == DurableUploadState.Queued || job.state == DurableUploadState.Uploading
+    }
+    .map { job -> job.request.file.selectionId }
+    .toSet()
 
 internal data class AndroidDurableUploadResource(
     val feature: String,
