@@ -211,11 +211,16 @@ internal sealed interface DurableUploadAccountResolution {
     data class Available(val session: NextcloudSession) : DurableUploadAccountResolution
     data object RegistryUnavailable : DurableUploadAccountResolution
     data object CredentialUnavailable : DurableUploadAccountResolution
+    data object DeferAccountActivation : DurableUploadAccountResolution
     data object AccountUnavailable : DurableUploadAccountResolution
 }
 
 internal sealed interface DurableUploadAccountRegistry {
-    data class Available(val accounts: List<NextcloudAccountRecord>) : DurableUploadAccountRegistry
+    data class Available(
+        val accounts: List<NextcloudAccountRecord>,
+        val activeAccountId: NextcloudAccountId? = null,
+    ) : DurableUploadAccountRegistry
+
     data object Unavailable : DurableUploadAccountRegistry
 }
 
@@ -231,16 +236,20 @@ internal fun resolveDurableUploadSession(
     registry: DurableUploadAccountRegistry,
     loadSession: (NextcloudAccountId) -> NextcloudSession?,
 ): DurableUploadAccountResolution {
-    val accounts = when (registry) {
-        is DurableUploadAccountRegistry.Available -> registry.accounts
+    val availableRegistry = when (registry) {
+        is DurableUploadAccountRegistry.Available -> registry
         DurableUploadAccountRegistry.Unavailable -> return DurableUploadAccountResolution.RegistryUnavailable
     }
-    val account = accounts.singleOrNull { record ->
+    val account = availableRegistry.accounts.singleOrNull { record ->
         NextcloudDocumentIds.accountKey(record.serverUrl, record.loginName) == expectedAccountId
     } ?: return DurableUploadAccountResolution.AccountUnavailable
     val session = loadSession(account.id)
         ?.takeIf { loaded -> NextcloudDocumentIds.accountKey(loaded) == expectedAccountId }
-        ?: return DurableUploadAccountResolution.CredentialUnavailable
+        ?: return if (account.id == availableRegistry.activeAccountId) {
+            DurableUploadAccountResolution.CredentialUnavailable
+        } else {
+            DurableUploadAccountResolution.DeferAccountActivation
+        }
     return DurableUploadAccountResolution.Available(session)
 }
 
