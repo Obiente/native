@@ -133,6 +133,32 @@ class AndroidDurableUploadSourcePreflightTest {
     }
 
     @Test
+    fun `pending ownership check defers the worker without releasing its capability`() = runBlocking {
+        var terminalDispositions = 0
+        var transientRetries = 0
+
+        val result = processQueuedDurableUploadSource(
+            requireCapability = {
+                requireDurableUploadCapabilityReady(CapabilityPhase.OwnershipCheckPending)
+            },
+            openSource = { error("A pending capability must not open its provider.") },
+            onCapabilityUnavailable = {
+                terminalDispositions += 1
+                "failed"
+            },
+            onProviderUnavailable = {
+                transientRetries += 1
+                "retried"
+            },
+            onReady = { error("A pending capability must not start an upload.") },
+        )
+
+        assertEquals("retried", result)
+        assertEquals(0, terminalDispositions)
+        assertEquals(1, transientRetries)
+    }
+
+    @Test
     fun `malformed capability metadata is terminal while storage failures stay retryable`() {
         assertFailsWith<AndroidLocalUploadCapabilityUnavailableException> {
             readAndroidLocalUploadCapability<Unit> {

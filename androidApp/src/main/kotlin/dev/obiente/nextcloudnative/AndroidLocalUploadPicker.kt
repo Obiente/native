@@ -283,8 +283,11 @@ internal class AndroidLocalUploadPicker(context: Context) {
         }
         if (snapshot.malformedCapabilities.isNotEmpty()) {
             PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
-            requestQueuedDurableUploadSchedulingRecovery()
+            if (snapshot.malformedCapabilities.values.any(::malformedDurableUploadCapabilityCanBecomeActionable)) {
+                requestQueuedDurableUploadSchedulingRecovery()
+            }
         }
+        if (snapshot.recoveryQuarantined) return@synchronized true
         if (!snapshot.scanComplete) {
             requestQueuedDurableUploadSchedulingRecovery()
             return@synchronized false
@@ -299,7 +302,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         )
         malformedRecovery.forEach { malformed ->
             if (!malformedRecoveryIsActionable(malformed, capabilities, malformedCapabilities)) {
-                allRecovered = false
+                if (malformedDurableUploadCapabilityCanBecomeActionable(malformed)) allRecovered = false
                 return@forEach
             }
             if (remainingRecoveryActions == 0) {
@@ -442,7 +445,9 @@ internal class AndroidLocalUploadPicker(context: Context) {
         )
         if (snapshot.malformedCapabilities.isNotEmpty()) {
             PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
-            requestQueuedDurableUploadSchedulingRecovery()
+            if (snapshot.malformedCapabilities.values.any(::malformedDurableUploadCapabilityCanBecomeActionable)) {
+                requestQueuedDurableUploadSchedulingRecovery()
+            }
         }
         return snapshot
     }
@@ -450,16 +455,17 @@ internal class AndroidLocalUploadPicker(context: Context) {
     private fun loadCapabilityRecoverySnapshot(): DurableUploadCapabilitySnapshot<SelectedSource> =
         RECOVERY_SCAN.loadPage(
             cachedCapabilities = selections.toMap(),
-            storedSelectionIds = storedCapabilitySelectionIds(),
+            storedSelectionIds = storedCapabilitySelectionIds(MAX_RECOVERY_ROWS_PER_PASS),
             maximumRows = MAX_RECOVERY_ROWS_PER_PASS,
             loadStoredCapability = ::load,
         )
 
-    private fun storedCapabilitySelectionIds(): List<String> = preferences.all.keys
-        .asSequence()
-        .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
-        .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
-        .toList()
+    private fun storedCapabilitySelectionIds(maximumRows: Int? = null): List<String> {
+        val selectionIds = preferences.all.keys.asSequence()
+            .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
+            .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
+        return maximumRows?.let { limit -> selectionIds.take(limit + 1).toList() } ?: selectionIds.toList()
+    }
 
     private fun releaseMalformedCapability(
         selectionId: String,
@@ -622,11 +628,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 "The persisted local file metadata changed.",
             )
         }
-        if (!isDurableUploadCapabilityReady(source.phase)) {
-            throw AndroidLocalUploadCapabilityUnavailableException(
-                "The local file selection is pending capability cleanup.",
-            )
-        }
+        requireDurableUploadCapabilityReady(source.phase)
         return source
     }
 

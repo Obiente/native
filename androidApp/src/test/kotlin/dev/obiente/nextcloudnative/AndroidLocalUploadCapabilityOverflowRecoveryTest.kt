@@ -46,26 +46,35 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
     }
 
     @Test
-    fun `oversized state is scanned in bounded repeatable pages`() {
+    fun `oversized state is quarantined without retaining or loading unbounded rows`() {
         var rowLoads = 0
         val storedIds = (1..1_025).map { index -> "selection-$index" }
         val scan = DurableUploadCapabilityRecoveryScan<String>()
 
-        val first = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
+        val snapshot = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
             rowLoads += 1
             "content://synthetic/$it"
         }
-        assertFalse(first.scanComplete)
-        assertEquals(1_025, first.trackedCapabilityCount)
-        assertEquals(1_024, rowLoads)
+        assertFalse(snapshot.scanComplete)
+        assertTrue(snapshot.recoveryQuarantined)
+        assertEquals(1_025, snapshot.trackedCapabilityCount)
+        assertTrue(snapshot.capabilities.isEmpty())
+        assertTrue(snapshot.malformedCapabilities.isEmpty())
+        assertEquals(0, rowLoads)
+    }
 
-        val second = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
-            rowLoads += 1
-            "content://synthetic/$it"
-        }
-        assertTrue(second.scanComplete)
-        assertEquals(1_025, second.capabilities.size)
-        assertEquals(1_025, rowLoads)
+    @Test
+    fun `malformed ciphertext without a permission identity remains quarantined without polling`() {
+        assertFalse(
+            malformedDurableUploadCapabilityCanBecomeActionable(
+                malformed("selection-corrupt").copy(cleanupPermissionIdentity = null),
+            ),
+        )
+        assertTrue(
+            malformedDurableUploadCapabilityCanBecomeActionable(
+                malformed("selection-recoverable", "content://synthetic/recoverable"),
+            ),
+        )
     }
 
     @Test
