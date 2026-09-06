@@ -3,6 +3,11 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 temporary_directory="$(mktemp -d)"
+# MSYS converts command-line arguments for native executables, but not paths on stdin.
+# The scanner receives these fixture paths through its NUL-delimited input stream.
+if command -v cygpath >/dev/null 2>&1; then
+    temporary_directory="$(cygpath -m "$temporary_directory")"
+fi
 trap 'rm -rf -- "$temporary_directory"' EXIT
 
 rustc --edition=2021 --test \

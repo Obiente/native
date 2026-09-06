@@ -1,9 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.io.File
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
@@ -11,7 +7,6 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -28,107 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOT_ATTEMPTS = 16
-
-internal data class WindowsCloudFileIdentity(
-    val accountId: String,
-    val path: String,
-    val remoteRevision: String,
-    val size: Long,
-    val directory: Boolean,
-    val lastModifiedEpochMillis: Long? = null,
-) {
-    init {
-        require(accountId.isNotBlank() && accountId.length <= MAX_ACCOUNT_ID_LENGTH)
-        if (path.isNotEmpty()) FileOfflineKey(accountId, path)
-        require(remoteRevision.isNotBlank() && remoteRevision.length <= MAX_REVISION_LENGTH)
-        require(size >= 0L)
-        require(!directory || size == 0L)
-        require(lastModifiedEpochMillis == null || lastModifiedEpochMillis >= 0L)
-    }
-
-    private companion object {
-        const val MAX_ACCOUNT_ID_LENGTH = 256
-        const val MAX_REVISION_LENGTH = 1_024
-    }
-}
-
-/** Versioned, checksummed and strictly bounded identity persisted in Windows placeholders. */
-internal object WindowsCloudFileIdentityCodec {
-    fun encode(identity: WindowsCloudFileIdentity): ByteArray {
-        val payload = ByteArrayOutputStream().use { bytes ->
-            DataOutputStream(bytes).use { output ->
-                output.writeInt(MAGIC)
-                output.writeShort(VERSION)
-                output.writeBoolean(identity.directory)
-                output.writeLong(identity.size)
-                output.writeLong(identity.lastModifiedEpochMillis ?: UNKNOWN_MODIFIED_TIME)
-                output.writeBoundedUtf8(identity.accountId, MAX_ACCOUNT_BYTES)
-                output.writeBoundedUtf8(identity.path, MAX_PATH_BYTES)
-                output.writeBoundedUtf8(identity.remoteRevision, MAX_REVISION_BYTES)
-            }
-            bytes.toByteArray()
-        }
-        val digest = MessageDigest.getInstance("SHA-256").digest(payload)
-        return payload + digest
-    }
-
-    fun decode(bytes: ByteArray): WindowsCloudFileIdentity {
-        require(bytes.size in MIN_IDENTITY_BYTES..MAX_IDENTITY_BYTES) {
-            "The Windows placeholder identity has an invalid size."
-        }
-        val payload = bytes.copyOfRange(0, bytes.size - DIGEST_BYTES)
-        val expectedDigest = bytes.copyOfRange(bytes.size - DIGEST_BYTES, bytes.size)
-        require(MessageDigest.getInstance("SHA-256").digest(payload).contentEquals(expectedDigest)) {
-            "The Windows placeholder identity checksum is invalid."
-        }
-        return DataInputStream(ByteArrayInputStream(payload)).use { input ->
-            require(input.readInt() == MAGIC) { "The Windows placeholder identity type is invalid." }
-            val version = input.readUnsignedShort()
-            require(version in MINIMUM_SUPPORTED_VERSION..VERSION) {
-                "The Windows placeholder identity version is unsupported."
-            }
-            val directory = input.readBoolean()
-            val size = input.readLong()
-            val lastModifiedEpochMillis = if (version >= 2) {
-                input.readLong().takeUnless { it == UNKNOWN_MODIFIED_TIME }
-            } else {
-                null
-            }
-            val accountId = input.readBoundedUtf8(MAX_ACCOUNT_BYTES)
-            val path = input.readBoundedUtf8(MAX_PATH_BYTES)
-            val revision = input.readBoundedUtf8(MAX_REVISION_BYTES)
-            require(input.available() == 0) { "The Windows placeholder identity has trailing data." }
-            WindowsCloudFileIdentity(accountId, path, revision, size, directory, lastModifiedEpochMillis)
-        }
-    }
-
-    private fun DataOutputStream.writeBoundedUtf8(value: String, maximumBytes: Int) {
-        val bytes = value.encodeToByteArray()
-        require(bytes.size <= maximumBytes)
-        writeShort(bytes.size)
-        write(bytes)
-    }
-
-    private fun DataInputStream.readBoundedUtf8(maximumBytes: Int): String {
-        val length = readUnsignedShort()
-        require(length <= maximumBytes && length <= available()) {
-            "The Windows placeholder identity field is invalid."
-        }
-        val bytes = ByteArray(length).also(::readFully)
-        return bytes.decodeToString(throwOnInvalidSequence = true)
-    }
-
-    private const val MAGIC = 0x4E434656 // NCFV
-    private const val VERSION = 2
-    private const val MINIMUM_SUPPORTED_VERSION = 1
-    private const val UNKNOWN_MODIFIED_TIME = -1L
-    private const val DIGEST_BYTES = 32
-    private const val MAX_ACCOUNT_BYTES = 256
-    private const val MAX_PATH_BYTES = 3_072
-    private const val MAX_REVISION_BYTES = 1_024
-    private const val MAX_IDENTITY_BYTES = 4_096
-    private const val MIN_IDENTITY_BYTES = 4 + 2 + 1 + 8 + 2 + 2 + 2 + DIGEST_BYTES
-}
 
 internal data class WindowsCloudHydrationRange(val offset: Long, val length: Int) {
     init {
@@ -1021,13 +915,12 @@ internal class WindowsCloudFilesProvider(
                 }
                 if (cancellation.get()) return@execute
                 val directory = requireIdentity(info, expectDirectory = true)
-                // CFAPI permits returning entries beyond the requested pattern. Returning the complete
-                // directory lets this transfer safely mark on-demand population as finished.
-                val identities = backend.list(directory.path)
-                    .filter { !cancellation.get() }
-                identities.forEach { identity -> knownIdentities[identity.path] = identity }
-                val placeholders = identities.map(::placeholder)
-                if (!cancellation.get()) api.completePlaceholderFetch(info, placeholders)
+                // Reconcile existing children before completing the enumeration. Sending already
+                // present names through TRANSFER_PLACEHOLDERS can leave enumeration incomplete.
+                synchronized(namespaceMutationLock) {
+                    if (!cancellation.get()) populateDirectory(directory.path, localPath(directory))
+                }
+                if (!cancellation.get()) api.completePlaceholderFetch(info, emptyList())
             } catch (_: Throwable) {
                 if (!cancellation.get()) api.failPlaceholderFetch(info)
             } finally {

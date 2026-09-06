@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
+const shellPath = (value) => process.platform === "win32" ? value.replaceAll("\\", "/") : value;
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "Obiente/nc-native";
 const versionName = "0.1.0-alpha.2";
@@ -135,9 +136,10 @@ test("generated core manifests satisfy the oldest shipped strict schema", async 
     const environment = { ...process.env, GITHUB_REPOSITORY: repository };
 
     await execFileAsync(
-      path.join(repositoryRoot, "tools/create-android-update-manifest.sh"),
+      "bash",
       [
-        androidManifest,
+        shellPath(path.join(repositoryRoot, "tools/create-android-update-manifest.sh")),
+        shellPath(androidManifest),
         "prerelease-v1",
         tag,
         versionName,
@@ -156,15 +158,16 @@ test("generated core manifests satisfy the oldest shipped strict schema", async 
       writeFile(path.join(temporary, "NextcloudNative-1.0.3822.msi"), "msi fixture\n"),
     ]);
     await execFileAsync(
-      path.join(repositoryRoot, "tools/create-desktop-update-manifest.sh"),
+      "bash",
       [
-        desktopManifest,
+        shellPath(path.join(repositoryRoot, "tools/create-desktop-update-manifest.sh")),
+        shellPath(desktopManifest),
         "prerelease-v1",
         tag,
         versionName,
         String(versionCode),
         packageVersion,
-        temporary,
+        shellPath(temporary),
       ],
       { cwd: repositoryRoot, env: environment },
     );
