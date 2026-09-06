@@ -153,9 +153,10 @@ internal class AndroidDurableMultipartUploads(
         ) {
             return false
         }
-        if (!picker.release(job.request.file)) return false
-        store.remove(uploadId)
-        return true
+        return dismissTerminalDurableUploadStatus(
+            release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
+            removeStatus = { store.remove(uploadId) },
+        )
     }
 
     private fun schedule(
@@ -242,16 +243,27 @@ internal fun reconcileTerminalDurableUploadCapabilityCleanup(
     release: (onQuarantined: () -> Unit) -> Boolean,
     complete: () -> Unit,
 ): Boolean {
-    var quarantined = false
-    if (release { quarantined = true }) {
-        complete()
-        return true
-    }
-    if (quarantined) {
+    if (releaseOrQuarantineDurableUploadCapability(release)) {
         complete()
         return true
     }
     return false
+}
+
+internal fun releaseOrQuarantineDurableUploadCapability(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+): Boolean {
+    var quarantined = false
+    return release { quarantined = true } || quarantined
+}
+
+internal fun dismissTerminalDurableUploadStatus(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+    removeStatus: () -> Unit,
+): Boolean {
+    if (!releaseOrQuarantineDurableUploadCapability(release)) return false
+    removeStatus()
+    return true
 }
 
 internal data class AndroidDurableMultipartUploadJob(

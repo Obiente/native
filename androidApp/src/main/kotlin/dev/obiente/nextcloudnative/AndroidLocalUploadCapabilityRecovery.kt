@@ -94,9 +94,58 @@ internal data class DurableUploadCapabilitySnapshot<Capability>(
         get() = storedCapabilityCount ?: (capabilities.keys + malformedCapabilities.keys).size
 }
 
+internal class DurableUploadCapabilityOverflowException : IllegalStateException(
+    "Too many picker capabilities are pending bounded recovery.",
+)
+
 internal fun malformedDurableUploadCapabilityCanBecomeActionable(
     capability: MalformedDurableUploadCapability,
 ): Boolean = capability.cleanupPermissionIdentity != null
+
+internal enum class DurableUploadMalformedRecoveryDisposition {
+    Recover,
+    Retry,
+    Quarantine,
+}
+
+internal enum class DurableUploadMalformedReleaseResult {
+    Released,
+    Retry,
+    Quarantine,
+}
+
+internal fun releaseMalformedDurableUploadCapability(
+    disposition: DurableUploadMalformedRecoveryDisposition,
+    recover: () -> Boolean,
+): DurableUploadMalformedReleaseResult = when (disposition) {
+    DurableUploadMalformedRecoveryDisposition.Recover -> if (recover()) {
+        DurableUploadMalformedReleaseResult.Released
+    } else {
+        DurableUploadMalformedReleaseResult.Retry
+    }
+    DurableUploadMalformedRecoveryDisposition.Retry -> DurableUploadMalformedReleaseResult.Retry
+    DurableUploadMalformedRecoveryDisposition.Quarantine -> DurableUploadMalformedReleaseResult.Quarantine
+}
+
+internal fun durableUploadMalformedRecoveryDisposition(
+    grantPreExisting: Boolean?,
+    peerProtection: DurableUploadPermissionPeerProtection,
+    permissionAbsent: Boolean?,
+): DurableUploadMalformedRecoveryDisposition {
+    val cleanupPlan = durableUploadPermissionCleanupPlan(
+        grantPreExisting = grantPreExisting,
+        peerProtection = peerProtection,
+        permissionAbsent = permissionAbsent == true,
+    )
+    return when {
+        cleanupPlan != DurableUploadPermissionCleanupPlan.Retain ->
+            DurableUploadMalformedRecoveryDisposition.Recover
+        permissionAbsent == null -> DurableUploadMalformedRecoveryDisposition.Retry
+        grantPreExisting == null && peerProtection == DurableUploadPermissionPeerProtection.None ->
+            DurableUploadMalformedRecoveryDisposition.Quarantine
+        else -> DurableUploadMalformedRecoveryDisposition.Quarantine
+    }
+}
 
 internal fun <Capability> loadDurableUploadCapabilitySnapshot(
     cachedCapabilities: Map<String, Capability>,
@@ -105,9 +154,14 @@ internal fun <Capability> loadDurableUploadCapabilitySnapshot(
     loadStoredCapability: (String) -> Capability?,
 ): DurableUploadCapabilitySnapshot<Capability> {
     require(maximumRecoverableCapabilities > 0)
-    val storedIds = storedSelectionIds.toList()
-    require((cachedCapabilities.keys + storedIds).size <= maximumRecoverableCapabilities) {
-        "Too many picker capabilities are pending bounded recovery."
+    val trackedIds = cachedCapabilities.keys.toMutableSet()
+    if (trackedIds.size > maximumRecoverableCapabilities) throw DurableUploadCapabilityOverflowException()
+    val storedIds = linkedSetOf<String>()
+    storedSelectionIds.forEach { selectionId ->
+        storedIds += selectionId
+        if (trackedIds.add(selectionId) && trackedIds.size > maximumRecoverableCapabilities) {
+            throw DurableUploadCapabilityOverflowException()
+        }
     }
     val capabilities = cachedCapabilities.toMutableMap()
     val malformed = linkedMapOf<String, MalformedDurableUploadCapability>()
