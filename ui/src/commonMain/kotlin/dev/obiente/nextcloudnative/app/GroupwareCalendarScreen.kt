@@ -80,46 +80,6 @@ internal data class CalendarMonth(val year: Int, val month: Int) {
     fun days(): Int = groupwareCalendarDaysInMonth(year, month)
 }
 
-private sealed interface CalendarLoadState {
-    data object Loading : CalendarLoadState
-    data class Ready(
-        val month: CalendarMonth,
-        val timeWindow: GroupwareDavTimeWindow,
-        val calendars: List<GroupwareCalendar>,
-        val events: List<GroupwareCalendarEvent>,
-    ) : CalendarLoadState
-    data class Error(val message: String) : CalendarLoadState
-}
-
-private object CalendarWorkspaceMemoryCache {
-    private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, CalendarLoadState.Ready>()
-
-    fun get(
-        session: NextcloudSession,
-        userId: String,
-        month: CalendarMonth,
-        timeWindow: GroupwareDavTimeWindow,
-    ): CalendarLoadState.Ready? {
-        val key = key(session, userId, month, timeWindow)
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, userId: String, value: CalendarLoadState.Ready) {
-        val key = key(session, userId, value.month, value.timeWindow)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_CALENDAR_MONTHS) entries.remove(entries.keys.first())
-    }
-
-    private fun key(
-        session: NextcloudSession,
-        userId: String,
-        month: CalendarMonth,
-        timeWindow: GroupwareDavTimeWindow,
-    ): Pair<NextcloudAccountId, String> = session.accountId to
-        "$userId\n${month.year}-${month.month}\n${timeWindow.startUtc}-${timeWindow.endUtc}"
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativeGroupwareCalendarScreen(
@@ -1105,7 +1065,6 @@ private val MONTH_NAMES = listOf(
     "July", "August", "September", "October", "November", "December",
 )
 private val WEEK_DAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-private const val MAXIMUM_RETAINED_CALENDAR_MONTHS = 24
 private const val CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE =
     "The server response was interrupted, so the calendar result is unknown. " +
         "Refresh to verify it before trying another change."

@@ -1397,34 +1397,6 @@ private fun DashboardFailure(message: String, onRetry: () -> Unit) {
     }
 }
 
-private sealed interface UserStatusSurfaceState {
-    data object Loading : UserStatusSurfaceState
-    data class Available(
-        val capabilities: NativeUserStatusCapabilities,
-        val status: NativeUserStatus,
-        val predefined: List<NativePredefinedStatus>,
-    ) : UserStatusSurfaceState
-    data class Failed(val message: String) : UserStatusSurfaceState
-}
-
-private object UserStatusWorkspaceMemoryCache {
-    private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
-
-    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
-        val key = key(session)
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, value: UserStatusSurfaceState.Available) {
-        val key = key(session)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    private fun key(session: NextcloudSession): NextcloudAccountId = session.accountId
-}
-
 private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
     Never("No expiry", null),
     OneHour("1 hour", 60L * 60L),
@@ -1778,7 +1750,6 @@ internal fun NativeUserStatusScreen(
     }
 }
 
-private const val MAXIMUM_RETAINED_STATUS_ACCOUNTS = 4
 
 @Composable
 private fun CurrentUserStatusCard(status: NativeUserStatus) {

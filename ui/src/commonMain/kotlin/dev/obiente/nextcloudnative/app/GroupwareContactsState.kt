@@ -23,6 +23,10 @@ internal object ContactsWorkspaceMemoryCache {
         entries[key] = value
         while (entries.size > MAXIMUM_RETAINED_CONTACT_ACCOUNTS) entries.remove(entries.keys.first())
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        entries.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
+    }
 }
 
 internal fun contactEditRequiresFullLoad(

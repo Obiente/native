@@ -701,6 +701,10 @@ internal class DashboardStatusMemoryCache(
     fun invalidate(session: NextcloudSession) {
         entries.remove(session.accountId)
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        entries.keys.removeAll { account -> account.storageKey == accountStorageKey }
+    }
 }
 
 internal fun retainedDashboardRefreshSnapshot(

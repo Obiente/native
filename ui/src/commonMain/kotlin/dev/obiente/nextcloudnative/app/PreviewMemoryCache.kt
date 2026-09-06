@@ -28,6 +28,12 @@ internal object PreviewMemoryCache {
             bytes -= entries.remove(oldestKey)?.size ?: 0
         }
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        entries.keys.filter { key -> key.account == accountStorageKey }.forEach { key ->
+            bytes -= entries.remove(key)?.size ?: 0
+        }
+    }
 }
 
 internal data class PreviewCacheKey(

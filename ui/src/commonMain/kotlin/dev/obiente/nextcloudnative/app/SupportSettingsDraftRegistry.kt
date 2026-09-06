@@ -24,6 +24,10 @@ internal object SupportSettingsDraftRegistry {
             }
         }
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        states.remove(accountStorageKey)?.clearDrafts()
+    }
 }
 
 private const val MAX_RETAINED_SUPPORT_DRAFT_ACCOUNTS = 4

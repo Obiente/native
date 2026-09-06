@@ -6,6 +6,11 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.util.prefs.Preferences
+
+private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
+private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
+private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
 
 internal data class VirtualRangeRevision(
     val relativePath: String,
@@ -56,10 +61,32 @@ internal suspend fun removeDesktopAccountPrivateStorage(
     syncEngine: DesktopFileSyncEngine,
     files: DesktopFileReadCache,
     ranges: DesktopVirtualRangeCache,
+    preferences: Preferences,
 ) {
     syncEngine.removeAccountPairs(accountId)
     files.removeAccount(accountId)
     ranges.removeAccount(accountId)
+    removeDesktopAccountVirtualFilePreferences(preferences, accountId)
+}
+
+internal fun removeDesktopAccountVirtualFilePreferences(preferences: Preferences, accountId: String) {
+    preferences.remove(virtualFileProviderRootPreferenceKey(accountId))
+    preferences.remove(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId))
+    preferences.remove(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId))
+    preferences.flush()
+}
+
+internal fun virtualFileProviderRootPreferenceKey(accountId: String): String =
+    desktopAccountPreferenceKey(KEY_VIRTUAL_FILE_ROOT_PREFIX, accountId)
+
+internal fun virtualFileCachePreferenceKey(prefix: String, accountId: String): String {
+    require(prefix == KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX || prefix == KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX)
+    return desktopAccountPreferenceKey(prefix, accountId)
+}
+
+private fun desktopAccountPreferenceKey(prefix: String, accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$prefix$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
 }
 
 private fun desktopCacheRoot(): File {
