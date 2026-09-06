@@ -172,7 +172,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             if (mode == "r") {
                 offline.availableContent(session, reference.path)?.let { cached ->
                     signal?.throwIfCanceled()
-                    return openAndroidDocumentAccountLeasedContent(cached.content, accountLease, WRITE_HANDLER)
+                    return openAndroidDocumentAccountLeasedContent(cached.content, accountLease, storageManager(), WRITE_HANDLER, signal)
                 }
             }
             val account = resolveAccount(session)
@@ -181,7 +181,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     if (mode == "r") {
                         virtualFiles.acquire(session, reference.path)?.let { lease ->
                             signal?.throwIfCanceled()
-                            return openAndroidDocumentVirtualFileLease(lease, accountLease, WRITE_HANDLER)
+                            return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
                         }
                     }
                     throw failure
@@ -193,7 +193,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             file.etag?.takeIf(String::isNotBlank)?.let { etag ->
                 virtualFiles.acquire(session, reference.path, expectedRemoteEtag = etag)?.let { lease ->
                     signal?.throwIfCanceled()
-                    return openAndroidDocumentVirtualFileLease(lease, accountLease, WRITE_HANDLER)
+                    return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
                 }
             }
             return openVirtualFileProxy(session, account.userId, file, signal, accountLease)
@@ -219,13 +219,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             var empty = virtualFiles.createHydrationStagingFile()
             if (runCatching { virtualFiles.publishHydration(session, file, empty) }.getOrDefault(false)) {
                 virtualFiles.acquire(session, file.path, expectedRemoteEtag = etag)?.let { lease ->
-                    return openAndroidDocumentVirtualFileLease(lease, accountLease, WRITE_HANDLER)
+                    return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
                 }
             }
             if (!empty.exists()) empty = virtualFiles.createHydrationStagingFile()
-            return ParcelFileDescriptor.open(empty, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
-                try { virtualFiles.discardHydrationStagingFile(empty) } finally { accountLease.close() }
-            }
+            return openAndroidDocumentAccountLeasedContent(
+                empty, accountLease, storageManager(), WRITE_HANDLER, signal,
+                onReleased = { virtualFiles.discardHydrationStagingFile(empty) },
+            )
         }
         val rangeSession = services.openFileRangeSession(
             session = session,
@@ -779,6 +780,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
 
     private fun documentsRootTitle(): String =
         context?.getString(R.string.documents_provider_root_name).orEmpty()
+
+    private fun storageManager(): StorageManager =
+        requireNotNull(context?.getSystemService(StorageManager::class.java))
 
     private fun requireActiveSession(): NextcloudSession = services.loadSession()
         ?: throw FileNotFoundException("Sign in to nati.ve to browse files.")

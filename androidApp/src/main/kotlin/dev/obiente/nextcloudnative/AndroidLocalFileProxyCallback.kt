@@ -8,7 +8,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Revocable, seekable access to an exact local cache generation used by an external handoff. */
+/** Revocable, seekable access to an exact local cache generation. */
 internal class AndroidLocalFileProxyCallback(
     content: File,
     private val accessAllowed: () -> Boolean,
