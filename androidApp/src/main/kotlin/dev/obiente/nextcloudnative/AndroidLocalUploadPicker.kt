@@ -734,45 +734,6 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 }
 
-private fun requireSafeProcessGeneration(value: String) {
-    require(value.length in 16..96 && value.all { it.isLetterOrDigit() || it == '-' }) {
-        "The picker capability process generation is invalid."
-    }
-}
-
-internal fun JSONObject.optionalStrictString(key: String): String? {
-    if (!has(key) || isNull(key)) return null
-    return requireStrictString(key)
-}
-
-internal fun JSONObject.requireStrictString(key: String): String = get(key).let { value ->
-    require(value is String) { "The $key value changed type." }
-    value
-}
-
-internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
-    if (!has(key) || isNull(key)) return null
-    return get(key).let { value ->
-        require(value is Boolean) { "The $key value changed type." }
-        value
-    }
-}
-
-internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
-    payload.optionalStrictBoolean("grantPreExisting") ?: false
-
-internal fun resumeLocalUploadSelectionResult(
-    continuation: CancellableContinuation<LocalUploadSelectionResult>,
-    result: LocalUploadSelectionResult,
-    releaseSelected: (LocalUploadFile) -> Unit,
-) {
-    continuation.resume(result) { _, undeliveredResult, _ ->
-        if (undeliveredResult is LocalUploadSelectionResult.Selected) {
-            runCatching { releaseSelected(undeliveredResult.file) }
-        }
-    }
-}
-
 private data class AndroidUploadMetadata(
     val displayName: String,
     val sizeBytes: Long?,

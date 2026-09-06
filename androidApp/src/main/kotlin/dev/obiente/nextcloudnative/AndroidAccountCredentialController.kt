@@ -726,7 +726,6 @@ internal class AndroidAccountCredentialController(
             throw failure
         }
     }
-
     private fun encryptState(state: AndroidAccountCredentialState): String = try {
         sessionCipher.encrypt(encodeAndroidAccountCredentialState(state))
     } catch (failure: Exception) {
@@ -736,7 +735,6 @@ internal class AndroidAccountCredentialController(
         )
         throw failure
     }
-
     private fun encryptCredentialSlot(session: NextcloudSession): String = try {
         sessionCipher.encrypt(encodeAndroidPersistedSession(session))
     } catch (failure: Exception) {
@@ -798,5 +796,4 @@ internal class AndroidAccountCredentialController(
         component = SupportDiagnosticComponent.Cache,
         failure = failure,
     )
-
 }
