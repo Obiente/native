@@ -205,25 +205,42 @@ internal class AndroidLocalUploadPicker(context: Context) {
             requestQueuedDurableUploadSchedulingRecovery()
             return@synchronized false
         }
-        val capabilities = try {
-            loadCapabilitySnapshot().capabilities
+        val snapshot = try {
+            loadCapabilitySnapshot()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return@synchronized retainCapabilityCleanup(file.selectionId)
         }
-        val ownedElsewhere = capabilities.anyOtherCapabilityOwnsUri(
-            source.uri,
-            file.selectionId,
+        val malformedPeerBlocksCleanup = malformedPeerBlocksDirectCleanup(
+            malformedCapabilities = snapshot.malformedCapabilities,
+            targetSelectionId = file.selectionId,
+            targetPermissionIdentity = source.uri.toString(),
         )
+        if (malformedPeerBlocksCleanup) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        val cleanupPlan = durableUploadPermissionCleanupPlan(
+            grantPreExisting = source.grantPreExisting,
+            peerProtection = permissionPeerProtection(
+                capabilities = snapshot.capabilities,
+                malformedCapabilities = emptyMap(),
+                targetSelectionId = file.selectionId,
+                targetPermissionIdentity = source.uri.toString(),
+            ),
+        )
+        if (cleanupPlan == DurableUploadPermissionCleanupPlan.Retain) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
         releaseDurableUploadCapability(
             releasePermission = {
-                if (shouldReleaseDurableUploadPermission(source.grantPreExisting, ownedElsewhere)) {
+                if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) {
                     releasePermission(source.uri)
                 }
             },
             isPermissionAbsent = {
-                source.grantPreExisting || ownedElsewhere || exactReadPermissionIsAbsent(source.uri)
+                cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease ||
+                    exactReadPermissionIsAbsent(source.uri)
             },
             removeMetadata = { removeMetadata(file.selectionId) },
         ).also { released ->
@@ -258,27 +275,56 @@ internal class AndroidLocalUploadPicker(context: Context) {
 
     fun reconcileCapabilities(ownedSelectionIds: Set<String>): Boolean = synchronized(CAPABILITY_LOCK) {
         val snapshot = try {
-            loadCapabilitySnapshot()
+            loadCapabilityRecoverySnapshot()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return@synchronized false
         }
+        if (snapshot.malformedCapabilities.isNotEmpty()) {
+            PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
+            requestQueuedDurableUploadSchedulingRecovery()
+        }
+        if (!snapshot.scanComplete) {
+            requestQueuedDurableUploadSchedulingRecovery()
+            return@synchronized false
+        }
         val capabilities = snapshot.capabilities.toMutableMap()
+        val malformedCapabilities = snapshot.malformedCapabilities.toMutableMap()
         var allRecovered = true
-        snapshot.malformedCapabilities.values
-            .sortedBy(MalformedDurableUploadCapability::selectionId)
-            .forEach { malformed ->
-                val recovered = recoverMalformedCapability(malformed, capabilities)
-                if (recovered) {
-                    selections.remove(malformed.selectionId)
-                    PENDING_CLEANUP_SELECTIONS.remove(malformed.selectionId)
-                } else {
-                    allRecovered = false
-                }
+        var remainingRecoveryActions = MAX_RECOVERY_ROWS_PER_PASS
+        val malformedRecovery = malformedDurableUploadCapabilitiesForRecovery(
+            malformedCapabilities,
+            ownedSelectionIds,
+        )
+        malformedRecovery.forEach { malformed ->
+            if (!malformedRecoveryIsActionable(malformed, capabilities, malformedCapabilities)) {
+                allRecovered = false
+                return@forEach
             }
+            if (remainingRecoveryActions == 0) {
+                allRecovered = false
+                return@forEach
+            }
+            remainingRecoveryActions -= 1
+            val recovered = recoverMalformedCapability(
+                malformed,
+                capabilities,
+                malformedCapabilities,
+            )
+            if (recovered) {
+                malformedCapabilities.remove(malformed.selectionId)
+                selections.remove(malformed.selectionId)
+                PENDING_CLEANUP_SELECTIONS.remove(malformed.selectionId)
+            } else {
+                allRecovered = false
+            }
+        }
         capabilities.values
-            .sortedBy { capability -> capability.file.selectionId }
+            .sortedWith(
+                compareByDescending<SelectedSource> { capability -> capability.grantPreExisting }
+                    .thenBy { capability -> capability.file.selectionId },
+            )
             .forEach { capability ->
                 val selectionId = capability.file.selectionId
                 val ownedByDurableJob = selectionId in ownedSelectionIds
@@ -288,6 +334,11 @@ internal class AndroidLocalUploadPicker(context: Context) {
                         ownedByDurableJob = ownedByDurableJob,
                     )
                 ) {
+                    if (remainingRecoveryActions == 0) {
+                        allRecovered = false
+                        return@forEach
+                    }
+                    remainingRecoveryActions -= 1
                     val ready = capability.copy(
                         phase = CapabilityPhase.Ready,
                         processGeneration = PROCESS_GENERATION,
@@ -307,24 +358,32 @@ internal class AndroidLocalUploadPicker(context: Context) {
                     ownedByDurableJob = ownedByDurableJob,
                     cleanupExplicitlyPending = selectionId in PENDING_CLEANUP_SELECTIONS,
                 )) return@forEach
-                val ownedElsewhere = capabilities.anyOtherCapabilityOwnsUri(
-                    capability.uri,
-                    selectionId,
+                val cleanupPlan = durableUploadPermissionCleanupPlan(
+                    grantPreExisting = capability.grantPreExisting,
+                    peerProtection = permissionPeerProtection(
+                        capabilities = capabilities,
+                        malformedCapabilities = malformedCapabilities,
+                        targetSelectionId = selectionId,
+                        targetPermissionIdentity = capability.uri.toString(),
+                    ),
                 )
+                if (cleanupPlan == DurableUploadPermissionCleanupPlan.Retain) {
+                    allRecovered = false
+                    return@forEach
+                }
+                if (remainingRecoveryActions == 0) {
+                    allRecovered = false
+                    return@forEach
+                }
+                remainingRecoveryActions -= 1
                 val released = releaseDurableUploadCapability(
                     releasePermission = {
-                        if (
-                            shouldReleaseDurableUploadPermission(
-                                capability.grantPreExisting,
-                                ownedElsewhere,
-                            )
-                        ) {
+                        if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) {
                             releasePermission(capability.uri)
                         }
                     },
                     isPermissionAbsent = {
-                        capability.grantPreExisting ||
-                            ownedElsewhere ||
+                        cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease ||
                             exactReadPermissionIsAbsent(capability.uri)
                     },
                     removeMetadata = { removeMetadata(selectionId) },
@@ -374,17 +433,11 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     private fun loadCapabilitySnapshot(): DurableUploadCapabilitySnapshot<SelectedSource> {
-        val storedSelectionIds = preferences.all.keys
-            .asSequence()
-            .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
-            .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
-            .toList()
-        require(storedSelectionIds.size <= MAX_TRACKED_CAPABILITIES) {
-            "Too many picker capabilities are tracked."
-        }
+        val storedSelectionIds = storedCapabilitySelectionIds()
         val snapshot = loadDurableUploadCapabilitySnapshot(
             cachedCapabilities = selections.toMap(),
             storedSelectionIds = storedSelectionIds,
+            maximumRecoverableCapabilities = MAX_RECOVERABLE_CAPABILITIES,
             loadStoredCapability = ::load,
         )
         if (snapshot.malformedCapabilities.isNotEmpty()) {
@@ -393,6 +446,20 @@ internal class AndroidLocalUploadPicker(context: Context) {
         }
         return snapshot
     }
+
+    private fun loadCapabilityRecoverySnapshot(): DurableUploadCapabilitySnapshot<SelectedSource> =
+        RECOVERY_SCAN.loadPage(
+            cachedCapabilities = selections.toMap(),
+            storedSelectionIds = storedCapabilitySelectionIds(),
+            maximumRows = MAX_RECOVERY_ROWS_PER_PASS,
+            loadStoredCapability = ::load,
+        )
+
+    private fun storedCapabilitySelectionIds(): List<String> = preferences.all.keys
+        .asSequence()
+        .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
+        .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
+        .toList()
 
     private fun releaseMalformedCapability(
         selectionId: String,
@@ -412,7 +479,22 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 malformed.cleanupPermissionIdentity,
                 malformed.grantPreExisting,
             )
-        val recovered = recoverMalformedCapability(isolated, snapshot.capabilities)
+        val permissionIdentity = isolated.cleanupPermissionIdentity
+        if (
+            permissionIdentity != null &&
+            malformedPeerBlocksDirectCleanup(
+                malformedCapabilities = snapshot.malformedCapabilities,
+                targetSelectionId = selectionId,
+                targetPermissionIdentity = permissionIdentity,
+            )
+        ) {
+            return retainCapabilityCleanup(selectionId)
+        }
+        val recovered = recoverMalformedCapability(
+            isolated,
+            snapshot.capabilities,
+            emptyMap(),
+        )
         if (recovered) {
             selections.remove(selectionId)
             PENDING_CLEANUP_SELECTIONS.remove(selectionId)
@@ -425,31 +507,101 @@ internal class AndroidLocalUploadPicker(context: Context) {
     private fun recoverMalformedCapability(
         malformed: MalformedDurableUploadCapability,
         capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
     ): Boolean {
         val permission = malformed.cleanupPermissionIdentity?.let(Uri::parse)
-        val ownedElsewhere = permission != null && capabilities.anyOtherCapabilityOwnsUri(
-            permission,
-            malformed.selectionId,
-        )
+        val peerProtection = permission?.let { target ->
+            permissionPeerProtection(
+                capabilities = capabilities,
+                malformedCapabilities = malformedCapabilities,
+                targetSelectionId = malformed.selectionId,
+                targetPermissionIdentity = target.toString(),
+            )
+        } ?: DurableUploadPermissionPeerProtection.Ambiguous
         return recoverMalformedDurableUploadCapability(
             capability = malformed,
             permission = permission,
-            ownedByAnotherCapability = ownedElsewhere,
+            peerProtection = peerProtection,
             releasePermission = ::releasePermission,
             isPermissionAbsent = ::exactReadPermissionIsAbsent,
             removeMetadata = ::removeMetadata,
         )
     }
 
-    private fun Map<String, SelectedSource>.anyOtherCapabilityOwnsUri(
-        uri: Uri,
-        selectionId: String,
-    ): Boolean = durableUploadCapabilityPermissionOwnedByAnother(
-        capabilities = this,
-        targetSelectionId = selectionId,
-        targetPermission = uri,
-        permissionOf = SelectedSource::uri,
-        samePermission = { first, second -> first == second },
+    private fun malformedRecoveryIsActionable(
+        malformed: MalformedDurableUploadCapability,
+        capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+    ): Boolean {
+        val permission = malformed.cleanupPermissionIdentity?.let(Uri::parse) ?: return false
+        val peerProtection = permissionPeerProtection(
+            capabilities = capabilities,
+            malformedCapabilities = malformedCapabilities,
+            targetSelectionId = malformed.selectionId,
+            targetPermissionIdentity = permission.toString(),
+        )
+        val permissionAbsent = if (
+            malformed.grantPreExisting == null &&
+            peerProtection == DurableUploadPermissionPeerProtection.None
+        ) {
+            try {
+                exactReadPermissionIsAbsent(permission)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+        return durableUploadPermissionCleanupPlan(
+            malformed.grantPreExisting,
+            peerProtection,
+            permissionAbsent,
+        ) != DurableUploadPermissionCleanupPlan.Retain
+    }
+
+    private fun permissionPeerProtection(
+        capabilities: Map<String, SelectedSource>,
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+        targetSelectionId: String,
+        targetPermissionIdentity: String,
+    ): DurableUploadPermissionPeerProtection = durableUploadPermissionPeerProtection(
+        peers = (
+            capabilities.asSequence().map { (selectionId, capability) ->
+                DurableUploadPermissionPeer(
+                    selectionId,
+                    capability.uri.toString(),
+                    capability.grantPreExisting,
+                )
+            } + malformedCapabilities.asSequence().map { (_, capability) ->
+                DurableUploadPermissionPeer(
+                    capability.selectionId,
+                    capability.cleanupPermissionIdentity,
+                    capability.grantPreExisting,
+                )
+            }
+        ).asIterable(),
+        targetSelectionId = targetSelectionId,
+        targetPermission = targetPermissionIdentity,
+        samePermission = String::equals,
+    )
+
+    private fun malformedPeerBlocksDirectCleanup(
+        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
+        targetSelectionId: String,
+        targetPermissionIdentity: String,
+    ): Boolean = malformedDurableUploadPeerBlocksDirectCleanup(
+        malformedPeers = malformedCapabilities.values.asSequence().map { capability ->
+            DurableUploadPermissionPeer(
+                capability.selectionId,
+                capability.cleanupPermissionIdentity,
+                capability.grantPreExisting,
+            )
+        }.asIterable(),
+        targetSelectionId = targetSelectionId,
+        targetPermission = targetPermissionIdentity,
+        samePermission = String::equals,
     )
 
     private fun persistedSource(file: LocalUploadFile): SelectedSource {
@@ -559,10 +711,13 @@ internal class AndroidLocalUploadPicker(context: Context) {
         const val PREFERENCES = "nextcloud_native_upload_capabilities"
         const val PREFERENCE_PREFIX = "upload_"
         const val MAX_TRACKED_CAPABILITIES = 64
+        const val MAX_RECOVERABLE_CAPABILITIES = 1_024
+        const val MAX_RECOVERY_ROWS_PER_PASS = 1_024
         val PROCESS_GENERATION = UUID.randomUUID().toString()
         val PROCESS_SELECTIONS = ConcurrentHashMap<String, SelectedSource>()
         val PENDING_CLEANUP_SELECTIONS = ConcurrentHashMap.newKeySet<String>()
         val CAPABILITY_LOCK = Any()
+        val RECOVERY_SCAN = DurableUploadCapabilityRecoveryScan<SelectedSource>()
     }
 }
 
@@ -593,15 +748,6 @@ internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
 internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
     payload.optionalStrictBoolean("grantPreExisting") ?: false
 
-internal fun durableUploadCapabilityHasCapacity(
-    trackedCapabilityCount: Int,
-    maximumTrackedCapabilities: Int,
-): Boolean {
-    require(trackedCapabilityCount >= 0)
-    require(maximumTrackedCapabilities > 0)
-    return trackedCapabilityCount < maximumTrackedCapabilities
-}
-
 internal fun resumeLocalUploadSelectionResult(
     continuation: CancellableContinuation<LocalUploadSelectionResult>,
     result: LocalUploadSelectionResult,
@@ -612,107 +758,6 @@ internal fun resumeLocalUploadSelectionResult(
             runCatching { releaseSelected(undeliveredResult.file) }
         }
     }
-}
-
-/**
- * Acquires a durable picker capability without exposing an interval where a successful selection
- * can be reported before its metadata reaches app-private storage.
- */
-internal fun acquireDurableUploadCapability(
-    takePermission: () -> Unit,
-    persistMetadata: () -> Boolean,
-    releasePermission: () -> Unit,
-    persistAcquiring: () -> Boolean = { true },
-    markCleanupPending: () -> Boolean = { true },
-    isPermissionAbsent: () -> Boolean = { false },
-    removeCapability: () -> Boolean = { true },
-    onRollbackRetained: () -> Unit = {},
-) {
-    val acquiringPersisted = try {
-        persistAcquiring()
-    } catch (cancelled: CancellationException) {
-        durableUploadCleanupStep(removeCapability)
-        runCatching(onRollbackRetained)
-        throw cancelled
-    } catch (failure: Exception) {
-        durableUploadCleanupStep(removeCapability)
-        runCatching(onRollbackRetained)
-        throw failure
-    }
-    if (!acquiringPersisted) {
-        durableUploadCleanupStep(removeCapability)
-        runCatching(onRollbackRetained)
-        error("The picker capability rollback could not be saved.")
-    }
-    try {
-        takePermission()
-    } catch (cancelled: CancellationException) {
-        runCatching(onRollbackRetained)
-        throw cancelled
-    } catch (failure: Exception) {
-        runCatching(onRollbackRetained)
-        throw failure
-    }
-    val persisted = runCatching { persistMetadata() }
-    if (persisted.getOrNull() == true) return
-    if (!durableUploadCleanupStep(markCleanupPending)) runCatching(onRollbackRetained)
-    val released = try {
-        releaseDurableUploadPermission(releasePermission, isPermissionAbsent)
-    } catch (cancelled: CancellationException) {
-        runCatching(onRollbackRetained)
-        throw cancelled
-    }
-    if (released) {
-        if (!durableUploadCleanupStep(removeCapability)) runCatching(onRollbackRetained)
-    } else {
-        runCatching(onRollbackRetained)
-    }
-    persisted.exceptionOrNull()?.let { throw it }
-    error("The durable upload capability could not be saved.")
-}
-
-internal enum class CapabilityPhase(val persistedValue: String) {
-    Acquiring("acquiring"),
-    Ready("ready"),
-    OwnershipCheckPending("ownership-check-pending"),
-    CleanupPending("cleanup-pending");
-
-    companion object {
-        fun fromPersistedValue(value: String): CapabilityPhase = entries.singleOrNull {
-            phase -> phase.persistedValue == value
-        } ?: error("The picker capability phase is invalid.")
-    }
-}
-
-internal fun shouldRecoverDurableUploadCapability(
-    phase: CapabilityPhase,
-    processGeneration: String?,
-    currentProcessGeneration: String,
-    ownedByDurableJob: Boolean,
-    cleanupExplicitlyPending: Boolean,
-): Boolean = !ownedByDurableJob && (
-    cleanupExplicitlyPending ||
-        phase != CapabilityPhase.Ready ||
-        processGeneration != currentProcessGeneration
-)
-
-internal fun shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
-    phase: CapabilityPhase,
-    ownedByDurableJob: Boolean,
-): Boolean = phase == CapabilityPhase.OwnershipCheckPending && ownedByDurableJob
-
-internal fun isDurableUploadCapabilityReady(phase: CapabilityPhase): Boolean =
-    phase == CapabilityPhase.Ready
-
-internal fun finalizeDurableUploadCapabilityDelivery(
-    publishReady: () -> Unit,
-    continuationIsActive: () -> Boolean,
-    cleanupUndelivered: () -> Unit,
-): Boolean {
-    publishReady()
-    if (continuationIsActive()) return true
-    runCatching(cleanupUndelivered)
-    return false
 }
 
 private data class AndroidUploadMetadata(

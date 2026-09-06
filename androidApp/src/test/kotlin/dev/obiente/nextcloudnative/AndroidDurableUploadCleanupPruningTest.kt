@@ -18,6 +18,41 @@ import org.json.JSONObject
 
 class AndroidDurableUploadCleanupPruningTest {
     @Test
+    fun `oversized terminal cleanup jobs remain eligible for paged capability recovery`() {
+        val jobs = (1..1_025).map { index ->
+            fixtureJob(
+                index = index,
+                state = DurableUploadState.Failed,
+                cleanupPending = true,
+            )
+        }
+        val retained = durableUploadCapabilityRetainedSelectionIds(jobs)
+        val storedIds = jobs.map { job -> job.request.file.selectionId }
+        val scan = DurableUploadCapabilityRecoveryScan<CapabilityPhase>()
+
+        val first = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
+            CapabilityPhase.CleanupPending
+        }
+        val second = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
+            CapabilityPhase.CleanupPending
+        }
+        val recoverable = second.capabilities.count { (selectionId, phase) ->
+            shouldRecoverDurableUploadCapability(
+                phase = phase,
+                processGeneration = "prior-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = selectionId in retained,
+                cleanupExplicitlyPending = true,
+            )
+        }
+
+        assertTrue(retained.isEmpty())
+        assertFalse(first.scanComplete)
+        assertTrue(second.scanComplete)
+        assertEquals(1_025, recoverable)
+    }
+
+    @Test
     fun `reconciliation runs terminal cleanup without consulting upload work ownership`() = runBlocking {
         val pending = fixtureJob(index = 1, cleanupPending = true)
         val history = fixtureJob(index = 2)
