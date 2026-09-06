@@ -192,7 +192,7 @@ internal class AndroidDocumentProviderIncarnationStore(
         try {
             accountIdentities.distinct().sorted().forEach { accountIdentity ->
                 requireAccountIdentity(accountIdentity)
-                val pending = readPendingRetirement(accountIdentity)
+                val pending = readPendingRetirementForCredentialReset(accountIdentity)
                 if (pending != null) {
                     resumeRetirementForCredentialReset(pending)
                     retirements += pending
@@ -222,6 +222,30 @@ internal class AndroidDocumentProviderIncarnationStore(
             }
             throw failure
         }
+    }
+
+    private fun readPendingRetirementForCredentialReset(
+        accountIdentity: String,
+    ): AndroidDocumentProviderIncarnationRetirement? = try {
+        readPendingRetirement(accountIdentity)
+    } catch (_: IllegalArgumentException) {
+        quarantineMalformedPendingRetirement(accountIdentity)
+        null
+    } catch (_: ClassCastException) {
+        quarantineMalformedPendingRetirement(accountIdentity)
+        null
+    }
+
+    private fun quarantineMalformedPendingRetirement(accountIdentity: String) {
+        val journalKey = retirementJournalKey(accountIdentity)
+        val malformed = try {
+            read(journalKey)
+        } catch (_: ClassCastException) {
+            null
+        }
+        malformed?.let { persistEncoded(quarantinedRetirementJournalKey(accountIdentity), it.take(MAX_RETIREMENT_JOURNAL_LENGTH)) }
+        persist(accountIdentity, AndroidDocumentProviderIncarnationRecord.Retired(NextcloudDocumentIncarnation.Legacy))
+        persistEncoded(journalKey, null)
     }
 
     private fun readPendingRetirement(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement? {
@@ -329,6 +353,9 @@ internal class AndroidDocumentProviderIncarnationStore(
 
         fun retirementJournalKey(accountIdentity: String): String =
             "$RETIREMENT_JOURNAL_KEY_PREFIX$accountIdentity"
+
+        fun quarantinedRetirementJournalKey(accountIdentity: String): String =
+            "quarantined-$RETIREMENT_JOURNAL_KEY_PREFIX$accountIdentity"
     }
 }
 
