@@ -1,9 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+
 internal object SupportSettingsDraftRegistry {
     private val gate = sharedAccountPrivateMemoryGate
     private val loginDraftState = SupportSettingsDraftState()
     private val states = linkedMapOf<String, SupportSettingsDraftState>()
+    private val mutableActivationRevision = MutableStateFlow(0L)
+    private val activationRevision = mutableActivationRevision.asStateFlow()
     private val inactiveState = SupportSettingsDraftState.inactive()
 
     fun loginState(): SupportSettingsDraftState = loginDraftState
@@ -32,6 +39,11 @@ internal object SupportSettingsDraftRegistry {
         }
     }
 
+    internal fun activationRevision(): StateFlow<Long> = activationRevision
+
+    internal fun publishAccountActivated() =
+        mutableActivationRevision.update { revision -> revision + 1L }
+
     internal fun purgeRetiredAccount(accountStorageKey: String) {
         states[accountStorageKey]?.let { retired ->
             retired.purgeRetiredAccount()
@@ -43,7 +55,10 @@ internal object SupportSettingsDraftRegistry {
         purgeRetiredAccount(accountStorageKey)
     }
 
-    internal fun activateAccount(accountStorageKey: String) = gate.activateAccount(accountStorageKey)
+    internal fun activateAccount(accountStorageKey: String) = gate.activateAccount(
+        accountStorageKey = accountStorageKey,
+        activated = ::publishAccountActivated,
+    )
 }
 
 private const val MAX_RETAINED_SUPPORT_DRAFT_ACCOUNTS = 4
