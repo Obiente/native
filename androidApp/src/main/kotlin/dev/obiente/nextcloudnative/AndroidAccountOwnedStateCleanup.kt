@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
+import dev.obiente.nextcloudnative.app.AccountPrivateMemoryCleanup
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
@@ -49,6 +50,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
                 { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
+                { AccountPrivateMemoryCleanup.removeAccount(session.accountId.storageKey) },
             ),
         )
     }
@@ -79,6 +81,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
                 { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
+                { AccountPrivateMemoryCleanup.removeAccount(session.accountId.storageKey) },
             ),
         )
     }
@@ -109,6 +112,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
                 { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
+                { AccountPrivateMemoryCleanup.removeAccount(accountStorageKey) },
             ),
         )
     }

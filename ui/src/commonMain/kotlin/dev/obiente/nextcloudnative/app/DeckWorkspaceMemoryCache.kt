@@ -27,6 +27,9 @@ internal object DeckWorkspaceMemoryCache {
         while (entries.size > MAXIMUM_RETAINED_DECK_ACCOUNTS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+    fun removeAccount(accountStorageKey: String) {
+        entries.remove(accountStorageKey)
+    }
+
+    private fun key(session: NextcloudSession): String = session.accountId.storageKey
 }

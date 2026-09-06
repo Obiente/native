@@ -35,6 +35,12 @@ internal class NextcloudNotesCache {
         noteLists[account] = noteLists[account]?.filterNot { note -> note.id == noteId } ?: return
         noteListEtags.remove(account)
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        noteLists.keys.removeAll { account -> account.storageKey == accountStorageKey }
+        noteListEtags.keys.removeAll { account -> account.storageKey == accountStorageKey }
+        noteDetails.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
+    }
 }
 
 internal val sharedNextcloudNotesCache = NextcloudNotesCache()

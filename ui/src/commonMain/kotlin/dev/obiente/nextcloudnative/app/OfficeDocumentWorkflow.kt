@@ -247,6 +247,10 @@ internal class NextcloudDocumentEditingCapabilitiesCache {
             etag = etag?.takeIf(String::isNotBlank),
         )
     }
+
+    fun removeAccount(accountStorageKey: String) {
+        entries.remove(accountStorageKey)
+    }
 }
 
 internal val sharedDocumentEditingCapabilitiesCache = NextcloudDocumentEditingCapabilitiesCache()

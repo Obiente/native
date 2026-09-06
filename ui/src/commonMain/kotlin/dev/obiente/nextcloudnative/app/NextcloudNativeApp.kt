@@ -304,31 +304,6 @@ internal fun NativeAppSchema.forDynamicContractVersion(
 
 private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
-private class PhotoTimelineUiState {
-    val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
-    val backupStatuses = mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
-    val initialLoadCompleted = mutableStateOf(false)
-}
-
-private object PhotoTimelineUiStateRepository {
-    private const val MAXIMUM_ACCOUNT_STATES = 4
-    private val accountStates = linkedMapOf<String, PhotoTimelineUiState>()
-
-    fun stateFor(session: NextcloudSession): PhotoTimelineUiState {
-        val accountKey = previewCacheDigest(session)
-        accountStates.remove(accountKey)?.let { existing ->
-            accountStates[accountKey] = existing
-            return existing
-        }
-        val created = PhotoTimelineUiState()
-        accountStates[accountKey] = created
-        while (accountStates.size > MAXIMUM_ACCOUNT_STATES) {
-            accountStates.remove(accountStates.keys.first())
-        }
-        return created
-    }
-}
-
 private val mediaViewerNavigationRepository = MediaViewerNavigationRepository()
 
 private inline fun <reified T : Enum<T>> enumSaver() = Saver<T, String>(
@@ -7115,25 +7090,6 @@ internal fun shouldShowDynamicRecordFallbackDetail(
     viewComponent != NativeComponent.form &&
     selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
 
-private object ActivityWorkspaceMemoryCache {
-    private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ActivityTimelineState>()
-
-    fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? {
-        val key = key(session, filterId)
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, filterId: String, value: ActivityTimelineState) {
-        val key = key(session, filterId)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    private fun key(session: NextcloudSession, filterId: String): Pair<NextcloudAccountId, String> =
-        session.accountId to filterId
-}
-
 @Composable
 private fun ActivityScreen(
     services: NextcloudPlatformServices,
@@ -11886,38 +11842,6 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
-internal object TalkWorkspaceMemoryCache {
-    private val rooms = linkedMapOf<NextcloudAccountId, List<TalkRoom>>()
-    private val messages = linkedMapOf<Pair<NextcloudAccountId, String>, List<TalkMessage>>()
-
-    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, session.accountId)
-
-    fun storeRooms(session: NextcloudSession, value: List<TalkRoom>) {
-        store(rooms, session.accountId, value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
-    }
-
-    fun messages(session: NextcloudSession, roomToken: String): List<TalkMessage>? =
-        touch(messages, session.accountId to roomToken)
-
-    fun storeMessages(session: NextcloudSession, roomToken: String, value: List<TalkMessage>) {
-        store(
-            messages,
-            session.accountId to roomToken,
-            value,
-            MAXIMUM_RETAINED_TALK_ROOMS,
-        )
-    }
-
-    private fun <Key, T> touch(entries: LinkedHashMap<Key, T>, key: Key): T? =
-        entries.remove(key)?.also { entries[key] = it }
-
-    private fun <Key, T> store(entries: LinkedHashMap<Key, T>, key: Key, value: T, maximum: Int) {
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > maximum) entries.remove(entries.keys.first())
-    }
-}
-
 @Composable
 private fun TalkScreen(
     services: NextcloudPlatformServices,
@@ -12422,6 +12346,3 @@ internal fun formatBytes(bytes: Long?): String = when {
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024
-private const val MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS = 4
-private const val MAXIMUM_RETAINED_TALK_ACCOUNTS = 4
-private const val MAXIMUM_RETAINED_TALK_ROOMS = 16
