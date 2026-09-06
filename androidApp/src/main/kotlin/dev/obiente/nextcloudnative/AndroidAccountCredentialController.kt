@@ -30,6 +30,7 @@ internal class AndroidAccountCredentialController(
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
     private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String, String?, String?, String?) -> Unit,
     private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String, String, String?, String?, String?) -> Unit,
+    private val activatePersistedAccount: suspend (NextcloudSession) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val handoffCleanup = AndroidExternalFileHandoffCleanup(appContext, preferences, ::commitPreferences)
@@ -44,7 +45,6 @@ internal class AndroidAccountCredentialController(
             )
         },
     )
-
     fun loadSession(): NextcloudSession? = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
         load = {
             val registry = readRegistryForCredentialLoad()
@@ -62,7 +62,6 @@ internal class AndroidAccountCredentialController(
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
-
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
             val registry = readRegistryForCredentialLoad() ?: return@serialize null
@@ -489,6 +488,7 @@ internal class AndroidAccountCredentialController(
                 )
             },
             finishMaintenance = {
+                activatePersistedAccount(session)
                 clearAndroidPreviousPreviewAfterCommittedSelection(
                     previousSession = previousSession,
                     selectedSession = session,

@@ -478,6 +478,11 @@ internal class AndroidNextcloudServices(
         removeQueuedUploads = accountOwnedStateCleanup::remove,
         retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
         retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,
+        activatePersistedAccount = { session ->
+            dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(session))
+            AccountPrivateMemoryLifecycle.activateAccount(session.accountId.storageKey)
+            dynamicDiscoveryCache.activateAccount(session.accountId.storageKey)
+        },
     )
 
     init {
@@ -928,16 +933,7 @@ internal class AndroidNextcloudServices(
             withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.migrateLegacyEntries(session) }
         }
 
-    override suspend fun saveSession(session: NextcloudSession): NextcloudSession {
-        val persisted = accountCredentials.saveSession(session)
-        activateAndroidDynamicReadsAfterCredentialSave(
-            persisted, ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX, ANDROID_ACCOUNT_OPERATION_GUARD,
-            { accountCredentials.loadSession(persisted.accountId) }, dynamicApiRequestCoalescer::activateAccount,
-        )
-        AccountPrivateMemoryLifecycle.activateAccount(persisted.accountId.storageKey)
-        dynamicDiscoveryCache.activateAccount(persisted.accountId.storageKey)
-        return persisted
-    }
+    override suspend fun saveSession(session: NextcloudSession): NextcloudSession = accountCredentials.saveSession(session)
 
     internal fun accountRetentionSnapshot() = accountCredentials.accountRetentionSnapshot()
 
