@@ -88,6 +88,7 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
 
 internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     preflightAndroidAccountRemoval(context, session)
+    ANDROID_FILE_RANGE_SESSION_COORDINATOR.quiesce(NextcloudDocumentIds.accountKey(session))
 }
 
 internal fun revokeAndroidAccountDocumentGrants(context: Context, accountIdentity: String) {
