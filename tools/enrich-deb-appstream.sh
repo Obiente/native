@@ -54,6 +54,7 @@ mapfile -d '' desktop_entries < <(
 [[ "${#desktop_entries[@]}" -eq 1 ]]
 desktop_entry="${desktop_entries[0]}"
 sed -i \
+    -e 's|^Name=.*|Name=nati.ve|' \
     -e 's|^Comment=.*|Comment=One native client for your complete Nextcloud account|' \
     -e 's|^Categories=.*|Categories=Network;FileTransfer;Utility;|' \
     -e 's|^Icon=.*|Icon=dev.obiente.nextcloudnative|' \
