@@ -130,10 +130,15 @@ internal class AndroidDurableMultipartUploads(
                     .any { work -> !work.state.isFinished }
             },
             cleanupCapability = { job ->
-                check(picker.release(job.request.file)) {
+                check(
+                    reconcileTerminalDurableUploadCapabilityCleanup(
+                        release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
+                        complete = { store.completeCapabilityCleanup(job.id) },
+                        retire = { store.remove(job.id) },
+                    ),
+                ) {
                     "The durable upload capability cleanup remains pending."
                 }
-                store.completeCapabilityCleanup(job.id)
             },
             schedule = { job -> schedule(job).await() },
         )
@@ -232,6 +237,23 @@ internal fun requestDurableUploadSchedulingRecoveryForQueuedStatuses(
     requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
 ) {
     if (jobs.any { job -> job.state == DurableUploadState.Queued }) requestRecovery()
+}
+
+internal fun reconcileTerminalDurableUploadCapabilityCleanup(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+    complete: () -> Unit,
+    retire: () -> Unit,
+): Boolean {
+    var quarantined = false
+    if (release { quarantined = true }) {
+        complete()
+        return true
+    }
+    if (quarantined) {
+        retire()
+        return true
+    }
+    return false
 }
 
 internal data class AndroidDurableMultipartUploadJob(

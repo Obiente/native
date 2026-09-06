@@ -182,13 +182,13 @@ internal class AndroidLocalUploadPicker(context: Context) {
         requiredSource(file, useCachedSource = false)
     }
 
-    fun release(file: LocalUploadFile): Boolean = synchronized(CAPABILITY_LOCK) {
+    fun release(file: LocalUploadFile, onQuarantined: () -> Unit = {}): Boolean = synchronized(CAPABILITY_LOCK) {
         val source = try {
             selections[file.selectionId] ?: load(file.selectionId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (malformed: AndroidLocalUploadCapabilityMalformedException) {
-            return@synchronized releaseMalformedCapability(file.selectionId, malformed)
+            return@synchronized releaseMalformedCapability(file.selectionId, malformed, onQuarantined)
         } catch (_: Exception) {
             return@synchronized retainCapabilityCleanup(file.selectionId)
         }
@@ -470,6 +470,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
     private fun releaseMalformedCapability(
         selectionId: String,
         malformed: AndroidLocalUploadCapabilityMalformedException,
+        onQuarantined: () -> Unit,
     ): Boolean {
         PENDING_CLEANUP_SELECTIONS += selectionId
         val snapshot = try {
@@ -504,6 +505,8 @@ internal class AndroidLocalUploadPicker(context: Context) {
         if (recovered) {
             selections.remove(selectionId)
             PENDING_CLEANUP_SELECTIONS.remove(selectionId)
+        } else if (!malformedDurableUploadCapabilityCanBecomeActionable(isolated)) {
+            onQuarantined()
         } else {
             requestQueuedDurableUploadSchedulingRecovery()
         }

@@ -23,7 +23,12 @@ internal class DeckAttachmentUploadWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = runDurableUploadWorkerWithRecoverySignal(
         requestRecovery = {
-            requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(id)
+            val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
+            if (jobId == null) {
+                requestQueuedDurableUploadSchedulingRecovery()
+            } else {
+                requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(jobId, id)
+            }
         },
     ) {
         withContext(Dispatchers.IO) {
