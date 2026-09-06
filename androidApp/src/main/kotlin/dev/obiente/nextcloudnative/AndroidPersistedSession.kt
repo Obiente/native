@@ -300,7 +300,7 @@ private fun recordAccountCredentialDiagnostic(
 private class AndroidCredentialMismatchException : IllegalArgumentException()
 
 private const val ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION = 2
-private const val MAX_ANDROID_ACCOUNT_CREDENTIALS = 64
+internal const val MAX_ANDROID_ACCOUNT_CREDENTIALS = 64
 private const val MAX_ANDROID_ACCOUNT_CREDENTIAL_STORE_BYTES = 512 * 1024
 private const val KEY_VERSION = "version"
 private const val KEY_ACCOUNT_REGISTRY = "account_registry_v1"

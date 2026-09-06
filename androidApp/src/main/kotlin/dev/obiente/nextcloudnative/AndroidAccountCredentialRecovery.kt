@@ -88,11 +88,54 @@ internal fun unsupportedCredentialStoreMutation(version: Int): Nothing =
 internal fun androidAccountCredentialSlotKey(accountId: NextcloudAccountId): String =
     "$ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX${accountId.storageKey}"
 
+internal data class AndroidIndependentCredentialSlotReset(
+    val preferenceKey: String,
+    val encrypted: String,
+    val session: NextcloudSession,
+)
+
+internal fun recoverAndroidIndependentCredentialSlotsForReset(
+    preferenceKeys: Collection<String>,
+    readEncrypted: (String) -> String?,
+    decrypt: (String) -> String,
+): List<AndroidIndependentCredentialSlotReset> {
+    val slotKeys = preferenceKeys
+        .filter { key -> key.startsWith(ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX) }
+        .sorted()
+    check(slotKeys.size <= MAX_ANDROID_ACCOUNT_CREDENTIALS) {
+        "The independent account credential slot set is too large to reset safely."
+    }
+    return slotKeys.map { key ->
+        val encrypted = checkNotNull(readEncrypted(key)) {
+            "An independent account credential slot disappeared during reset."
+        }
+        val restored = decodeAndroidAccountCredentialState(decrypt(encrypted))
+        restored.unsupportedVersion?.let(::unsupportedCredentialStoreMutation)
+        val state = checkNotNull(restored.state) {
+            "An independent account credential slot is invalid and cannot be reset safely."
+        }
+        check(state.registry.accounts.size == 1 && state.sessions.size == 1) {
+            "An independent account credential slot has an invalid account count."
+        }
+        val session = checkNotNull(state.activeSession) {
+            "An independent account credential slot does not select its account."
+        }
+        check(key == androidAccountCredentialSlotKey(session.accountId)) {
+            "An independent account credential slot has a mismatched identity."
+        }
+        AndroidIndependentCredentialSlotReset(key, encrypted, session)
+    }
+}
+
 internal fun retainedAndroidAccountCredentialSlotKeys(
     state: AndroidAccountCredentialState,
 ): Set<String> = state.registry.accounts.mapTo(hashSetOf()) { account ->
     androidAccountCredentialSlotKey(account.id)
 }
+
+internal fun hasAndroidIndependentCredentialState(preferences: SharedPreferences): Boolean =
+    preferences.contains(ANDROID_ACCOUNT_REGISTRY_KEY) ||
+        preferences.all.keys.any { key -> key.startsWith(ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX) }
 
 internal fun readAndroidAccountCredentialSlot(
     accountId: NextcloudAccountId,
