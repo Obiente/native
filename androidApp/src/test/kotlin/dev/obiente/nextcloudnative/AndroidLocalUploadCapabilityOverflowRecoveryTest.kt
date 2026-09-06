@@ -193,6 +193,18 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
     }
 
     @Test
+    fun `unknowable malformed peer quarantines blocked cleanup without polling`() {
+        val disposition = durableUploadMalformedPeerCleanupDisposition(
+            malformedPeers = listOf(peer("selection-unknown", permission = null, grantPreExisting = null)),
+            targetSelectionId = "selection-valid",
+            targetPermission = "content://synthetic/valid",
+            samePermission = String::equals,
+        )
+
+        assertEquals(DurableUploadMalformedPeerCleanupDisposition.Quarantine, disposition)
+    }
+
+    @Test
     fun `peer protection keeps ambiguous provenance distinct from a retained app grant`() {
         val sharedUri = "content://synthetic/shared"
         val exactAppGrant = peer("selection-false", sharedUri, grantPreExisting = false)

@@ -15,10 +15,21 @@ internal class AndroidDurableUploadAccountCleanup(context: Context) {
             cancelWork = { job ->
                 WorkManager.getInstance(appContext).cancelUniqueWork(durableUploadWorkName(job.id)).await()
             },
-            releaseCapability = { job -> picker.release(job.request.file) },
+            releaseCapability = { job ->
+                releaseAndroidDurableUploadCapabilityForAccountRemoval { onQuarantined ->
+                    picker.release(job.request.file, onQuarantined)
+                }
+            },
             removeJob = store::remove,
         )
     }
+}
+
+internal fun releaseAndroidDurableUploadCapabilityForAccountRemoval(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+): Boolean {
+    var quarantined = false
+    return release { quarantined = true } || quarantined
 }
 
 internal suspend fun removeAndroidDurableUploadJobs(
