@@ -1398,13 +1398,6 @@ private fun DashboardFailure(message: String, onRetry: () -> Unit) {
     }
 }
 
-private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
-    Never("No expiry", null),
-    OneHour("1 hour", 60L * 60L),
-    FourHours("4 hours", 4L * 60L * 60L),
-    OneDay("24 hours", 24L * 60L * 60L),
-}
-
 @Composable
 internal fun NativeUserStatusScreen(
     services: NextcloudPlatformServices,
@@ -1717,6 +1710,7 @@ internal fun NativeUserStatusScreen(
                         onClick = {
                             mutationInProgress = true
                             scope.launch {
+                                val cacheProducer = sharedDashboardStatusMemoryCache.producer(session)
                                 runCatching {
                                     services.executeNextcloudApi(session, request).also { response ->
                                         require(response.status in 200..299) {
@@ -1724,7 +1718,7 @@ internal fun NativeUserStatusScreen(
                                         }
                                     }
                                 }.onSuccess {
-                                    sharedDashboardStatusMemoryCache.invalidate(session)
+                                    sharedDashboardStatusMemoryCache.invalidate(session, cacheProducer)
                                     pendingEdit = null
                                     mutationInProgress = false
                                     mutationError = null

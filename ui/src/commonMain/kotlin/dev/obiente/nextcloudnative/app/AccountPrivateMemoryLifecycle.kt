@@ -21,16 +21,38 @@ internal class AccountPrivateMemoryGate {
         if (accountStorageKey in closedAccounts) unavailable else action()
     }
 
+    fun <T> read(
+        producer: AccountPrivateMemoryProducer?,
+        unavailable: T,
+        action: () -> T,
+    ): T = lock.withLock {
+        val currentProducer = producer ?: return@withLock unavailable
+        if (!accepts(currentProducer)) unavailable else action()
+    }
+
+    fun <T> read(
+        accountStorageKey: String,
+        producer: AccountPrivateMemoryProducer?,
+        unavailable: T,
+        action: () -> T,
+    ): T = lock.withLock {
+        val currentProducer = producer ?: return@withLock unavailable
+        require(currentProducer.accountStorageKey == accountStorageKey) {
+            "The private-memory producer belongs to another account."
+        }
+        if (!accepts(currentProducer)) unavailable else action()
+    }
+
     fun mutate(
         accountStorageKey: String,
         producer: AccountPrivateMemoryProducer?,
         action: () -> Unit,
     ): Boolean = lock.withLock {
-        val current = producer ?: return@withLock false
-        require(current.accountStorageKey == accountStorageKey) {
+        val currentProducer = producer ?: return@withLock false
+        require(currentProducer.accountStorageKey == accountStorageKey) {
             "The private-memory producer belongs to another account."
         }
-        if (!accepts(current)) return@withLock false
+        if (!accepts(currentProducer)) return@withLock false
         action()
         true
     }
@@ -42,10 +64,17 @@ internal class AccountPrivateMemoryGate {
         purge()
     }
 
-    fun activateAccount(accountStorageKey: String, prepare: () -> Unit = {}) = lock.withLock {
+    fun activateAccount(
+        accountStorageKey: String,
+        prepare: () -> Unit = {},
+        activated: () -> Unit = {},
+    ) = lock.withLock {
         prepare()
         closedAccounts.remove(accountStorageKey)
+        activated()
     }
+
+    fun <T> withLock(action: () -> T): T = lock.withLock(action)
 
     private fun accepts(producer: AccountPrivateMemoryProducer): Boolean =
         producer.accountStorageKey !in closedAccounts &&
@@ -61,7 +90,8 @@ object AccountPrivateMemoryLifecycle {
     }
 
     fun activateAccount(accountStorageKey: String) = sharedAccountPrivateMemoryGate.activateAccount(
-        accountStorageKey,
+        accountStorageKey = accountStorageKey,
         prepare = { sharedDynamicNativeMemoryCache.activateAccount(accountStorageKey) },
+        activated = SupportSettingsDraftRegistry::publishAccountActivated,
     )
 }

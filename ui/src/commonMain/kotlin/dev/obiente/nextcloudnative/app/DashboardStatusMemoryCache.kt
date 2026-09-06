@@ -41,8 +41,8 @@ internal class DashboardStatusMemoryCache(
         }
     }
 
-    fun invalidate(session: NextcloudSession) {
-        gate.read(session.accountId.storageKey, Unit) { entries.remove(session.accountId) }
+    fun invalidate(session: NextcloudSession, producer: AccountPrivateMemoryProducer?) {
+        gate.mutate(session.accountId.storageKey, producer) { entries.remove(session.accountId) }
     }
 
     internal fun purgeRetiredAccount(accountStorageKey: String) {

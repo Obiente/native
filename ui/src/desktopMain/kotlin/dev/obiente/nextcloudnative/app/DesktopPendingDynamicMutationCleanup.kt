@@ -18,9 +18,9 @@ internal suspend fun <T> clearDesktopDynamicApiState(
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
     accountStorageKey: String? = null,
-    memoryCache: DynamicNativeMemoryCache = sharedDynamicNativeMemoryCache,
+    retireMemoryAccount: (String) -> Unit = AccountPrivateMemoryLifecycle::retireAccount,
 ) = coalescer.fenceAccount(accountId) {
-    accountStorageKey?.let(memoryCache::retireAccount)
+    accountStorageKey?.let(retireMemoryAccount)
     cache.invalidateAccount(accountId)
 }
 
