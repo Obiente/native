@@ -22,7 +22,7 @@ internal suspend fun loadAndroidAccountFileListing(
     val read: suspend () -> NextcloudFileListing = {
         readAndroidAccountFileListing(cache, NextcloudDocumentIds.accountKey(session), path, request)
     }
-    return if (accountLeaseHeld) read() else withRetainedAndroidAccountFileRead(session, resolveSession, guard, read)
+    return if (accountLeaseHeld) read() else withRetainedAndroidAccountFileRead(session, resolveSession, guard, read = read)
 }
 
 private suspend fun readAndroidAccountFileListing(

@@ -325,9 +325,17 @@ internal class AndroidAccountCredentialController(
     }
     private suspend fun clearUnregisteredIndependentCredentialSlots(suspectEncrypted: String?) =
         clearUnregisteredAndroidAccountCredentialSlots(
-            preferences, sessionCipher, accountRemovalCleanupJournal, suspectEncrypted,
-            prepareAccountRemoval, removeQueuedUploads, ::commitPreferences, ::recordAccountRemovalCleanupFailure,
-            ::clearInvalidStore)
+            preferences = preferences,
+            sessionCipher = sessionCipher,
+            cleanupJournal = accountRemovalCleanupJournal,
+            suspectEncrypted = suspectEncrypted,
+            prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
+            revalidateAccountRemoval = { session -> preflightAndroidAccountRemoval(appContext, session) },
+            removeAccountOwnedState = removeQueuedUploads,
+            commitPreferences = ::commitPreferences,
+            recordCleanupFailure = ::recordAccountRemovalCleanupFailure,
+            clearInvalidStore = ::clearInvalidStore,
+        )
 
     private suspend fun clearRecoveredInvalidStore(
         current: AndroidAccountCredentialState,

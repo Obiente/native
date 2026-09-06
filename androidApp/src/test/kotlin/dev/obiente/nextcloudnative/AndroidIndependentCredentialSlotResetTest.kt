@@ -8,6 +8,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class AndroidIndependentCredentialSlotResetTest {
     @Test
@@ -66,28 +67,39 @@ class AndroidIndependentCredentialSlotResetTest {
         val events = mutableListOf<String>()
         val presentSlots = mutableSetOf(first.preferenceKey, second.preferenceKey)
         val tombstones = mutableSetOf<String>()
+        val guard = AndroidAccountOperationGuard()
 
-        retireUnregisteredAndroidAccountCredentialSlots(
-            slots = listOf(first, second),
-            guard = AndroidAccountOperationGuard(),
-            prepareAccountRemoval = { session -> events += "prepare-${session.loginName}" },
-            commitSlotRemoval = { slot, cleanup ->
-                events += "commit-${slot.session.loginName}"
-                presentSlots -= slot.preferenceKey
-                tombstones += cleanup.accountStorageKey
-            },
-            rollbackSlotRemoval = { slot -> presentSlots += slot.preferenceKey },
-            removeAccountOwnedState = { session ->
-                assertFalse(androidAccountCredentialSlotKey(session.accountId) in presentSlots)
-                assertTrue(session.accountId.storageKey in tombstones)
-                events += "cleanup-${session.loginName}"
-            },
-            clearCleanup = { accountStorageKey -> tombstones -= accountStorageKey },
-            recordCleanupFailure = { error("cleanup must succeed") },
-        )
+        withTimeout(1_000L) {
+            retireUnregisteredAndroidAccountCredentialSlots(
+                slots = listOf(first, second),
+                guard = guard,
+                prepareAccountRemoval = { session ->
+                    guard.withAccount(NextcloudDocumentIds.accountKey(session)) {
+                        events += "prepare-${session.loginName}"
+                    }
+                },
+                revalidateAccountRemoval = { session -> events += "revalidate-${session.loginName}" },
+                commitSlotRemoval = { slot, cleanup ->
+                    events += "commit-${slot.session.loginName}"
+                    presentSlots -= slot.preferenceKey
+                    tombstones += cleanup.accountStorageKey
+                },
+                rollbackSlotRemoval = { slot -> presentSlots += slot.preferenceKey },
+                removeAccountOwnedState = { session ->
+                    assertFalse(androidAccountCredentialSlotKey(session.accountId) in presentSlots)
+                    assertTrue(session.accountId.storageKey in tombstones)
+                    events += "cleanup-${session.loginName}"
+                },
+                clearCleanup = { accountStorageKey -> tombstones -= accountStorageKey },
+                recordCleanupFailure = { error("cleanup must succeed") },
+            )
+        }
 
         assertEquals(
-            listOf("prepare-alice", "commit-alice", "cleanup-alice", "prepare-bob", "commit-bob", "cleanup-bob"),
+            listOf(
+                "prepare-alice", "revalidate-alice", "commit-alice", "cleanup-alice",
+                "prepare-bob", "revalidate-bob", "commit-bob", "cleanup-bob",
+            ),
             events,
         )
         assertTrue(presentSlots.isEmpty())

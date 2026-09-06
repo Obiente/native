@@ -863,10 +863,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     }
 
     private fun findDocument(
-        session: NextcloudSession,
-        account: ResolvedAccount,
-        path: String,
-        accountLeaseHeld: Boolean = false,
+        session: NextcloudSession, account: ResolvedAccount, path: String, accountLeaseHeld: Boolean = false,
     ): NextcloudFile =
         providerCall(
             message = "The requested Nextcloud document was not found.",
