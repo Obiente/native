@@ -425,6 +425,35 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `ambiguous bind failure reloads authoritative pairs and abandons uncommitted ownership`() {
+        val fixture = fixture()
+        fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        fixture.storage.failWriteNumber = fixture.storage.writes + 1
+        fixture.storage.persistFailedWrite = true
+        var reloads = 0
+        var pairPersisted = false
+
+        assertFailsWith<IllegalStateException> {
+            bindAndPersistFileSyncPair(
+                pairId = PAIR_ID,
+                bindReady = { fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID) },
+                persist = { pairPersisted = true },
+                load = {
+                    reloads += 1
+                    state()
+                },
+                abandonUncommittedPair = fixture.lifecycle::abandonUncommittedPair,
+            )
+        }
+
+        assertEquals(1, reloads)
+        assertFalse(pairPersisted)
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `failed pair save releases ownership only when authoritative reload excludes the pair`() {
         val fixture = fixture()
         fixture.lifecycle.acquire(ROOT_URI, "Notes")

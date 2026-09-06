@@ -126,6 +126,22 @@ internal fun recoverFailedFileSyncPairSave(
     if (commitIsAbsent) runCatching { abandonUncommittedPair(pairId) }
 }
 
+internal fun bindAndPersistFileSyncPair(
+    pairId: String,
+    bindReady: () -> Unit,
+    persist: () -> Unit,
+    load: () -> AndroidFileSyncPersistedState,
+    abandonUncommittedPair: (String) -> Unit,
+) {
+    try {
+        bindReady()
+        persist()
+    } catch (failure: Exception) {
+        recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)
+        throw failure
+    }
+}
+
 /**
  * Reads a complete atomic snapshot without waiting for active execution.
  *

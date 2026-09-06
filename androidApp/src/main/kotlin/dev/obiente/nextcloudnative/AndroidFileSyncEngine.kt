@@ -272,15 +272,20 @@ internal class AndroidFileSyncEngine(context: Context) {
             configuration = configuration,
         )
         val ownsSafGrant = localRoot.localRootId.startsWith("content://")
-        if (ownsSafGrant) capabilities.bindReady(localRoot.localRootId, pair.id)
-        try {
-            store.save(current.copy(
-                coordinator = addFileSyncPair(current.coordinator, pair),
-                localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
-            ))
-        } catch (failure: Exception) {
-            if (ownsSafGrant) recoverFailedFileSyncPairSave(pair.id, store::load, capabilities::abandonUncommittedPair)
-            throw failure
+        val updated = current.copy(
+            coordinator = addFileSyncPair(current.coordinator, pair),
+            localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
+        )
+        if (ownsSafGrant) {
+            bindAndPersistFileSyncPair(
+                pairId = pair.id,
+                bindReady = { capabilities.bindReady(localRoot.localRootId, pair.id) },
+                persist = { store.save(updated) },
+                load = store::load,
+                abandonUncommittedPair = capabilities::abandonUncommittedPair,
+            )
+        } else {
+            store.save(updated)
         }
         scheduler.schedule(pair.id, accountId, userId, pair.configuration)
         FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
