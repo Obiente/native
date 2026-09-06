@@ -423,8 +423,9 @@ internal class AndroidNextcloudServices(
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
-    private val nativeMediaPreviewCache =
-        AndroidNativeMediaPreviewCache(File(appContext.cacheDir, "native-media-previews-v1"))
+    private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
+        File(appContext.cacheDir, "native-media-previews-v1"),
+    )
     private val dynamicApiState = androidDynamicApiProcessState(File(appContext.cacheDir, "dynamic-api-v1"))
     private val dynamicApiReadCache = dynamicApiState.cache
     private val dynamicApiRequestCoalescer = dynamicApiState.coalescer
@@ -2370,13 +2371,11 @@ internal class AndroidNextcloudServices(
         require(size > 0L) { "The file range session size must be positive." }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
         val url = buildNextcloudFileUrl(session.serverUrl, userId, path)
-        val authorization = Base64.encodeToString(
-            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-            Base64.NO_WRAP,
-        )
+        val authorization = androidFileRangeAuthorization(session)
         val closed = AtomicBoolean(false)
-        val activeCalls = ConcurrentHashMap.newKeySet<okhttp3.Call>()
-        return NextcloudFileRangeSession(
+        val activity = AndroidFileRangeSessionActivity()
+        return openTrackedAndroidFileRangeSession(session, { loadSession(session.accountId) }, activity) {
+            NextcloudFileRangeSession(
             size = size,
             readBlock = { offset, length ->
                 withContext(Dispatchers.IO) {
@@ -2398,8 +2397,8 @@ internal class AndroidNextcloudServices(
                         .header("If-Match", safeEtag)
                         .build()
                     val call = noRedirectHttpClient.newCall(request)
-                    activeCalls += call
-                    if (closed.get()) {
+                    val finishCall = activity.start(call::cancel)
+                    if (finishCall == null) {
                         call.cancel()
                     }
                     try {
@@ -2446,17 +2445,17 @@ internal class AndroidNextcloudServices(
                         )
                         throw failure
                     } finally {
-                        activeCalls -= call
+                        finishCall?.invoke()
                     }
                 }
             },
             closeBlock = {
                 if (closed.compareAndSet(false, true)) {
-                    activeCalls.forEach { call -> call.cancel() }
-                    activeCalls.clear()
+                    activity.close()
                 }
             },
-        )
+            )
+        }
     }
 
     override suspend fun downloadMemoriesFileRange(

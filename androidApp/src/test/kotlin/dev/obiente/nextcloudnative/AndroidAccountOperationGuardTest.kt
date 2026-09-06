@@ -1,11 +1,13 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -361,6 +363,177 @@ class AndroidAccountOperationGuardTest {
             withAndroidAccountRemovalLease(accountIdentity, guard) { removalEntered = true }
         }
         assertTrue(removalEntered)
+    }
+
+    @Test
+    fun removalCancelsAndDrainsOpenRangeSessionBeforeCredentialCommit() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val readStarted = CompletableDeferred<Unit>()
+        val cancelObserved = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val activity = AndroidFileRangeSessionActivity()
+        val rangeSession = openTrackedAndroidFileRangeSession(
+            expectedSession = session,
+            resolveSession = { session },
+            activity = activity,
+            guard = guard,
+            coordinator = coordinator,
+            openSource = {
+                NextcloudFileRangeSession(
+                    size = 8L,
+                    readBlock = { _, length ->
+                        val finishCall = requireNotNull(activity.start { cancelObserved.complete(Unit) })
+                        try {
+                            readStarted.complete(Unit)
+                            releaseRead.await()
+                            ByteArray(length)
+                        } finally {
+                            finishCall()
+                        }
+                    },
+                    closeBlock = activity::close,
+                )
+            },
+        )
+        val read = async {
+            val finishUse = requireNotNull(rangeSession.beginUse())
+            try {
+                rangeSession.read(0L, 1)
+            } finally {
+                finishUse()
+            }
+        }
+        readStarted.await()
+        var committed = false
+        val removal = async {
+            withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) {
+                coordinator.quiesce(NextcloudDocumentIds.accountKey(session))
+                committed = true
+            }
+        }
+
+        cancelObserved.await()
+        yield()
+        assertFalse(committed)
+        releaseRead.complete(Unit)
+        read.await()
+        removal.await()
+        assertTrue(committed)
+        rangeSession.close()
+        rangeSession.close()
+    }
+
+    @Test
+    fun staleRangeSessionCannotStartAfterCredentialRetirement() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+
+        assertFailsWith<FileNotFoundException> {
+            openTrackedAndroidFileRangeSession(
+                expectedSession = session,
+                resolveSession = { session.copy(appPassword = "new-password") },
+                activity = AndroidFileRangeSessionActivity(),
+                guard = guard,
+                openSource = { error("stale range source must not open") },
+            )
+        }
+
+        withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) { }
+
+        assertFailsWith<IllegalStateException> {
+            openTrackedAndroidFileRangeSession(
+                expectedSession = session,
+                resolveSession = { session },
+                activity = AndroidFileRangeSessionActivity(),
+                guard = guard,
+                openSource = { error("synthetic range construction failure") },
+            )
+        }
+        withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) { }
+    }
+
+    @Test
+    fun sameAccountReauthenticationDrainsOldPasswordRangeBeforeCredentialCommit() = runBlocking {
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val old = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replacement = old.copy(appPassword = "new-password")
+        val activity = AndroidFileRangeSessionActivity()
+        val cancelObserved = CompletableDeferred<Unit>()
+        val finishRead = requireNotNull(activity.start { cancelObserved.complete(Unit) })
+        coordinator.register(NextcloudDocumentIds.accountKey(old), activity, activity::close)
+        var committed = false
+
+        val reauthenticate = async {
+            quiesceAndroidFileRangesBeforeCredentialReplacement(old, replacement, coordinator)
+            committed = true
+        }
+
+        cancelObserved.await()
+        assertFalse(committed)
+        finishRead()
+        reauthenticate.await()
+        assertTrue(committed)
+        assertNull(activity.start())
+    }
+
+    @Test
+    fun selectingAnotherRetainedAccountLeavesPreviousAccountRangeOpen() = runBlocking {
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val previous = NextcloudSession("https://one.example.test", "alice", "first-password")
+        val selected = NextcloudSession("https://two.example.test", "bob", "second-password")
+        val activity = AndroidFileRangeSessionActivity()
+        var cancelled = false
+        coordinator.register(NextcloudDocumentIds.accountKey(previous), activity, activity::close)
+        val finishRead = requireNotNull(activity.start { cancelled = true })
+
+        quiesceAndroidFileRangesBeforeCredentialReplacement(previous, selected, coordinator)
+
+        assertFalse(cancelled)
+        finishRead()
+        activity.close()
+    }
+
+    @Test
+    fun inactiveReauthenticationLocksOldRangeIdentityAgainstLateRegistration() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val old = NextcloudSession("https://CLOUD.example.test:443/", "alice", "old-password")
+        val replacement = NextcloudSession("https://cloud.example.test", "alice", "new-password")
+        val active = NextcloudSession("https://two.example.test", "bob", "second-password")
+        val replacementState = AndroidAccountCredentialState.Empty.upsertAndSelect(replacement)
+        val activity = AndroidFileRangeSessionActivity()
+        val cancelObserved = CompletableDeferred<Unit>()
+        val finishOldRead = requireNotNull(activity.start { cancelObserved.complete(Unit) })
+        coordinator.register(NextcloudDocumentIds.accountKey(old), activity, activity::close)
+        var current: NextcloudSession? = old
+
+        val transition = async {
+            replaceAndroidActiveStateWithAccountLeases(
+                replacement = replacementState,
+                previousSession = active,
+                replacedSession = old,
+                suspectEncrypted = null,
+                guard = guard,
+                coordinator = coordinator,
+            ) { _, _, _, _ -> current = replacement }
+        }
+        cancelObserved.await()
+        val lateOpen = async {
+            runCatching {
+                openTrackedAndroidFileRangeSession(
+                    old, { current }, AndroidFileRangeSessionActivity(), guard, coordinator,
+                ) { NextcloudFileRangeSession(8L, { _, length -> ByteArray(length) }) }
+            }
+        }
+        yield()
+        assertFalse(lateOpen.isCompleted)
+
+        finishOldRead()
+        transition.await()
+        assertTrue(lateOpen.await().exceptionOrNull() is FileNotFoundException)
+        assertEquals(replacement, current)
     }
 
     @Test

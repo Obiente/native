@@ -10,12 +10,15 @@ class NextcloudFileRangeSession(
     val size: Long,
     private val readBlock: suspend (offset: Long, length: Int) -> ByteArray,
     private val closeBlock: () -> Unit = {},
+    private val beginUseBlock: () -> (() -> Unit)? = { {} },
 ) : AutoCloseable {
     init {
         require(size > 0L) { "A file range session must have a positive size." }
     }
 
     suspend fun read(offset: Long, length: Int): ByteArray = readBlock(offset, length)
+
+    fun beginUse(): (() -> Unit)? = beginUseBlock()
 
     override fun close() = closeBlock()
 }

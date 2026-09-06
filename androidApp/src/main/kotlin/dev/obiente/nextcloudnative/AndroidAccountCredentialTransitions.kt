@@ -9,6 +9,24 @@ internal fun removeActiveAndroidAccountCredentialState(
     state: AndroidAccountCredentialState,
 ): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
 
+internal suspend fun replaceAndroidActiveStateWithAccountLeases(
+    replacement: AndroidAccountCredentialState,
+    previousSession: NextcloudSession?,
+    replacedSession: NextcloudSession?,
+    suspectEncrypted: String?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    coordinator: AndroidFileRangeSessionCoordinator = ANDROID_FILE_RANGE_SESSION_COORDINATOR,
+    replace: suspend (AndroidAccountCredentialState, NextcloudSession?, String?, NextcloudSession?) -> Unit,
+) {
+    val replacementSession = requireNotNull(replacement.activeSession)
+    val accountIdentities = listOfNotNull(previousSession, replacementSession, replacedSession)
+        .map(NextcloudDocumentIds::accountKey)
+    guard.withAccounts(accountIdentities) {
+        quiesceAndroidFileRangesBeforeCredentialReplacement(replacedSession, replacementSession, coordinator)
+        replace(replacement, previousSession, suspectEncrypted, replacedSession)
+    }
+}
+
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     active: Boolean = false,
     recovered: AndroidAccountCredentialState,
