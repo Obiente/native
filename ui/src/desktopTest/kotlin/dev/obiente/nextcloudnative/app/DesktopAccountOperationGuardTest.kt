@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -63,6 +64,10 @@ class DesktopAccountOperationGuardTest {
         val finishPersistence = CompletableDeferred<Unit>()
         val events = mutableListOf<String>()
         val session = NextcloudSession("https://cloud.example.test", "alice", "saved-password")
+        val memoryCache = DynamicNativeMemoryCache()
+        val screenKey = dynamicScreenCacheKey(session, "mail", "messages", null, emptyMap())
+        memoryCache.retireAccount(session.accountId.storageKey)
+        var activatedProducer: DynamicNativeMemoryCacheProducer? = null
         val save = async {
             guard.persistSessionAndActivateDynamicReads(
                 persist = {
@@ -70,12 +75,19 @@ class DesktopAccountOperationGuardTest {
                     finishPersistence.await()
                     session
                 },
-                activate = { events += "activate" },
+                activate = {
+                    memoryCache.activateAccount(it.accountId.storageKey)
+                    activatedProducer = memoryCache.producer(screenKey)
+                    events += "activate"
+                },
             )
         }
         persistenceEntered.await()
         val removal = async {
-            guard.serialize { events += "fence" }
+            guard.serialize {
+                memoryCache.retireAccount(session.accountId.storageKey)
+                events += "fence"
+            }
         }
         yield()
 
@@ -83,8 +95,14 @@ class DesktopAccountOperationGuardTest {
         finishPersistence.complete(Unit)
         assertEquals(session, save.await())
         removal.await()
+        memoryCache.storeScreen(
+            screenKey,
+            DynamicScreenSnapshot(emptyList(), emptyMap()),
+            requireNotNull(activatedProducer),
+        )
 
         assertEquals(listOf("activate", "fence"), events)
+        assertNull(memoryCache.screen(screenKey))
     }
 
     @Test
@@ -741,6 +759,7 @@ class DesktopAccountOperationGuardTest {
                 events += "remove-pairs"
                 error("synthetic pair cleanup failure")
             },
+            retireCommittedAccount = { events += "retire-memory" },
             recordCleanupFailure = { events += "diagnose-cleanup" },
         )
 
@@ -749,6 +768,7 @@ class DesktopAccountOperationGuardTest {
             listOf(
                 "prepare-cleanup",
                 "remove-credential",
+                "retire-memory",
                 "commit-cleanup",
                 "remove-pairs",
                 "diagnose-cleanup",
@@ -776,12 +796,13 @@ class DesktopAccountOperationGuardTest {
                     events += "remove-pairs"
                     throw CancellationException("pair cleanup owner stopped")
                 },
+                retireCommittedAccount = { events += "retire-memory" },
                 recordCleanupFailure = { events += "diagnose-cleanup" },
             )
         }
 
         assertEquals(
-            listOf("prepare-cleanup", "remove-credential", "commit-cleanup", "remove-pairs"),
+            listOf("prepare-cleanup", "remove-credential", "retire-memory", "commit-cleanup", "remove-pairs"),
             events,
         )
     }
@@ -802,11 +823,12 @@ class DesktopAccountOperationGuardTest {
                     error("synthetic post-commit credential cleanup failure")
                 },
                 removeSyncPairs = { events += "remove-pairs" },
+                retireCommittedAccount = { events += "retire-memory" },
                 recordCleanupFailure = { events += "diagnose-cleanup" },
             )
         }
 
-        assertEquals(listOf("prepare-cleanup", "remove-credential", "commit-cleanup"), events)
+        assertEquals(listOf("prepare-cleanup", "remove-credential", "retire-memory", "commit-cleanup"), events)
     }
 
     @Test
@@ -856,7 +878,7 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
-    fun futureCleanupEntryIsPreservedWithoutHidingValidTombstonesOrBlockingNewRemoval() {
+    fun futureCleanupEntryFailsActivationClosedWithoutBlockingNewRemoval() {
         val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
         val malformedAccountId = "1".repeat(64)
         val validAccountId = "2".repeat(64)
@@ -884,8 +906,10 @@ class DesktopAccountOperationGuardTest {
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals("v2|committed|$MUTATION_SCOPE", preferences.get("fsac.$validAccountId", null))
             assertTrue(journal.blocksAccountActivation(malformedAccountId))
-            assertFailsWith<IllegalStateException> { requireDesktopAccountActivationAllowed(true) }
-            assertFalse(journal.blocksAccountActivation(validAccountId))
+            assertFailsWith<IllegalStateException> {
+                requireDesktopAccountActivationAllowed(DesktopAccountActivationBlock.UnknownJournalData)
+            }
+            assertTrue(journal.blocksAccountActivation(validAccountId))
             assertEquals(1, malformedCount)
 
             journal.prepare(newAccountId)
@@ -894,7 +918,7 @@ class DesktopAccountOperationGuardTest {
                 setOf(malformedAccountId, validAccountId, newAccountId),
                 journal.pending().mapTo(linkedSetOf(), DesktopAccountSyncPairCleanup::accountId),
             )
-            assertFalse(journal.blocksAccountActivation(newAccountId))
+            assertTrue(journal.blocksAccountActivation(newAccountId))
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertFailsWith<IllegalStateException> { journal.prepare(malformedAccountId) }
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
@@ -960,6 +984,33 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun v3CleanupBlocksCanonicalEquivalentAccountActivationByStorageKey() {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        try {
+            assertEquals(original.accountId, equivalent.accountId)
+            assertNotEquals(originalProviderId, equivalentProviderId)
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+            journal.prepare(originalProviderId, MUTATION_SCOPE, original.accountId.storageKey)
+
+            assertTrue(
+                journal.blocksAccountActivation(
+                    equivalentProviderId,
+                    equivalent.accountId.storageKey,
+                ),
+            )
+            assertFailsWith<IllegalStateException> {
+                journal.requireAccountActivationAllowed(equivalent.accountRecord())
+            }
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
     fun futureCleanupBlocksCredentialLoadAndPrivateSessionPublication() {
         val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
         val session = NextcloudSession("https://cloud.example.test", "alice", "private-password")
@@ -1009,6 +1060,35 @@ class DesktopAccountOperationGuardTest {
             assertEquals(0, publications)
         } finally {
             preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun cleanupWithoutStorageKeyBlocksCanonicalEquivalentActivationUntilRecovery() {
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        assertNotEquals(originalProviderId, equivalentProviderId)
+
+        listOf("prepared", "v2|prepared|$MUTATION_SCOPE").forEach { encoded ->
+            val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+            try {
+                preferences.put("fsac.$originalProviderId", encoded)
+                val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+
+                assertTrue(
+                    journal.blocksAccountActivation(
+                        equivalentProviderId,
+                        equivalent.accountId.storageKey,
+                    ),
+                )
+                assertFailsWith<IllegalStateException> {
+                    journal.requireAccountActivationAllowed(equivalent.accountRecord())
+                }
+            } finally {
+                preferences.removeNode()
+            }
         }
     }
 
@@ -1075,101 +1155,6 @@ class DesktopAccountOperationGuardTest {
         } finally {
             preferences.removeNode()
         }
-    }
-
-    @Test
-    fun preparedCleanupFromAnAbortedRemovalPreservesExistingPairs() = runBlocking {
-        val events = mutableListOf<String>()
-
-        retryDesktopAccountSyncPairCleanup(
-            cleanup = DesktopAccountSyncPairCleanup(
-                CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Prepared,
-            ),
-            accountOwnership = { DesktopAccountOwnership.Present },
-            removeSyncPairs = { events += "remove-pairs" },
-            clearCleanup = { events += "clear-cleanup" },
-        )
-
-        assertEquals(listOf("clear-cleanup"), events)
-    }
-
-    @Test
-    fun preparedCleanupPreservesPairsAndJournalWhenCredentialOwnershipIsUnknown() = runBlocking {
-        val events = mutableListOf<String>()
-
-        retryDesktopAccountSyncPairCleanup(
-            cleanup = DesktopAccountSyncPairCleanup(
-                CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Prepared,
-            ),
-            accountOwnership = { DesktopAccountOwnership.Unknown },
-            removeSyncPairs = { events += "remove-pairs" },
-            clearCleanup = { events += "clear-cleanup" },
-        )
-
-        assertTrue(events.isEmpty())
-    }
-
-    @Test
-    fun futureCleanupFormatRemainsBlockedAndUntouchedWhenCredentialsAreAbsent() = runBlocking {
-        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
-        val futureValue = "v99|committed|future-private-state"
-        preferences.put("fsac.$CLEANUP_ACCOUNT_ID", futureValue)
-        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
-        var ownershipChecks = 0
-        val events = mutableListOf<String>()
-
-        try {
-            val cleanup = journal.pending().single()
-            assertEquals(DesktopAccountSyncPairCleanupPhase.Unknown, cleanup.phase)
-            assertTrue(journal.blocksAccountActivation(CLEANUP_ACCOUNT_ID))
-
-            retryDesktopAccountSyncPairCleanup(
-                cleanup = cleanup,
-                accountOwnership = {
-                    ownershipChecks += 1
-                    DesktopAccountOwnership.Absent
-                },
-                removeSyncPairs = { events += "remove-pairs" },
-                clearCleanup = { events += "clear-cleanup" },
-            )
-
-            assertEquals(0, ownershipChecks)
-            assertTrue(events.isEmpty())
-            assertEquals(futureValue, preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null))
-            assertTrue(journal.blocksAccountActivation(CLEANUP_ACCOUNT_ID))
-            assertTrue(journal.blocksAccountActivation("9".repeat(64), ACCOUNT_STORAGE_KEY))
-        } finally {
-            preferences.removeNode()
-        }
-    }
-
-    @Test
-    fun preparedCleanupUsesCredentialFreeOwnershipToRecover() = runBlocking {
-        val absentEvents = mutableListOf<String>()
-        retryDesktopAccountSyncPairCleanup(
-            cleanup = DesktopAccountSyncPairCleanup(
-                CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Prepared,
-            ),
-            accountOwnership = { DesktopAccountOwnership.Absent },
-            removeSyncPairs = { absentEvents += "remove-pairs" },
-            clearCleanup = { absentEvents += "clear-cleanup" },
-        )
-        assertEquals(listOf("remove-pairs", "clear-cleanup"), absentEvents)
-
-        val presentEvents = mutableListOf<String>()
-        retryDesktopAccountSyncPairCleanup(
-            cleanup = DesktopAccountSyncPairCleanup(
-                CLEANUP_ACCOUNT_ID,
-                DesktopAccountSyncPairCleanupPhase.Prepared,
-            ),
-            accountOwnership = { DesktopAccountOwnership.Present },
-            removeSyncPairs = { presentEvents += "remove-pairs" },
-            clearCleanup = { presentEvents += "clear-cleanup" },
-        )
-        assertEquals(listOf("clear-cleanup"), presentEvents)
     }
 
     private companion object {

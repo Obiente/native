@@ -186,7 +186,7 @@ internal class DynamicNativeMemoryCache(
     }
 }
 
-data class DynamicNativeMemoryCacheProducer(
+class DynamicNativeMemoryCacheProducer internal constructor(
     val accountStorageKey: String,
     val incarnation: Long,
 )

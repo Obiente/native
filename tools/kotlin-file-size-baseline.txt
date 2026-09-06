@@ -1,5 +1,5 @@
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidFileSyncEngine.kt|851
-androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4233
+androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4232
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidProjectContentClient.kt|985
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/NextcloudDocumentsProvider.kt|1003
 contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt|1224
@@ -25,7 +25,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckRelationDialogs.kt|1234
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckScreen.kt|1883
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt|1331
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12348
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12332
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1693
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1717
@@ -53,7 +53,7 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileReadCache.k
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncEngine.kt|884
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncRemoteTree.kt|883
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncStore.kt|808
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6236
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6216
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCache.kt|2759
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem.kt|1697
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1085

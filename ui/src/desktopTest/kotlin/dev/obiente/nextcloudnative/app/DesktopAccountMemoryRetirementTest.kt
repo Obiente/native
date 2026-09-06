@@ -7,7 +7,9 @@ import java.util.prefs.Preferences
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class DesktopAccountMemoryRetirementTest {
@@ -108,5 +110,104 @@ class DesktopAccountMemoryRetirementTest {
             preferences.removeNode()
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun unknownCredentialRemovalFailureKeepsMemoryActive() = runBlocking {
+        var memoryRetired = false
+
+        assertFailsWith<IllegalStateException> {
+            removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = ACCOUNT_ID,
+                prepareCleanup = { _, _, _, _ -> },
+                commitCleanup = {},
+                clearCleanup = {},
+                accountOwnership = { DesktopAccountOwnership.Unknown },
+                removeCredential = { error("credential removal outcome is unknown") },
+                removeSyncPairs = {},
+                retireCommittedAccount = { memoryRetired = true },
+                recordCleanupFailure = {},
+            )
+        }
+
+        assertFalse(memoryRetired)
+    }
+
+    @Test
+    fun journalReportsPendingCleanupSeparatelyFromUnknownData() {
+        val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
+        try {
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+            journal.prepare(ACCOUNT_ID, MUTATION_SCOPE, ACCOUNT_STORAGE_KEY)
+
+            val block = journal.accountActivationBlock(ACCOUNT_ID, ACCOUNT_STORAGE_KEY)
+            assertEquals(DesktopAccountActivationBlock.PendingCleanup, block)
+            val failure = assertFailsWith<IllegalStateException> {
+                requireDesktopAccountActivationAllowed(block)
+            }
+            assertEquals(DESKTOP_PENDING_CLEANUP_STATE_MESSAGE, failure.message)
+
+            preferences.put("fsac.$ACCOUNT_ID", "future-phase")
+            val unknownBlock = journal.accountActivationBlock(ACCOUNT_ID, ACCOUNT_STORAGE_KEY)
+            assertEquals(DesktopAccountActivationBlock.UnknownJournalData, unknownBlock)
+            val unknownFailure = assertFailsWith<IllegalStateException> {
+                requireDesktopAccountActivationAllowed(unknownBlock)
+            }
+            assertEquals(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE, unknownFailure.message)
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun v3CleanupBlocksCanonicalEquivalentAccountActivationByStorageKey() {
+        val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        try {
+            assertEquals(original.accountId, equivalent.accountId)
+            assertNotEquals(originalProviderId, equivalentProviderId)
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+            journal.prepare(originalProviderId, MUTATION_SCOPE, original.accountId.storageKey)
+
+            assertTrue(journal.blocksAccountActivation(equivalentProviderId, equivalent.accountId.storageKey))
+            assertFailsWith<IllegalStateException> {
+                journal.requireAccountActivationAllowed(equivalent.accountRecord())
+            }
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun cleanupWithoutStorageKeyBlocksCanonicalEquivalentActivationUntilRecovery() {
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        assertNotEquals(originalProviderId, equivalentProviderId)
+
+        listOf("prepared", "v2|prepared|$MUTATION_SCOPE").forEach { encoded ->
+            val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
+            try {
+                preferences.put("fsac.$originalProviderId", encoded)
+                val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+
+                assertTrue(journal.blocksAccountActivation(equivalentProviderId, equivalent.accountId.storageKey))
+                assertFailsWith<IllegalStateException> {
+                    journal.requireAccountActivationAllowed(equivalent.accountRecord())
+                }
+            } finally {
+                preferences.removeNode()
+            }
+        }
+    }
+
+    private companion object {
+        const val ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        const val ACCOUNT_STORAGE_KEY = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        const val MUTATION_SCOPE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 }

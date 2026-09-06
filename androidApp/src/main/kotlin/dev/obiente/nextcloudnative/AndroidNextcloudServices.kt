@@ -14,7 +14,6 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
-import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
 import dev.obiente.nextcloudnative.app.DeckAttachment
@@ -464,6 +463,7 @@ internal class AndroidNextcloudServices(
         diagnostics = supportDiagnostics,
         client = httpClient,
     )
+    private val dynamicAccountActivation = AndroidDynamicAccountActivation(dynamicApiRequestCoalescer)
     private val accountCredentials = AndroidAccountCredentialController(
         context = appContext,
         preferences = preferences,
@@ -482,8 +482,7 @@ internal class AndroidNextcloudServices(
         retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
         retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,
         activatePersistedAccount = { session ->
-            dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(session))
-            AccountPrivateMemoryLifecycle.activateAccount(session.accountId.storageKey)
+            dynamicAccountActivation.afterCredentialSave(session)
             dynamicDiscoveryCache.activateAccount(session.accountId.storageKey)
         },
     )
