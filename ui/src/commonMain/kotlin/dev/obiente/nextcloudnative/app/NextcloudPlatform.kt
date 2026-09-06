@@ -1347,8 +1347,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
     /**
      * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
      *
-     * Implementations use the supplied session's credentials, including for retained background
-     * work, reject redirects and arbitrary local paths, and enforce request and response limits.
+     * Use supplied-session credentials for retained work, reject redirects and arbitrary paths, and enforce limits.
      */
     suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,
