@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,9 +38,7 @@ internal fun SettingsScreen(
     var selectedSectionName by rememberSaveable(session.serverUrl, session.loginName) {
         mutableStateOf<String?>(null)
     }
-    val supportDrafts = remember(session.serverUrl, session.loginName) {
-        SupportSettingsDraftRegistry.stateFor(session)
-    }
+    val supportDrafts = rememberAccountSupportSettingsDraftState(session)
     val detailStateHolder = rememberSaveableStateHolder()
     var loggingOut by remember { mutableStateOf(false) }
     var logoutError by remember { mutableStateOf<String?>(null) }
@@ -298,6 +297,17 @@ internal fun SettingsScreen(
                 content = sectionContent,
             )
         }
+    }
+}
+
+@Composable
+internal fun rememberAccountSupportSettingsDraftState(session: NextcloudSession): SupportSettingsDraftState {
+    val accountStorageKey = remember(session.serverUrl, session.loginName) { session.accountId.storageKey }
+    val activationRevision by remember {
+        SupportSettingsDraftRegistry.activationRevision()
+    }.collectAsState()
+    return remember(accountStorageKey, activationRevision) {
+        SupportSettingsDraftRegistry.stateFor(session)
     }
 }
 

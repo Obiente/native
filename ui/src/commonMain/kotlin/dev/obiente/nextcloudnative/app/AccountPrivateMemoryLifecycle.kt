@@ -51,9 +51,14 @@ internal class AccountPrivateMemoryGate {
         purge()
     }
 
-    fun activateAccount(accountStorageKey: String, prepare: () -> Unit = {}) = lock.withLock {
+    fun activateAccount(
+        accountStorageKey: String,
+        prepare: () -> Unit = {},
+        activated: () -> Unit = {},
+    ) = lock.withLock {
         prepare()
         closedAccounts.remove(accountStorageKey)
+        activated()
     }
 
     fun <T> withLock(action: () -> T): T = lock.withLock(action)
@@ -72,7 +77,8 @@ object AccountPrivateMemoryLifecycle {
     }
 
     fun activateAccount(accountStorageKey: String) = sharedAccountPrivateMemoryGate.activateAccount(
-        accountStorageKey,
+        accountStorageKey = accountStorageKey,
         prepare = { sharedDynamicNativeMemoryCache.activateAccount(accountStorageKey) },
+        activated = SupportSettingsDraftRegistry::publishAccountActivated,
     )
 }
