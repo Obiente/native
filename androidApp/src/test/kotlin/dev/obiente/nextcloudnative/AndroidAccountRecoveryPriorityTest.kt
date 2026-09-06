@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.accountRecord
 import kotlin.test.Test
@@ -12,6 +13,17 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class AndroidAccountRecoveryPriorityTest {
+    @Test
+    fun accountRegistryAdapterPreservesTheActiveAccount() {
+        val expected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(expected.accountRecord())
+
+        assertEquals(
+            AndroidExpectedAccountState.Active,
+            registry.asAccountRetentionSnapshot().expectedAccountState(NextcloudDocumentIds.accountKey(expected)),
+        )
+    }
+
     @Test
     fun scheduleRestorationRetriesOnlyWhenTheExpectedAccountMayStillBeActive() {
         val expected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
