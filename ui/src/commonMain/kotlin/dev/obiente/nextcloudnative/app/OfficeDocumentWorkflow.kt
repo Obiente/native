@@ -232,25 +232,36 @@ internal data class CachedDocumentEditingCapabilities(
 )
 
 /** Small process-local capability cache; it never stores edit or WOPI tokens. */
-internal class NextcloudDocumentEditingCapabilitiesCache {
+internal class NextcloudDocumentEditingCapabilitiesCache(
+    private val gate: AccountPrivateMemoryGate = AccountPrivateMemoryGate(),
+) {
     private val entries = mutableMapOf<String, CachedDocumentEditingCapabilities>()
 
-    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? = entries[previewCacheDigest(session)]
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
+
+    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? =
+        gate.read(session.accountId.storageKey, null) { entries[previewCacheDigest(session)] }
 
     fun store(
         session: NextcloudSession,
         capabilities: NextcloudDocumentEditingCapabilities,
         etag: String?,
+        producer: AccountPrivateMemoryProducer?,
     ) {
-        entries[previewCacheDigest(session)] = CachedDocumentEditingCapabilities(
-            capabilities = capabilities,
-            etag = etag?.takeIf(String::isNotBlank),
-        )
+        gate.mutate(session.accountId.storageKey, producer) {
+            entries[previewCacheDigest(session)] = CachedDocumentEditingCapabilities(
+                capabilities = capabilities,
+                etag = etag?.takeIf(String::isNotBlank),
+            )
+        }
     }
 
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.remove(accountStorageKey)
     }
 }
 
-internal val sharedDocumentEditingCapabilitiesCache = NextcloudDocumentEditingCapabilitiesCache()
+internal val sharedDocumentEditingCapabilitiesCache = NextcloudDocumentEditingCapabilitiesCache(
+    gate = sharedAccountPrivateMemoryGate,
+)

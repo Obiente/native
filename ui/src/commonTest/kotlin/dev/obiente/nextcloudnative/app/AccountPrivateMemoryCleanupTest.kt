@@ -27,8 +27,8 @@ class AccountPrivateMemoryCleanupTest {
         val removedDynamicProducer = sharedDynamicNativeMemoryCache.producer(removed)
         val retainedDynamicProducer = sharedDynamicNativeMemoryCache.producer(retained)
         try {
-            PreviewMemoryCache.put(removedPreview, byteArrayOf(1))
-            PreviewMemoryCache.put(retainedPreview, byteArrayOf(2))
+            PreviewMemoryCache.put(removedPreview, byteArrayOf(1), removedProducer)
+            PreviewMemoryCache.put(retainedPreview, byteArrayOf(2), retainedProducer)
             sharedNextcloudNotesCache.storeDetail(removed, note(1L, "Removed"), removedProducer)
             sharedNextcloudNotesCache.storeDetail(retained, note(2L, "Retained"), retainedProducer)
             sharedDynamicNativeMemoryCache.storeScreen(
@@ -37,17 +37,25 @@ class AccountPrivateMemoryCleanupTest {
             sharedDynamicNativeMemoryCache.storeScreen(
                 dynamicKey(retained), dynamicSnapshot(2), retainedDynamicProducer,
             )
-            sharedDashboardStatusMemoryCache.store(removed, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L)
-            sharedDashboardStatusMemoryCache.store(retained, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L)
-            ContactsWorkspaceMemoryCache.store(removed, "removed", ContactsLoadState.Ready(emptyList(), emptyList()))
-            ContactsWorkspaceMemoryCache.store(retained, "retained", ContactsLoadState.Ready(emptyList(), emptyList()))
+            sharedDashboardStatusMemoryCache.store(
+                removed, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L, removedProducer,
+            )
+            sharedDashboardStatusMemoryCache.store(
+                retained, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L, retainedProducer,
+            )
+            ContactsWorkspaceMemoryCache.store(
+                removed, "removed", ContactsLoadState.Ready(emptyList(), emptyList()), removedProducer,
+            )
+            ContactsWorkspaceMemoryCache.store(
+                retained, "retained", ContactsLoadState.Ready(emptyList(), emptyList()), retainedProducer,
+            )
             DeckWorkspaceMemoryCache.store(removed, deckSnapshot())
             DeckWorkspaceMemoryCache.store(retained, deckSnapshot())
             sharedDocumentEditingCapabilitiesCache.store(
-                removed, NextcloudDocumentEditingCapabilities.Unavailable, null,
+                removed, NextcloudDocumentEditingCapabilities.Unavailable, null, removedProducer,
             )
             sharedDocumentEditingCapabilitiesCache.store(
-                retained, NextcloudDocumentEditingCapabilities.Unavailable, null,
+                retained, NextcloudDocumentEditingCapabilities.Unavailable, null, retainedProducer,
             )
             ActivityWorkspaceMemoryCache.store(
                 removed, "all", ActivityTimelineState(initialized = true), removedProducer,
@@ -115,6 +123,50 @@ class AccountPrivateMemoryCleanupTest {
         AccountPrivateMemoryCleanup.removeAccount(accountKey)
     }
 
+    @Test
+    fun `stale private reads cannot repopulate removed caches after reactivation`() {
+        val account = session("private-cache-race")
+        val accountKey = account.accountId.storageKey
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        val staleProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
+        val dashboard = NativeDashboardSnapshot(emptyList(), emptyMap())
+        val contacts = ContactsLoadState.Ready(emptyList(), emptyList())
+        val status = userStatusState()
+
+        AccountPrivateMemoryLifecycle.retireAccount(accountKey)
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        sharedDashboardStatusMemoryCache.store(account, dashboard, null, 1L, staleProducer)
+        ContactsWorkspaceMemoryCache.store(account, "user", contacts, staleProducer)
+        UserStatusWorkspaceMemoryCache.store(account, status, staleProducer)
+        sharedDocumentEditingCapabilitiesCache.store(
+            account, NextcloudDocumentEditingCapabilities.Unavailable, null, staleProducer,
+        )
+        PreviewMemoryCache.put(
+            PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64), byteArrayOf(1), staleProducer,
+        )
+
+        assertNull(sharedDashboardStatusMemoryCache.get(account, 1L))
+        assertNull(ContactsWorkspaceMemoryCache.get(account, "user"))
+        assertNull(UserStatusWorkspaceMemoryCache.get(account))
+        assertNull(sharedDocumentEditingCapabilitiesCache.get(account))
+        assertNull(PreviewMemoryCache.get(PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64)))
+
+        val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
+        sharedDashboardStatusMemoryCache.store(account, dashboard, null, 2L, currentProducer)
+        ContactsWorkspaceMemoryCache.store(account, "user", contacts, currentProducer)
+        UserStatusWorkspaceMemoryCache.store(account, status, currentProducer)
+        sharedDocumentEditingCapabilitiesCache.store(
+            account, NextcloudDocumentEditingCapabilities.Unavailable, null, currentProducer,
+        )
+
+        assertNotNull(sharedDashboardStatusMemoryCache.get(account, 2L))
+        assertNotNull(ContactsWorkspaceMemoryCache.get(account, "user"))
+        assertNotNull(UserStatusWorkspaceMemoryCache.get(account))
+        assertNotNull(sharedDocumentEditingCapabilitiesCache.get(account))
+        AccountPrivateMemoryCleanup.removeAccount(accountKey)
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+    }
+
     private fun session(name: String) = NextcloudSession(
         serverUrl = "https://$name.private-memory.example.test",
         loginName = name,
@@ -139,6 +191,21 @@ class AccountPrivateMemoryCleanupTest {
         records = emptyList(),
         relatedRecords = emptyMap(),
         pagination = DynamicPaginationCheckpoint(page, "page-$page"),
+    )
+
+    private fun userStatusState() = UserStatusSurfaceState.Available(
+        capabilities = NativeUserStatusCapabilities(true, true, true, true),
+        status = NativeUserStatus(
+            userId = "user",
+            presence = NativeUserPresence.Online,
+            message = "Private status",
+            icon = null,
+            messageId = null,
+            clearAtEpochSeconds = null,
+            messageIsPredefined = false,
+            statusIsUserDefined = true,
+        ),
+        predefined = emptyList(),
     )
 
     private fun deckSnapshot() = DeckWorkspaceMemorySnapshot(

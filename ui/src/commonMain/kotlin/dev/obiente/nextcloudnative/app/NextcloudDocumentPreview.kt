@@ -86,6 +86,7 @@ fun NextcloudDocumentPreview(
         )
     }
     LaunchedEffect(services, session.serverUrl, session.loginName) {
+        val cacheProducer = sharedDocumentEditingCapabilitiesCache.producer(session)
         runCatching {
             services.loadDocumentEditingCapabilities(
                 session,
@@ -100,6 +101,7 @@ fun NextcloudDocumentPreview(
                         session,
                         result.value,
                         result.responseEtag,
+                        cacheProducer,
                     )
                 }
                 NextcloudConditionalRead.NotModified -> Unit
