@@ -634,7 +634,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         kind: DurableMutationRecoveryKind,
         expectedEncoded: String,
     ): Boolean = false
-
     /** Loads an account-scoped verified app contract without any cached user records. */
     suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
