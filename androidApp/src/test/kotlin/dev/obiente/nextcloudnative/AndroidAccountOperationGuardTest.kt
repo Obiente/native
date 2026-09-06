@@ -335,33 +335,28 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
-    fun writableDescriptorLeaseRejectsAccountRemovalWithoutWaitingForClose() = runBlocking {
+    fun documentMutationLeaseBlocksAccountRemovalUntilClose() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val session = NextcloudSession("https://cloud.example.test", "alice", "password")
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
-        val descriptorLease = acquireAndroidDocumentMutationAccountLease(session, { session }, guard)
-        var removalEntered = false
-
-        val failure = try {
-            assertFailsWith<IllegalStateException> {
-                withTimeout(1_000L) {
-                    withAndroidAccountRemovalLease(accountIdentity, guard) {
-                        removalEntered = true
-                    }
-                }
-            }
-        } finally {
-            descriptorLease.close()
-        }
-
-        assertEquals(
-            "Finish or discard pending document changes before removing this account.",
-            failure.message,
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            session,
+            { session },
+            guard,
+            lifetimeGuard,
         )
-        assertFalse(removalEntered)
-        withTimeout(1_000L) {
-            withAndroidAccountRemovalLease(accountIdentity, guard) { removalEntered = true }
+        var removalEntered = false
+        val removal = async {
+            withAndroidAccountRemovalLease(accountIdentity, guard, lifetimeGuard) {
+                removalEntered = true
+            }
         }
+        yield()
+
+        assertFalse(removalEntered)
+        mutationLease.close()
+        removal.await()
         assertTrue(removalEntered)
     }
 
@@ -539,6 +534,7 @@ class AndroidAccountOperationGuardTest {
     @Test
     fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")
 
         assertFailsWith<FileNotFoundException> {
@@ -546,11 +542,16 @@ class AndroidAccountOperationGuardTest {
                 session = original,
                 loadCurrentSession = { original.copy(appPassword = "replacement-password") },
                 guard = guard,
+                lifetimeGuard = lifetimeGuard,
             )
         }
 
         withTimeout(1_000L) {
-            guard.withAccount(NextcloudDocumentIds.accountKey(original)) { }
+            withAndroidAccountRemovalLease(
+                NextcloudDocumentIds.accountKey(original),
+                guard,
+                lifetimeGuard,
+            ) { }
         }
     }
 
