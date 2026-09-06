@@ -14,6 +14,7 @@ object AccountPrivateMemoryCleanup {
         DeckWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)
         SupportSettingsDraftRegistry.purgeRetiredAccount(accountStorageKey)
+        sharedMediaTimelineDavCarryoverStore.purgeRetiredAccount(accountStorageKey)
         removeCalendarWorkspaceMemory(accountStorageKey)
         removeUserStatusWorkspaceMemory(accountStorageKey)
         removeNextcloudNativeWorkspaceMemory(accountStorageKey)

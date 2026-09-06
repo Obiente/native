@@ -22,12 +22,28 @@ class AccountPrivateMemoryCleanupTest {
         val retainedPreview = PreviewCacheKey(retainedKey, "core", 2L, "etag", 64, 64)
         val removedDynamicKey = dynamicKey(removed)
         val retainedDynamicKey = dynamicKey(retained)
-        AccountPrivateMemoryLifecycle.activateAccount(removedKey)
-        AccountPrivateMemoryLifecycle.activateAccount(retainedKey)
         val removedProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(removedKey))
         val retainedProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(retainedKey))
         val removedDynamicProducer = requireNotNull(sharedDynamicNativeMemoryCache.producer(removedDynamicKey))
         val retainedDynamicProducer = requireNotNull(sharedDynamicNativeMemoryCache.producer(retainedDynamicKey))
+        val removedCarryoverScope = "removed|photos:timeline"
+        val retainedCarryoverScope = "retained|photos:timeline"
+        val removedCarryoverGeneration = requireNotNull(
+            sharedMediaTimelineDavCarryoverStore.beginAccountGeneration(
+                removed.accountId,
+                removedCarryoverScope,
+                removedProducer,
+            ),
+        )
+        val retainedCarryoverGeneration = requireNotNull(
+            sharedMediaTimelineDavCarryoverStore.beginAccountGeneration(
+                retained.accountId,
+                retainedCarryoverScope,
+                retainedProducer,
+            ),
+        )
+        val carryoverCursor = PhotoTimelineCursor("private-memory-carryover")
+        val carryover = mediaCarryover()
         val removedPhotoState = PhotoTimelineUiStateRepository.stateFor(removed)
         val retainedPhotoState = PhotoTimelineUiStateRepository.stateFor(retained)
         removedPhotoState.initialLoadCompleted.value = true
@@ -80,6 +96,22 @@ class AccountPrivateMemoryCleanupTest {
             )
             TalkWorkspaceMemoryCache.storeMessages(removed, "removed", emptyList(), removedProducer)
             TalkWorkspaceMemoryCache.storeMessages(retained, "retained", emptyList(), retainedProducer)
+            sharedMediaTimelineDavCarryoverStore.put(
+                removed.accountId,
+                removedCarryoverScope,
+                removedCarryoverGeneration,
+                carryoverCursor,
+                carryover,
+                removedProducer,
+            )
+            sharedMediaTimelineDavCarryoverStore.put(
+                retained.accountId,
+                retainedCarryoverScope,
+                retainedCarryoverGeneration,
+                carryoverCursor,
+                carryover,
+                retainedProducer,
+            )
 
             AccountPrivateMemoryCleanup.removeAccount(removedKey)
 
@@ -112,6 +144,26 @@ class AccountPrivateMemoryCleanupTest {
             assertSame(retainedPhotoState, PhotoTimelineUiStateRepository.stateFor(retained))
 
             AccountPrivateMemoryLifecycle.activateAccount(removedKey)
+            val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(removedKey))
+            assertNull(
+                sharedMediaTimelineDavCarryoverStore.take(
+                    removed.accountId,
+                    removedCarryoverScope,
+                    removedCarryoverGeneration,
+                    carryoverCursor,
+                    currentProducer,
+                ),
+            )
+            assertEquals(
+                carryover,
+                sharedMediaTimelineDavCarryoverStore.take(
+                    retained.accountId,
+                    retainedCarryoverScope,
+                    retainedCarryoverGeneration,
+                    carryoverCursor,
+                    retainedProducer,
+                ),
+            )
             sharedDashboardStatusMemoryCache.store(
                 removed, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 2L, removedProducer,
             )
@@ -140,7 +192,6 @@ class AccountPrivateMemoryCleanupTest {
             assertNull(ActivityWorkspaceMemoryCache.get(removed, "all"))
             assertNull(TalkWorkspaceMemoryCache.rooms(removed))
 
-            val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(removedKey))
             ContactsWorkspaceMemoryCache.store(
                 removed, "removed", ContactsLoadState.Ready(emptyList(), emptyList()), currentProducer,
             )
@@ -284,6 +335,27 @@ class AccountPrivateMemoryCleanupTest {
         requestedBoard = null,
         requestedBoardId = null,
         requestedCardId = null,
+    )
+
+    private fun mediaCarryover() = MediaTimelineDavCarryover(
+        mapOf(
+            MediaTimelinePartitionKey.Mime(MediaSearchDavPartition.ImageMime) to
+                MediaTimelinePartitionCarryover(
+                    files = listOf(
+                        NextcloudFile(
+                            path = "Photos/private.jpg",
+                            name = "private.jpg",
+                            isDirectory = false,
+                            mimeType = "image/jpeg",
+                            size = 1L,
+                            lastModified = "private",
+                            fileId = 1L,
+                            hasPreview = true,
+                        ),
+                    ),
+                    remoteCursorAfterFetched = null,
+                ),
+        ),
     )
 
     private companion object {

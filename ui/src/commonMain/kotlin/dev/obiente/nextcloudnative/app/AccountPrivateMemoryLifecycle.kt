@@ -30,6 +30,19 @@ internal class AccountPrivateMemoryGate {
         if (!accepts(currentProducer)) unavailable else action()
     }
 
+    fun <T> read(
+        accountStorageKey: String,
+        producer: AccountPrivateMemoryProducer?,
+        unavailable: T,
+        action: () -> T,
+    ): T = lock.withLock {
+        val currentProducer = producer ?: return@withLock unavailable
+        require(currentProducer.accountStorageKey == accountStorageKey) {
+            "The private-memory producer belongs to another account."
+        }
+        if (!accepts(currentProducer)) unavailable else action()
+    }
+
     fun mutate(
         accountStorageKey: String,
         producer: AccountPrivateMemoryProducer?,
