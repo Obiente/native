@@ -573,19 +573,24 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     if (closeError != null) {
                         retainFailedWriteback(writeback, closeError)
                     } else {
-                        requireAndroidDocumentStagedWritebackCapacity(
-                            stagedBytes = staging.length(),
-                            availableBytes = staging.parentFile?.usableSpace ?: 0L,
-                        )
-                        webDav.replaceFileAtomically(
-                            session = session,
-                            userId = account.userId,
-                            path = writeback.remotePath,
-                            source = staging,
-                            expectedEtag = expectedEtag,
-                        )
-                        writeback.complete()
-                        notifyDocumentChanged(session, incarnation, writeback.remotePath)
+                        withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
+                            expectedSession = session,
+                            loadCurrentSession = { services.loadSession(session.accountId) },
+                        ) { currentSession ->
+                            requireAndroidDocumentStagedWritebackCapacity(
+                                stagedBytes = staging.length(),
+                                availableBytes = staging.parentFile?.usableSpace ?: 0L,
+                            )
+                            webDav.replaceFileAtomically(
+                                session = currentSession,
+                                userId = account.userId,
+                                path = writeback.remotePath,
+                                source = staging,
+                                expectedEtag = expectedEtag,
+                            )
+                            writeback.complete()
+                            notifyDocumentChanged(currentSession, incarnation, writeback.remotePath)
+                        }
                     }
                 } catch (failure: Throwable) {
                     retainFailedWriteback(writeback, failure)

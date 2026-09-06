@@ -43,16 +43,49 @@ internal fun acquireAndroidDocumentMutationAccountLease(
     session: NextcloudSession,
     loadCurrentSession: () -> NextcloudSession?,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
-    val lease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(session))
+    val accountIdentity = NextcloudDocumentIds.accountKey(session)
+    val lifetimeLease = lifetimeGuard.acquireReadBlocking(accountIdentity)
+    val operationLease = try {
+        guard.acquireBlocking(accountIdentity)
+    } catch (failure: Throwable) {
+        lifetimeLease.close()
+        throw failure
+    }
     return try {
         if (!androidDocumentWritebackSessionIsCurrent(session, loadCurrentSession())) {
             throw FileNotFoundException("The active Nextcloud account changed before the document mutation could start.")
         }
-        lease
+        AndroidAccountOperationLease {
+            try {
+                operationLease.close()
+            } finally {
+                lifetimeLease.close()
+            }
+        }
     } catch (failure: Throwable) {
-        lease.close()
+        operationLease.close()
+        lifetimeLease.close()
         throw failure
+    }
+}
+
+internal inline fun <Result> withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
+    expectedSession: NextcloudSession,
+    noinline loadCurrentSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    action: (NextcloudSession) -> Result,
+): Result {
+    val operationLease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(expectedSession))
+    return try {
+        val currentSession = loadCurrentSession()
+        if (!androidDocumentWritebackSessionIsCurrent(expectedSession, currentSession)) {
+            throw FileNotFoundException("The active Nextcloud account changed before the document writeback could commit.")
+        }
+        action(requireNotNull(currentSession))
+    } finally {
+        operationLease.close()
     }
 }
 
