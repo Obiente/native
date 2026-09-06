@@ -17,8 +17,8 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
         val removedCacheId = "1".repeat(64)
         val retainedStorageKey = "b".repeat(64)
         val retainedCacheId = "2".repeat(64)
-        val removedProducer = DynamicNativeMemoryCacheProducer(removedStorageKey, 0L)
-        val retainedProducer = DynamicNativeMemoryCacheProducer(retainedStorageKey, 0L)
+        val removedProducer = producerForTest(removedStorageKey, 0L)
+        val retainedProducer = producerForTest(retainedStorageKey, 0L)
         try {
             cache.save(removedStorageKey, removedCacheId, "deck", "removed", removedProducer)
             cache.save(retainedStorageKey, retainedCacheId, "deck", "retained", retainedProducer)
@@ -34,7 +34,7 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
 
             cache.save(
                 removedStorageKey, removedCacheId, "deck", "current",
-                DynamicNativeMemoryCacheProducer(removedStorageKey, 1L),
+                producerForTest(removedStorageKey, 1L),
             )
             assertEquals("current", cache.load(removedStorageKey, removedCacheId, "deck"))
         } finally {
@@ -49,11 +49,11 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
         try {
             cache.save(
                 "a".repeat(64), "1".repeat(64), "deck", "first",
-                DynamicNativeMemoryCacheProducer("a".repeat(64), 0L),
+                producerForTest("a".repeat(64), 0L),
             )
             cache.save(
                 "b".repeat(64), "2".repeat(64), "talk", "second",
-                DynamicNativeMemoryCacheProducer("b".repeat(64), 0L),
+                producerForTest("b".repeat(64), 0L),
             )
 
             cache.retireAccount("a".repeat(64), null)
@@ -63,4 +63,9 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
             root.deleteRecursively()
         }
     }
+
+    private fun producerForTest(accountStorageKey: String, incarnation: Long): DynamicNativeMemoryCacheProducer =
+        DynamicNativeMemoryCacheProducer::class.java
+            .getDeclaredConstructor(String::class.java, java.lang.Long.TYPE)
+            .newInstance(accountStorageKey, incarnation)
 }
