@@ -15,6 +15,8 @@ internal class AndroidLocalUploadCapabilityReadException(
 internal class AndroidLocalUploadCapabilityMalformedException(
     message: String,
     cause: Throwable? = null,
+    val cleanupPermissionIdentity: String? = null,
+    val grantPreExisting: Boolean? = null,
 ) : IllegalStateException(message, cause)
 
 internal inline fun readAndroidLocalUploadCapabilityPreference(read: () -> String?): String? = try {

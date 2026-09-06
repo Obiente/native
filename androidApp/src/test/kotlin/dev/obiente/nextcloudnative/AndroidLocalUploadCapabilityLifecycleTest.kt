@@ -372,6 +372,101 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     }
 
     @Test
+    fun `malformed persisted peer does not hide valid capabilities or block a new selection`() {
+        val snapshot = loadDurableUploadCapabilitySnapshot(
+            cachedCapabilities = emptyMap(),
+            storedSelectionIds = listOf("selection-malformed", "selection-valid"),
+            loadStoredCapability = { selectionId ->
+                if (selectionId == "selection-malformed") {
+                    throw AndroidLocalUploadCapabilityMalformedException(
+                        message = "invalid phase",
+                        cleanupPermissionIdentity = "content://synthetic/malformed",
+                        grantPreExisting = false,
+                    )
+                }
+                "content://synthetic/valid"
+            },
+        )
+
+        assertEquals(mapOf("selection-valid" to "content://synthetic/valid"), snapshot.capabilities)
+        assertEquals(setOf("selection-malformed"), snapshot.malformedCapabilities.keys)
+        assertEquals(2, snapshot.trackedCapabilityCount)
+        assertTrue(
+            durableUploadCapabilityHasCapacity(
+                trackedCapabilityCount = snapshot.trackedCapabilityCount,
+                maximumTrackedCapabilities = 64,
+            ),
+        )
+        assertEquals(
+            "content://synthetic/new",
+            (snapshot.capabilities + ("selection-new" to "content://synthetic/new"))["selection-new"],
+        )
+    }
+
+    @Test
+    fun `snapshot isolation preserves transient capability read failures`() {
+        assertFailsWith<GeneralSecurityException> {
+            loadDurableUploadCapabilitySnapshot<String>(
+                cachedCapabilities = emptyMap(),
+                storedSelectionIds = listOf("selection-unreadable"),
+                loadStoredCapability = { throw GeneralSecurityException("synthetic decryption failure") },
+            )
+        }
+    }
+
+    @Test
+    fun `startup recovery releases a malformed app owned capability before deleting its row`() {
+        val events = mutableListOf<String>()
+        val capability = MalformedDurableUploadCapability(
+            selectionId = "selection-malformed",
+            cleanupPermissionIdentity = "content://synthetic/malformed",
+            grantPreExisting = false,
+        )
+
+        val recovered = recoverMalformedDurableUploadCapability(
+            capability = capability,
+            permission = checkNotNull(capability.cleanupPermissionIdentity),
+            ownedByAnotherCapability = false,
+            releasePermission = { events += "release:$it" },
+            isPermissionAbsent = { false },
+            removeMetadata = {
+                events += "remove:$it"
+                true
+            },
+        )
+
+        assertTrue(recovered)
+        assertEquals(
+            listOf(
+                "release:content://synthetic/malformed",
+                "remove:selection-malformed",
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `malformed capability with unknown grant ownership remains durable while permission exists`() {
+        var metadataPresent = true
+
+        val recovered = recoverMalformedDurableUploadCapability(
+            capability = MalformedDurableUploadCapability(
+                selectionId = "selection-malformed",
+                cleanupPermissionIdentity = "content://synthetic/malformed",
+                grantPreExisting = null,
+            ),
+            permission = "content://synthetic/malformed",
+            ownedByAnotherCapability = false,
+            releasePermission = { error("unknown ownership must not release") },
+            isPermissionAbsent = { false },
+            removeMetadata = { true.also { metadataPresent = false } },
+        )
+
+        assertFalse(recovered)
+        assertTrue(metadataPresent)
+    }
+
+    @Test
     fun `unreadable persisted duplicate ownership fails closed`() {
         assertFailsWith<GeneralSecurityException> {
             mergeDurableUploadCapabilities(
