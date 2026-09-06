@@ -57,10 +57,7 @@ internal class AndroidLocalFileProxyCallback(
         }
     }
 
-    fun cancel() {
-        cancelled.set(true)
-        runCatching(source::close)
-    }
+    fun cancel() = onRelease()
 
     private fun requireAccess() {
         if (released.get() || cancelled.get() || !accessAllowed()) {
