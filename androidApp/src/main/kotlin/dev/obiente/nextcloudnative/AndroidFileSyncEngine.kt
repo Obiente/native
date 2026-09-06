@@ -271,12 +271,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             remoteRootPath = normalizedRemote,
             configuration = configuration,
         )
-        val ownsSafGrant = localRoot.localRootId.startsWith("content://")
         val updated = current.copy(
             coordinator = addFileSyncPair(current.coordinator, pair),
             localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
         )
-        if (ownsSafGrant) {
+        if (localRoot.localRootId.startsWith("content://")) {
             bindAndPersistFileSyncPair(
                 pairId = pair.id,
                 bindReady = { capabilities.bindReady(localRoot.localRootId, pair.id) },
@@ -360,10 +359,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     capabilities.preparePairCleanup(pairId)
                     val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
                     capabilities.persistPairRemoval(store::loadAndReconcileUploadCleanups) {
-                        store.save(current.copy(
-                            coordinator = remaining,
-                            localDisplayNames = current.localDisplayNames - pairId,
-                        ))
+                        store.save(current.copy(coordinator = remaining, localDisplayNames = current.localDisplayNames - pairId))
                     }
                 },
                 cancelSchedule = { scheduler.cancel(pairId) },
