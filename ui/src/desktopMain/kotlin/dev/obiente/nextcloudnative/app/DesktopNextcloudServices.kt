@@ -696,6 +696,10 @@ class DesktopNextcloudServices(
     supportIntakeRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val homeWorkspaceLayoutStorage = DesktopHomeWorkspaceLayoutStorage(
+        preferences.node("home-workspace"),
+        desktopHomeWorkspaceLockFile(),
+    )
     private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
     private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot ?: if (providedSupportDiagnostics == null) {
         Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
@@ -746,7 +750,9 @@ class DesktopNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
-    private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
+    private val dynamicDiscoveryCache = DesktopDynamicDiscoveryCacheCoordinator.get(
+        desktopContractCacheDirectory("discoveries-v1"),
+    )
     private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
@@ -3330,12 +3336,11 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         appId: String,
     ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
-        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
-        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
-            return@withContext null
-        }
-        runCatching { target.readText() }
-            .getOrNull()
+        dynamicDiscoveryCache.load(
+            session.accountId.storageKey,
+            desktopFileCacheAccountId(session),
+            appId,
+        )
             ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
     }
     override suspend fun saveCachedDynamicAppDiscovery(
@@ -3344,35 +3349,13 @@ class DesktopNextcloudServices(
         producer: DynamicNativeMemoryCacheProducer?,
     ) = withContext(Dispatchers.IO) {
         val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
-        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
-        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
-            "Could not create the dynamic contract cache."
-        }
-        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
-        temporary.outputStream().buffered().use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.flush()
-        }
-        try {
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
-        Unit
-    }
-
-    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
-        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
-        return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
+        dynamicDiscoveryCache.save(
+            session.accountId.storageKey,
+            desktopFileCacheAccountId(session),
+            discovery.descriptor.app.id,
+            encoded,
+            producer,
+        )
     }
 
     override suspend fun loadPendingDynamicMutation(
@@ -3493,6 +3476,7 @@ class DesktopNextcloudServices(
             },
             activate = {
                 AccountPrivateMemoryLifecycle.activateAccount(it.accountId.storageKey)
+                dynamicDiscoveryCache.activateAccount(it.accountId.storageKey)
                 dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it))
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
                 startDesktopSyncLifecycle()
@@ -3570,6 +3554,7 @@ class DesktopNextcloudServices(
                     ?: return@serialize false
                 val providerAccountId = desktopFileCacheAccountId(account)
                 val durableMutationScope = desktopDurableMutationAccountScope(account)
+                val accountPersistenceScopes = desktopAccountPersistenceScopeDigests(account)
                 requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
                     fileSyncEngine.requireAccountRemovalReady(providerAccountId)
@@ -3577,6 +3562,7 @@ class DesktopNextcloudServices(
                         accountId = providerAccountId,
                         durableMutationAccountScope = durableMutationScope,
                         accountStorageKey = account.id.storageKey,
+                        legacyAccountScopeDigest = accountPersistenceScopes.legacy,
                         prepareCleanup = accountSyncPairCleanupJournal::prepare,
                         commitCleanup = accountSyncPairCleanupJournal::commit,
                         clearCleanup = accountSyncPairCleanupJournal::clear,
@@ -3590,7 +3576,7 @@ class DesktopNextcloudServices(
                         } },
                         removeSyncPairs = ::removeDesktopAccountOwnedState,
                         retireCommittedAccount = {
-                            AccountPrivateMemoryLifecycle.retireAccount(account.id.storageKey)
+                            fenceDesktopAccountPrivateCaches(account.id.storageKey)
                         },
                     ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
@@ -3632,6 +3618,8 @@ class DesktopNextcloudServices(
             val durableMutationScope = activeSession?.let(::durableMutationAccountScope)
                 ?: activeRecord?.let(::desktopDurableMutationAccountScope)
             val accountStorageKey = activeSession?.accountId?.storageKey ?: activeRecord?.id?.storageKey
+            val accountPersistenceScopes = activeSession?.let(::accountPersistenceScopeDigests)
+                ?: activeRecord?.let(::desktopAccountPersistenceScopeDigests)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3752,7 +3740,7 @@ class DesktopNextcloudServices(
                 }
                 try {
                     clearDesktopActiveAccountBeforeSyncPairCleanup(
-                        accountId, durableMutationScope, accountStorageKey,
+                        accountId, durableMutationScope, accountStorageKey, accountPersistenceScopes?.legacy,
                         accountSyncPairCleanupJournal, ::desktopAccountOwnership,
                         {
                             commitDesktopAccountRemovalBeforeVirtualFileTeardown(
@@ -3783,7 +3771,9 @@ class DesktopNextcloudServices(
                         ::removeDesktopAccountOwnedState,
                         ::recordSupportDiagnostic,
                         retireCommittedAccount = {
-                            accountStorageKey?.let(AccountPrivateMemoryLifecycle::retireAccount)
+                            if (accountStorageKey != null && accountId != null) {
+                                fenceDesktopAccountPrivateCaches(accountStorageKey)
+                            }
                         },
                     )
                 } finally {
@@ -3850,12 +3840,16 @@ class DesktopNextcloudServices(
     }
     private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
         val accountId = cleanup.accountId
+        dynamicDiscoveryCache.retireAccount(cleanup.accountStorageKey, accountId)
         clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
         supportIntake.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
         cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::retireAccount)
+        cleanup.accountStorageKey?.let { accountStorageKey ->
+            homeWorkspaceLayoutStorage.removeAccount(accountStorageKey, cleanup.legacyAccountScopeDigest)
+        }
         externalFileHandoff.removeAccount(accountId)
         removeDesktopAccountPrivateStorage(
             accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId), preferences,
@@ -3875,6 +3869,11 @@ class DesktopNextcloudServices(
             )
             throw failure
         }
+    }
+
+    private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String) {
+        AccountPrivateMemoryLifecycle.retireAccount(accountStorageKey)
+        dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }
 
     private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership =
