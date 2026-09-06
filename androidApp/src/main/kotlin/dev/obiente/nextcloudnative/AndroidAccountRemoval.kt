@@ -44,6 +44,19 @@ internal suspend fun <Result> withPreparedAndroidAccountRemovalLease(
     }
 }
 
+internal suspend fun <Result> withUnavailableAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    preflight: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result = withPreparedAndroidAccountRemovalLease(
+    accountIdentity = accountIdentity,
+    guard = guard,
+    prepare = preflight,
+    revalidate = preflight,
+    action = action,
+)
+
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
@@ -100,6 +113,18 @@ internal class AndroidAccountRemovalLeaseCoordinator(
         guard = guard,
         prepare = { prepareAndroidAccountRemoval(appContext, session) },
         revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        action = action,
+    )
+
+    // Missing credentials cannot safely repair legacy self-provider downloads before removal.
+    // Commit first; durable owned-state cleanup remains fail-closed and can resume after re-add.
+    suspend fun <Result> withUnavailableLease(
+        session: NextcloudSession,
+        action: suspend () -> Result,
+    ): Result = withUnavailableAndroidAccountRemovalLease(
+        accountIdentity = NextcloudDocumentIds.accountKey(session),
+        guard = guard,
+        preflight = { preflightAndroidAccountRemoval(appContext, session) },
         action = action,
     )
 
