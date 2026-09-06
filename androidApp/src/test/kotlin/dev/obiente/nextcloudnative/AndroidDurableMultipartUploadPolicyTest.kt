@@ -396,7 +396,7 @@ class AndroidDurableMultipartUploadPolicyTest {
 
         val result = failQueuedDurableUploadForUnavailableAccount(
             transitionToFailed = { events += "fail" },
-            releaseSelection = {
+            releaseSelection = { _ ->
                 events += "release"
                 true
             },
