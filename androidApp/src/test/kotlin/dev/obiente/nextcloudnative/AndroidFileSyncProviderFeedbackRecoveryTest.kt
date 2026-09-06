@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import java.io.FileNotFoundException
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -206,6 +207,30 @@ class AndroidFileSyncProviderFeedbackRecoveryTest {
 
         assertTrue(reconciled)
         assertEquals(listOf("discover", "reconcile:relocated"), events)
+    }
+
+    @Test
+    fun `missing recorded directory falls through to relocated discovery`() {
+        var pending = true
+        val events = mutableListOf<String>()
+
+        val reconciled = reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
+            recordedCandidates = listOf("stale"),
+            discoverCandidates = {
+                events += "discover"
+                listOf("relocated")
+            },
+            hasPendingRecovery = { pending },
+            hasPendingForDirectory = { pending },
+            reconcileDirectory = { candidate ->
+                events += "reconcile:$candidate"
+                if (candidate == "stale") throw FileNotFoundException("The directory moved")
+                pending = false
+            },
+        )
+
+        assertTrue(reconciled)
+        assertEquals(listOf("reconcile:stale", "discover", "reconcile:relocated"), events)
     }
 
     @Test

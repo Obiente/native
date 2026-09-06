@@ -96,11 +96,19 @@ internal fun <Directory> reconcileRecordedThenDiscoveredAndroidSafDownloadDirect
             hasPendingRecovery = hasPendingRecovery,
             hasPendingForDirectory = hasPendingForDirectory,
             shouldContinue = shouldContinue,
-            reconcileDirectory = reconcileDirectory,
+            reconcileDirectory = { candidate ->
+                try {
+                    reconcileDirectory(candidate)
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (_: Exception) {
+                    // A recorded document ID may be stale after the recovery directory was moved.
+                }
+            },
         )
     ) return true
     return reconcileRecordedAndroidSafDownloadDirectories(
-        candidates = recordedCandidates + discoverCandidates(),
+        candidates = discoverCandidates(),
         hasPendingRecovery = hasPendingRecovery,
         hasPendingForDirectory = hasPendingForDirectory,
         shouldContinue = shouldContinue,
