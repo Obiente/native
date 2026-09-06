@@ -61,6 +61,28 @@ class AndroidDurableUploadCleanupPruningTest {
     }
 
     @Test
+    fun `permanently malformed terminal cleanup retires only its durable row`() {
+        val storage = MemoryStorage()
+        val store = AndroidDurableMultipartUploadStore(storage, PlaintextCipher)
+        val quarantined = fixtureJob(index = 1, cleanupPending = true)
+        val retained = fixtureJob(index = 2, cleanupPending = true)
+        store.add(quarantined)
+        store.add(retained)
+
+        val reconciled = reconcileTerminalDurableUploadCapabilityCleanup(
+            release = { onQuarantined ->
+                onQuarantined()
+                false
+            },
+            complete = { error("Malformed capability metadata must remain quarantined.") },
+            retire = { store.remove(quarantined.id) },
+        )
+
+        assertTrue(reconciled)
+        assertEquals(listOf(retained), AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list())
+    }
+
+    @Test
     fun `only queued uploads are eligible for connected upload work`() {
         val queued = fixtureJob(index = 1, state = DurableUploadState.Queued)
         val pending = fixtureJob(index = 2, cleanupPending = true)

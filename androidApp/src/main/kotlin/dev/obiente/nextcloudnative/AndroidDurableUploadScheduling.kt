@@ -43,7 +43,7 @@ internal const val ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS = 60
 
 internal data class AndroidDurableUploadSchedulingRecoveryBatch(
     val immediate: Boolean,
-    val workIdsToAwait: List<UUID>,
+    val workIdsToAwait: Map<String, UUID>,
 )
 
 internal sealed interface AndroidDurableUploadSchedulingRecoveryStep {
@@ -60,7 +60,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     private val monitor = Any()
     private val wakeups = Channel<Unit>(Channel.CONFLATED)
     private var immediatePending = false
-    private val workIdsToAwait = linkedSetOf<UUID>()
+    private val workIdsToAwait = linkedMapOf<String, UUID>()
 
     fun request() {
         synchronized(monitor) {
@@ -69,9 +69,10 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
         }
     }
 
-    fun requestAfterWorkStopsRunning(workId: UUID) {
+    fun requestAfterWorkStopsRunning(jobId: String, workId: UUID) {
+        require(jobId.isNotBlank())
         synchronized(monitor) {
-            workIdsToAwait += workId
+            workIdsToAwait[jobId] = workId
             wakeups.trySend(Unit)
         }
     }
@@ -105,7 +106,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
         }
         AndroidDurableUploadSchedulingRecoveryBatch(
             immediate = immediatePending,
-            workIdsToAwait = workIdsToAwait.toList(),
+            workIdsToAwait = workIdsToAwait.toMap(),
         ).also {
             immediatePending = false
             workIdsToAwait.clear()
@@ -120,8 +121,8 @@ internal fun requestQueuedDurableUploadSchedulingRecovery() {
     ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.request()
 }
 
-internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(workId: UUID) {
-    ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.requestAfterWorkStopsRunning(workId)
+internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(jobId: String, workId: UUID) {
+    ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.requestAfterWorkStopsRunning(jobId, workId)
 }
 
 internal suspend fun monitorQueuedDurableUploadScheduling(
@@ -136,11 +137,11 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
     require(workerFailureFollowUpDelayMillis > 0L)
     recover()
     var immediatePending = false
-    val workIdsToAwait = linkedSetOf<UUID>()
+    val workIdsToAwait = linkedMapOf<String, UUID>()
 
     fun addRequests(batch: AndroidDurableUploadSchedulingRecoveryBatch) {
         immediatePending = immediatePending || batch.immediate
-        workIdsToAwait += batch.workIdsToAwait
+        workIdsToAwait.putAll(batch.workIdsToAwait)
     }
 
     while (true) {
@@ -152,7 +153,7 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
             continue
         }
 
-        val workId = workIdsToAwait.first()
+        val (jobId, workId) = workIdsToAwait.entries.first()
         when (val step = recoverySignal.runUntilRequested { awaitWorkStopsRunning(workId) }) {
             AndroidDurableUploadSchedulingRecoveryStep.Completed -> Unit
             is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
@@ -166,7 +167,7 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
             }
         ) {
             AndroidDurableUploadSchedulingRecoveryStep.Completed -> {
-                workIdsToAwait.remove(workId)
+                workIdsToAwait.remove(jobId, workId)
                 recover()
             }
             is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> addRequests(step.batch)
