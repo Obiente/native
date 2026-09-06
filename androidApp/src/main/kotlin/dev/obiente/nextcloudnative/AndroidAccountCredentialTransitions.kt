@@ -42,9 +42,15 @@ internal fun androidAccountRemovalCleanupRetryFailure(failure: Exception) = Ille
 internal suspend fun retryAndroidAccountOwnedStateCleanup(
     session: NextcloudSession,
     pending: AndroidPendingAccountRemovalCleanup,
-    retry: suspend (NextcloudSession, String, String?, String?) -> Unit,
+    retry: suspend (NextcloudSession, String, String?, String?, String?) -> Unit,
 ) {
-    retry(session, pending.workIdentity, pending.previewCacheIdentity, pending.durableMutationIdentity)
+    retry(
+        session,
+        pending.workIdentity,
+        pending.previewCacheIdentity,
+        pending.durableMutationIdentity,
+        pending.legacyAccountScopeDigest,
+    )
 }
 
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(

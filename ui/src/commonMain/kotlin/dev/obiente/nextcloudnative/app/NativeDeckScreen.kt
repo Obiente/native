@@ -82,6 +82,7 @@ fun NativeDeckScreen(
         requestedBoardId,
         requestedCardId,
     ) {
+        val cacheProducer = DeckWorkspaceMemoryCache.producer(session)
         DeckWorkspaceMemoryCache.store(
             session,
             DeckWorkspaceMemorySnapshot(
@@ -93,6 +94,7 @@ fun NativeDeckScreen(
                 requestedBoardId = requestedBoardId,
                 requestedCardId = requestedCardId,
             ),
+            cacheProducer,
         )
     }
 

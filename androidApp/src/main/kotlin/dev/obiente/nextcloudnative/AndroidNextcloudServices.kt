@@ -2671,7 +2671,9 @@ internal class AndroidNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
             withNoBlockingAndroidDocumentWritebackSuspending(appContext, currentSession, path) {
                 val specification = textFileDavSaveRequest(text, expectedEtag)
                 val response = request(
@@ -2681,6 +2683,7 @@ internal class AndroidNextcloudServices(
                     rawBody = specification.body,
                     contentType = specification.contentType,
                     headers = specification.headers,
+                    accountMutationSerialized = accountMutationSerialized,
                 )
                 val confirmation = confirmTextFileDavSave(response.status)
                 val etag = response.etag ?: try {
@@ -2701,7 +2704,9 @@ internal class AndroidNextcloudServices(
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
-        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
             val response = request(
                 method = "PUT",
                 url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
@@ -2709,6 +2714,7 @@ internal class AndroidNextcloudServices(
                 rawBody = utf8,
                 contentType = "text/plain; charset=utf-8",
                 headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+                accountMutationSerialized = accountMutationSerialized,
             )
             if (response.status == 412) return@withAndroidAuthenticatedFileMutation SavedTextFile(null, false)
             check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
@@ -2722,13 +2728,14 @@ internal class AndroidNextcloudServices(
         withContext(Dispatchers.IO) {
             withAndroidAuthenticatedFileMutation(
                 accountMutationLeaseHeld, session, accountCredentials::loadSession,
-            ) { currentSession ->
+            ) { currentSession, accountMutationSerialized ->
                 val response = request(
                     method = "MKCOL",
                     url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
                     session = currentSession,
                     headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
                     maxResponseBytes = 64 * 1024,
+                    accountMutationSerialized = accountMutationSerialized,
                 )
                 if (response.status in setOf(405, 412)) return@withAndroidAuthenticatedFileMutation false
                 if (response.status !in 200..299) throw fileOperationException(response.status)
@@ -2741,7 +2748,9 @@ internal class AndroidNextcloudServices(
     override suspend fun executeFileMutation(session: NextcloudSession, userId: String, mutation: NextcloudFileMutation):
         NextcloudFileMutationResult = withContext(Dispatchers.IO) {
         val spec = mutation.toWebDavMutationSpec()
-        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+        withAndroidAuthenticatedFileMutation(
+            accountMutationLeaseHeld, session, accountCredentials::loadSession,
+        ) { currentSession, accountMutationSerialized ->
             withNoBlockingAndroidDocumentWritebackSuspending(
                 appContext,
                 currentSession,
@@ -2761,6 +2770,7 @@ internal class AndroidNextcloudServices(
                     session = currentSession,
                     headers = headers,
                     maxResponseBytes = 64 * 1024,
+                    accountMutationSerialized = accountMutationSerialized,
                 )
                 if (response.status !in 200..299) throw fileOperationException(response.status)
                 val accountId = NextcloudDocumentIds.accountKey(currentSession)

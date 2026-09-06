@@ -11,7 +11,7 @@ object AccountPrivateMemoryCleanup {
         sharedDynamicNativeMemoryCache.retireAccount(accountStorageKey)
         sharedDashboardStatusMemoryCache.purgeRetiredAccount(accountStorageKey)
         ContactsWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
-        DeckWorkspaceMemoryCache.removeAccount(accountStorageKey)
+        DeckWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)
         SupportSettingsDraftRegistry.removeAccount(accountStorageKey)
         removeCalendarWorkspaceMemory(accountStorageKey)

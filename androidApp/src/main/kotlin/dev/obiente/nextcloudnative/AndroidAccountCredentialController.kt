@@ -28,8 +28,8 @@ internal class AndroidAccountCredentialController(
     private val resumeQueuedUploads: suspend (String) -> Unit,
     private val prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
-    private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String, String?, String?) -> Unit,
-    private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String, String, String?, String?) -> Unit,
+    private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String, String?, String?, String?) -> Unit,
+    private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String, String, String?, String?, String?) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val handoffCleanup = AndroidExternalFileHandoffCleanup(appContext, preferences, ::commitPreferences)
@@ -200,6 +200,7 @@ internal class AndroidAccountCredentialController(
                         identity,
                         pendingCleanup.previewCacheIdentity,
                         pendingCleanup.durableMutationIdentity,
+                        pendingCleanup.legacyAccountScopeDigest,
                     )
                 },
                 persistRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
