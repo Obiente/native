@@ -1,8 +1,9 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
-import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.AccountPrivateMemoryCleanup
+import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
+import dev.obiente.nextcloudnative.app.DynamicNativeMemoryAccountLifecycle
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.removeAndroidHomeWorkspaceAccountPreferences
@@ -43,7 +44,14 @@ internal class AndroidAccountOwnedStateCleanup(
             cacheIdentity,
             clearPreviewAccount,
             listOf(
-                { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
+                {
+                    fenceAndroidDynamicApiStateForRemoval(
+                        cacheIdentity,
+                        dynamicApiState.coalescer,
+                        dynamicApiState.cache,
+                        session.accountId.storageKey,
+                    )
+                },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
                 {
@@ -83,8 +91,15 @@ internal class AndroidAccountOwnedStateCleanup(
             clearPreviewAccount,
             listOf(
                 {
-                    previewCacheIdentity?.let { identity ->
-                        fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
+                    if (previewCacheIdentity == null) {
+                        DynamicNativeMemoryAccountLifecycle.retireAccount(session.accountId.storageKey)
+                    } else {
+                        fenceAndroidDynamicApiStateForRemoval(
+                            previewCacheIdentity,
+                            dynamicApiState.coalescer,
+                            dynamicApiState.cache,
+                            session.accountId.storageKey,
+                        )
                     }
                 },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
@@ -126,8 +141,15 @@ internal class AndroidAccountOwnedStateCleanup(
             clearPreviewAccount,
             listOf(
                 {
-                    previewCacheIdentity?.let { identity ->
-                        fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
+                    if (previewCacheIdentity == null) {
+                        DynamicNativeMemoryAccountLifecycle.retireAccount(accountStorageKey)
+                    } else {
+                        fenceAndroidDynamicApiStateForRemoval(
+                            previewCacheIdentity,
+                            dynamicApiState.coalescer,
+                            dynamicApiState.cache,
+                            accountStorageKey,
+                        )
                     }
                 },
                 { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
@@ -156,20 +178,28 @@ internal class AndroidAccountOwnedStateCleanup(
             ),
         )
     }
+
 }
 
 internal suspend fun <T> clearAndroidDynamicApiState(
     accountIdentity: String,
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
-) = coalescer.fenceAccount(accountIdentity) { cache.invalidateAccount(accountIdentity) }
+    accountStorageKey: String? = null,
+    retireMemoryAccount: (String) -> Unit = DynamicNativeMemoryAccountLifecycle::retireAccount,
+) = coalescer.fenceAccount(accountIdentity) {
+    accountStorageKey?.let(retireMemoryAccount)
+    cache.invalidateAccount(accountIdentity)
+}
 
 internal suspend fun <T> fenceAndroidDynamicApiStateForRemoval(
     accountIdentity: String,
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
+    accountStorageKey: String? = null,
+    retireMemoryAccount: (String) -> Unit = DynamicNativeMemoryAccountLifecycle::retireAccount,
 ) = withContext(NonCancellable) {
-    clearAndroidDynamicApiState(accountIdentity, coalescer, cache)
+    clearAndroidDynamicApiState(accountIdentity, coalescer, cache, accountStorageKey, retireMemoryAccount)
 }
 
 internal suspend fun runAndroidAccountOwnedStateCleanups(

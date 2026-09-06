@@ -188,6 +188,9 @@ internal class DesktopAccountSyncPairCleanupJournal(
         require(legacyAccountScopeDigest == null || legacyAccountScopeDigest.matches(ACCOUNT_STORAGE_KEY_PATTERN)) {
             "The desktop legacy workspace cleanup identity is invalid."
         }
+        require(accountStorageKey == null || durableMutationAccountScope != null) {
+            "The desktop account cleanup requires its durable mutation identity."
+        }
         val key = cleanupKey(accountId)
         val current = preferences.get(key, null)?.let { decode(accountId, it) }
         check(current == null || current.phase != DesktopAccountSyncPairCleanupPhase.Unknown) {

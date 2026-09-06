@@ -131,10 +131,18 @@ class DesktopPendingDynamicMutationDirectoryTest {
                 val requestIdentity = "GET /dashboard/widgets"
                 val cache = DynamicApiResponseCache(root)
                 val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+                val memoryCache = DynamicNativeMemoryCache()
+                val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+                val screenKey = dynamicScreenCacheKey(session, "dashboard", "widgets", null, emptyMap())
                 val started = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
                 cache.store(accountId, requestIdentity, response)
+                memoryCache.storeScreen(
+                    screenKey,
+                    DynamicScreenSnapshot(emptyList(), emptyMap()),
+                    requireNotNull(memoryCache.producer(screenKey)),
+                )
                 val read = async {
                     coalescer.execute(accountId, requestIdentity, load = {
                         started.complete(Unit)
@@ -144,14 +152,57 @@ class DesktopPendingDynamicMutationDirectoryTest {
                 }
                 started.await()
 
-                clearDesktopDynamicApiState(accountId, coalescer, cache)
+                clearDesktopDynamicApiState(
+                    accountId,
+                    coalescer,
+                    cache,
+                    session.accountId.storageKey,
+                    memoryCache,
+                )
                 release.complete(Unit)
 
                 assertFailsWith<Exception> { read.await() }
                 kotlin.test.assertNull(cache.load(accountId, requestIdentity, 1_024))
+                kotlin.test.assertNull(memoryCache.screen(screenKey))
             } finally {
                 root.deleteRecursively()
             }
+        }
+    }
+
+    @Test
+    fun `desktop memory retirement survives a rejected disk cache purge`() = runBlocking {
+        val root = createTempDirectory("desktop-dynamic-cache-rejected-cleanup-").toFile()
+        try {
+            val accountId = "e".repeat(64)
+            val accountDirectory = root.resolve(accountId).apply { mkdirs() }
+            accountDirectory.resolve("unsafe-entry").mkdir()
+            val cache = DynamicApiResponseCache(root)
+            val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+            val memoryCache = DynamicNativeMemoryCache()
+            val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+            val screenKey = dynamicScreenCacheKey(session, "dashboard", "widgets", null, emptyMap())
+            val staleProducer = requireNotNull(memoryCache.producer(screenKey))
+            memoryCache.storeScreen(screenKey, DynamicScreenSnapshot(emptyList(), emptyMap()), staleProducer)
+
+            assertFailsWith<IllegalStateException> {
+                clearDesktopDynamicApiState(
+                    accountId,
+                    coalescer,
+                    cache,
+                    session.accountId.storageKey,
+                    memoryCache,
+                )
+            }
+
+            kotlin.test.assertNull(memoryCache.screen(screenKey))
+            memoryCache.storeScreen(screenKey, DynamicScreenSnapshot(emptyList(), emptyMap()), staleProducer)
+            kotlin.test.assertNull(memoryCache.screen(screenKey))
+            assertFailsWith<Exception> {
+                coalescer.execute(accountId, "GET /dashboard/widgets", load = { error("must remain fenced") })
+            }
+        } finally {
+            root.deleteRecursively()
         }
     }
 }

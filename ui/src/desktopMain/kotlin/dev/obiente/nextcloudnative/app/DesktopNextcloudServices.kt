@@ -826,7 +826,7 @@ class DesktopNextcloudServices(
         accountId: String,
         cache: DesktopVirtualRangeCache,
     ) {
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) return
         if (sessionClearing) return
         if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
         if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
@@ -1345,7 +1345,7 @@ class DesktopNextcloudServices(
         if (!isLinuxDesktop()) return
         session ?: return
         val accountId = desktopFileCacheAccountId(session)
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) return
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice
@@ -1681,7 +1681,9 @@ class DesktopNextcloudServices(
         }
         val accountId = desktopFileCacheAccountId(session)
         val cacheProducer = fileReadCache.producer(accountId)
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return unknownCleanupStateRejection()
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) {
+            return unknownCleanupStateRejection()
+        }
         runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
             return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
         }
@@ -2707,7 +2709,7 @@ class DesktopNextcloudServices(
                     ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
-                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) {
+                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) {
                     return@syncRun FileSyncCenterActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
                 }
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
@@ -3844,7 +3846,12 @@ class DesktopNextcloudServices(
     private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
         val accountId = cleanup.accountId
         dynamicDiscoveryCache.retireAccount(cleanup.accountStorageKey, accountId)
-        clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        clearDesktopDynamicApiState(
+            accountId,
+            dynamicApiRequestCoalescer,
+            dynamicApiReadCache,
+            cleanup.accountStorageKey,
+        )
         supportIntake.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
