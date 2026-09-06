@@ -45,10 +45,9 @@ internal fun acquireAndroidDocumentMutationAccountLease(
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
-    val accountIdentity = NextcloudDocumentIds.accountKey(session)
     val lifetimeLease = lifetimeGuard.acquireReadBlocking(session.documentProviderIncarnationAccountIdentity())
     val operationLease = try {
-        guard.acquireBlocking(accountIdentity)
+        guard.acquireBlocking(androidAccountOperationIdentities(session))
     } catch (failure: Throwable) {
         lifetimeLease.close()
         throw failure
@@ -77,7 +76,7 @@ internal inline fun <Result> withAndroidDocumentWritebackCommitWhileLifetimeLeas
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     action: (NextcloudSession) -> Result,
 ): Result {
-    val operationLease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(expectedSession))
+    val operationLease = guard.acquireBlocking(androidAccountOperationIdentities(expectedSession))
     return try {
         val currentSession = loadCurrentSession()
         if (!androidDocumentWritebackSessionIsCurrent(expectedSession, currentSession)) {

@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative
 
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.ParcelFileDescriptor
+import android.os.storage.StorageManager
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.File
 import java.io.FileNotFoundException
@@ -14,12 +16,11 @@ internal fun acquireAndroidDocumentProviderReadLease(
     operationGuard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
-    val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
     val lifetimeLease = lifetimeGuard.acquireReadBlocking(
         expectedSession.documentProviderIncarnationAccountIdentity(),
     )
     val operationLease = try {
-        operationGuard.acquireBlocking(accountIdentity)
+        operationGuard.acquireBlocking(androidAccountOperationIdentities(expectedSession))
     } catch (failure: Throwable) {
         lifetimeLease.close()
         throw failure
@@ -82,24 +83,59 @@ private fun checkAndroidDocumentProviderReadAccess(
 internal fun openAndroidDocumentAccountLeasedContent(
     content: File,
     accountLease: AndroidAccountOperationLease,
+    storageManager: StorageManager,
     handler: Handler,
-): ParcelFileDescriptor = try {
-    ParcelFileDescriptor.open(content, ParcelFileDescriptor.MODE_READ_ONLY, handler) { accountLease.close() }
+    signal: CancellationSignal? = null,
+    onReleased: () -> Unit = {},
+): ParcelFileDescriptor {
+    val callback = androidDocumentAccountLeasedContentCallback(content, accountLease, onReleased)
+    return try {
+        signal?.setOnCancelListener(callback::cancel)
+        if (signal?.isCanceled == true) throw android.os.OperationCanceledException()
+        storageManager.openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, handler)
+    } catch (failure: Throwable) {
+        callback.onRelease()
+        throw failure
+    }
+}
+
+internal fun androidDocumentAccountLeasedContentCallback(
+    content: File,
+    accountLease: AndroidAccountOperationLease,
+    onReleased: () -> Unit = {},
+): AndroidLocalFileProxyCallback = try {
+    AndroidLocalFileProxyCallback(
+        content = content,
+        accessAllowed = { true },
+        onReleased = {
+            try { onReleased() } finally { accountLease.close() }
+        },
+    )
 } catch (failure: Throwable) {
-    accountLease.close()
+    try {
+        onReleased()
+    } catch (cleanupFailure: Throwable) {
+        failure.addSuppressed(cleanupFailure)
+    }
+    try {
+        accountLease.close()
+    } catch (cleanupFailure: Throwable) {
+        failure.addSuppressed(cleanupFailure)
+    }
     throw failure
 }
 
 internal fun openAndroidDocumentVirtualFileLease(
     lease: AndroidVirtualFileLease,
     accountLease: AndroidAccountOperationLease,
+    storageManager: StorageManager,
     handler: Handler,
-): ParcelFileDescriptor = try {
-    ParcelFileDescriptor.open(lease.content, ParcelFileDescriptor.MODE_READ_ONLY, handler) {
-        try { lease.release() } finally { accountLease.close() }
-    }
-} catch (failure: Throwable) {
-    lease.release()
-    accountLease.close()
-    throw failure
-}
+    signal: CancellationSignal? = null,
+): ParcelFileDescriptor = openAndroidDocumentAccountLeasedContent(
+    content = lease.content,
+    accountLease = accountLease,
+    storageManager = storageManager,
+    handler = handler,
+    signal = signal,
+    onReleased = lease.release,
+)

@@ -43,13 +43,13 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
     action: suspend () -> Result,
-): Result = withAndroidAccountRemovalLease(
-    accountIdentity = NextcloudDocumentIds.accountKey(session),
-    guard = guard,
-    lifetimeGuard = lifetimeGuard,
-    lifetimeAccountIdentity = session.documentProviderIncarnationAccountIdentity(),
-    action = action,
-)
+): Result = lifetimeGuard.withRemoval(session.documentProviderIncarnationAccountIdentity()) {
+    guard.tryWithAccounts(
+        accountIds = androidAccountOperationIdentities(session),
+        unavailable = { rejectAndroidAccountRemovalForPendingDocumentChanges() },
+        action = action,
+    )
+}
 
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,

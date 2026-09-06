@@ -533,6 +533,31 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun canonicallyEquivalentCredentialTransitionCannotPassAnOlderDocumentMutation() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443///")
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            original, { original }, guard, lifetimeGuard,
+        )
+        try {
+            assertFalse(
+                guard.tryWithAccounts(
+                    androidAccountOperationIdentities(equivalent), unavailable = { false }, action = { true },
+                ),
+            )
+        } finally {
+            mutationLease.close()
+        }
+        assertTrue(
+            guard.tryWithAccounts(
+                androidAccountOperationIdentities(equivalent), unavailable = { false }, action = { true },
+            ),
+        )
+    }
+
+    @Test
     fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()

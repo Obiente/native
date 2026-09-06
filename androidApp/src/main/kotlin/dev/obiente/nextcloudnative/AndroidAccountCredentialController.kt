@@ -325,7 +325,7 @@ internal class AndroidAccountCredentialController(
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
         }?.let(::encryptState)
         clearPersistedSession(encodedReplacement, replacement, pendingCleanup = pendingCleanup)
-        notifyDocumentRootsChanged()
+        notifyAndroidDocumentRootsAfterCommittedTransition(notifyDocumentRootsChanged, ::recordAccountRemovalCleanupFailure)
     }
     private suspend fun clearInvalidStore(suspectEncrypted: String?) {
         retireAndroidDocumentProviderIncarnationsForCredentialReset(
@@ -334,7 +334,7 @@ internal class AndroidAccountCredentialController(
             clearCredentials = { clearPersistedSession(null, AndroidAccountCredentialState.Empty, suspectEncrypted) },
             recordCompletionFailure = ::recordAccountRemovalCleanupFailure,
         )
-        notifyDocumentRootsChanged()
+        notifyAndroidDocumentRootsAfterCommittedTransition(notifyDocumentRootsChanged, ::recordAccountRemovalCleanupFailure)
     }
     private suspend fun clearUnregisteredIndependentCredentialSlots(suspectEncrypted: String?) =
         clearUnregisteredAndroidAccountCredentialSlots(
@@ -391,7 +391,7 @@ internal class AndroidAccountCredentialController(
             suspectEncrypted,
             pendingCleanup,
         )
-        notifyDocumentRootsChanged()
+        notifyAndroidDocumentRootsAfterCommittedTransition(notifyDocumentRootsChanged, ::recordAccountRemovalCleanupFailure)
     }
     private suspend fun clearPersistedSession(
         encodedReplacement: String?,

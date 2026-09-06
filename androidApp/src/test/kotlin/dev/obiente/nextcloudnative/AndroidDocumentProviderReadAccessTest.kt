@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -23,6 +24,43 @@ class AndroidDocumentProviderReadAccessTest {
     private val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")
     private val originalIncarnation = incarnation("1")
     private val replacementIncarnation = incarnation("2")
+
+    @Test
+    fun cachedDocumentContentUsesARevocableProxyCallback() {
+        val content = Files.createTempFile("document-cache-proxy-", ".bin").toFile().apply {
+            writeText("cached bytes")
+        }
+        var leaseReleased = 0
+        val callback = androidDocumentAccountLeasedContentCallback(
+            content,
+            AndroidAccountOperationLease { leaseReleased += 1 },
+        )
+        try {
+            val bytes = ByteArray(6)
+            assertEquals(6, callback.onRead(0L, bytes.size, bytes))
+            assertEquals("cached", bytes.decodeToString())
+            callback.onRelease()
+            callback.onRelease()
+            assertEquals(1, leaseReleased)
+        } finally {
+            callback.onRelease()
+            content.delete()
+        }
+    }
+
+    @Test
+    fun failedCachedDocumentProxySetupReleasesItsAccountLease() {
+        var leaseReleased = 0
+
+        assertFailsWith<FileNotFoundException> {
+            androidDocumentAccountLeasedContentCallback(
+                java.io.File("missing-document-cache-${System.nanoTime()}"),
+                AndroidAccountOperationLease { leaseReleased += 1 },
+            )
+        }
+
+        assertEquals(1, leaseReleased)
+    }
 
     @Test
     fun openedFileLeaseBlocksRemovalUntilTheDescriptorReleasesIt() = runBlocking {
