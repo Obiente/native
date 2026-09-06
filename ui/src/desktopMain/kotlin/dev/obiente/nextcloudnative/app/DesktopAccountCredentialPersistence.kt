@@ -768,6 +768,9 @@ internal fun desktopFileCacheAccountId(account: NextcloudAccountRecord): String 
 internal fun desktopDurableMutationAccountScope(account: NextcloudAccountRecord): String =
     durableMutationAccountScope(account.toSession(appPassword = ""))
 
+internal fun desktopAccountPersistenceScopeDigests(account: NextcloudAccountRecord): AccountPersistenceScopeDigests =
+    accountPersistenceScopeDigests(account.toSession(appPassword = ""))
+
 internal class DesktopAccountSessionPublication(
     private val registerPrivateValue: (String) -> Unit,
     private val publishAccountIdentity: (String) -> Unit,
