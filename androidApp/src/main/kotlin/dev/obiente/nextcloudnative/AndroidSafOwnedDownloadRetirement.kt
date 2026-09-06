@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 
 internal data class AndroidSafOwnedDownloadRecoveryDirectory(
@@ -90,6 +91,7 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
     localRootId: String,
     localRecoveryPaths: Set<String>,
     shouldContinue: () -> Boolean,
+    providerRecoverySession: NextcloudSession?,
 ) {
     val appContext = context.applicationContext
     val treeUri = Uri.parse(localRootId)
@@ -99,6 +101,7 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         resolver = appContext.contentResolver,
         rootId = localRootId,
         downloadOwnershipStore = ownership,
+        providerRecoverySession = providerRecoverySession,
     )
     localTree.indexRecoveryLocationsIfNeeded(indexedOwnership, shouldContinue)
     val recordedDocumentIds = ownership.pendingTransactions().asSequence()

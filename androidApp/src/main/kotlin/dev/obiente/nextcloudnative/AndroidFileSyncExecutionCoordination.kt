@@ -6,6 +6,7 @@ import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -161,6 +162,7 @@ internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
     localRecoveryPaths: Set<String>,
+    providerRecoverySession: NextcloudSession? = null,
 ): Boolean {
     if (!localRootId.startsWith("content://")) return true
     val shouldContinue = androidFileSyncJobContinuation(currentCoroutineContext()[Job])
@@ -197,6 +199,7 @@ internal suspend fun reconcileSafDownloadsBeforePairRemoval(
                 localRootId = localRootId,
                 localRecoveryPaths = localRecoveryPaths,
                 shouldContinue = shouldContinue,
+                providerRecoverySession = providerRecoverySession,
             )
         } else {
             createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
@@ -279,6 +282,7 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
 internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
     context: Context,
     accountId: String,
+    providerRecoverySession: NextcloudSession,
 ) {
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
@@ -289,6 +293,7 @@ internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRem
                     context = context,
                     localRootId = pair.localRootId,
                     localRecoveryPaths = androidSafOwnedDownloadRecoveryPaths(pair),
+                    providerRecoverySession = providerRecoverySession,
                 )
             },
         )

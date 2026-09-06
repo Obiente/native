@@ -101,6 +101,7 @@ internal suspend fun prepareAndroidAccountRemoval(context: Context, session: Nex
     reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
         context,
         NextcloudDocumentIds.accountKey(session),
+        session,
     )
 }
 
