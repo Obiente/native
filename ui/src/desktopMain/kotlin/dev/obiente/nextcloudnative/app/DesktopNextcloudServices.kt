@@ -1274,9 +1274,10 @@ class DesktopNextcloudServices(
         userId: String,
         accountId: String,
         path: String,
+        cacheProducer: DesktopFileReadCacheProducer?,
     ) {
         synchronized(virtualFileProviderLock) {
-            runCatching { invalidateDesktopFileMetadata(accountId, path) }
+            if (!runCatching { invalidateDesktopFileMetadata(accountId, path, cacheProducer) }.getOrDefault(false)) return
             val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
             val roots = runCatching {
                 cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
@@ -1358,12 +1359,8 @@ class DesktopNextcloudServices(
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
         onRemoteMutationCommitted = { session, userId, path ->
-            refreshRetainedFoldersAfterMutation(
-                session,
-                userId,
-                desktopFileCacheAccountId(session),
-                path,
-            )
+            val (accountId, cacheProducer) = fileReadCache.producerFor(session)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         },
     )
     private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(
@@ -1683,6 +1680,7 @@ class DesktopNextcloudServices(
             )
         }
         val accountId = desktopFileCacheAccountId(session)
+        val cacheProducer = fileReadCache.producer(accountId)
         if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return unknownCleanupStateRejection()
         runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
             return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
@@ -1863,7 +1861,7 @@ class DesktopNextcloudServices(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
                 onCommitted = { path ->
                     runCatching { virtualRangeCache(accountId).invalidate(accountId, path) }
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
                     recoveredWritebackPaths += path
                 },
             )
@@ -1892,7 +1890,7 @@ class DesktopNextcloudServices(
                     },
                 ),
                 afterMutationInvalidated = { path ->
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
                 },
             )
             metadataBackendReference = metadataBackend
@@ -2381,16 +2379,13 @@ class DesktopNextcloudServices(
         if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }
 
-    private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
-        synchronized(virtualFileProviderLock) {
-            val mountedBackend = linuxVirtualMetadataBackend
-                ?.takeIf { linuxVirtualFileMountIdentity == accountId }
-            if (mountedBackend != null) {
-                mountedBackend.invalidateAfterExternalMutation(path)
-            } else {
-                fileReadCache.invalidate(accountId, path)
-            }
-        }
+    private fun invalidateDesktopFileMetadata(
+        accountId: String, path: String, cacheProducer: DesktopFileReadCacheProducer?,
+    ): Boolean = synchronized(virtualFileProviderLock) {
+        if (!fileReadCache.invalidate(accountId, path, cacheProducer)) return@synchronized false
+        linuxVirtualMetadataBackend?.takeIf { linuxVirtualFileMountIdentity == accountId }
+            ?.invalidateAfterExternalMutation(path)
+        true
     }
 
     override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
@@ -3447,12 +3442,15 @@ class DesktopNextcloudServices(
         )
     }
     override fun loadSession(): NextcloudSession? = sessionPublicationGuard.serialize {
-        val session = accountCredentials.loadActiveSession()
+        val activeId = accountCredentials.activeAccountId()
+        val record = accountCredentials.listAccounts().firstOrNull { account -> account.id == activeId }
+        val session = loadDesktopSessionAfterCleanupGate(
+            record, accountSyncPairCleanupJournal, accountCredentials::loadActiveSession,
+            accountSessionPublication::publish,
+        )
         if (session == null) {
             supportDiagnostics.setActiveAccountIdentity(null)
             supportIntake.setActiveAccountIdentity(null)
-        } else {
-            accountSessionPublication.publish(session)
         }
         session
     }
@@ -3488,9 +3486,11 @@ class DesktopNextcloudServices(
     override fun activeAccountId() = sessionPublicationGuard.serialize(accountCredentials::activeAccountId)
     override fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         sessionPublicationGuard.serialize {
-            accountCredentials.loadSession(accountId)?.also { session ->
-                accountSessionPublication.register(session)
-            }
+            val record = accountCredentials.listAccounts().firstOrNull { account -> account.id == accountId }
+            loadDesktopSessionAfterCleanupGate(
+                record, accountSyncPairCleanupJournal, { accountCredentials.loadSession(accountId) },
+                accountSessionPublication::register,
+            )
         }
     override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         withContext(Dispatchers.IO) {
@@ -3576,7 +3576,7 @@ class DesktopNextcloudServices(
                         } },
                         removeSyncPairs = ::removeDesktopAccountOwnedState,
                         retireCommittedAccount = {
-                            fenceDesktopAccountPrivateCaches(account.id.storageKey)
+                            fenceDesktopAccountPrivateCaches(account.id.storageKey, providerAccountId)
                         },
                     ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
@@ -3772,7 +3772,7 @@ class DesktopNextcloudServices(
                         ::recordSupportDiagnostic,
                         retireCommittedAccount = {
                             if (accountStorageKey != null && accountId != null) {
-                                fenceDesktopAccountPrivateCaches(accountStorageKey)
+                                fenceDesktopAccountPrivateCaches(accountStorageKey, accountId)
                             }
                         },
                     )
@@ -3810,7 +3810,9 @@ class DesktopNextcloudServices(
                 accountSyncPairCleanupJournal::clear, ::reactivateDesktopMemoryAfterAbortedRemoval,
             )
         }
-        requireDesktopAccountActivationAllowed(accountSyncPairCleanupJournal.blocksAccountActivation(accountId))
+        requireDesktopAccountActivationAllowed(
+            accountSyncPairCleanupJournal.blocksAccountActivation(accountId, accountStorageKey),
+        )
     }
     private suspend fun retryPendingAccountSyncPairCleanups() =
         retryPendingDesktopAccountSyncPairCleanups(
@@ -3872,7 +3874,8 @@ class DesktopNextcloudServices(
         }
     }
 
-    private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String) {
+    private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String, fileCacheAccountId: String) {
+        fileReadCache.retireAccount(fileCacheAccountId)
         AccountPrivateMemoryLifecycle.retireAccount(accountStorageKey)
         dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }
@@ -4221,9 +4224,9 @@ class DesktopNextcloudServices(
                 ).conflictConditionHeaders(),
             )
         }
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun refreshMetadata() {
-            runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, safePath) }
+            runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, safePath, cacheProducer) }
         }
         val response = request(
             method = "PROPPATCH",
@@ -4427,7 +4430,7 @@ class DesktopNextcloudServices(
                 response.status == 304 && cached != null ->
                     NextcloudFileContent(cached.bytes, cached.mimeType, cached.etag)
                 response.status == 404 -> {
-                    runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, path) }
+                    runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer) }
                     error("The file no longer exists on the server.")
                 }
                 response.status >= 500 && cached != null ->
@@ -4673,9 +4676,9 @@ class DesktopNextcloudServices(
         version: NextcloudFileVersion,
     ): Unit = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path, cacheProducer)
         val response = request(
             method = specification.method,
             url = session.serverUrl + specification.relativePath,
@@ -4692,12 +4695,7 @@ class DesktopNextcloudServices(
         when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
             FileVersionRestoreHttpResult.Restored -> {
                 runCatching {
-                    refreshRetainedFoldersAfterMutation(
-                        session,
-                        userId,
-                        accountId,
-                        file.path,
-                    )
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path, cacheProducer)
                 }
             }
             is FileVersionRestoreHttpResult.Rejected -> error(result.message)
@@ -4755,7 +4753,7 @@ class DesktopNextcloudServices(
         val specification = textFileDavSaveRequest(text, expectedEtag)
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -4770,7 +4768,7 @@ class DesktopNextcloudServices(
         val etag = response.etag ?:
             runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
         runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
             etag?.let {
                 fileReadCache.storeContent(
                     accountId, path,
@@ -4794,7 +4792,7 @@ class DesktopNextcloudServices(
         }
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -4809,7 +4807,7 @@ class DesktopNextcloudServices(
         check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
         check(response.status == 201) { "The server did not confirm that a new text file was created." }
         runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
             response.etag?.let {
                 fileReadCache.storeContent(
                     accountId, path,
@@ -4826,9 +4824,9 @@ class DesktopNextcloudServices(
         userId: String,
         path: String,
     ): Boolean = withContext(Dispatchers.IO) {
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         val response = request(
             method = "MKCOL",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -4842,7 +4840,7 @@ class DesktopNextcloudServices(
         if (response.status !in 200..299) throw fileOperationException(response.status)
         check(response.status == 201) { "The server did not confirm that a new folder was created." }
         runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         }
         true
     }
@@ -4861,12 +4859,12 @@ class DesktopNextcloudServices(
                 put("Overwrite", if (spec.overwrite) "T" else "F")
             }
         }
-        val accountId = desktopFileCacheAccountId(session)
+        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         fun invalidateAffectedMetadata() {
             runCatching {
-                refreshRetainedFoldersAfterMutation(session, userId, accountId, spec.sourcePath)
+                refreshRetainedFoldersAfterMutation(session, userId, accountId, spec.sourcePath, cacheProducer)
                 spec.destinationPath?.let { destination ->
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, destination)
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, destination, cacheProducer)
                 }
             }
         }
