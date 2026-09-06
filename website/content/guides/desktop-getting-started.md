@@ -54,3 +54,15 @@ Open **Settings** to choose the theme, review the connected server, configure st
 When the **Folder sync** workspace is available, the client checks the local selection before hashing local file content and stops if it contains more than 100,000 selected entries. A larger remote tree or combined change plan can reach the limit later. Automatic checks wait longer after repeated item failures and leave an item failed after five attempts. Use the pair action or the tray's **Sync now** action only after reviewing the failure. These rules apply to ordinary folder pairs, not to Windows Cloud Files placeholders in File Explorer.
 
 Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account and points to safe retry or discard actions when an earlier send still needs recovery. If reply delivery is uncertain, refresh Requests before retrying; when delivery is confirmed, clear the retained draft before writing another reply. **New report** lets you add reproduction steps and prepare a bounded diagnostic report, while **Privacy** explains what it can contain. The report includes a one-time heap, non-heap, direct-buffer, mapped-buffer, uptime, thread, garbage-collection, and event-history snapshot where the JVM exposes those counters. It excludes server URLs, account names, file names, paths, credentials, response bodies, and file contents. Draft text stays in memory until the app closes and is not saved to disk. Preparing, previewing, or exporting a report does not submit it. Review the report and choose **Send** only when you intend to submit it to support.
+
+### Windows in-app updates
+
+In builds containing the quiet-update handoff, choose **Update and restart** to
+let nati.ve download and verify the update, close, install it without another
+installer window, and reopen. Windows is not restarted automatically. A failed
+installation shows an update-failure notice when the app can reopen.
+
+Older installed versions may still open the installer for their first upgrade.
+Check the [release notes](https://github.com/Obiente/native/releases) for the
+behavior included in your build. Automatic update checks do not automatically
+download updates or close the app; you choose when to apply an update.

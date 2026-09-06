@@ -3400,7 +3400,7 @@ class DesktopNextcloudServices(
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
                         severity = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened,
+                            AppUpdateInstallResult.ConfirmationOpened, AppUpdateInstallResult.Restarting,
                             AppUpdateInstallResult.Installed,
                             -> SupportDiagnosticSeverity.Info
                             is AppUpdateInstallResult.Cancelled,
@@ -3410,13 +3410,7 @@ class DesktopNextcloudServices(
                         },
                         component = SupportDiagnosticComponent.Updates,
                         operation = "updates.install",
-                        outcome = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
-                            AppUpdateInstallResult.Installed -> "installed"
-                            is AppUpdateInstallResult.Cancelled -> "cancelled"
-                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
-                            is AppUpdateInstallResult.Rejected -> "rejected"
-                        },
+                        outcome = result.diagnosticOutcome(),
                         durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
                         message = when (result) {
                             is AppUpdateInstallResult.PermissionRequired -> result.message

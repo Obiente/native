@@ -69,7 +69,7 @@ internal fun AppUpdateAvailableBanner(
                     if (release is AndroidDirectRelease) {
                         "Review the certificate-verified APK before installing."
                     } else {
-                        "Review the downloaded package before opening the system installer."
+                        "Review the update before installing."
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
