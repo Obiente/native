@@ -26,9 +26,9 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckRelationDialo
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckScreen.kt|1883
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt|1331
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12348
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1692
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1693
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1718
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1719
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoEditing.kt|847
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowsing.kt|895
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt|860
@@ -62,4 +62,4 @@ ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.k
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystemTest.kt|2149
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProviderTest.kt|3205
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/PantryLiveContractCompatibilityTest.kt|1202
-ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2526
+ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2543
