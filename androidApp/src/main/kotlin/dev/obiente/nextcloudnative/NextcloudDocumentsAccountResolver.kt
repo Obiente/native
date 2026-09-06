@@ -69,5 +69,14 @@ internal class NextcloudDocumentsAccountResolver(
     }
 }
 
+internal fun nextcloudDocumentsAccountResolver(
+    services: AndroidNextcloudServices,
+    incarnations: AndroidDocumentProviderIncarnationStore,
+) = NextcloudDocumentsAccountResolver(
+    services::listAccounts,
+    services::loadSession,
+    incarnations::activeIncarnation,
+)
+
 private fun NextcloudAccountRecord.documentAccountKey(): String =
     NextcloudDocumentIds.accountKey(serverUrl, loginName)

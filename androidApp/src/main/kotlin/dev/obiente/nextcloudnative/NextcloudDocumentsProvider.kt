@@ -54,11 +54,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         cleanupIncompleteAndroidDocumentWritebacks(providerContext)
         services = AndroidNextcloudServices(providerContext)
         documentIncarnations = AndroidDocumentProviderIncarnationStore(providerContext)
-        accountResolver = NextcloudDocumentsAccountResolver(
-            services::listAccounts,
-            services::loadSession,
-            documentIncarnations::activeIncarnation,
-        )
+        accountResolver = nextcloudDocumentsAccountResolver(services, documentIncarnations)
         AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(providerContext))
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
