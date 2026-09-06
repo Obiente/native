@@ -880,6 +880,16 @@ class DesktopAccountCredentialPersistenceTest {
         assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
     }
 
+    @Test
+    fun phaseOnlyRollbackJournalBlocksEveryCredentialOperation() {
+        assertPhaseOnlyJournalBlocksCredentialOperations("rollback")
+    }
+
+    @Test
+    fun phaseOnlyUnknownJournalBlocksEveryCredentialOperation() {
+        assertPhaseOnlyJournalBlocksCredentialOperations("unexpected-phase")
+    }
+
     private fun persistence(
         preferences: Preferences,
         secrets: MemorySecretStore,
@@ -939,6 +949,27 @@ class DesktopAccountCredentialPersistenceTest {
         assertFalse(rendered.contains("alice"))
         assertFalse(rendered.contains("cloud.example.test"))
     }
+
+    private fun assertPhaseOnlyJournalBlocksCredentialOperations(phase: String) =
+        withStore { preferences, secrets ->
+            val session = firstSession()
+            val persistence = persistence(preferences, secrets)
+            preferences.put("accountCredentialSavePhase", phase)
+            preferences.flush()
+            val operations: List<() -> Unit> = listOf(
+                { persistence.loadActiveSession() },
+                { persistence.saveSession(session) },
+                { persistence.selectAccount(session.accountId) },
+                { persistence.removeAccount(session.accountId) },
+            )
+
+            operations.forEach { operation ->
+                assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> { operation() }
+                assertEquals(phase, preferences.get("accountCredentialSavePhase", null))
+                assertNull(preferences.get("accountCredentialSaveServer", null))
+                assertNull(preferences.get("accountCredentialSaveLogin", null))
+            }
+        }
 
     private fun firstSession() = NextcloudSession(
         serverUrl = "https://cloud.example.test",

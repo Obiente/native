@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import android.content.SharedPreferences
+import dev.obiente.nextcloudnative.app.NextcloudAccountId
+import dev.obiente.nextcloudnative.app.NextcloudSession
 
 internal class AndroidAccountRemovalCleanupJournal(
     private val preferences: SharedPreferences,
@@ -68,6 +70,35 @@ internal fun requireAndroidAccountRemovalCleanupJournalAllowsActivation(
     check(snapshot.malformedEntryCount == 0) {
         "Reset the malformed account-removal cleanup state before signing in again."
     }
+}
+
+internal inline fun <Session> restoreAndroidSessionAfterRemovalCleanup(
+    accountId: NextcloudAccountId,
+    loadSnapshot: () -> RestoredAndroidPendingAccountRemovalCleanups,
+    restoreSession: () -> Session?,
+): Session? {
+    val snapshot = try {
+        loadSnapshot()
+    } catch (_: Exception) {
+        return null
+    }
+    if (
+        snapshot.malformedEntryCount > 0 ||
+        snapshot.cleanups.any { cleanup -> cleanup.accountStorageKey == accountId.storageKey }
+    ) return null
+    return restoreSession()
+}
+
+internal suspend fun selectAndroidAccountAfterRemovalCleanup(
+    session: NextcloudSession,
+    retryPendingCleanup: suspend (NextcloudSession) -> Unit,
+    registerSessionPrivateValues: (NextcloudSession) -> Unit,
+    persistSelection: suspend () -> Unit,
+): NextcloudSession {
+    retryPendingCleanup(session)
+    registerSessionPrivateValues(session)
+    persistSelection()
+    return session
 }
 
 internal fun replaceAndroidAccountRemovalCleanup(
