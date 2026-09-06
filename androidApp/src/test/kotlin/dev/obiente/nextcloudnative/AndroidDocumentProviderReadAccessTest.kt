@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
 import java.nio.file.Files
@@ -375,6 +376,66 @@ class AndroidDocumentProviderReadAccessTest {
 
         assertTrue(selectionEntered)
         lease.close()
+    }
+
+    @Test
+    fun trackedRemoteRangeDoesNotHoldRemovalLifetimeUntilDescriptorRelease() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val activity = AndroidFileRangeSessionActivity()
+        val accountLease = readLease(guard, lifetimeGuard)
+        val range = openTrackedAndroidFileRangeSession(
+            expectedSession = original,
+            resolveSession = { original },
+            activity = activity,
+            guard = guard,
+            coordinator = coordinator,
+            openSource = {
+                NextcloudFileRangeSession(
+                    size = 8L,
+                    readBlock = { _, length -> ByteArray(length) },
+                    closeBlock = activity::close,
+                )
+            },
+        )
+        openAndroidTrackedRangeDescriptor(accountLease, {}) { Any() }
+        val finishUse = requireNotNull(range.beginUse())
+        var removalEntered = false
+
+        val removal = async(Dispatchers.Default) {
+            withAndroidAccountRemovalLease(original, guard, lifetimeGuard) {
+                coordinator.quiesce(NextcloudDocumentIds.accountKey(original))
+                removalEntered = true
+            }
+        }
+        yield()
+        assertFalse(removalEntered)
+
+        finishUse()
+        withTimeout(1_000L) { removal.await() }
+        assertTrue(removalEntered)
+        assertEquals(null, range.beginUse())
+        range.close()
+    }
+
+    @Test
+    fun failedTrackedRangeDescriptorSetupReleasesLifetimeAndSource() {
+        var leaseReleased = 0
+        var sourceReleased = 0
+        val failure = FileNotFoundException("synthetic descriptor setup failure")
+
+        val thrown = assertFailsWith<FileNotFoundException> {
+            openAndroidTrackedRangeDescriptor(
+                accountLease = AndroidAccountOperationLease { leaseReleased += 1 },
+                onOpenFailure = { sourceReleased += 1 },
+                openDescriptor = { throw failure },
+            )
+        }
+
+        assertEquals(failure, thrown)
+        assertEquals(1, leaseReleased)
+        assertEquals(1, sourceReleased)
     }
 
     @Test

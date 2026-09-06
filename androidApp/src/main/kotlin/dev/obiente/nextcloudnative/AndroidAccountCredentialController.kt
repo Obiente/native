@@ -336,11 +336,9 @@ internal class AndroidAccountCredentialController(
         )
         notifyAndroidDocumentRootsAfterCommittedTransition(notifyDocumentRootsChanged, ::recordAccountRemovalCleanupFailure)
     }
-    private suspend fun clearUnregisteredIndependentCredentialSlots(suspectEncrypted: String?) =
-        clearUnregisteredAndroidAccountCredentialSlots(
-            preferences, sessionCipher, accountRemovalCleanupJournal, suspectEncrypted,
-            prepareAccountRemoval, removeQueuedUploads, ::commitPreferences, ::recordAccountRemovalCleanupFailure,
-            ::clearInvalidStore)
+    private suspend fun clearUnregisteredIndependentCredentialSlots(suspectEncrypted: String?) = clearUnregisteredAndroidAccountCredentialSlots(
+        appContext, preferences, sessionCipher, accountRemovalCleanupJournal, suspectEncrypted,
+        prepareAccountRemoval, removeQueuedUploads, ::commitPreferences, ::recordAccountRemovalCleanupFailure, ::clearInvalidStore)
 
     private suspend fun clearRecoveredInvalidStore(
         current: AndroidAccountCredentialState,
