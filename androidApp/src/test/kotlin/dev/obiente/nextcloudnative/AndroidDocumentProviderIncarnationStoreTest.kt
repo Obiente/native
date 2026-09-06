@@ -355,7 +355,7 @@ class AndroidDocumentProviderIncarnationStoreTest {
 
     @Test
     fun malformedAndUnsupportedJournalsStayUnavailableWhileOtherAccountsRecover() {
-        listOf("broken", "2:unsupported").forEach { malformed ->
+        listOf("broken", "2:unsupported", "1:$accountIdentity:present:_w:_w").forEach { malformed ->
             val otherAccount = "b".repeat(64)
             val otherActive = AndroidDocumentProviderIncarnationRecord.Active(
                 NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
