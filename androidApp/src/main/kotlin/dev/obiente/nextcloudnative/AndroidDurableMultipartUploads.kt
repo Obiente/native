@@ -134,7 +134,6 @@ internal class AndroidDurableMultipartUploads(
                     reconcileTerminalDurableUploadCapabilityCleanup(
                         release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
                         complete = { store.completeCapabilityCleanup(job.id) },
-                        retire = { store.remove(job.id) },
                     ),
                 ) {
                     "The durable upload capability cleanup remains pending."
@@ -242,7 +241,6 @@ internal fun requestDurableUploadSchedulingRecoveryForQueuedStatuses(
 internal fun reconcileTerminalDurableUploadCapabilityCleanup(
     release: (onQuarantined: () -> Unit) -> Boolean,
     complete: () -> Unit,
-    retire: () -> Unit,
 ): Boolean {
     var quarantined = false
     if (release { quarantined = true }) {
@@ -250,7 +248,7 @@ internal fun reconcileTerminalDurableUploadCapabilityCleanup(
         return true
     }
     if (quarantined) {
-        retire()
+        complete()
         return true
     }
     return false

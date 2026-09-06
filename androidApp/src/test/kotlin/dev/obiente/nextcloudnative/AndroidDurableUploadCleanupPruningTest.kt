@@ -61,7 +61,7 @@ class AndroidDurableUploadCleanupPruningTest {
     }
 
     @Test
-    fun `permanently malformed terminal cleanup retires only its durable row`() {
+    fun `permanently malformed terminal cleanup preserves its terminal status`() {
         val storage = MemoryStorage()
         val store = AndroidDurableMultipartUploadStore(storage, PlaintextCipher)
         val quarantined = fixtureJob(index = 1, cleanupPending = true)
@@ -74,12 +74,28 @@ class AndroidDurableUploadCleanupPruningTest {
                 onQuarantined()
                 false
             },
-            complete = { error("Malformed capability metadata must remain quarantined.") },
-            retire = { store.remove(quarantined.id) },
+            complete = { store.completeCapabilityCleanup(quarantined.id) },
         )
 
         assertTrue(reconciled)
-        assertEquals(listOf(retained), AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list())
+        assertEquals(
+            listOf(quarantined.copy(capabilityCleanupPending = false), retained),
+            AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list(),
+        )
+    }
+
+    @Test
+    fun `account cleanup accepts a quarantined unknowable capability`() {
+        var quarantined = false
+
+        val ready = releaseAndroidDurableUploadCapabilityForAccountRemoval { onQuarantined ->
+            onQuarantined()
+            quarantined = true
+            false
+        }
+
+        assertTrue(ready)
+        assertTrue(quarantined)
     }
 
     @Test
