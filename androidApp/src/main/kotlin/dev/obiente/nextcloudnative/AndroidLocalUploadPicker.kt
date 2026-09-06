@@ -634,7 +634,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         val encrypted = readAndroidLocalUploadCapabilityPreference {
             preferences.getString(preferenceKey(selectionId), null)
         } ?: return null
-        val decrypted = cipher.decrypt(encrypted)
+        val decrypted = decryptAndroidLocalUploadCapability { cipher.decrypt(encrypted) }
         val payload = try {
             JSONObject(decrypted)
         } catch (failure: Exception) {

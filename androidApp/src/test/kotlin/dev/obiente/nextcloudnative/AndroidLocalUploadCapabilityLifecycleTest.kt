@@ -415,6 +415,35 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     }
 
     @Test
+    fun `corrupt ciphertext remains durable when grant ownership cannot be reconstructed`() {
+        var encryptedMetadataPresent = true
+        val snapshot = loadDurableUploadCapabilitySnapshot<String>(
+            cachedCapabilities = emptyMap(),
+            storedSelectionIds = listOf("selection-corrupt"),
+            loadStoredCapability = {
+                decryptAndroidLocalUploadCapability {
+                    throw InvalidSessionCiphertextException("authentication failed")
+                }
+            },
+        )
+        val corrupt = snapshot.malformedCapabilities.getValue("selection-corrupt")
+
+        val recovered = recoverMalformedDurableUploadCapability<String>(
+            capability = corrupt,
+            permission = null,
+            peerProtection = DurableUploadPermissionPeerProtection.Ambiguous,
+            releasePermission = { error("Unknown permission must not be released.") },
+            isPermissionAbsent = { error("Unknown permission cannot be queried.") },
+            removeMetadata = { true.also { encryptedMetadataPresent = false } },
+        )
+
+        assertEquals(null, corrupt.cleanupPermissionIdentity)
+        assertEquals(null, corrupt.grantPreExisting)
+        assertFalse(recovered)
+        assertTrue(encryptedMetadataPresent)
+    }
+
+    @Test
     fun `startup recovery releases a malformed app owned capability before deleting its row`() {
         val events = mutableListOf<String>()
         val capability = MalformedDurableUploadCapability(
