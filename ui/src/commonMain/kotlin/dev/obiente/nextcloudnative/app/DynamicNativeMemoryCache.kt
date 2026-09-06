@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -29,37 +31,51 @@ internal class DynamicNativeMemoryCache(
         val storedAt: TimeMark,
     )
 
-    private val discoveries = linkedMapOf<DynamicDiscoveryCacheKey, DynamicDescriptorDiscovery>()
+    private val lock = DynamicNativeMemoryCacheLock()
     private val discoveryMetadata = linkedMapOf<DynamicDiscoveryCacheKey, DiscoveryEntry>()
     private val discoveryFailures = linkedMapOf<DynamicDiscoveryCacheKey, TimeMark>()
     private val screens = linkedMapOf<DynamicScreenCacheKey, ScreenEntry>()
+    private val closedAccounts = mutableSetOf<String>()
+    private val accountIncarnations = mutableMapOf<String, Long>()
+
+    fun producer(session: NextcloudSession): DynamicNativeMemoryCacheProducer? =
+        producer(session.dynamicAccountKey())
+
+    fun producer(key: DynamicScreenCacheKey): DynamicNativeMemoryCacheProducer? = producer(key.account)
 
     fun discovery(
         session: NextcloudSession,
         appId: String,
         freshOnly: Boolean = false,
         allowStaleDiscovery: Boolean = true,
-    ): DynamicDescriptorDiscovery? {
+    ): DynamicDescriptorDiscovery? = lock.withLock {
         val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
-        val entry = discoveryMetadata.touch(key) ?: return null
-        if (!allowStaleDiscovery && freshOnly && entry.storedAt.elapsedNow() > discoveryFreshFor) return null
-        if (freshOnly && entry.storedAt.elapsedNow() > discoveryFreshFor) return null
-        return entry.discovery
+        if (key.account in closedAccounts) return@withLock null
+        val entry = discoveryMetadata.touch(key) ?: return@withLock null
+        if (!allowStaleDiscovery && freshOnly && entry.storedAt.elapsedNow() > discoveryFreshFor) {
+            return@withLock null
+        }
+        if (freshOnly && entry.storedAt.elapsedNow() > discoveryFreshFor) return@withLock null
+        entry.discovery
     }
 
     fun isDiscoveryFresh(
         session: NextcloudSession,
         appId: String,
-    ): Boolean = discoveryMetadata[DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)]
-        ?.takeIf { entry ->
+    ): Boolean = lock.withLock {
+        val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
+        if (key.account in closedAccounts) return@withLock false
+        discoveryMetadata[key]?.let { entry ->
             entry.discovery.versionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
                 entry.storedAt.elapsedNow() <= discoveryFreshFor
-        } != null
+        } == true
+    }
 
-    fun shouldRetryDiscovery(session: NextcloudSession, appId: String): Boolean {
+    fun shouldRetryDiscovery(session: NextcloudSession, appId: String): Boolean = lock.withLock {
         val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
-        val failure = discoveryFailures[key] ?: return true
-        return if (failure.elapsedNow() >= discoveryFailureCooldown) {
+        if (key.account in closedAccounts) return@withLock false
+        val failure = discoveryFailures[key] ?: return@withLock true
+        if (failure.elapsedNow() >= discoveryFailureCooldown) {
             discoveryFailures.remove(key)
             true
         } else {
@@ -67,52 +83,86 @@ internal class DynamicNativeMemoryCache(
         }
     }
 
-    fun storeDiscovery(session: NextcloudSession, appId: String, discovery: DynamicDescriptorDiscovery) {
+    fun storeDiscovery(
+        session: NextcloudSession,
+        appId: String,
+        discovery: DynamicDescriptorDiscovery,
+        producer: DynamicNativeMemoryCacheProducer?,
+    ) = lock.withLock {
         val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
+        val currentProducer = producer ?: return@withLock
+        require(currentProducer.accountStorageKey == key.account) { "The dynamic cache producer belongs to another account." }
+        if (!accepts(currentProducer)) return@withLock
         discoveryMetadata.remove(key)
         discoveryMetadata[key] = DiscoveryEntry(discovery = discovery, storedAt = timeSource.markNow())
-        discoveries[key] = discovery
         while (discoveryMetadata.size > MAXIMUM_DISCOVERIES) discoveryMetadata.remove(discoveryMetadata.keys.first())
-        while (discoveries.size > MAXIMUM_DISCOVERIES) discoveries.remove(discoveries.keys.first())
         discoveryFailures.remove(key)
     }
 
-    fun screen(key: DynamicScreenCacheKey, freshOnly: Boolean = false): DynamicScreenSnapshot? {
-        if (!key.cacheable) return null
-        val entry = screens.touch(key) ?: return null
-        if (freshOnly && entry.storedAt.elapsedNow() > freshFor) return null
-        return entry.snapshot
+    fun screen(key: DynamicScreenCacheKey, freshOnly: Boolean = false): DynamicScreenSnapshot? = lock.withLock {
+        if (!key.cacheable || key.account in closedAccounts) return@withLock null
+        val entry = screens.touch(key) ?: return@withLock null
+        if (freshOnly && entry.storedAt.elapsedNow() > freshFor) return@withLock null
+        entry.snapshot
     }
 
-    fun markDiscoveryFailure(session: NextcloudSession, appId: String) {
+    fun markDiscoveryFailure(
+        session: NextcloudSession,
+        appId: String,
+        producer: DynamicNativeMemoryCacheProducer?,
+    ) = lock.withLock {
         val key = DynamicDiscoveryCacheKey(session.dynamicAccountKey(), appId)
+        val currentProducer = producer ?: return@withLock
+        require(currentProducer.accountStorageKey == key.account) { "The dynamic cache producer belongs to another account." }
+        if (!accepts(currentProducer)) return@withLock
         discoveryFailures.remove(key)
         discoveryFailures[key] = timeSource.markNow()
-        while (discoveries.size > MAXIMUM_DISCOVERIES) discoveries.remove(discoveries.keys.first())
         while (discoveryFailures.size > MAXIMUM_DISCOVERIES) discoveryFailures.remove(discoveryFailures.keys.first())
     }
 
-    fun storeScreen(key: DynamicScreenCacheKey, snapshot: DynamicScreenSnapshot) {
-        if (!key.cacheable) return
+    fun storeScreen(
+        key: DynamicScreenCacheKey,
+        snapshot: DynamicScreenSnapshot,
+        producer: DynamicNativeMemoryCacheProducer?,
+    ) = lock.withLock {
+        val currentProducer = producer ?: return@withLock
+        require(currentProducer.accountStorageKey == key.account) { "The dynamic cache producer belongs to another account." }
+        if (!key.cacheable || !accepts(currentProducer)) return@withLock
         screens.remove(key)
         screens[key] = ScreenEntry(snapshot.bounded(), timeSource.markNow())
         while (screens.size > maximumScreens) screens.remove(screens.keys.first())
     }
 
-    fun invalidateScreens(session: NextcloudSession, appId: String) {
+    fun invalidateScreens(session: NextcloudSession, appId: String) = lock.withLock {
         val account = session.dynamicAccountKey()
         screens.keys.removeAll { key ->
             key.account == account && key.appId == appId
         }
     }
 
-    fun removeAccount(accountStorageKey: String) {
-        discoveries.keys.removeAll { key -> key.account == accountStorageKey }
+    /** Purges process-local state and rejects stale completions until exact credential activation. */
+    fun retireAccount(accountStorageKey: String) = lock.withLock {
+        if (closedAccounts.add(accountStorageKey)) {
+            accountIncarnations[accountStorageKey] = (accountIncarnations[accountStorageKey] ?: 0L) + 1L
+        }
         discoveryMetadata.keys.removeAll { key -> key.account == accountStorageKey }
         discoveryFailures.keys.removeAll { key -> key.account == accountStorageKey }
         screens.keys.removeAll { key -> key.account == accountStorageKey }
     }
 
+    /** Reopens an empty account cache only after the platform has persisted its exact credentials. */
+    fun activateAccount(accountStorageKey: String) = lock.withLock {
+        closedAccounts.remove(accountStorageKey)
+    }
+
+    private fun producer(accountStorageKey: String): DynamicNativeMemoryCacheProducer? = lock.withLock {
+        if (accountStorageKey in closedAccounts) return@withLock null
+        DynamicNativeMemoryCacheProducer(accountStorageKey, accountIncarnations[accountStorageKey] ?: 0L)
+    }
+
+    private fun accepts(producer: DynamicNativeMemoryCacheProducer): Boolean =
+        producer.accountStorageKey !in closedAccounts &&
+            (accountIncarnations[producer.accountStorageKey] ?: 0L) == producer.incarnation
     private fun DynamicScreenSnapshot.bounded(): DynamicScreenSnapshot {
         val boundedRelated = relatedRecords.entries
             .take(MAXIMUM_RELATED_RESOURCES)
@@ -135,6 +185,11 @@ internal class DynamicNativeMemoryCache(
         const val MAXIMUM_RECORDS_PER_RESOURCE = 500
     }
 }
+
+data class DynamicNativeMemoryCacheProducer(
+    val accountStorageKey: String,
+    val incarnation: Long,
+)
 
 internal data class DynamicDiscoveryCacheKey(
     val account: String,
@@ -289,6 +344,16 @@ internal fun NativeRecord.dynamicPaginationRecordIdentity(resourceId: String): S
     }
 }
 
+internal fun shouldShowDynamicRecordFallbackDetail(
+    viewResourceId: String,
+    viewComponent: NativeComponent,
+    selectedRecord: NativeRecord?,
+    selectedRecordResourceId: String?,
+): Boolean = selectedRecord != null &&
+    viewComponent != NativeComponent.detail &&
+    viewComponent != NativeComponent.form &&
+    selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
+
 private val DYNAMIC_SCREEN_SCOPE_RELATIONS = setOf(
     "accountid",
     "mailaccountid",
@@ -306,3 +371,10 @@ private val DYNAMIC_SCREEN_SCOPE_RELATIONS = setOf(
 private fun NextcloudSession.dynamicAccountKey(): String = accountId.storageKey
 
 internal val sharedDynamicNativeMemoryCache = DynamicNativeMemoryCache()
+
+/** Compatibility entry point for callers that previously retired only the dynamic UI cache. */
+object DynamicNativeMemoryAccountLifecycle {
+    fun retireAccount(accountStorageKey: String) = AccountPrivateMemoryLifecycle.retireAccount(accountStorageKey)
+
+    fun activateAccount(accountStorageKey: String) = AccountPrivateMemoryLifecycle.activateAccount(accountStorageKey)
+}

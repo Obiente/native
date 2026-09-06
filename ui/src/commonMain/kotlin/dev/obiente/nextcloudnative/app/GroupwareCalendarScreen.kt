@@ -272,8 +272,8 @@ fun NativeGroupwareCalendarScreen(
         selectedDate = today
         selectedEventId = null
     }
-
     suspend fun reload() {
+        val cacheProducer = CalendarWorkspaceMemoryCache.producer(session)
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
             runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
@@ -318,7 +318,7 @@ fun NativeGroupwareCalendarScreen(
             CalendarLoadState.Ready(month, queryWindow, calendars, events)
         }.onSuccess { loaded ->
             state = loaded
-            CalendarWorkspaceMemoryCache.store(session, userId, loaded)
+            CalendarWorkspaceMemoryCache.store(session, userId, loaded, cacheProducer)
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
                     if (!clearMutationRecovery()) return@onSuccess

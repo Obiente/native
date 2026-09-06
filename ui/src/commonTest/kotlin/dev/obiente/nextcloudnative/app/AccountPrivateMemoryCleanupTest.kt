@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -15,17 +16,27 @@ class AccountPrivateMemoryCleanupTest {
         val retained = session("retained")
         val removedKey = removed.accountId.storageKey
         val retainedKey = retained.accountId.storageKey
+        AccountPrivateMemoryLifecycle.activateAccount(removedKey)
+        AccountPrivateMemoryLifecycle.activateAccount(retainedKey)
         val removedPreview = PreviewCacheKey(removedKey, "core", 1L, "etag", 64, 64)
         val retainedPreview = PreviewCacheKey(retainedKey, "core", 2L, "etag", 64, 64)
         val removedPhotoState = PhotoTimelineUiStateRepository.stateFor(removed)
         val retainedPhotoState = PhotoTimelineUiStateRepository.stateFor(retained)
+        val removedProducer = sharedAccountPrivateMemoryGate.producer(removedKey)
+        val retainedProducer = sharedAccountPrivateMemoryGate.producer(retainedKey)
+        val removedDynamicProducer = sharedDynamicNativeMemoryCache.producer(removed)
+        val retainedDynamicProducer = sharedDynamicNativeMemoryCache.producer(retained)
         try {
             PreviewMemoryCache.put(removedPreview, byteArrayOf(1))
             PreviewMemoryCache.put(retainedPreview, byteArrayOf(2))
-            sharedNextcloudNotesCache.storeDetail(removed, note(1L, "Removed"))
-            sharedNextcloudNotesCache.storeDetail(retained, note(2L, "Retained"))
-            sharedDynamicNativeMemoryCache.storeScreen(dynamicKey(removed), dynamicSnapshot(1))
-            sharedDynamicNativeMemoryCache.storeScreen(dynamicKey(retained), dynamicSnapshot(2))
+            sharedNextcloudNotesCache.storeDetail(removed, note(1L, "Removed"), removedProducer)
+            sharedNextcloudNotesCache.storeDetail(retained, note(2L, "Retained"), retainedProducer)
+            sharedDynamicNativeMemoryCache.storeScreen(
+                dynamicKey(removed), dynamicSnapshot(1), removedDynamicProducer,
+            )
+            sharedDynamicNativeMemoryCache.storeScreen(
+                dynamicKey(retained), dynamicSnapshot(2), retainedDynamicProducer,
+            )
             sharedDashboardStatusMemoryCache.store(removed, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L)
             sharedDashboardStatusMemoryCache.store(retained, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L)
             ContactsWorkspaceMemoryCache.store(removed, "removed", ContactsLoadState.Ready(emptyList(), emptyList()))
@@ -38,10 +49,18 @@ class AccountPrivateMemoryCleanupTest {
             sharedDocumentEditingCapabilitiesCache.store(
                 retained, NextcloudDocumentEditingCapabilities.Unavailable, null,
             )
-            ActivityWorkspaceMemoryCache.store(removed, "all", ActivityTimelineState(initialized = true))
-            ActivityWorkspaceMemoryCache.store(retained, "all", ActivityTimelineState(initialized = true))
-            TalkWorkspaceMemoryCache.storeRooms(removed, listOf(TalkRoom("removed", "Removed", null, 0)))
-            TalkWorkspaceMemoryCache.storeRooms(retained, listOf(TalkRoom("retained", "Retained", null, 0)))
+            ActivityWorkspaceMemoryCache.store(
+                removed, "all", ActivityTimelineState(initialized = true), removedProducer,
+            )
+            ActivityWorkspaceMemoryCache.store(
+                retained, "all", ActivityTimelineState(initialized = true), retainedProducer,
+            )
+            TalkWorkspaceMemoryCache.storeRooms(
+                removed, listOf(TalkRoom("removed", "Removed", null, 0)), removedProducer,
+            )
+            TalkWorkspaceMemoryCache.storeRooms(
+                retained, listOf(TalkRoom("retained", "Retained", null, 0)), retainedProducer,
+            )
 
             AccountPrivateMemoryCleanup.removeAccount(removedKey)
 
@@ -68,7 +87,32 @@ class AccountPrivateMemoryCleanupTest {
         } finally {
             AccountPrivateMemoryCleanup.removeAccount(removedKey)
             AccountPrivateMemoryCleanup.removeAccount(retainedKey)
+            AccountPrivateMemoryLifecycle.activateAccount(removedKey)
+            AccountPrivateMemoryLifecycle.activateAccount(retainedKey)
         }
+    }
+
+    @Test
+    fun `stale workspace completion cannot repopulate a reactivated account`() {
+        val account = session("crossing")
+        val accountKey = account.accountId.storageKey
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        val staleProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
+
+        AccountPrivateMemoryLifecycle.retireAccount(accountKey)
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        TalkWorkspaceMemoryCache.storeRooms(
+            account, listOf(TalkRoom("stale", "Stale", null, 0)), staleProducer,
+        )
+
+        assertNull(TalkWorkspaceMemoryCache.rooms(account))
+        val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
+        TalkWorkspaceMemoryCache.storeRooms(
+            account, listOf(TalkRoom("current", "Current", null, 0)), currentProducer,
+        )
+        assertEquals("current", TalkWorkspaceMemoryCache.rooms(account)?.single()?.token)
+        assertFalse(staleProducer == currentProducer)
+        AccountPrivateMemoryCleanup.removeAccount(accountKey)
     }
 
     private fun session(name: String) = NextcloudSession(

@@ -282,14 +282,19 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     accountOwnership: (String) -> DesktopAccountOwnership,
     removeCredential: suspend () -> Boolean,
     removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
+    retireCommittedAccount: () -> Unit = {},
     recordCleanupFailure: suspend (Exception) -> Unit,
 ): Boolean {
     prepareCleanup(accountId, durableMutationAccountScope, accountStorageKey)
     val removed = try {
         removeCredential()
     } catch (failure: Throwable) {
+        val ownership = runCatching { accountOwnership(accountId) }
+        if (ownership.getOrNull() == DesktopAccountOwnership.Absent) {
+            runCatching(retireCommittedAccount).exceptionOrNull()?.let(failure::addSuppressed)
+        }
         runCatching {
-            when (accountOwnership(accountId)) {
+            when (ownership.getOrThrow()) {
                 DesktopAccountOwnership.Present -> clearCleanup(accountId)
                 DesktopAccountOwnership.Absent -> commitCleanup(accountId)
                 DesktopAccountOwnership.Unknown -> Unit
@@ -301,6 +306,7 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
         clearCleanup(accountId)
         return false
     }
+    retireCommittedAccount()
     try {
         commitCleanup(accountId)
         removeSyncPairs(
@@ -329,6 +335,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
     commitRemoval: suspend () -> Unit,
     removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+    retireCommittedAccount: () -> Unit = {},
 ) {
     if (accountId == null) {
         commitRemoval()
@@ -347,6 +354,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
             true
         },
         removeSyncPairs = removeSyncPairs,
+        retireCommittedAccount = retireCommittedAccount,
         recordCleanupFailure = { failure ->
             recordDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
         },
@@ -407,11 +415,13 @@ internal suspend fun retryDesktopAccountSyncPairCleanup(
     accountOwnership: (String) -> DesktopAccountOwnership,
     removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     clearCleanup: suspend (String) -> Unit,
+    reactivatePresentAccount: (DesktopAccountSyncPairCleanup) -> Unit = {},
 ) {
     if (cleanup.phase != DesktopAccountSyncPairCleanupPhase.Committed) {
         when (accountOwnership(cleanup.accountId)) {
             DesktopAccountOwnership.Present -> {
                 clearCleanup(cleanup.accountId)
+                reactivatePresentAccount(cleanup)
                 return
             }
             DesktopAccountOwnership.Unknown -> return
@@ -427,6 +437,7 @@ internal suspend fun retryPendingDesktopAccountSyncPairCleanups(
     accountOwnership: (String) -> DesktopAccountOwnership,
     removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     recordCleanupFailure: (String, Exception) -> Unit,
+    reactivatePresentAccount: (DesktopAccountSyncPairCleanup) -> Unit = {},
 ) {
     cleanupJournal.pending().forEach { cleanup ->
         try {
@@ -435,6 +446,7 @@ internal suspend fun retryPendingDesktopAccountSyncPairCleanups(
                 accountOwnership,
                 removeSyncPairs,
                 cleanupJournal::clear,
+                reactivatePresentAccount,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
