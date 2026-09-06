@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class DesktopAccountMemoryRetirementTest {
@@ -155,6 +156,52 @@ class DesktopAccountMemoryRetirementTest {
             assertEquals(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE, unknownFailure.message)
         } finally {
             preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun v3CleanupBlocksCanonicalEquivalentAccountActivationByStorageKey() {
+        val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        try {
+            assertEquals(original.accountId, equivalent.accountId)
+            assertNotEquals(originalProviderId, equivalentProviderId)
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+            journal.prepare(originalProviderId, MUTATION_SCOPE, original.accountId.storageKey)
+
+            assertTrue(journal.blocksAccountActivation(equivalentProviderId, equivalent.accountId.storageKey))
+            assertFailsWith<IllegalStateException> {
+                journal.requireAccountActivationAllowed(equivalent.accountRecord())
+            }
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun cleanupWithoutStorageKeyBlocksCanonicalEquivalentActivationUntilRecovery() {
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val originalProviderId = desktopFileCacheAccountId(original)
+        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
+        assertNotEquals(originalProviderId, equivalentProviderId)
+
+        listOf("prepared", "v2|prepared|$MUTATION_SCOPE").forEach { encoded ->
+            val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
+            try {
+                preferences.put("fsac.$originalProviderId", encoded)
+                val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+
+                assertTrue(journal.blocksAccountActivation(equivalentProviderId, equivalent.accountId.storageKey))
+                assertFailsWith<IllegalStateException> {
+                    journal.requireAccountActivationAllowed(equivalent.accountRecord())
+                }
+            } finally {
+                preferences.removeNode()
+            }
         }
     }
 
