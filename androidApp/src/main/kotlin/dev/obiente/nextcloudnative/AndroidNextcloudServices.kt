@@ -924,11 +924,12 @@ internal class AndroidNextcloudServices(
                 val encrypted = preferences.getString(KEY_SESSION, null)
                     ?: return@restorePersistedSession null
                 runCatching {
-                    val json = JSONObject(sessionCipher.decrypt(encrypted))
-                    NextcloudSession(
-                        serverUrl = json.getString("serverUrl"),
-                        loginName = json.getString("loginName"),
-                        appPassword = json.getString("appPassword"),
+                    restoreAndroidPersistedSession(
+                        encoded = sessionCipher.decrypt(encrypted),
+                        persistMigrated = { migrated ->
+                            preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).commit()
+                        },
+                        recordDiagnostic = ::recordSupportDiagnostic,
                     )
                 }.onFailure { failure ->
                     recordSupportDiagnostic(
@@ -960,12 +961,7 @@ internal class AndroidNextcloudServices(
         registerSessionPrivateValues(session)
         val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
         val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
-        val json = JSONObject()
-            .put("serverUrl", session.serverUrl)
-            .put("loginName", session.loginName)
-            .put("appPassword", session.appPassword)
-            .toString()
-        val encrypted = runCatching { sessionCipher.encrypt(json) }
+        val encrypted = runCatching { sessionCipher.encrypt(encodeAndroidPersistedSession(session)) }
             .onFailure { failure ->
                 recordSupportDiagnostic(
                     SupportDiagnosticEventDraft(

@@ -46,12 +46,6 @@ data class PlatformCapabilityStatus(
     val state: PlatformCapabilityState,
 )
 
-data class NextcloudSession(
-    val serverUrl: String,
-    val loginName: String,
-    val appPassword: String,
-)
-
 data class LoginChallenge(
     val enteredServerUrl: String,
     val pollEndpoint: String,

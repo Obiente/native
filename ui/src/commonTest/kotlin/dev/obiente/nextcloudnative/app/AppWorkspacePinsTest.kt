@@ -1,12 +1,33 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 class AppWorkspacePinsTest {
+    @Test
+    fun `coordinator defers preference reads until its effect runs`() = runBlocking {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val coordinator = AppWorkspacePinsLoadCoordinator {
+            repository.loadWithProvenance("a".repeat(64), "b".repeat(64))
+        }
+
+        assertEquals(0, storage.readCount)
+        assertEquals(null, coordinator.state)
+
+        val loaded = coordinator.load(Dispatchers.Unconfined)
+
+        assertEquals(defaultAppWorkspacePinnedIds(), loaded.appIds)
+        assertEquals(2, storage.readCount)
+        assertEquals(loaded, coordinator.state)
+    }
+
     @Test
     fun `pins persist per opaque account scope and preserve order`() {
         val storage = MemoryStorage()
@@ -19,6 +40,72 @@ class AppWorkspacePinsTest {
         assertEquals(listOf("deck", "spreed", "files"), repository.load(firstAccount))
         assertEquals(defaultAppWorkspacePinnedIds(), repository.load(secondAccount))
         assertTrue(storage.values.keys.single().endsWith(firstAccount))
+    }
+
+    @Test
+    fun `legacy account key returns a migration plan without writing during load`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "a".repeat(64)
+        val legacy = "b".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+
+        val loaded = repository.loadWithProvenance(current, legacy)
+
+        assertEquals(listOf("files", "deck"), loaded.appIds)
+        assertFalse(loaded.storageAuthoritative)
+        assertTrue(loaded.legacyMigrationRequired)
+        assertEquals(defaultAppWorkspacePinnedIds(), repository.load(current))
+        assertTrue(repository.saveIfAbsent(current, loaded.appIds))
+        assertTrue(storage.values.keys.any { key -> key.endsWith(current) })
+    }
+
+    @Test
+    fun `delayed legacy promotion does not overwrite newer canonical pins`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "c".repeat(64)
+        val legacy = "d".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+        val staleLegacy = repository.loadWithProvenance(current, legacy)
+
+        assertTrue(repository.save(current, listOf("files", "calendar")))
+        assertFalse(repository.saveIfAbsent(current, staleLegacy.appIds))
+
+        assertEquals(listOf("files", "calendar"), repository.load(current))
+    }
+
+    @Test
+    fun `losing legacy promotion reloads canonical pins and restores authority`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "c".repeat(64)
+        val legacy = "d".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+        val staleLegacy = repository.loadWithProvenance(current, legacy)
+        assertTrue(repository.save(current, listOf("files", "calendar")))
+
+        val resolved = repository.resolveLegacyMigration(current, staleLegacy)
+
+        assertEquals(listOf("files", "calendar"), resolved.appIds)
+        assertTrue(resolved.storageAuthoritative)
+        assertFalse(resolved.legacyMigrationRequired)
+    }
+
+    @Test
+    fun `legacy pin read cancellation remains control flow`() {
+        val current = "e".repeat(64)
+        val legacy = "f".repeat(64)
+        val repository = AppWorkspacePinsRepository(object : HomeWorkspaceLayoutStorage {
+            override fun read(persistenceKey: String): String? =
+                if (persistenceKey.endsWith(current)) null else throw CancellationException("synthetic cancellation")
+
+            override fun write(persistenceKey: String, encodedSnapshot: String) = Unit
+        })
+
+        assertFailsWith<CancellationException> {
+            repository.loadWithProvenance(current, legacy)
+        }
     }
 
     @Test
@@ -93,8 +180,12 @@ class AppWorkspacePinsTest {
 
     private class MemoryStorage : HomeWorkspaceLayoutStorage {
         val values = mutableMapOf<String, String>()
+        var readCount = 0
 
-        override fun read(persistenceKey: String): String? = values[persistenceKey]
+        override fun read(persistenceKey: String): String? {
+            readCount += 1
+            return values[persistenceKey]
+        }
 
         override fun write(persistenceKey: String, encodedSnapshot: String) {
             values[persistenceKey] = encodedSnapshot
