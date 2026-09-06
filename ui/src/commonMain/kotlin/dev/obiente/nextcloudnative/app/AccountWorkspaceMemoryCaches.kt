@@ -41,26 +41,37 @@ internal sealed interface CalendarLoadState {
 }
 
 internal object CalendarWorkspaceMemoryCache {
+    private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, CalendarLoadState.Ready>()
+
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
 
     fun get(
         session: NextcloudSession,
         userId: String,
         month: CalendarMonth,
         timeWindow: GroupwareDavTimeWindow,
-    ): CalendarLoadState.Ready? {
+    ): CalendarLoadState.Ready? = gate.read(session.accountId.storageKey, null) {
         val key = key(session, userId, month, timeWindow)
-        return entries.remove(key)?.also { entries[key] = it }
+        entries.remove(key)?.also { entries[key] = it }
     }
 
-    fun store(session: NextcloudSession, userId: String, value: CalendarLoadState.Ready) {
-        val key = key(session, userId, value.month, value.timeWindow)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_CALENDAR_MONTHS) entries.remove(entries.keys.first())
+    fun store(
+        session: NextcloudSession,
+        userId: String,
+        value: CalendarLoadState.Ready,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            val key = key(session, userId, value.month, value.timeWindow)
+            entries.remove(key)
+            entries[key] = value
+            while (entries.size > MAXIMUM_RETAINED_CALENDAR_MONTHS) entries.remove(entries.keys.first())
+        }
     }
 
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
     }
 
@@ -104,43 +115,74 @@ internal object UserStatusWorkspaceMemoryCache {
 }
 
 internal object ActivityWorkspaceMemoryCache {
+    private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ActivityTimelineState>()
 
-    fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? {
-        val key = session.accountId to filterId
-        return entries.remove(key)?.also { entries[key] = it }
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
+
+    fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? =
+        gate.read(session.accountId.storageKey, null) {
+            val key = session.accountId to filterId
+            entries.remove(key)?.also { entries[key] = it }
+        }
+
+    fun store(
+        session: NextcloudSession,
+        filterId: String,
+        value: ActivityTimelineState,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            val key = session.accountId to filterId
+            entries.remove(key)
+            entries[key] = value
+            while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
+        }
     }
 
-    fun store(session: NextcloudSession, filterId: String, value: ActivityTimelineState) {
-        val key = session.accountId to filterId
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
     }
 }
 
 internal object TalkWorkspaceMemoryCache {
+    private val gate = sharedAccountPrivateMemoryGate
     private val rooms = linkedMapOf<NextcloudAccountId, List<TalkRoom>>()
     private val messages = linkedMapOf<Pair<NextcloudAccountId, String>, List<TalkMessage>>()
 
-    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, session.accountId)
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
 
-    fun storeRooms(session: NextcloudSession, value: List<TalkRoom>) {
-        store(rooms, session.accountId, value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
+    fun rooms(session: NextcloudSession): List<TalkRoom>? = gate.read(session.accountId.storageKey, null) {
+        touch(rooms, session.accountId)
+    }
+
+    fun storeRooms(
+        session: NextcloudSession,
+        value: List<TalkRoom>,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            store(rooms, session.accountId, value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
+        }
     }
 
     fun messages(session: NextcloudSession, roomToken: String): List<TalkMessage>? =
-        touch(messages, session.accountId to roomToken)
+        gate.read(session.accountId.storageKey, null) { touch(messages, session.accountId to roomToken) }
 
-    fun storeMessages(session: NextcloudSession, roomToken: String, value: List<TalkMessage>) {
-        store(messages, session.accountId to roomToken, value, MAXIMUM_RETAINED_TALK_ROOMS)
+    fun storeMessages(
+        session: NextcloudSession,
+        roomToken: String,
+        value: List<TalkMessage>,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            store(messages, session.accountId to roomToken, value, MAXIMUM_RETAINED_TALK_ROOMS)
+        }
     }
 
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         rooms.keys.removeAll { account -> account.storageKey == accountStorageKey }
         messages.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
     }
@@ -156,15 +198,15 @@ internal object TalkWorkspaceMemoryCache {
 }
 
 internal fun removeCalendarWorkspaceMemory(accountStorageKey: String) =
-    CalendarWorkspaceMemoryCache.removeAccount(accountStorageKey)
+    CalendarWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 
 internal fun removeUserStatusWorkspaceMemory(accountStorageKey: String) =
     UserStatusWorkspaceMemoryCache.removeAccount(accountStorageKey)
 
 internal fun removeNextcloudNativeWorkspaceMemory(accountStorageKey: String) {
     PhotoTimelineUiStateRepository.removeAccount(accountStorageKey)
-    ActivityWorkspaceMemoryCache.removeAccount(accountStorageKey)
-    TalkWorkspaceMemoryCache.removeAccount(accountStorageKey)
+    ActivityWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
+    TalkWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 }
 
 private const val MAXIMUM_RETAINED_CALENDAR_MONTHS = 24

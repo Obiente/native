@@ -52,7 +52,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.Buffer
 import okio.BufferedSink
-import okio.buffer
 
 class JvmSupportIntake(
     private val diagnostics: AsyncJvmSupportDiagnostics,
@@ -121,6 +120,7 @@ class JvmSupportIntake(
     private var completedSubmissions: List<CompletedSubmission> = emptyList()
     private var completedExpiryJob: Job? = null
     private var storageUnavailableMessage: String? = null
+    private val retiredAccountIdentities = mutableSetOf<String>()
 
     init {
         require(descriptorCleanupRetryMillis > 0L)
@@ -154,10 +154,41 @@ class JvmSupportIntake(
     fun setActiveAccountIdentity(accountIdentity: String?) {
         synchronized(lock) {
             activeAccountIdentity = accountIdentity?.takeIf(String::isNotBlank)
+            activeAccountIdentity?.let(retiredAccountIdentities::remove)
             refreshVisibleStateLocked()
         }
     }
 
+    suspend fun removeAccount(accountIdentity: String) = withContext(Dispatchers.IO) {
+        awaitInitialization()
+        require(accountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
+        check(synchronized(lock) { storageUnavailableMessage } == null) {
+            "Private support submission recovery is unavailable."
+        }
+        var call: Call? = null
+        var target: PendingSubmission? = null
+        synchronized(lock) {
+            retiredAccountIdentities += accountIdentity
+            target = pending?.takeIf { it.originAccountIdentity == accountIdentity }
+            if (target != null || actualStateAccountIdentity == accountIdentity) {
+                cancellationRequested.set(true)
+                call = activeCall.getAndSet(null)
+            }
+        }
+        call?.cancel()
+        synchronized(persistenceLock) {
+            JvmSupportAccountStorageCleanup(temporaryRoot, directorySync, privateFileDelete)
+                .removeAccount(accountIdentity, target?.archive)
+            synchronized(lock) {
+                if (pending === target) pending = null
+                completedSubmissions = completedSubmissions.filterNot { it.originAccountIdentity == accountIdentity }
+                refreshVisibleStateLocked()
+            }
+        }
+        check(synchronized(lock) { !operationActive.get() || actualStateAccountIdentity != accountIdentity }) {
+            "The private support operation is still stopping."
+        }
+    }
     internal suspend fun awaitInitialization() = initialized.await()
 
     suspend fun submit(
@@ -1438,6 +1469,10 @@ class JvmSupportIntake(
     }
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
+        if (synchronized(lock) { submission.originAccountIdentity in retiredAccountIdentities }) {
+            finishTerminal(submission)
+            return
+        }
         validateReceipt(receipt)
         val existingCompletion = synchronized(lock) {
             completedSubmissions.firstOrNull { completed ->
@@ -1470,9 +1505,17 @@ class JvmSupportIntake(
             )
             return
         }
-        synchronized(lock) {
-            completedSubmissions = completedSubmissions + completedSubmission
-            scheduleCompletedExpiryLocked()
+        val retained = synchronized(lock) {
+            if (submission.originAccountIdentity in retiredAccountIdentities) false else {
+                completedSubmissions = completedSubmissions + completedSubmission
+                scheduleCompletedExpiryLocked()
+                true
+            }
+        }
+        if (!retained) {
+            deleteCompletedDescriptorSafely(completedDescriptor(completedSubmission.recordId))
+            finishTerminal(submission)
+            return
         }
         finishTerminal(submission)
         publishState(submittedStateFor(submission.originAccountIdentity), submission.originAccountIdentity)
@@ -2373,32 +2416,6 @@ private fun syncPosixDirectoryEntry(directory: File) {
     if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
     FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
         channel.force(true)
-    }
-}
-
-private fun Long.saturatingAdd(increment: Long): Long =
-    if (this > Long.MAX_VALUE - increment) Long.MAX_VALUE else this + increment
-
-private class ProgressRequestBody(
-    private val delegate: RequestBody,
-    private val onProgress: (Long, Long) -> Unit,
-) : RequestBody() {
-    override fun contentType() = delegate.contentType()
-    override fun contentLength(): Long = delegate.contentLength()
-
-    override fun writeTo(sink: BufferedSink) {
-        val total = contentLength()
-        val forwarding = object : okio.ForwardingSink(sink) {
-            var uploaded = 0L
-            override fun write(source: okio.Buffer, byteCount: Long) {
-                super.write(source, byteCount)
-                uploaded += byteCount
-                onProgress(uploaded, total)
-            }
-        }
-        val buffered = forwarding.buffer()
-        delegate.writeTo(buffered)
-        buffered.flush()
     }
 }
 

@@ -22,6 +22,10 @@ internal class AndroidAccountOwnedStateCleanup(
     private val dynamicApiState: AndroidDynamicApiProcessState = androidDynamicApiProcessState(
         File(context.applicationContext.cacheDir, "dynamic-api-v1"),
     ),
+    private val dynamicDiscoveryCache: AndroidDynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
+        File(context.applicationContext.filesDir, "contracts/discoveries-v1"),
+    ),
+    private val removeSupportAccount: suspend (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
@@ -39,11 +43,15 @@ internal class AndroidAccountOwnedStateCleanup(
             clearPreviewAccount,
             listOf(
                 { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
+                { removeSupportAccount(accountIdentity) },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
+                { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
@@ -70,11 +78,15 @@ internal class AndroidAccountOwnedStateCleanup(
                         fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
                     }
                 },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
+                { removeSupportAccount(accountIdentity) },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
+                { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
@@ -101,11 +113,15 @@ internal class AndroidAccountOwnedStateCleanup(
                         fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
                     }
                 },
+                { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
+                { removeSupportAccount(accountIdentity) },
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
+                { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { deckCardDrafts.removeAccount(accountStorageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },

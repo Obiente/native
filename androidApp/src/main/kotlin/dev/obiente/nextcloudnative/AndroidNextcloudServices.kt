@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
+import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
 import dev.obiente.nextcloudnative.app.DeckAttachment
@@ -75,7 +76,6 @@ import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.FileVersionRestoreHttpResult
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
 import dev.obiente.nextcloudnative.app.classifyFileVersionRestoreHttpResponse
-import dev.obiente.nextcloudnative.app.isSafeDynamicDiscoveryCacheAppId
 import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_MUTATION_BYTES
 import dev.obiente.nextcloudnative.app.decodePersistedDynamicMutation
 import dev.obiente.nextcloudnative.app.encodePersistedDynamicMutation
@@ -416,7 +416,9 @@ internal class AndroidNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
-    private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
+    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
+        File(appContext.filesDir, "contracts/discoveries-v1"),
+    )
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
@@ -426,11 +428,12 @@ internal class AndroidNextcloudServices(
     private val dynamicApiState = androidDynamicApiProcessState(File(appContext.cacheDir, "dynamic-api-v1"))
     private val dynamicApiReadCache = dynamicApiState.cache
     private val dynamicApiRequestCoalescer = dynamicApiState.coalescer
-    private val accountOwnedStateCleanup =
+    private val accountOwnedStateCleanup by lazy {
         AndroidAccountOwnedStateCleanup(
             appContext, fileReadCache, virtualFileCache, nativeMediaPreviewCache::clearAccount,
-            dynamicApiState,
+            dynamicApiState, dynamicDiscoveryCache, supportIntake::removeAccount,
         )
+    }
     private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
@@ -805,42 +808,26 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         appId: String,
     ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
-        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
-        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
-            return@withContext null
-        }
-        runCatching { target.readText() }
-            .getOrNull()
+        dynamicDiscoveryCache.load(
+            session.accountId.storageKey,
+            NextcloudDocumentIds.cacheAccountId(session),
+            appId,
+        )
             ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
     }
 
     override suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: dev.obiente.nextcloudnative.app.DynamicNativeMemoryCacheProducer?,
     ) = withContext(Dispatchers.IO) {
         val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
-        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
-        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
-            "Could not create the dynamic contract cache."
-        }
-        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.fd.sync()
-        }
-        check(temporary.renameTo(target) || runCatching {
-            temporary.copyTo(target, overwrite = true)
-            temporary.delete()
-        }.isSuccess) {
-            "Could not publish the dynamic contract cache."
-        }
-    }
-
-    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
-        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
-        return File(
-            dynamicDiscoveryCacheDirectory,
-            "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",
+        dynamicDiscoveryCache.save(
+            session.accountId.storageKey,
+            NextcloudDocumentIds.cacheAccountId(session),
+            discovery.descriptor.app.id,
+            encoded,
+            producer,
         )
     }
 
@@ -947,6 +934,8 @@ internal class AndroidNextcloudServices(
             persisted, ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX, ANDROID_ACCOUNT_OPERATION_GUARD,
             { accountCredentials.loadSession(persisted.accountId) }, dynamicApiRequestCoalescer::activateAccount,
         )
+        AccountPrivateMemoryLifecycle.activateAccount(persisted.accountId.storageKey)
+        dynamicDiscoveryCache.activateAccount(persisted.accountId.storageKey)
         return persisted
     }
 

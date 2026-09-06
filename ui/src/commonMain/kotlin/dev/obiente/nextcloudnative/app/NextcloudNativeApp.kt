@@ -2432,7 +2432,6 @@ private fun AuthenticatedApp(
                     val cached = cachedAppDiscoveries[current.app.id]
                     if (cached == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
                         cachedAppDiscoveries[current.app.id] = candidate
-                        sharedDynamicNativeMemoryCache.storeDiscovery(session, current.app.id, candidate)
                     }
                     val liveServerVersion = serverInfo?.version
                     val active = screen as? Screen.AppInfo
@@ -2864,7 +2863,6 @@ private fun AppInfoScreen(
         discoveryAttempt += 1
         onRetryServerInfo()
     }
-
     LaunchedEffect(
         app.id,
         session,
@@ -2873,6 +2871,7 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
+        val cacheProducer = sharedDynamicNativeMemoryCache.producer(session)
         discoveryProgress = DynamicDescriptorDiscoveryProgress(
             DynamicDescriptorDiscoveryPhase.CachedWorkspace,
             "Checking the saved workspace",
@@ -2888,7 +2887,7 @@ private fun AppInfoScreen(
         if (retainedDiscovery != null) {
             discovery = retainedDiscovery
             onDiscovery(retainedDiscovery)
-            sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedDiscovery)
+            sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedDiscovery, cacheProducer)
         }
         val shouldRetry = discoveryAttempt > 0 || sharedDynamicNativeMemoryCache.shouldRetryDiscovery(session, app.id) ||
             !sharedDynamicNativeMemoryCache.isDiscoveryFresh(session, app.id)
@@ -2917,9 +2916,9 @@ private fun AppInfoScreen(
                 val retainedCachedContract = resolvedDiscovery !== candidate
                 onDiscovery(resolvedDiscovery)
                 discovery = resolvedDiscovery
-                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery)
+                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery, cacheProducer)
                 runCatching {
-                    services.saveCachedDynamicAppDiscovery(session, resolvedDiscovery)
+                    services.saveCachedDynamicAppDiscovery(session, resolvedDiscovery, cacheProducer)
                 }
                 if (retainedCachedContract) {
                     discoveryError =
@@ -2935,9 +2934,9 @@ private fun AppInfoScreen(
                 if (retainedReadOnly != null) {
                     onDiscovery(retainedReadOnly)
                     discovery = retainedReadOnly
-                    sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly)
+                    sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly, cacheProducer)
                 }
-                sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id)
+                sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
                 discoveryError = if (retainedDiscovery == null) {
                     failure.message ?: "Could not discover this app's native API."
                 } else {
@@ -2946,7 +2945,6 @@ private fun AppInfoScreen(
                 }
             }
     }
-
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         val resolved = discovery
         // The discovered screen owns its own contextual header. Keeping the
@@ -3386,6 +3384,7 @@ private fun DynamicDiscoveredAppScreen(
         formRelationLoadAttempt,
         loadAttempt,
     ) {
+        val cacheProducer = sharedDynamicNativeMemoryCache.producer(session)
         val view = selectedView ?: return@LaunchedEffect
         val retainedMailPagination = retainedMailPaginationSnapshot(
             hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
@@ -3523,6 +3522,7 @@ private fun DynamicDiscoveredAppScreen(
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
                         DynamicScreenSnapshot(records, updatedRecords),
+                        cacheProducer,
                     )
                 }
             }.onFailure { failure ->
@@ -3617,6 +3617,7 @@ private fun DynamicDiscoveredAppScreen(
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
                         DynamicScreenSnapshot(rows, updatedRecords),
+                        cacheProducer,
                     )
                 }
             }.onFailure { failure ->
@@ -3640,6 +3641,7 @@ private fun DynamicDiscoveredAppScreen(
             sharedDynamicNativeMemoryCache.storeScreen(
                 cacheKey,
                 DynamicScreenSnapshot(records, updatedRecords),
+                cacheProducer,
             )
             return@LaunchedEffect
         }
@@ -3705,6 +3707,7 @@ private fun DynamicDiscoveredAppScreen(
                         relatedRecords = updatedRecords,
                         pagination = nextPagination?.toCheckpoint(),
                     ),
+                    cacheProducer,
                 )
             }
         }.onFailure { failure ->
@@ -4690,6 +4693,7 @@ private fun DynamicDiscoveredAppScreen(
                     pathParameters = pagingPathParameters,
                     cacheable = pagingCacheable,
                 )
+                val cacheProducer = sharedDynamicNativeMemoryCache.producer(pagingRequestIdentity.cacheKey)
                 val pagingRuntimeValues = pagingRecord?.toDynamicRuntimeValues().orEmpty().toMap()
                 val values = pagingRuntimeValues +
                     pagingPathParameters +
@@ -4785,6 +4789,7 @@ private fun DynamicDiscoveredAppScreen(
                                 relatedRecords = updatedRecords,
                                 pagination = nextPagination?.toCheckpoint(),
                             ),
+                            cacheProducer,
                         )
                         loadingMore = false
                     }.onFailure { failure ->
@@ -7066,30 +7071,6 @@ internal fun inheritDynamicParentParameters(
         !key.equals("id", ignoreCase = true) && key.endsWith("Id", ignoreCase = true)
     }
 
-/**
- * Selecting a record without a destination keeps the current collection on screen. Its path
- * bindings still belong to that collection and must survive the selection. Otherwise a child's
- * generic `id` can replace the parent's generic `id` when the collection reloads.
- */
-internal fun resolveDynamicRecordSelectionParameters(
-    currentViewId: String,
-    nextViewId: String,
-    currentParameters: Map<String, String>,
-    explicitTargetParameters: Map<String, String>?,
-    fallbackTargetParameters: Map<String, String>,
-): Map<String, String> = explicitTargetParameters
-    ?: if (nextViewId == currentViewId) currentParameters else fallbackTargetParameters
-
-internal fun shouldShowDynamicRecordFallbackDetail(
-    viewResourceId: String,
-    viewComponent: NativeComponent,
-    selectedRecord: NativeRecord?,
-    selectedRecordResourceId: String?,
-): Boolean = selectedRecord != null &&
-    viewComponent != NativeComponent.detail &&
-    viewComponent != NativeComponent.form &&
-    selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
-
 @Composable
 private fun ActivityScreen(
     services: NextcloudPlatformServices,
@@ -7174,6 +7155,7 @@ private fun ActivityScreen(
     LaunchedEffect(session, activityInstalled, selectedServerFilterId, loadAttempt) {
         if (!activityInstalled) return@LaunchedEffect
         val filterId = selectedServerFilterId
+        val cacheProducer = ActivityWorkspaceMemoryCache.producer(session)
         timeline = timeline.beginActivityRefresh()
         runCatching {
             loadNextcloudActivityPage(filterId = filterId) { request ->
@@ -7183,7 +7165,7 @@ private fun ActivityScreen(
             .onSuccess { page ->
                 if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyActivityRefresh(page)
-                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline, cacheProducer)
             }
             .onFailure { failure ->
                 if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
@@ -7195,6 +7177,7 @@ private fun ActivityScreen(
         if (!activityInstalled || olderPageAttempt == 0) return@LaunchedEffect
         val filterId = selectedServerFilterId
         val cursor = timeline.nextSince ?: return@LaunchedEffect
+        val cacheProducer = ActivityWorkspaceMemoryCache.producer(session)
         timeline = timeline.beginNextActivityPage()
         runCatching {
             loadNextcloudActivityPage(since = cursor, filterId = filterId) { request ->
@@ -7204,7 +7187,7 @@ private fun ActivityScreen(
             .onSuccess { page ->
                 if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyNextActivityPage(page)
-                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline, cacheProducer)
             }
             .onFailure { failure ->
                 if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
@@ -11854,12 +11837,13 @@ private fun TalkScreen(
     var refreshing by remember(session) { mutableStateOf(false) }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     LaunchedEffect(loadAttempt) {
+        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
         refreshing = rooms != null
         error = null
         runCatching { services.listTalkRooms(session) }
             .onSuccess {
                 rooms = it
-                TalkWorkspaceMemoryCache.storeRooms(session, it)
+                TalkWorkspaceMemoryCache.storeRooms(session, it, cacheProducer)
             }
             .onFailure { error = it.message ?: "Could not load Talk conversations." }
         refreshing = false
