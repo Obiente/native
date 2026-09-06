@@ -128,7 +128,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun removeAccount(accountId: String) {
-        lifecycle.retire(accountId)
+        retireAccount(accountId)
         try {
             purgeDesktopAccountCacheDirectory(root, accountId)
             virtualListingInvalidationPreferences.remove(accountId)
@@ -139,11 +139,9 @@ internal class DesktopFileReadCache(
         }
     }
 
-    @Synchronized
-    fun producer(accountId: String): DesktopFileReadCacheProducer? = lifecycle.producer(accountId)
-
-    @Synchronized
-    fun activateAccount(accountId: String) = lifecycle.activate(accountId)
+    @Synchronized fun retireAccount(accountId: String) = lifecycle.retire(accountId)
+    @Synchronized fun producer(accountId: String): DesktopFileReadCacheProducer? = lifecycle.producer(accountId)
+    @Synchronized fun activateAccount(accountId: String) = lifecycle.activate(accountId)
 
     @Synchronized
     fun storeListing(
@@ -409,7 +407,8 @@ internal class DesktopFileReadCache(
     ): VirtualFileEvictionPlan = applyEviction(accountId, requestedBytesToFree, nowEpochMillis)
 
     @Synchronized
-    fun invalidate(accountId: String, path: String) {
+    fun invalidate(accountId: String, path: String, cacheProducer: DesktopFileReadCacheProducer? = producer(accountId)): Boolean {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return false
         val normalized = path.cachePath()
         val parent = normalized.parentCachePath()
         val accountDirectory = accountDirectory(accountId)
@@ -456,6 +455,7 @@ internal class DesktopFileReadCache(
                 content = index.content.filterNot { it in removed },
             ),
         )
+        return true
     }
 
     private fun CacheIndexV1.bounded(): CacheIndexV1 {

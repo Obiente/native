@@ -52,7 +52,9 @@ class DesktopFileReadCacheTest {
                 cacheProducer = currentProducer,
             ),
         )
+        assertFalse(cache.invalidate(accountId, "Notes", staleProducer))
         assertContentEquals(content.bytes, cache.cachedContent(accountId, "Notes/private.txt", 64)?.bytes)
+        assertEquals(listing, cache.cachedListing(accountId, "Notes"))
     }
 
     @Test

@@ -20,7 +20,20 @@ internal fun requireDesktopAccountActivationAllowed(blockedByUnknownCleanup: Boo
 }
 
 internal fun DesktopAccountSyncPairCleanupJournal.requireAccountActivationAllowed(record: NextcloudAccountRecord) =
-    requireDesktopAccountActivationAllowed(blocksAccountActivation(desktopFileCacheAccountId(record)))
+    requireDesktopAccountActivationAllowed(
+        blocksAccountActivation(desktopFileCacheAccountId(record), record.id.storageKey),
+    )
+
+internal fun loadDesktopSessionAfterCleanupGate(
+    record: NextcloudAccountRecord?,
+    cleanupJournal: DesktopAccountSyncPairCleanupJournal,
+    load: () -> NextcloudSession?,
+    publish: (NextcloudSession) -> Unit,
+): NextcloudSession? {
+    requireDesktopAccountActivationAllowed(cleanupJournal.blocksAllAccountActivation())
+    record?.let(cleanupJournal::requireAccountActivationAllowed)
+    return load()?.also(publish)
+}
 
 internal enum class DesktopAccountSyncPairCleanupPhase {
     Prepared,
@@ -92,10 +105,36 @@ internal class DesktopAccountSyncPairCleanupJournal(
         preferences.flush()
     }
 
-    fun blocksAccountActivation(accountId: String): Boolean {
+    fun blocksAccountActivation(accountId: String, accountStorageKey: String? = null): Boolean {
         validateDesktopSyncPairCleanupAccountId(accountId)
-        val encoded = preferences.get(cleanupKey(accountId), null)
-        val blocked = encoded != null && decode(accountId, encoded).phase == DesktopAccountSyncPairCleanupPhase.Unknown
+        require(accountStorageKey == null || accountStorageKey.matches(ACCOUNT_STORAGE_KEY_PATTERN)) {
+            "The desktop account storage cleanup identity is invalid."
+        }
+        val blocked = if (accountStorageKey == null) {
+            val encoded = preferences.get(cleanupKey(accountId), null)
+            encoded != null && decode(accountId, encoded).phase == DesktopAccountSyncPairCleanupPhase.Unknown
+        } else {
+            pending().any { cleanup ->
+                cleanup.phase == DesktopAccountSyncPairCleanupPhase.Unknown &&
+                    (cleanup.accountStorageKey == null || cleanup.matchesAccountActivation(accountId, accountStorageKey))
+            }
+        }
+        if (blocked) recordMalformedOnce()
+        return blocked
+    }
+
+    fun blocksAllAccountActivation(): Boolean {
+        val blocked = preferences.keys().asSequence()
+            .filter { key -> key.startsWith(KEY_PREFIX) }
+            .any { key ->
+                val accountId = key.removePrefix(KEY_PREFIX)
+                val cleanup = runCatching {
+                    validateDesktopSyncPairCleanupAccountId(accountId)
+                    decode(accountId, preferences.get(key, null))
+                }.getOrNull()
+                cleanup == null ||
+                    cleanup.phase == DesktopAccountSyncPairCleanupPhase.Unknown && cleanup.accountStorageKey == null
+            }
         if (blocked) recordMalformedOnce()
         return blocked
     }
@@ -193,6 +232,17 @@ internal class DesktopAccountSyncPairCleanupJournal(
             scope != null && accountStorageKey != null && legacyAccountScopeDigest != null
         ) {
             DesktopAccountSyncPairCleanup(accountId, phase, scope, accountStorageKey, legacyAccountScopeDigest)
+        } else if (
+            fields.size > 5 && fields[0] == VALUE_VERSION_WITH_LEGACY_ACCOUNT_SCOPE &&
+            scope != null && accountStorageKey != null && legacyAccountScopeDigest != null
+        ) {
+            DesktopAccountSyncPairCleanup(
+                accountId,
+                DesktopAccountSyncPairCleanupPhase.Unknown,
+                scope,
+                accountStorageKey,
+                legacyAccountScopeDigest,
+            )
         } else {
             DesktopAccountSyncPairCleanup(accountId, DesktopAccountSyncPairCleanupPhase.Unknown)
         }
