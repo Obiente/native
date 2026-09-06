@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.FileNotFoundException
 import java.nio.file.Files
@@ -12,12 +13,40 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 class AndroidFileSyncProviderFeedbackRecoveryTest {
     private val applicationId = "dev.obiente.nextcloudnative.dev"
     private val ownAuthority = nextcloudDocumentsAuthority(applicationId)
     private val accountKey = "0123456789abcdef0123456789abcdef"
+
+    @Test
+    fun `credential removal fences account work before waiting for the sync engine`() = runBlocking {
+        val session = NextcloudSession("https://cloud.example.test", "alice", "fixture-password")
+        val guard = AndroidAccountOperationGuard()
+        val engineLock = Mutex(locked = true)
+        val waitingForEngine = CompletableDeferred<Unit>()
+        val recovery = async {
+            withAndroidFileSyncAccountRecoveryLease(session, { session }, guard) {
+                waitingForEngine.complete(Unit)
+                engineLock.withLock {}
+            }
+        }
+        waitingForEngine.await()
+
+        val competingWorkEntered = guard.tryWithAccount(
+            NextcloudDocumentIds.accountKey(session), unavailable = { false }, action = { true },
+        )
+        assertFalse(competingWorkEntered)
+
+        engineLock.unlock()
+        withTimeout(1_000L) { recovery.await() }
+    }
 
     @Test
     fun `restored own provider root stops before remote preparation`() {

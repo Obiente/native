@@ -125,11 +125,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     ): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
-        val session = requireAndroidDocumentsProviderChildrenSession(parentDocumentId, services::loadSession)
+        val (session, recoveryAuthorized) = requireAndroidDocumentsProviderChildrenSession(parentDocumentId, services::loadSession)
         val parent = requireReference(parentDocumentId, session)
         val children = runCatching {
             val account = resolveAccount(session)
-            runBlocking(Dispatchers.IO) { services.listFiles(session, account.userId, parent.path) }
+            runBlocking(Dispatchers.IO) {
+                if (recoveryAuthorized) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent.path)
+                else services.listFiles(session, account.userId, parent.path)
+            }
         }.getOrElse { failure ->
             val cachedChildren = offline.availableChildren(session, parent.path)
             if (cachedChildren.isNotEmpty() || offline.isStoredDirectory(session, parent.path)) {
@@ -186,7 +189,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         }
         signal?.throwIfCanceled()
 
-        val session = requireAndroidDocumentsProviderOpenSession(documentId, mode, services::loadSession)
+        val (session, recoveryAuthorized) = requireAndroidDocumentsProviderOpenSession(documentId, mode, services::loadSession)
         if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
             if (mode != "r") throw SecurityException("External file handoffs are read-only.")
             return openExternalHandoffDocument(session, documentId, signal)
@@ -200,7 +203,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         }
         val account = resolveAccount(session)
-        val file = runCatching { findDocument(session, account, reference.path) }
+        val file = runCatching { findDocument(session, account, reference.path, recoveryAuthorized) }
             .getOrElse { failure ->
                 if (mode == "r") {
                     virtualFiles.acquire(session, reference.path)?.let { lease ->

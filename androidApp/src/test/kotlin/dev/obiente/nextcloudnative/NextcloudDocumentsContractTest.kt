@@ -334,6 +334,41 @@ class NextcloudDocumentsContractTest {
     }
 
     @Test
+    fun `recovery mutation uses the account lease held by credential removal`() = runBlocking {
+        val removed = session("removed", "removed-secret")
+        val documentId = NextcloudDocumentIds.documentId(removed, "Sync/recovery-backup")
+        val guard = AndroidAccountOperationGuard()
+        var mutationEntered = false
+
+        guard.withAccount(NextcloudDocumentIds.accountKey(removed)) {
+            withAndroidDocumentsProviderRecoveryPermit(
+                removed,
+                documentId,
+                AndroidDocumentsProviderRecoveryOperation.Rename,
+            ) {
+                val resolved = requireNotNull(
+                    resolveAndroidDocumentsProviderSession(
+                        documentId,
+                        AndroidDocumentsProviderRecoveryOperation.Rename,
+                        allowRecoveryPermit = true,
+                        loadActiveSession = { null },
+                    ),
+                )
+                withResolvedAndroidDocumentsProviderMutation(
+                    resolved,
+                    loadActiveSession = { null },
+                    guard = guard,
+                ) { session ->
+                    assertEquals(removed, session)
+                    mutationEntered = true
+                }
+            }
+        }
+
+        assertTrue(mutationEntered)
+    }
+
+    @Test
     fun `account removal preflight runs before remote credential revocation`() = runBlocking {
         var revoked = false
         var removed = false

@@ -284,21 +284,38 @@ internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRem
     accountId: String,
     providerRecoverySession: NextcloudSession,
 ) {
-    AndroidFileSyncEngine.ENGINE_LOCK.withLock {
-        reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
-            pairs = AndroidFileSyncStore(context).load().coordinator.pairs,
-            accountId = accountId,
-            reconcileLocalDownloads = { pair ->
-                reconcileSafDownloadsBeforePairRemoval(
-                    context = context,
-                    localRootId = pair.localRootId,
-                    localRecoveryPaths = androidSafOwnedDownloadRecoveryPaths(pair),
-                    providerRecoverySession = providerRecoverySession,
-                )
-            },
-        )
+    val services = AndroidNextcloudServices(context.applicationContext)
+    withAndroidFileSyncAccountRecoveryLease(
+        expectedSession = providerRecoverySession,
+        resolveSession = { services.loadSession(providerRecoverySession.accountId) },
+    ) {
+        AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+            reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
+                pairs = AndroidFileSyncStore(context).load().coordinator.pairs,
+                accountId = accountId,
+                reconcileLocalDownloads = { pair ->
+                    reconcileSafDownloadsBeforePairRemoval(
+                        context = context,
+                        localRootId = pair.localRootId,
+                        localRecoveryPaths = androidSafOwnedDownloadRecoveryPaths(pair),
+                        providerRecoverySession = providerRecoverySession,
+                    )
+                },
+            )
+        }
     }
 }
+
+internal suspend fun <Result> withAndroidFileSyncAccountRecoveryLease(
+    expectedSession: NextcloudSession,
+    resolveSession: suspend () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    action: suspend () -> Result,
+): Result = guard.withExactAccountSession(
+    expectedSession = expectedSession,
+    resolveSession = resolveSession,
+    unavailable = { error("The account changed before folder sync recovery could start.") },
+) { action() }
 
 internal suspend fun reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
     pairs: List<FileSyncPair>,

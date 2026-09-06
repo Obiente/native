@@ -199,12 +199,24 @@ internal fun <Result> withAndroidDocumentsProviderMutation(
     documentId: String,
     operation: AndroidDocumentsProviderRecoveryOperation,
     loadActiveSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     action: (NextcloudSession) -> Result,
 ): Result {
     val resolved = requireAndroidDocumentsProviderSession(documentId, operation, loadActiveSession)
+    return withResolvedAndroidDocumentsProviderMutation(resolved, loadActiveSession, guard, action)
+}
+
+internal fun <Result> withResolvedAndroidDocumentsProviderMutation(
+    resolved: AndroidDocumentsProviderResolvedSession,
+    loadActiveSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard,
+    action: (NextcloudSession) -> Result,
+): Result {
+    if (resolved.recoveryAuthorized) return action(resolved.session)
     return withAndroidDocumentMutation(
         resolved.session,
-        { if (resolved.recoveryAuthorized) resolved.session else loadActiveSession() },
+        loadActiveSession,
+        guard,
         action,
     )
 }
@@ -221,29 +233,29 @@ internal fun requireAndroidDocumentsProviderQuerySession(
 internal fun requireAndroidDocumentsProviderChildrenSession(
     documentId: String,
     loadActiveSession: () -> NextcloudSession?,
-): NextcloudSession = requireAndroidDocumentsProviderSession(
+): AndroidDocumentsProviderResolvedSession = requireAndroidDocumentsProviderSession(
     documentId,
     AndroidDocumentsProviderRecoveryOperation.QueryChildren,
     loadActiveSession,
-).session
+)
 
 internal fun requireAndroidDocumentsProviderOpenSession(
     documentId: String,
     mode: String,
     loadActiveSession: () -> NextcloudSession?,
-): NextcloudSession = requireAndroidDocumentsProviderCallSession(
+): AndroidDocumentsProviderResolvedSession = requireAndroidDocumentsProviderCallSession(
     documentId,
     if (mode == "r") AndroidDocumentsProviderRecoveryOperation.OpenRead else
         AndroidDocumentsProviderRecoveryOperation.OpenWrite,
     loadActiveSession,
-).session
+)
 
 internal fun <Result> withAndroidDocumentsProviderCreate(
     documentId: String,
     loadActiveSession: () -> NextcloudSession?,
     action: (NextcloudSession) -> Result,
 ): Result = withAndroidDocumentsProviderMutation(
-    documentId, AndroidDocumentsProviderRecoveryOperation.Create, loadActiveSession, action,
+    documentId, AndroidDocumentsProviderRecoveryOperation.Create, loadActiveSession, action = action,
 )
 
 internal fun <Result> withAndroidDocumentsProviderRename(
@@ -251,7 +263,7 @@ internal fun <Result> withAndroidDocumentsProviderRename(
     loadActiveSession: () -> NextcloudSession?,
     action: (NextcloudSession) -> Result,
 ): Result = withAndroidDocumentsProviderMutation(
-    documentId, AndroidDocumentsProviderRecoveryOperation.Rename, loadActiveSession, action,
+    documentId, AndroidDocumentsProviderRecoveryOperation.Rename, loadActiveSession, action = action,
 )
 
 internal fun <Result> withAndroidDocumentsProviderDelete(
@@ -259,7 +271,7 @@ internal fun <Result> withAndroidDocumentsProviderDelete(
     loadActiveSession: () -> NextcloudSession?,
     action: (NextcloudSession) -> Result,
 ): Result = withAndroidDocumentsProviderMutation(
-    documentId, AndroidDocumentsProviderRecoveryOperation.Delete, loadActiveSession, action,
+    documentId, AndroidDocumentsProviderRecoveryOperation.Delete, loadActiveSession, action = action,
 )
 
 internal fun <Result> withAndroidDocumentsProviderMove(
@@ -267,5 +279,5 @@ internal fun <Result> withAndroidDocumentsProviderMove(
     loadActiveSession: () -> NextcloudSession?,
     action: (NextcloudSession) -> Result,
 ): Result = withAndroidDocumentsProviderMutation(
-    documentId, AndroidDocumentsProviderRecoveryOperation.Move, loadActiveSession, action,
+    documentId, AndroidDocumentsProviderRecoveryOperation.Move, loadActiveSession, action = action,
 )
