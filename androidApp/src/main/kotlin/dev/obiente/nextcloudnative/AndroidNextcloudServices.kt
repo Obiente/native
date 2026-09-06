@@ -476,7 +476,6 @@ internal class AndroidNextcloudServices(
         clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
-        prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
         removeQueuedUploads = accountOwnedStateCleanup::remove,
         retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
         retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,

@@ -265,7 +265,8 @@ class AndroidAccountOperationGuardTest {
             revokeAndroidSessionWithAccountLease(
                 accountIdentity = "account-a",
                 guard = guard,
-                preflight = {},
+                prepare = {},
+                revalidate = {},
                 revoke = { remoteRevoked.complete(Unit) },
                 removeLocalAccount = {
                     allowLocalRemoval.await()
@@ -407,12 +408,13 @@ class AndroidAccountOperationGuardTest {
                 prepare = {
                     guard.withAccount(accountIdentity) { events += "provider-read" }
                 },
+                revalidate = { events += "revalidate" },
             ) {
                 events += "remove"
             }
         }
 
-        assertEquals(listOf("provider-read", "remove"), events)
+        assertEquals(listOf("provider-read", "revalidate", "remove"), events)
     }
 
     @Test
@@ -431,6 +433,7 @@ class AndroidAccountOperationGuardTest {
                         prepare = {
                             competingLease = guard.acquireBlocking(accountIdentity)
                         },
+                        revalidate = {},
                     ) {
                         removalEntered = true
                     }
@@ -445,6 +448,40 @@ class AndroidAccountOperationGuardTest {
             failure.message,
         )
         assertFalse(removalEntered)
+    }
+
+    @Test
+    fun removalStateIsRevalidatedAfterTheAccountLeaseIsAcquired() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalReady = true
+        var removalEntered = false
+        var revalidationHeldLease = false
+
+        val failure = assertFailsWith<IllegalStateException> {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = { removalReady = false },
+                revalidate = {
+                    revalidationHeldLease = guard.tryWithAccount(
+                        accountIdentity,
+                        unavailable = { true },
+                        action = { false },
+                    )
+                    check(removalReady) { "Account state changed after preparation." }
+                },
+            ) {
+                removalEntered = true
+            }
+        }
+
+        assertEquals("Account state changed after preparation.", failure.message)
+        assertTrue(revalidationHeldLease)
+        assertFalse(removalEntered)
+        withTimeout(1_000L) {
+            guard.withAccount(accountIdentity) { }
+        }
     }
 
     @Test
