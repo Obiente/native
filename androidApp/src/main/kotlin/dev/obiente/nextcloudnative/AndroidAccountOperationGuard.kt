@@ -152,11 +152,12 @@ internal suspend fun <Result> withAndroidAuthenticatedFileMutation(
     accountMutationLeaseHeld: Boolean,
     expectedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
     resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     action: suspend (dev.obiente.nextcloudnative.app.NextcloudSession) -> Result,
 ): Result = if (accountMutationLeaseHeld) {
     action(expectedSession)
 } else {
-    ANDROID_ACCOUNT_OPERATION_GUARD.withAuthenticatedMutationSession(expectedSession, resolveSession, action)
+    guard.withAuthenticatedMutationSession(expectedSession, resolveSession, action)
 }
 
 internal suspend fun <Result> withAndroidAccountPrivateStatePublication(
