@@ -162,7 +162,7 @@ class OfficeDocumentWorkflowTest {
         val first = NextcloudSession("https://cloud.example", "ada", "secret")
         val second = NextcloudSession("https://cloud.example", "grace", "secret")
 
-        cache.store(first, officeCapabilities(), "\"cap-v1\"")
+        cache.store(first, officeCapabilities(), "\"cap-v1\"", cache.producer(first))
 
         assertEquals("\"cap-v1\"", cache.get(first)?.etag)
         assertEquals(null, cache.get(second))
@@ -175,7 +175,7 @@ class OfficeDocumentWorkflowTest {
     fun capabilityCacheDoesNotConflateCaseSensitiveServerInstallationPaths() {
         val cache = NextcloudDocumentEditingCapabilitiesCache()
         val session = NextcloudSession("https://cloud.example/Cloud", "ada", "secret")
-        cache.store(session, officeCapabilities(), "\"cap-v1\"")
+        cache.store(session, officeCapabilities(), "\"cap-v1\"", cache.producer(session))
         assertEquals(null, cache.get(session.copy(serverUrl = "https://cloud.example/cloud")))
     }
 

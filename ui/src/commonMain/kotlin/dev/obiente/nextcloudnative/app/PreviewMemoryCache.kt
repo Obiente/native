@@ -9,27 +9,32 @@ import kotlinx.coroutines.CancellationException
  */
 internal object PreviewMemoryCache {
     private const val MAX_BYTES = 24 * 1024 * 1024
+    private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<PreviewCacheKey, ByteArray>()
     private var bytes = 0
 
-    fun get(key: PreviewCacheKey): ByteArray? {
-        val value = entries.remove(key) ?: return null
+    fun producer(accountStorageKey: String): AccountPrivateMemoryProducer? = gate.producer(accountStorageKey)
+
+    fun get(key: PreviewCacheKey): ByteArray? = gate.read(key.account, null) {
+        val value = entries.remove(key) ?: return@read null
         entries[key] = value
-        return value
+        value
     }
 
-    fun put(key: PreviewCacheKey, value: ByteArray) {
+    fun put(key: PreviewCacheKey, value: ByteArray, producer: AccountPrivateMemoryProducer?) {
         if (value.size > MAX_BYTES) return
-        entries.remove(key)?.let { bytes -= it.size }
-        entries[key] = value
-        bytes += value.size
-        while (bytes > MAX_BYTES && entries.isNotEmpty()) {
-            val oldestKey = entries.keys.first()
-            bytes -= entries.remove(oldestKey)?.size ?: 0
+        gate.mutate(key.account, producer) {
+            entries.remove(key)?.let { bytes -= it.size }
+            entries[key] = value
+            bytes += value.size
+            while (bytes > MAX_BYTES && entries.isNotEmpty()) {
+                val oldestKey = entries.keys.first()
+                bytes -= entries.remove(oldestKey)?.size ?: 0
+            }
         }
     }
 
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.keys.filter { key -> key.account == accountStorageKey }.forEach { key ->
             bytes -= entries.remove(key)?.size ?: 0
         }
@@ -69,7 +74,8 @@ internal suspend fun loadPreviewMemoryCached(
     load: suspend () -> ByteArray,
 ): ByteArray {
     if (key == null) return load()
-    return PreviewMemoryCache.get(key) ?: load().also { PreviewMemoryCache.put(key, it) }
+    val producer = PreviewMemoryCache.producer(key.account)
+    return PreviewMemoryCache.get(key) ?: load().also { PreviewMemoryCache.put(key, it, producer) }
 }
 
 internal suspend fun NextcloudPlatformServices.loadPreviewCached(

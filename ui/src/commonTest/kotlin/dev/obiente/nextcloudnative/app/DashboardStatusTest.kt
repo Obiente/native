@@ -201,7 +201,7 @@ class DashboardStatusTest {
         val session = NextcloudSession("https://cloud.example.test", "person", "secret")
         val snapshot = NativeDashboardSnapshot(listOf(widget("calendar", setOf(2))), emptyMap())
         val cache = DashboardStatusMemoryCache(ttlSeconds = 60L)
-        cache.store(session, snapshot, status = null, nowEpochSeconds = 100L)
+        cache.store(session, snapshot, status = null, nowEpochSeconds = 100L, producer = cache.producer(session))
 
         val expired = cache.get(session, nowEpochSeconds = 161L)
 
@@ -688,7 +688,7 @@ class DashboardStatusTest {
         )
         val dashboard = NativeDashboardSnapshot(listOf(widget), mapOf("calendar" to emptyList()))
 
-        cache.store(first, dashboard, status = null, nowEpochSeconds = 1_000)
+        cache.store(first, dashboard, status = null, nowEpochSeconds = 1_000, producer = cache.producer(first))
 
         assertEquals(dashboard, cache.get(rotated, 1_030)?.dashboard)
         assertNull(cache.get(second, 1_030))
