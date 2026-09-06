@@ -23,6 +23,14 @@ internal sealed interface AndroidDocumentProviderIncarnationRecord {
     ) : AndroidDocumentProviderIncarnationRecord
 }
 
+private sealed interface AndroidDocumentProviderCredentialResetRecord {
+    data object Missing : AndroidDocumentProviderCredentialResetRecord
+    data class Readable(
+        val record: AndroidDocumentProviderIncarnationRecord,
+    ) : AndroidDocumentProviderCredentialResetRecord
+    data object Unreadable : AndroidDocumentProviderCredentialResetRecord
+}
+
 internal data class AndroidDocumentProviderIncarnationRetirement(
     val accountIdentity: String,
     val previousEncoded: String?,
@@ -162,31 +170,45 @@ internal class AndroidDocumentProviderIncarnationStore(
         (readRecord(accountIdentity) as? AndroidDocumentProviderIncarnationRecord.Retired)?.incarnation
     }
 
-    fun activeAccountIdentitiesForCredentialReset(): List<String> = synchronized(LOCK) {
+    fun accountIdentitiesForCredentialReset(): List<String> = synchronized(LOCK) {
         keys().asSequence()
-            .filter(ACCOUNT_IDENTITY_PATTERN::matches)
-            .filter { accountIdentity ->
-                try {
-                    readRecord(accountIdentity) is AndroidDocumentProviderIncarnationRecord.Active
-                } catch (_: IllegalArgumentException) {
-                    false
-                } catch (_: ClassCastException) {
-                    false
+            .mapNotNull { key ->
+                when {
+                    ACCOUNT_IDENTITY_PATTERN.matches(key) -> key
+                    key.startsWith(RETIREMENT_JOURNAL_KEY_PREFIX) ->
+                        key.removePrefix(RETIREMENT_JOURNAL_KEY_PREFIX).takeIf(ACCOUNT_IDENTITY_PATTERN::matches)
+                    else -> null
                 }
             }
+            .distinct()
             .sorted()
             .toList()
     }
 
-    fun retireActiveForCredentialReset(
+    fun prepareForCredentialReset(
         accountIdentities: Collection<String>,
     ): List<AndroidDocumentProviderIncarnationRetirement> = synchronized(LOCK) {
         val retirements = mutableListOf<AndroidDocumentProviderIncarnationRetirement>()
         try {
             accountIdentities.distinct().sorted().forEach { accountIdentity ->
                 requireAccountIdentity(accountIdentity)
-                if (readRecord(accountIdentity) is AndroidDocumentProviderIncarnationRecord.Active) {
-                    retirements += retireForRemoval(accountIdentity)
+                val pending = readPendingRetirement(accountIdentity)
+                if (pending != null) {
+                    resumeRetirementForCredentialReset(pending)
+                    retirements += pending
+                } else {
+                    when (val result = readRecordForCredentialReset(accountIdentity)) {
+                        AndroidDocumentProviderCredentialResetRecord.Missing -> Unit
+                        is AndroidDocumentProviderCredentialResetRecord.Readable -> when (result.record) {
+                            is AndroidDocumentProviderIncarnationRecord.Active ->
+                                retirements += retireForRemoval(accountIdentity)
+                            is AndroidDocumentProviderIncarnationRecord.Retired -> Unit
+                        }
+                        AndroidDocumentProviderCredentialResetRecord.Unreadable -> persist(
+                            accountIdentity,
+                            AndroidDocumentProviderIncarnationRecord.Retired(NextcloudDocumentIncarnation.Legacy),
+                        )
+                    }
                 }
             }
             retirements
@@ -200,6 +222,32 @@ internal class AndroidDocumentProviderIncarnationStore(
             }
             throw failure
         }
+    }
+
+    private fun readPendingRetirement(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement? {
+        val encoded = read(retirementJournalKey(accountIdentity)) ?: return null
+        return decodeAndroidDocumentProviderRetirement(encoded).also { retirement ->
+            require(retirement.accountIdentity == accountIdentity) {
+                "The document provider retirement journal has the wrong account."
+            }
+        }
+    }
+
+    private fun resumeRetirementForCredentialReset(retirement: AndroidDocumentProviderIncarnationRetirement) {
+        when (read(retirement.accountIdentity)) {
+            retirement.previousEncoded -> persistEncoded(retirement.accountIdentity, retirement.retiredEncoded)
+            retirement.retiredEncoded -> Unit
+            else -> error("The document provider account incarnation changed during credential reset.")
+        }
+    }
+
+    private fun readRecordForCredentialReset(accountIdentity: String): AndroidDocumentProviderCredentialResetRecord = try {
+        readRecord(accountIdentity)?.let(AndroidDocumentProviderCredentialResetRecord::Readable)
+            ?: AndroidDocumentProviderCredentialResetRecord.Missing
+    } catch (_: IllegalArgumentException) {
+        AndroidDocumentProviderCredentialResetRecord.Unreadable
+    } catch (_: ClassCastException) {
+        AndroidDocumentProviderCredentialResetRecord.Unreadable
     }
 
     private fun readRecord(accountIdentity: String): AndroidDocumentProviderIncarnationRecord? {
@@ -290,9 +338,9 @@ internal suspend fun retireAndroidDocumentProviderIncarnationsForCredentialReset
     clearCredentials: suspend () -> Unit,
     recordCompletionFailure: (Exception) -> Unit = {},
 ) {
-    val accountIdentities = store.activeAccountIdentitiesForCredentialReset()
-    lifetimeGuard.withRemovals(accountIdentities) {
-        val retirements = store.retireActiveForCredentialReset(accountIdentities)
+    val accountIdentities = store.accountIdentitiesForCredentialReset()
+    lifetimeGuard.withCredentialReset(accountIdentities) {
+        val retirements = store.prepareForCredentialReset(accountIdentities)
         withContext(NonCancellable) {
             try {
                 clearCredentials()

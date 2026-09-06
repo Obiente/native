@@ -197,6 +197,28 @@ class AndroidDocumentProviderReadAccessTest {
     }
 
     @Test
+    fun cancelledCredentialResetWaitDoesNotBlockNewDocumentReads() = runBlocking {
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val openDescriptor = lifetimeGuard.acquireReadBlocking(original.accountId.storageKey)
+        val reset = launch(start = CoroutineStart.UNDISPATCHED) {
+            lifetimeGuard.withCredentialReset(emptyList()) {
+                error("Cancelled credential reset must not enter")
+            }
+        }
+        assertFalse(reset.isCompleted)
+
+        reset.cancelAndJoin()
+        val laterRead = withTimeout(1_000L) {
+            async(Dispatchers.Default) {
+                lifetimeGuard.acquireReadBlocking(original.accountId.storageKey)
+            }.await()
+        }
+
+        laterRead.close()
+        openDescriptor.close()
+    }
+
+    @Test
     fun fileOpenWaitingForRemovalRejectsTheReplacementIncarnation() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()

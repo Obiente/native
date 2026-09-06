@@ -595,6 +595,123 @@ class AndroidDocumentProviderIncarnationStoreTest {
     }
 
     @Test
+    fun credentialResetWaitsForARecordlessLegacyDocumentLifetimeLease() = runBlocking {
+        val fixture = fixture()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val descriptorLease = lifetimeGuard.acquireReadBlocking(accountIdentity)
+        var credentialsCleared = false
+        val reset = async(start = CoroutineStart.UNDISPATCHED) {
+            retireAndroidDocumentProviderIncarnationsForCredentialReset(
+                fixture.store,
+                lifetimeGuard,
+                clearCredentials = { credentialsCleared = true },
+            )
+        }
+        yield()
+
+        assertFalse(credentialsCleared)
+        descriptorLease.close()
+        reset.await()
+        assertTrue(credentialsCleared)
+        assertEquals(emptyMap(), fixture.records)
+    }
+
+    @Test
+    fun credentialResetResumesAnInterruptedActiveRetirement() = runBlocking {
+        val active = AndroidDocumentProviderIncarnationRecord.Active(
+            NextcloudDocumentIncarnation.Versioned("1".repeat(32)),
+        )
+        val activeEncoded = encodeAndroidDocumentProviderIncarnationRecord(active)
+        val records = mutableMapOf(accountIdentity to activeEncoded)
+        val fixture = fixture(records, incarnations = listOf("2".repeat(32)))
+        fixture.store.retireForRemoval(accountIdentity)
+        records[accountIdentity] = activeEncoded
+        var credentialsCleared = false
+
+        retireAndroidDocumentProviderIncarnationsForCredentialReset(
+            fixture.store,
+            AndroidAccountRemovalLifetimeGuard(),
+            clearCredentials = { credentialsCleared = true },
+        )
+
+        assertTrue(credentialsCleared)
+        assertFailsWith<IllegalStateException> { fixture.store.activeIncarnation(accountIdentity) }
+        assertEquals(setOf(accountIdentity), records.keys)
+        assertEquals(
+            NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
+            fixture.store.prepareForAccountSave(accountIdentity, accountAlreadyStored = false),
+        )
+    }
+
+    @Test
+    fun failedCredentialResetRollsBackAResumedRetirement() = runBlocking {
+        val active = AndroidDocumentProviderIncarnationRecord.Active(
+            NextcloudDocumentIncarnation.Versioned("1".repeat(32)),
+        )
+        val activeEncoded = encodeAndroidDocumentProviderIncarnationRecord(active)
+        val records = mutableMapOf(accountIdentity to activeEncoded)
+        val fixture = fixture(records)
+        fixture.store.retireForRemoval(accountIdentity)
+        records[accountIdentity] = activeEncoded
+
+        assertFailsWith<IllegalStateException> {
+            retireAndroidDocumentProviderIncarnationsForCredentialReset(
+                fixture.store,
+                AndroidAccountRemovalLifetimeGuard(),
+                clearCredentials = { error("synthetic credential reset failure") },
+            )
+        }
+
+        assertEquals(active.incarnation, fixture.store.activeIncarnation(accountIdentity))
+        assertEquals(setOf(accountIdentity), records.keys)
+    }
+
+    @Test
+    fun credentialResetTombstonesMalformedStateBeforeSafeReadd() = runBlocking {
+        val records = mutableMapOf(accountIdentity to "broken")
+        val fixture = fixture(records, incarnations = listOf("2".repeat(32)))
+
+        retireAndroidDocumentProviderIncarnationsForCredentialReset(
+            fixture.store,
+            AndroidAccountRemovalLifetimeGuard(),
+            clearCredentials = {},
+        )
+
+        assertFailsWith<IllegalStateException> { fixture.store.activeIncarnation(accountIdentity) }
+        assertEquals(
+            NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
+            fixture.store.prepareForAccountSave(accountIdentity, accountAlreadyStored = false),
+        )
+    }
+
+    @Test
+    fun credentialResetTombstonesWrongTypedStateBeforeSafeReadd() = runBlocking {
+        val values = mutableMapOf<String, Any>(accountIdentity to setOf("wrong-type"))
+        val incarnations = ArrayDeque(listOf("2".repeat(32)))
+        val store = AndroidDocumentProviderIncarnationStore(
+            read = { key -> values[key] as String? },
+            commit = { key, value ->
+                if (value == null) values.remove(key) else values[key] = value
+                true
+            },
+            keys = { values.keys },
+            createIncarnation = { NextcloudDocumentIncarnation.Versioned(incarnations.removeFirst()) },
+        )
+
+        retireAndroidDocumentProviderIncarnationsForCredentialReset(
+            store,
+            AndroidAccountRemovalLifetimeGuard(),
+            clearCredentials = {},
+        )
+
+        assertFailsWith<IllegalStateException> { store.activeIncarnation(accountIdentity) }
+        assertEquals(
+            NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
+            store.prepareForAccountSave(accountIdentity, accountAlreadyStored = false),
+        )
+    }
+
+    @Test
     fun failedCredentialResetRollsBackEveryPreparedIncarnation() = runBlocking {
         val otherAccount = "b".repeat(64)
         val active = AndroidDocumentProviderIncarnationRecord.Active(
