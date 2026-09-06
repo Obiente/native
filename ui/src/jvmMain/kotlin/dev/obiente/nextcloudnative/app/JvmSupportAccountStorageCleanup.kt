@@ -9,7 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Deletes only durable support artifacts whose descriptor proves ownership by one account. */
-internal class JvmSupportAccountStorageCleanup(
+class JvmSupportAccountStorageCleanup(
     private val root: File,
     private val directorySync: (File) -> Unit,
     private val deleteFile: (File) -> Boolean = File::delete,

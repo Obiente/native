@@ -18,12 +18,14 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         val pending = pendingAndroidAccountRemovalCleanup(removed)
         val retried = mutableListOf<Pair<String, String?>>()
 
-        retryAndroidAccountOwnedStateCleanup(readded, pending) { _, workIdentity, previewIdentity, _ ->
+        retryAndroidAccountOwnedStateCleanup(readded, pending) { _, workIdentity, previewIdentity, _, _ ->
             retried += workIdentity to previewIdentity
         }
 
         assertEquals(removed.accountId, readded.accountId)
         assertFalse(NextcloudDocumentIds.cacheAccountId(removed) == NextcloudDocumentIds.cacheAccountId(readded))
+        assertEquals(legacyAndroidAccountPersistenceScopeDigest(removed), pending.legacyAccountScopeDigest)
+        assertTrue(requireNotNull(pending.legacyAccountScopeDigest) != pending.accountStorageKey)
         assertEquals(
             NextcloudDocumentIds.accountKey(removed) to NextcloudDocumentIds.cacheAccountId(removed),
             retried.single(),
@@ -40,7 +42,7 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         )
         val retriedPreviewIdentities = mutableListOf<String?>()
 
-        retryAndroidAccountOwnedStateCleanup(readded, legacy) { _, _, previewIdentity, _ ->
+        retryAndroidAccountOwnedStateCleanup(readded, legacy) { _, _, previewIdentity, _, _ ->
             retriedPreviewIdentities += previewIdentity
         }
 
@@ -54,6 +56,7 @@ class AndroidAccountPreviewCleanupRecoveryTest {
 
         assertEquals(64, requireNotNull(pending.previewCacheIdentity).length)
         assertEquals(64, requireNotNull(pending.durableMutationIdentity).length)
+        assertNull(pending.legacyAccountScopeDigest)
         assertTrue(pending.previewCacheIdentity.startsWith(pending.workIdentity))
         assertEquals(pending, decodeAndroidPendingAccountRemovalCleanup(encodeAndroidPendingAccountRemovalCleanup(pending)))
         assertNull(
@@ -65,6 +68,11 @@ class AndroidAccountPreviewCleanupRecoveryTest {
             decodeAndroidPendingAccountRemovalCleanup(
                 "${pending.accountStorageKey}:${pending.workIdentity}",
             )?.durableMutationIdentity,
+        )
+        assertNull(
+            decodeAndroidPendingAccountRemovalCleanup(
+                "${pending.accountStorageKey}:${pending.workIdentity}",
+            )?.legacyAccountScopeDigest,
         )
         val mismatchedIdentity = if (pending.workIdentity.first() == 'f') "e".repeat(64) else "f".repeat(64)
         assertFailsWith<IllegalArgumentException> { pending.copy(previewCacheIdentity = mismatchedIdentity) }

@@ -105,6 +105,32 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
     }
 
     @Test
+    fun supportCleanupFailureKeepsRestartRecoveryPendingUntilRetrySucceeds() = runBlocking {
+        val pending = cleanup("a", "1")
+        var supportCleanupFails = true
+        var supportCleanupAttempts = 0
+        var clears = 0
+
+        suspend fun recover(): Boolean = recoverPendingAndroidAccountRemovalCleanups(
+            pending = listOf(pending),
+            accountOwnedByRegistry = { false },
+            removeAccountOwnedWork = {
+                supportCleanupAttempts += 1
+                if (supportCleanupFails) error("synthetic support cleanup failure")
+            },
+            clearCleanup = { clears += 1 },
+            recordFailure = {},
+        )
+
+        assertFalse(recover())
+        assertEquals(0, clears)
+        supportCleanupFails = false
+        assertTrue(recover())
+        assertEquals(2, supportCleanupAttempts)
+        assertEquals(1, clears)
+    }
+
+    @Test
     fun unreadableCleanupJournalDefersRecoveryWithABoundedMessage() {
         val messages = mutableListOf<String>()
 
