@@ -64,6 +64,30 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
     }
 
     @Test
+    fun `direct snapshot overflow is distinct from a transient row failure`() {
+        var rowLoads = 0
+
+        assertFailsWith<DurableUploadCapabilityOverflowException> {
+            loadDurableUploadCapabilitySnapshot(
+                cachedCapabilities = emptyMap(),
+                storedSelectionIds = listOf("selection-one", "selection-two"),
+                maximumRecoverableCapabilities = 1,
+                loadStoredCapability = { rowLoads += 1 },
+            )
+        }
+        assertEquals(0, rowLoads)
+        assertFailsWith<DurableUploadCapabilityOverflowException> {
+            loadDurableUploadCapabilitySnapshot(
+                cachedCapabilities = mapOf("selection-cached" to "content://synthetic/cached"),
+                storedSelectionIds = listOf("selection-cached", "selection-stored"),
+                maximumRecoverableCapabilities = 1,
+                loadStoredCapability = { rowLoads += 1 },
+            )
+        }
+        assertEquals(0, rowLoads)
+    }
+
+    @Test
     fun `malformed ciphertext without a permission identity remains quarantined without polling`() {
         assertFalse(
             malformedDurableUploadCapabilityCanBecomeActionable(
@@ -74,6 +98,40 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
             malformedDurableUploadCapabilityCanBecomeActionable(
                 malformed("selection-recoverable", "content://synthetic/recoverable"),
             ),
+        )
+    }
+
+    @Test
+    fun `unknown grant provenance is quarantined while a transient permission read retries`() {
+        assertEquals(
+            DurableUploadMalformedRecoveryDisposition.Quarantine,
+            durableUploadMalformedRecoveryDisposition(
+                grantPreExisting = null,
+                peerProtection = DurableUploadPermissionPeerProtection.None,
+                permissionAbsent = false,
+            ),
+        )
+        assertEquals(
+            DurableUploadMalformedRecoveryDisposition.Retry,
+            durableUploadMalformedRecoveryDisposition(
+                grantPreExisting = null,
+                peerProtection = DurableUploadPermissionPeerProtection.None,
+                permissionAbsent = null,
+            ),
+        )
+        assertEquals(
+            DurableUploadMalformedRecoveryDisposition.Recover,
+            durableUploadMalformedRecoveryDisposition(
+                grantPreExisting = null,
+                peerProtection = DurableUploadPermissionPeerProtection.None,
+                permissionAbsent = true,
+            ),
+        )
+        assertEquals(
+            DurableUploadMalformedReleaseResult.Quarantine,
+            releaseMalformedDurableUploadCapability(DurableUploadMalformedRecoveryDisposition.Quarantine) {
+                error("quarantined unknown provenance must not attempt recovery")
+            },
         )
     }
 
@@ -227,6 +285,37 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
                 durableUploadPermissionCleanupPlan(false, protection),
             )
         }
+        assertEquals(
+            DurableUploadMalformedRecoveryDisposition.Quarantine,
+            durableUploadMalformedRecoveryDisposition(
+                grantPreExisting = null,
+                peerProtection = protection("selection-target", sharedUri, arrayOf(exactUnknownGrant)),
+                permissionAbsent = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `stable malformed peer ambiguity quarantines direct release without recovery`() {
+        val sharedUri = "content://synthetic/shared"
+        val disposition = durableUploadMalformedRecoveryDisposition(
+            grantPreExisting = null,
+            peerProtection = protection(
+                "selection-target",
+                sharedUri,
+                arrayOf(peer("selection-peer", sharedUri, grantPreExisting = null)),
+            ),
+            permissionAbsent = false,
+        )
+        var recoveryAttempted = false
+
+        val result = releaseMalformedDurableUploadCapability(disposition) {
+            recoveryAttempted = true
+            true
+        }
+
+        assertEquals(DurableUploadMalformedReleaseResult.Quarantine, result)
+        assertFalse(recoveryAttempted)
     }
 
     @Test

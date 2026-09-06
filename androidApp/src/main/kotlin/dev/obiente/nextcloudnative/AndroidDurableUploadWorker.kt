@@ -55,8 +55,8 @@ internal class DeckAttachmentUploadWorker(
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return resultAfterDurableUploadCapabilityRelease(
-                releaseCapability = { picker.release(initial.request.file) },
+            return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
+                releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
                 onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
                 releasedResult = Result.success(),
@@ -64,8 +64,8 @@ internal class DeckAttachmentUploadWorker(
             )
         }
         if (initial.state != DurableUploadState.Queued) {
-            return resultAfterDurableUploadCapabilityRelease(
-                releaseCapability = { picker.release(initial.request.file) },
+            return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
+                releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
                 onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
                 releasedResult = Result.success(),
@@ -138,7 +138,7 @@ internal class DeckAttachmentUploadWorker(
                             message = "The account used for this upload is no longer available.",
                         )
                     },
-                    releaseSelection = { picker.release(initial.request.file) },
+                    releaseSelection = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
                     onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
                     recordFailure = {
@@ -170,8 +170,8 @@ internal class DeckAttachmentUploadWorker(
                     accountId = initial.accountId,
                     jobId = jobId,
                 )
-                resultAfterDurableUploadCapabilityRelease(
-                    releaseCapability = { picker.release(initial.request.file) },
+                resultAfterDurableUploadCapabilityReleaseOrQuarantine(
+                    releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
                     onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
                     releasedResult = Result.failure(),
@@ -269,8 +269,8 @@ internal class DeckAttachmentUploadWorker(
                 failure = failure,
             )
         }
-        return resultAfterDurableUploadCapabilityRelease(
-            releaseCapability = { picker.release(started.request.file) },
+        return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
+            releaseCapability = { onQuarantined -> picker.release(started.request.file, onQuarantined) },
             completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
             onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
             releasedResult = Result.success(),
@@ -309,7 +309,7 @@ internal class DeckAttachmentUploadWorker(
 
 internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     transitionToFailed: () -> Unit,
-    releaseSelection: () -> Boolean,
+    releaseSelection: (onQuarantined: () -> Unit) -> Boolean,
     completeCapabilityCleanup: () -> Unit = {},
     onCleanupRetained: () -> Unit = {},
     recordFailure: () -> Unit,
@@ -317,7 +317,7 @@ internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     retryResult: Result,
 ): Result {
     transitionToFailed()
-    val result = resultAfterDurableUploadCapabilityRelease(
+    val result = resultAfterDurableUploadCapabilityReleaseOrQuarantine(
         releaseCapability = releaseSelection,
         completeCapabilityCleanup = completeCapabilityCleanup,
         onCleanupRetained = onCleanupRetained,
@@ -348,6 +348,20 @@ internal fun <Result> resultAfterDurableUploadCapabilityRelease(
     runCatching(onCleanupRetained)
     retainedResult
 }
+
+internal fun <Result> resultAfterDurableUploadCapabilityReleaseOrQuarantine(
+    releaseCapability: (onQuarantined: () -> Unit) -> Boolean,
+    completeCapabilityCleanup: () -> Unit = {},
+    onCleanupRetained: () -> Unit = {},
+    releasedResult: Result,
+    retainedResult: Result,
+): Result = resultAfterDurableUploadCapabilityRelease(
+    releaseCapability = { releaseOrQuarantineDurableUploadCapability(releaseCapability) },
+    completeCapabilityCleanup = completeCapabilityCleanup,
+    onCleanupRetained = onCleanupRetained,
+    releasedResult = releasedResult,
+    retainedResult = retainedResult,
+)
 
 internal suspend fun <Result> processQueuedDurableUploadSource(
     requireCapability: () -> Unit,
