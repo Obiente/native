@@ -761,24 +761,6 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 }
 
-private fun requireSafeProcessGeneration(value: String) {
-    require(value.length in 16..96 && value.all { it.isLetterOrDigit() || it == '-' }) {
-        "The picker capability process generation is invalid."
-    }
-}
-
-internal fun resumeLocalUploadSelectionResult(
-    continuation: CancellableContinuation<LocalUploadSelectionResult>,
-    result: LocalUploadSelectionResult,
-    releaseSelected: (LocalUploadFile) -> Unit,
-) {
-    continuation.resume(result) { _, undeliveredResult, _ ->
-        if (undeliveredResult is LocalUploadSelectionResult.Selected) {
-            runCatching { releaseSelected(undeliveredResult.file) }
-        }
-    }
-}
-
 private data class AndroidUploadMetadata(
     val displayName: String,
     val sizeBytes: Long?,
