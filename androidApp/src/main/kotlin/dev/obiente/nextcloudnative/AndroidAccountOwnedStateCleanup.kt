@@ -53,7 +53,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAndroidAccountPersistenceScopeDigest(session),
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity, session.accountId.storageKey) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
@@ -96,7 +96,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity, session.accountId.storageKey) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
@@ -139,7 +139,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity, accountStorageKey) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },

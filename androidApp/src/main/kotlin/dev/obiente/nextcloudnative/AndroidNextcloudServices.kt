@@ -1158,20 +1158,7 @@ internal class AndroidNextcloudServices(
     }
 
     private fun notifyDocumentsDocumentChanged(session: NextcloudSession, path: String) {
-        appContext.contentResolver.notifyChange(
-            DocumentsContract.buildDocumentUri(
-                nextcloudDocumentsAuthority(appContext.packageName),
-                NextcloudDocumentIds.documentId(session, path),
-            ),
-            null,
-        )
-        appContext.contentResolver.notifyChange(
-            DocumentsContract.buildChildDocumentsUri(
-                nextcloudDocumentsAuthority(appContext.packageName),
-                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
-            ),
-            null,
-        )
+        notifyAndroidDocumentChanged(appContext, session, path)
     }
 
     override suspend fun beginLogin(
@@ -1235,10 +1222,8 @@ internal class AndroidNextcloudServices(
             ),
         )
     }
-
     override fun trustedServerCertificate(serverUrl: String): TrustedServerCertificate? =
         AndroidServerCertificateTrust.trustedCertificate(appContext, serverUrl)
-
     override fun removeTrustedServerCertificate(serverUrl: String): Boolean {
         val removed = AndroidServerCertificateTrust.revoke(appContext, serverUrl)
         recordSupportDiagnostic(
@@ -1251,7 +1236,6 @@ internal class AndroidNextcloudServices(
         )
         return removed
     }
-
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         val formBody = "token=" + URLEncoder.encode(challenge.token, StandardCharsets.UTF_8.name())
         var networkFailure: JvmNetworkFailureDiagnostic? = null
@@ -1297,18 +1281,15 @@ internal class AndroidNextcloudServices(
         }
         interpretation.result
     }
-
     override fun finishLoginPolling(challenge: LoginChallenge) {
         loginPollFallbackTokens -= challenge.token
         loginPollPendingTokens -= challenge.token
     }
-
     override suspend fun awaitLoginNetworkAvailability() {
         val connectivity = appContext.getSystemService(ConnectivityManager::class.java) ?: return
         if (connectivity.activeNetworkIsValidated()) return
         awaitValidatedAndroidNetwork(connectivity)
     }
-
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
         withContext(Dispatchers.IO) {
             val user = ocsGet(session, "/ocs/v2.php/cloud/user").getJSONObject("ocs").getJSONObject("data")
@@ -1336,20 +1317,30 @@ internal class AndroidNextcloudServices(
                 fileSharing = parseNextcloudFileSharingCapabilities(capabilities.toString()),
             )
         }
-
     override suspend fun listFiles(
         session: NextcloudSession,
         userId: String,
         path: String,
     ): List<NextcloudFile> = listFilesWithSource(session, userId, path).files
-
     override suspend fun listFilesWithSource(
         session: NextcloudSession,
         userId: String,
         path: String,
     ): NextcloudFileListing = withRetainedAndroidAccountFileRead(session, { loadSession(session.accountId) }) read@{
+        listFilesWithSourceWhileAccountLeaseHeld(session, userId, path)
+    }
+    internal suspend fun listFilesWhileAccountLeaseHeld(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): List<NextcloudFile> = listFilesWithSourceWhileAccountLeaseHeld(session, userId, path).files
+    private suspend fun listFilesWithSourceWhileAccountLeaseHeld(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): NextcloudFileListing {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        try {
+        return try {
             val response = request(
                 method = "PROPFIND",
                 url = buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -1366,7 +1357,7 @@ internal class AndroidNextcloudServices(
             } else {
                 if (response.status >= 500) {
                     fileReadCache.cachedListing(accountId, path)?.files?.let {
-                        return@read NextcloudFileListing(it, NextcloudFileListingSource.Cache)
+                        return NextcloudFileListing(it, NextcloudFileListingSource.Cache)
                     }
                 }
                 throw NextcloudFileListingHttpException(response.status)
@@ -1377,7 +1368,6 @@ internal class AndroidNextcloudServices(
                 ?: throw failure
         }
     }
-
     override suspend fun listFilesCachedWithSource(
         session: NextcloudSession,
         userId: String,
@@ -1387,7 +1377,6 @@ internal class AndroidNextcloudServices(
             NextcloudFileListing(it.files, NextcloudFileListingSource.Cache)
         }
     }
-
     override suspend fun searchFiles(
         session: NextcloudSession,
         userId: String,
@@ -1408,7 +1397,6 @@ internal class AndroidNextcloudServices(
             .distinctBy(NextcloudFile::path)
             .take(maximumResults)
     }
-
     override suspend fun listFavoriteFiles(
         session: NextcloudSession,
         userId: String,
@@ -1425,7 +1413,6 @@ internal class AndroidNextcloudServices(
         if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
         parseDavFiles(response.body, userId).distinctBy(NextcloudFile::path)
     }
-
     override suspend fun setFileFavorite(
         session: NextcloudSession,
         userId: String,

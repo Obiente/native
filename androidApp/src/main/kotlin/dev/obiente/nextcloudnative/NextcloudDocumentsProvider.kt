@@ -25,20 +25,16 @@ import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileNotFoundException
-import java.net.URI
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import okhttp3.OkHttpClient
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-
 /**
- * Storage Access Framework bridge for the currently authenticated account.
+ * Storage Access Framework bridge for locally stored Nextcloud accounts.
  *
  * Reads use the same bounded WebDAV download path as the app. Writes are staged in app-private
  * storage and committed with ETag preconditions only when the caller closes the descriptor.
@@ -48,7 +44,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     private lateinit var offline: AndroidFileOfflineRepository
     private lateinit var virtualFiles: AndroidVirtualFileCache
     private lateinit var webDav: NextcloudDocumentWebDav
-
+    private lateinit var documentIncarnations: AndroidDocumentProviderIncarnationStore
+    private lateinit var accountResolver: NextcloudDocumentsAccountResolver
     @Volatile
     private var cachedAccount: ResolvedAccount? = null
 
@@ -56,6 +53,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val providerContext = context ?: return false
         cleanupIncompleteAndroidDocumentWritebacks(providerContext)
         services = AndroidNextcloudServices(providerContext)
+        documentIncarnations = AndroidDocumentProviderIncarnationStore(providerContext)
+        accountResolver = nextcloudDocumentsAccountResolver(services, documentIncarnations)
         AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(providerContext))
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
@@ -71,53 +70,37 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     override fun queryRoots(projection: Array<out String>?): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_ROOT_PROJECTION
         val cursor = MatrixCursor(columns)
-        val session = services.loadSession() ?: return cursor
-        val host = runCatching { URI(session.serverUrl).host }.getOrNull().orEmpty()
-        cursor.addNamedRow(
-            mapOf(
-                DocumentsContract.Root.COLUMN_ROOT_ID to NextcloudDocumentIds.accountKey(session),
-                DocumentsContract.Root.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.rootId(session),
-                DocumentsContract.Root.COLUMN_TITLE to context?.getString(R.string.documents_provider_root_name),
-                DocumentsContract.Root.COLUMN_SUMMARY to buildString {
-                    append(session.loginName)
-                    if (host.isNotBlank()) append(" on ").append(host)
-                },
-                DocumentsContract.Root.COLUMN_FLAGS to (
-                    DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
-                        DocumentsContract.Root.FLAG_SUPPORTS_SEARCH or
-                        if (context?.isReadOnlyTestMode() == true) {
-                            0
-                        } else {
-                            DocumentsContract.Root.FLAG_SUPPORTS_CREATE
-                        }
-                    ),
-                DocumentsContract.Root.COLUMN_ICON to R.mipmap.ic_launcher,
-                DocumentsContract.Root.COLUMN_MIME_TYPES to "*/*",
-            ),
-        )
+        accountResolver.resolvableAccounts().forEach { account ->
+            cursor.addNextcloudRootRow(
+                session = account.session,
+                incarnation = account.incarnation,
+                title = context?.getString(R.string.documents_provider_root_name).orEmpty(),
+                readOnly = context?.isReadOnlyTestMode() == true,
+            )
+        }
         return cursor
     }
-
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
-        val session = requireSession()
         if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+            val session = requireActiveSession()
             val handoff = AndroidExternalFileHandoffRegistry.peek(documentId, session)
                 ?: throw FileNotFoundException("This external file handoff has expired.")
             cursor.addExternalHandoffRow(handoff)
             return cursor
         }
-        val reference = requireReference(documentId, session)
-        if (reference.isRoot) {
-            cursor.addDocumentRow(session, null)
-            return cursor
+        return withDocumentRead(documentId) { session, reference ->
+            cursor.addNextcloudDocumentRow(
+                session,
+                reference.incarnation,
+                reference.takeUnless(NextcloudDocumentReference::isRoot)
+                    ?.let { findDocumentWithOfflineFallback(session, it.path) },
+                documentsRootTitle(),
+            )
+            cursor
         }
-
-        cursor.addDocumentRow(session, findDocumentWithOfflineFallback(session, reference.path))
-        return cursor
     }
-
     override fun queryChildDocuments(
         parentDocumentId: String,
         projection: Array<out String>?,
@@ -125,25 +108,21 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     ): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
-        val session = requireSession()
-        val parent = requireReference(parentDocumentId, session)
-        val children = runCatching {
-            val account = resolveAccount(session)
-            runBlocking(Dispatchers.IO) { services.listFiles(session, account.userId, parent.path) }
-        }.getOrElse { failure ->
-            val cachedChildren = offline.availableChildren(session, parent.path)
-            if (cachedChildren.isNotEmpty() || offline.isStoredDirectory(session, parent.path)) {
-                cachedChildren
-            } else {
-                throw FileNotFoundException("Could not load this Nextcloud folder.").also {
-                    it.initCause(failure)
+        return withDocumentRead(parentDocumentId) { session, parent ->
+            val children = runCatching {
+                val account = resolveAccount(session)
+                runBlocking(Dispatchers.IO) {
+                    services.listFilesWhileAccountLeaseHeld(session, account.userId, parent.path)
                 }
+            }.getOrElse { failure ->
+                val cachedChildren = offline.availableChildren(session, parent.path)
+                if (cachedChildren.isNotEmpty() || offline.isStoredDirectory(session, parent.path)) cachedChildren
+                else throw FileNotFoundException("Could not load this Nextcloud folder.").also { it.initCause(failure) }
             }
+            children.forEach { cursor.addNextcloudDocumentRow(session, parent.incarnation, it, documentsRootTitle()) }
+            cursor
         }
-        children.forEach { cursor.addDocumentRow(session, it) }
-        return cursor
     }
-
     override fun querySearchDocuments(
         rootId: String,
         query: String,
@@ -151,31 +130,27 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     ): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
-        val session = requireSession()
-        require(rootId == NextcloudDocumentIds.accountKey(session)) {
-            "The document root belongs to another account."
+        return withRootRead(rootId) { session, incarnation ->
+            val account = resolveAccount(session)
+            val result = providerCall(
+                message = "Could not search this Nextcloud account.",
+                accountIdentity = NextcloudDocumentIds.accountKey(session),
+            ) { webDav.searchFiles(session, account.userId, query) }
+            result.files.forEach { cursor.addNextcloudDocumentRow(session, incarnation, it, documentsRootTitle()) }
+            cursor
         }
-        val account = resolveAccount(session)
-        val result = providerCall(
-            message = "Could not search this Nextcloud account.",
-            accountIdentity = NextcloudDocumentIds.accountKey(session),
-        ) {
-            webDav.searchFiles(session, account.userId, query)
-        }
-        result.files.forEach { cursor.addDocumentRow(session, it) }
-        return cursor
     }
-
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
-        val session = services.loadSession() ?: return false
-        val parent = runCatching { NextcloudDocumentIds.requireForSession(parentDocumentId, session) }.getOrNull()
-            ?: return false
-        val child = runCatching { NextcloudDocumentIds.requireForSession(documentId, session) }.getOrNull()
+        val resolved = runCatching { accountResolver.requireDocument(parentDocumentId) }.getOrNull() ?: return false
+        val session = resolved.session
+        val parent = resolved.reference
+        val child = runCatching {
+            NextcloudDocumentIds.requireForSession(documentId, session, parent.incarnation)
+        }.getOrNull()
             ?: return false
         if (child.isRoot || parent.path == child.path) return false
         return parent.isRoot || child.path.startsWith(parent.path + "/")
     }
-
     override fun openDocument(
         documentId: String,
         mode: String,
@@ -185,49 +160,54 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw SecurityException("Unsupported document mode: $mode")
         }
         signal?.throwIfCanceled()
-
-        val session = requireSession()
         if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+            val session = requireActiveSession()
             if (mode != "r") throw SecurityException("External file handoffs are read-only.")
             return openExternalHandoffDocument(session, documentId, signal)
         }
-        val reference = requireReference(documentId, session)
+        val (session, reference) = requireDocument(documentId)
         if (reference.isRoot) throw FileNotFoundException("Folders cannot be opened as files.")
-        if (mode == "r") {
-            offline.availableContent(session, reference.path)?.let { cached ->
-                signal?.throwIfCanceled()
-                return ParcelFileDescriptor.open(cached.content, ParcelFileDescriptor.MODE_READ_ONLY)
-            }
-        }
-        val account = resolveAccount(session)
-        val file = runCatching { findDocument(session, account, reference.path) }
-            .getOrElse { failure ->
-                if (mode == "r") {
-                    virtualFiles.acquire(session, reference.path)?.let { lease ->
-                        signal?.throwIfCanceled()
-                        return openVirtualFileLease(lease)
-                    }
+        val accountLease = acquireDocumentReadLease(session, reference.incarnation)
+        try {
+            if (mode == "r") {
+                offline.availableContent(session, reference.path)?.let { cached ->
+                    signal?.throwIfCanceled()
+                    return openAndroidDocumentAccountLeasedContent(cached.content, accountLease, storageManager(), WRITE_HANDLER, signal)
                 }
-                throw failure
             }
-        if (file.isDirectory) throw FileNotFoundException("Folders cannot be opened as files.")
-        if (mode != "r") return openWritableDocument(session, account, file, mode, signal)
-
-        file.etag?.takeIf(String::isNotBlank)?.let { etag ->
-            virtualFiles.acquire(session, reference.path, expectedRemoteEtag = etag)?.let { lease ->
-                signal?.throwIfCanceled()
-                return openVirtualFileLease(lease)
+            val account = resolveAccount(session)
+            val file = runCatching { findDocument(session, account, reference.path) }
+                .getOrElse { failure ->
+                    if (mode == "r") {
+                        virtualFiles.acquire(session, reference.path)?.let { lease ->
+                            signal?.throwIfCanceled()
+                            return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
+                        }
+                    }
+                    throw failure
+                }
+            if (file.isDirectory) throw FileNotFoundException("Folders cannot be opened as files.")
+            if (mode != "r") return openWritableDocument(
+                session, reference.incarnation, account, file, mode, signal, accountLease,
+            )
+            file.etag?.takeIf(String::isNotBlank)?.let { etag ->
+                virtualFiles.acquire(session, reference.path, expectedRemoteEtag = etag)?.let { lease ->
+                    signal?.throwIfCanceled()
+                    return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
+                }
             }
+            return openVirtualFileProxy(session, account.userId, file, signal, accountLease)
+        } catch (failure: Throwable) {
+            accountLease.close()
+            throw failure
         }
-
-        return openVirtualFileProxy(session, account.userId, file, signal)
     }
-
     private fun openVirtualFileProxy(
         session: NextcloudSession,
         userId: String,
         file: NextcloudFile,
         signal: CancellationSignal?,
+        accountLease: AndroidAccountOperationLease,
     ): ParcelFileDescriptor {
         val size = file.size ?: throw FileNotFoundException(
             "Nextcloud did not provide a file size for seekable access.",
@@ -239,13 +219,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             var empty = virtualFiles.createHydrationStagingFile()
             if (runCatching { virtualFiles.publishHydration(session, file, empty) }.getOrDefault(false)) {
                 virtualFiles.acquire(session, file.path, expectedRemoteEtag = etag)?.let { lease ->
-                    return openVirtualFileLease(lease)
+                    return openAndroidDocumentVirtualFileLease(lease, accountLease, storageManager(), WRITE_HANDLER, signal)
                 }
             }
             if (!empty.exists()) empty = virtualFiles.createHydrationStagingFile()
-            return ParcelFileDescriptor.open(empty, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
-                virtualFiles.discardHydrationStagingFile(empty)
-            }
+            return openAndroidDocumentAccountLeasedContent(
+                empty, accountLease, storageManager(), WRITE_HANDLER, signal,
+                onReleased = { virtualFiles.discardHydrationStagingFile(empty) },
+            )
         }
         val rangeSession = services.openFileRangeSession(
             session = session,
@@ -285,15 +266,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw failure
         }
         signal?.setOnCancelListener(callback::cancel)
-        return try {
+        return openAndroidTrackedRangeDescriptor(accountLease, callback::onRelease) {
             requireNotNull(context?.getSystemService(StorageManager::class.java))
                 .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, nextProxyHandler())
-        } catch (failure: Throwable) {
-            callback.onRelease()
-            throw failure
         }
     }
-
     private fun openExternalHandoffDocument(
         session: NextcloudSession,
         documentId: String,
@@ -410,7 +387,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw failure
         }
     }
-
     private fun openExternalLocalContent(
         content: File,
         handoffLease: AndroidExternalFileHandoffLease,
@@ -450,21 +426,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw failure
         }
     }
-
-    private fun openVirtualFileLease(lease: AndroidVirtualFileLease): ParcelFileDescriptor = try {
-        ParcelFileDescriptor.open(
-            lease.content,
-            ParcelFileDescriptor.MODE_READ_ONLY,
-            WRITE_HANDLER,
-        ) { lease.release() }
-    } catch (failure: Throwable) {
-        lease.release()
-        throw failure
-    }
-
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String =
-        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
-            val parent = requireReference(parentDocumentId, session)
+        withDocumentMutation(parentDocumentId) { session, parent ->
             val account = resolveAccount(session)
             requireDirectory(session, account, parent)
             val path = childPath(parent.path, requireSafeDisplayName(displayName))
@@ -478,29 +441,28 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     }
                 }
             }
-            notifyDocumentChanged(session, path)
-            NextcloudDocumentIds.documentId(session, path)
+            notifyDocumentChanged(session, parent.incarnation, path)
+            NextcloudDocumentIds.documentId(session, parent.incarnation, path)
         }
-
     override fun renameDocument(documentId: String, displayName: String): String =
-        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
-            val reference = requireReference(documentId, session)
+        withDocumentMutation(documentId) { session, reference ->
             if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be renamed.")
             val account = resolveAccount(session)
             val file = findDocument(session, account, reference.path)
-            val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
-            if (destination == reference.path) return@withAndroidDocumentMutation documentId
+            val destination = childPath(
+                NextcloudDocumentIds.parentPath(reference.path),
+                requireSafeDisplayName(displayName),
+            )
+            if (destination == reference.path) return@withDocumentMutation documentId
             val etag = requireMutationEtag(file)
             withNoBlockingAndroidDocumentWriteback(context, session, reference.path, destination) {
                 mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
             }
-            notifyMove(session, reference.path, destination)
-            NextcloudDocumentIds.documentId(session, destination)
+            notifyMove(session, reference.incarnation, reference.path, destination)
+            NextcloudDocumentIds.documentId(session, reference.incarnation, destination)
         }
-
     override fun deleteDocument(documentId: String) =
-        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
-            val reference = requireReference(documentId, session)
+        withDocumentMutation(documentId) { session, reference ->
             if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be deleted.")
             val account = resolveAccount(session)
             val file = findDocument(session, account, reference.path)
@@ -515,18 +477,16 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     )
                 }
             }
-            notifyDocumentChanged(session, reference.path)
+            notifyDocumentChanged(session, reference.incarnation, reference.path)
         }
-
     override fun moveDocument(
         sourceDocumentId: String,
         sourceParentDocumentId: String,
         targetParentDocumentId: String,
     ): String =
-        withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
-            val source = requireReference(sourceDocumentId, session)
-            val sourceParent = requireReference(sourceParentDocumentId, session)
-            val targetParent = requireReference(targetParentDocumentId, session)
+        withDocumentMutation(sourceDocumentId) { session, source ->
+            val sourceParent = requireReference(sourceParentDocumentId, session, source.incarnation)
+            val targetParent = requireReference(targetParentDocumentId, session, source.incarnation)
             if (source.isRoot) throw SecurityException("The Nextcloud root cannot be moved.")
             require(NextcloudDocumentIds.parentPath(source.path) == sourceParent.path) {
                 "The supplied source parent does not contain this document."
@@ -535,31 +495,30 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             requireDirectory(session, account, targetParent)
             val file = findDocument(session, account, source.path)
             val destination = childPath(targetParent.path, file.name)
-            if (destination == source.path) return@withAndroidDocumentMutation sourceDocumentId
+            if (destination == source.path) return@withDocumentMutation sourceDocumentId
             withNoBlockingAndroidDocumentWriteback(context, session, source.path, destination) {
                 mutationCall {
                     webDav.move(session, account.userId, source.path, destination, requireMutationEtag(file))
                 }
             }
-            notifyMove(session, source.path, destination)
-            NextcloudDocumentIds.documentId(session, destination)
+            notifyMove(session, source.incarnation, source.path, destination)
+            NextcloudDocumentIds.documentId(session, source.incarnation, destination)
         }
-
     private fun openWritableDocument(
         session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
         account: ResolvedAccount,
         file: NextcloudFile,
         mode: String,
         signal: CancellationSignal?,
+        accountLease: AndroidAccountOperationLease,
     ): ParcelFileDescriptor {
-        val accountLease = acquireAndroidDocumentWritebackAccountLease(
-            session,
-            file.path,
-            services::loadSession,
-        )
         val recovered: AndroidDocumentPendingWriteback?
         val writeback: AndroidDocumentPendingWriteback
+        var pathReserved = false
         try {
+            reserveAndroidDocumentWritebackPath(session, file.path)
+            pathReserved = true
             recovered = claimAndroidDocumentPendingWriteback(context, session, file.path)
             if (recovered?.conflict == true) {
                 recovered.releaseActive()
@@ -567,9 +526,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
             writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
         } catch (failure: Throwable) {
-            releaseAndroidDocumentWritebackSetup(accountLease) {
+            if (pathReserved) releaseAndroidDocumentWritebackSetup(accountLease) {
                 releaseAndroidDocumentWritebackPath(session, file.path)
-            }
+            } else accountLease.close()
             throw failure
         }
         val expectedEtag = writeback.expectedRemoteEtag
@@ -607,19 +566,24 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     if (closeError != null) {
                         retainFailedWriteback(writeback, closeError)
                     } else {
-                        requireAndroidDocumentStagedWritebackCapacity(
-                            stagedBytes = staging.length(),
-                            availableBytes = staging.parentFile?.usableSpace ?: 0L,
-                        )
-                        webDav.replaceFileAtomically(
-                            session = session,
-                            userId = account.userId,
-                            path = writeback.remotePath,
-                            source = staging,
-                            expectedEtag = expectedEtag,
-                        )
-                        writeback.complete()
-                        notifyDocumentChanged(session, writeback.remotePath)
+                        withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
+                            expectedSession = session,
+                            loadCurrentSession = { services.loadSession(session.accountId) },
+                        ) { currentSession ->
+                            requireAndroidDocumentStagedWritebackCapacity(
+                                stagedBytes = staging.length(),
+                                availableBytes = staging.parentFile?.usableSpace ?: 0L,
+                            )
+                            webDav.replaceFileAtomically(
+                                session = currentSession,
+                                userId = account.userId,
+                                path = writeback.remotePath,
+                                source = staging,
+                                expectedEtag = expectedEtag,
+                            )
+                            writeback.complete()
+                            notifyDocumentChanged(currentSession, incarnation, writeback.remotePath)
+                        }
                     }
                 } catch (failure: Throwable) {
                     retainFailedWriteback(writeback, failure)
@@ -643,14 +607,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw failure
         }
     }
-
     private fun createLocalStagingFile(): File {
         val providerContext = requireNotNull(context) { "Provider context is unavailable." }
         val directory = File(providerContext.cacheDir, STAGING_DIRECTORY).apply { mkdirs() }
         check(directory.isDirectory) { "Could not prepare local document staging." }
         return File.createTempFile("document-", ".stage", directory)
     }
-
     private fun createDurableWriteback(
         session: NextcloudSession,
         file: NextcloudFile,
@@ -753,12 +715,21 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
 
     private inline fun <T> mutationCall(operation: () -> T): T = documentMutationCall(operation)
 
-    private fun notifyMove(session: NextcloudSession, sourcePath: String, destinationPath: String) {
-        notifyDocumentChanged(session, sourcePath)
-        notifyDocumentChanged(session, destinationPath)
+    private fun notifyMove(
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+        sourcePath: String,
+        destinationPath: String,
+    ) {
+        notifyDocumentChanged(session, incarnation, sourcePath)
+        notifyDocumentChanged(session, incarnation, destinationPath)
     }
 
-    private fun notifyDocumentChanged(session: NextcloudSession, path: String) {
+    private fun notifyDocumentChanged(
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+        path: String,
+    ) {
         runCatching { virtualFiles.invalidate(session, path) }
             .onFailure { failure ->
                 Log.w(LOG_TAG, "Could not invalidate virtual file content", failure)
@@ -773,40 +744,17 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val resolver = providerContext.contentResolver
         val authority = nextcloudDocumentsAuthority(providerContext.packageName)
         resolver.notifyChange(
-            DocumentsContract.buildDocumentUri(
-                authority,
-                NextcloudDocumentIds.documentId(session, path),
-            ),
+            DocumentsContract.buildDocumentUri(authority, NextcloudDocumentIds.documentId(session, incarnation, path)),
             null,
         )
         resolver.notifyChange(
             DocumentsContract.buildChildDocumentsUri(
                 authority,
-                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
+                NextcloudDocumentIds.documentId(session, incarnation, NextcloudDocumentIds.parentPath(path)),
             ),
             null,
         )
     }
-
-    private fun MatrixCursor.addDocumentRow(session: NextcloudSession, file: NextcloudFile?) {
-        val isDirectory = file?.isDirectory ?: true
-        val path = file?.path.orEmpty()
-        val displayName = file?.name ?: context?.getString(R.string.documents_provider_root_name).orEmpty()
-        addNamedRow(
-            mapOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.documentId(session, path),
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME to displayName,
-                DocumentsContract.Document.COLUMN_MIME_TYPE to when {
-                    isDirectory -> DocumentsContract.Document.MIME_TYPE_DIR
-                    else -> file.mimeType ?: "application/octet-stream"
-                },
-                DocumentsContract.Document.COLUMN_FLAGS to documentFlags(file),
-                DocumentsContract.Document.COLUMN_SIZE to file?.size,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED to file?.lastModified?.toEpochMilliseconds(),
-            ),
-        )
-    }
-
     private fun MatrixCursor.addExternalHandoffRow(record: AndroidExternalFileHandoffRecord) {
         val file = record.file
         addNamedRow(
@@ -821,42 +769,98 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         )
     }
 
-    private fun documentFlags(file: NextcloudFile?): Int {
-        if (file == null) {
-            return DocumentsContract.Document.FLAG_DIR_PREFERS_GRID or
-                DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
-        }
-        var flags = if (file.isDirectory) {
-            DocumentsContract.Document.FLAG_DIR_PREFERS_GRID or
-                DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
-        } else {
-            0
-        }
-        if (!file.etag.isNullOrBlank()) {
-            flags = flags or DocumentsContract.Document.FLAG_SUPPORTS_RENAME or
-                DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
-                DocumentsContract.Document.FLAG_SUPPORTS_MOVE
-            if (!file.isDirectory) flags = flags or DocumentsContract.Document.FLAG_SUPPORTS_WRITE
-        }
-        return flags
-    }
-
     private fun MatrixCursor.addNamedRow(values: Map<String, Any?>) {
         val row = newRow()
         columnNames.forEach { column -> row.add(values[column]) }
     }
 
-    private fun requireSession(): NextcloudSession = services.loadSession()
+    private fun documentsRootTitle(): String =
+        context?.getString(R.string.documents_provider_root_name).orEmpty()
+
+    private fun storageManager(): StorageManager =
+        requireNotNull(context?.getSystemService(StorageManager::class.java))
+
+    private fun requireActiveSession(): NextcloudSession = services.loadSession()
         ?: throw FileNotFoundException("Sign in to nati.ve to browse files.")
 
-    private fun requireReference(documentId: String, session: NextcloudSession): NextcloudDocumentReference =
+    private fun requireDocument(documentId: String): ResolvedNextcloudDocument = providerCall(
+        message = "This Nextcloud document ID is no longer valid.",
+        accountIdentity = runCatching { NextcloudDocumentIds.parse(documentId).accountKey }.getOrNull(),
+    ) {
+        accountResolver.requireDocument(documentId)
+    }
+
+    private fun requireRoot(rootId: String): ResolvedNextcloudDocumentsAccount = providerCall(
+        message = "This Nextcloud document root is no longer valid.",
+        accountIdentity = runCatching { NextcloudDocumentIds.parseProviderRootId(rootId).accountKey }.getOrNull(),
+    ) {
+        accountResolver.requireRoot(rootId)
+    }
+
+    private inline fun <Result> withDocumentRead(
+        documentId: String,
+        action: (NextcloudSession, NextcloudDocumentReference) -> Result,
+    ): Result {
+        val resolved = requireDocument(documentId)
+        return withAndroidDocumentProviderReadAccess(
+            resolved.session, resolved.reference.incarnation,
+            { services.loadSession(resolved.session.accountId) }, documentIncarnations::activeIncarnation,
+        ) { session -> action(session, resolved.reference) }
+    }
+    private inline fun <Result> withRootRead(
+        rootId: String,
+        action: (NextcloudSession, NextcloudDocumentIncarnation) -> Result,
+    ): Result {
+        val resolved = requireRoot(rootId)
+        return withAndroidDocumentProviderReadAccess(
+            resolved.session, resolved.incarnation,
+            { services.loadSession(resolved.session.accountId) }, documentIncarnations::activeIncarnation,
+        ) { session -> action(session, resolved.incarnation) }
+    }
+    private fun acquireDocumentReadLease(
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+    ) = acquireAndroidDocumentProviderReadLease(
+        session,
+        incarnation,
+        { services.loadSession(session.accountId) },
+        documentIncarnations::activeIncarnation,
+    )
+    private fun requireReference(
+        documentId: String,
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+    ): NextcloudDocumentReference =
         providerCall(
             message = "This Nextcloud document ID is no longer valid.",
             accountIdentity = NextcloudDocumentIds.accountKey(session),
         ) {
-            NextcloudDocumentIds.requireForSession(documentId, session)
+            NextcloudDocumentIds.requireForSession(documentId, session, incarnation)
         }
 
+    private inline fun <Result> withDocumentMutation(
+        documentId: String,
+        action: (NextcloudSession, NextcloudDocumentReference) -> Result,
+    ): Result {
+        val resolved = requireDocument(documentId)
+        return withAndroidDocumentMutation(
+            session = resolved.session,
+            loadCurrentSession = { services.loadSession(resolved.session.accountId) },
+        ) { session ->
+            requireCurrentIncarnation(session, resolved.reference.incarnation)
+            action(session, resolved.reference)
+        }
+    }
+    private fun requireCurrentIncarnation(
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+    ) {
+        require(
+            documentIncarnations.activeIncarnation(session.documentProviderIncarnationAccountIdentity()) == incarnation,
+        ) {
+            "The document belongs to an earlier account incarnation."
+        }
+    }
     private fun resolveAccount(session: NextcloudSession): ResolvedAccount {
         val accountKey = NextcloudDocumentIds.accountKey(session)
         cachedAccount?.takeIf { it.accountKey == accountKey }?.let { return it }
@@ -876,7 +880,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         ) {
             val parent = NextcloudDocumentIds.parentPath(path)
             runBlocking(Dispatchers.IO) {
-                services.listFiles(session, account.userId, parent)
+                services.listFilesWhileAccountLeaseHeld(session, account.userId, parent)
             }.firstOrNull { it.path == path }
                 ?: throw FileNotFoundException("The requested Nextcloud document was not found.")
         }
@@ -938,10 +942,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         }
     }
-
-    private fun String.toEpochMilliseconds(): Long? = runCatching {
-        ZonedDateTime.parse(this, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
-    }.getOrNull()
 
     private fun CancellationSignal?.asDocumentCancellation(): DocumentRequestCancellation {
         val platformSignal = this ?: return NoDocumentRequestCancellation

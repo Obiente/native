@@ -10,6 +10,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
@@ -227,6 +228,8 @@ class AndroidAccountOperationGuardTest {
     @Test
     fun remoteRevocationKeepsMutationsBlockedUntilLocalRemovalCommits() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val remoteRevoked = CompletableDeferred<Unit>()
         val allowLocalRemoval = CompletableDeferred<Unit>()
         var localRemovalCommitted = false
@@ -234,7 +237,7 @@ class AndroidAccountOperationGuardTest {
 
         val removal = async {
             revokeAndroidSessionWithAccountLease(
-                accountIdentity = "account-a",
+                expectedSession = session,
                 guard = guard,
                 preflight = {},
                 revoke = { remoteRevoked.complete(Unit) },
@@ -246,7 +249,7 @@ class AndroidAccountOperationGuardTest {
         }
         remoteRevoked.await()
         val mutation = async {
-            guard.withAccount("account-a") {
+            guard.withAccount(accountIdentity) {
                 mutationObservedCommittedRemoval = localRemovalCommitted
             }
         }
@@ -335,33 +338,27 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
-    fun writableDescriptorLeaseRejectsAccountRemovalWithoutWaitingForClose() = runBlocking {
+    fun documentMutationLeaseBlocksAccountRemovalUntilClose() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val session = NextcloudSession("https://cloud.example.test", "alice", "password")
-        val accountIdentity = NextcloudDocumentIds.accountKey(session)
-        val descriptorLease = acquireAndroidDocumentMutationAccountLease(session, { session }, guard)
-        var removalEntered = false
-
-        val failure = try {
-            assertFailsWith<IllegalStateException> {
-                withTimeout(1_000L) {
-                    withAndroidAccountRemovalLease(accountIdentity, guard) {
-                        removalEntered = true
-                    }
-                }
-            }
-        } finally {
-            descriptorLease.close()
-        }
-
-        assertEquals(
-            "Finish or discard pending document changes before removing this account.",
-            failure.message,
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            session,
+            { session },
+            guard,
+            lifetimeGuard,
         )
-        assertFalse(removalEntered)
-        withTimeout(1_000L) {
-            withAndroidAccountRemovalLease(accountIdentity, guard) { removalEntered = true }
+        var removalEntered = false
+        val removal = async {
+            withAndroidAccountRemovalLease(session, guard, lifetimeGuard) {
+                removalEntered = true
+            }
         }
+        yield()
+
+        assertFalse(removalEntered)
+        mutationLease.close()
+        removal.await()
         assertTrue(removalEntered)
     }
 
@@ -537,8 +534,66 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun canonicallyEquivalentCredentialTransitionCannotPassAnOlderDocumentMutation() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val equivalent = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443///")
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            original, { original }, guard, lifetimeGuard,
+        )
+        try {
+            assertFalse(
+                guard.tryWithAccounts(
+                    androidAccountOperationIdentities(equivalent), unavailable = { false }, action = { true },
+                ),
+            )
+        } finally {
+            mutationLease.close()
+        }
+        assertTrue(
+            guard.tryWithAccounts(
+                androidAccountOperationIdentities(equivalent), unavailable = { false }, action = { true },
+            ),
+        )
+    }
+
+    @Test
+    fun replacedSessionCanonicalIdentityBlocksCredentialPublication() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replaced = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443///")
+        val replacement = replaced.copy(appPassword = "new-password")
+        val replacementState = AndroidAccountCredentialState.Empty.upsertAndSelect(replacement)
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            original, { original }, guard, lifetimeGuard,
+        )
+        var published = false
+
+        val transition = async(Dispatchers.Default) {
+            replaceAndroidActiveStateWithAccountLeases(
+                replacement = replacementState,
+                previousSession = null,
+                replacedSession = replaced,
+                suspectEncrypted = null,
+                guard = guard,
+                coordinator = coordinator,
+            ) { _, _, _, _ -> published = true }
+        }
+        yield()
+        assertFalse(published)
+
+        mutationLease.close()
+        withTimeout(1_000L) { transition.await() }
+        assertTrue(published)
+    }
+
+    @Test
     fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")
 
         assertFailsWith<FileNotFoundException> {
@@ -546,11 +601,16 @@ class AndroidAccountOperationGuardTest {
                 session = original,
                 loadCurrentSession = { original.copy(appPassword = "replacement-password") },
                 guard = guard,
+                lifetimeGuard = lifetimeGuard,
             )
         }
 
         withTimeout(1_000L) {
-            guard.withAccount(NextcloudDocumentIds.accountKey(original)) { }
+            withAndroidAccountRemovalLease(
+                original,
+                guard,
+                lifetimeGuard,
+            ) { }
         }
     }
 
