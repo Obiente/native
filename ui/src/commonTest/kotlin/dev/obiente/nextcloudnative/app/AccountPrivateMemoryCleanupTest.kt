@@ -20,22 +20,24 @@ class AccountPrivateMemoryCleanupTest {
         AccountPrivateMemoryLifecycle.activateAccount(retainedKey)
         val removedPreview = PreviewCacheKey(removedKey, "core", 1L, "etag", 64, 64)
         val retainedPreview = PreviewCacheKey(retainedKey, "core", 2L, "etag", 64, 64)
+        val removedDynamicKey = dynamicKey(removed)
+        val retainedDynamicKey = dynamicKey(retained)
         val removedPhotoState = PhotoTimelineUiStateRepository.stateFor(removed)
         val retainedPhotoState = PhotoTimelineUiStateRepository.stateFor(retained)
         val removedProducer = sharedAccountPrivateMemoryGate.producer(removedKey)
         val retainedProducer = sharedAccountPrivateMemoryGate.producer(retainedKey)
-        val removedDynamicProducer = sharedDynamicNativeMemoryCache.producer(removed)
-        val retainedDynamicProducer = sharedDynamicNativeMemoryCache.producer(retained)
+        val removedDynamicProducer = requireNotNull(sharedDynamicNativeMemoryCache.producer(removedDynamicKey))
+        val retainedDynamicProducer = requireNotNull(sharedDynamicNativeMemoryCache.producer(retainedDynamicKey))
         try {
             PreviewMemoryCache.put(removedPreview, byteArrayOf(1), removedProducer)
             PreviewMemoryCache.put(retainedPreview, byteArrayOf(2), retainedProducer)
             sharedNextcloudNotesCache.storeDetail(removed, note(1L, "Removed"), removedProducer)
             sharedNextcloudNotesCache.storeDetail(retained, note(2L, "Retained"), retainedProducer)
             sharedDynamicNativeMemoryCache.storeScreen(
-                dynamicKey(removed), dynamicSnapshot(1), removedDynamicProducer,
+                removedDynamicKey, dynamicSnapshot(1), removedDynamicProducer,
             )
             sharedDynamicNativeMemoryCache.storeScreen(
-                dynamicKey(retained), dynamicSnapshot(2), retainedDynamicProducer,
+                retainedDynamicKey, dynamicSnapshot(2), retainedDynamicProducer,
             )
             sharedDashboardStatusMemoryCache.store(
                 removed, NativeDashboardSnapshot(emptyList(), emptyMap()), null, 1L, removedProducer,
@@ -76,8 +78,8 @@ class AccountPrivateMemoryCleanupTest {
             assertContentEquals(byteArrayOf(2), PreviewMemoryCache.get(retainedPreview))
             assertNull(sharedNextcloudNotesCache.detail(removed, 1L))
             assertEquals("Retained", sharedNextcloudNotesCache.detail(retained, 2L)?.title)
-            assertNull(sharedDynamicNativeMemoryCache.screen(dynamicKey(removed)))
-            assertNotNull(sharedDynamicNativeMemoryCache.screen(dynamicKey(retained)))
+            assertNull(sharedDynamicNativeMemoryCache.screen(removedDynamicKey))
+            assertNotNull(sharedDynamicNativeMemoryCache.screen(retainedDynamicKey))
             assertNull(sharedDashboardStatusMemoryCache.get(removed, 1L))
             assertNotNull(sharedDashboardStatusMemoryCache.get(retained, 1L))
             assertNull(ContactsWorkspaceMemoryCache.get(removed, "removed"))
