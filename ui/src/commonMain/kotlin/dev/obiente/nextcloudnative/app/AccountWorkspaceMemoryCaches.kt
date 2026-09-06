@@ -2,6 +2,13 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.mutableStateOf
 
+internal enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
+    Never("No expiry", null),
+    OneHour("1 hour", 60L * 60L),
+    FourHours("4 hours", 4L * 60L * 60L),
+    OneDay("24 hours", 24L * 60L * 60L),
+}
+
 internal class PhotoTimelineUiState {
     val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
     val backupStatuses = mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
@@ -10,22 +17,29 @@ internal class PhotoTimelineUiState {
 
 internal object PhotoTimelineUiStateRepository {
     private const val MAXIMUM_ACCOUNT_STATES = 4
+    private val gate = sharedAccountPrivateMemoryGate
     private val accountStates = linkedMapOf<String, PhotoTimelineUiState>()
 
-    fun stateFor(session: NextcloudSession): PhotoTimelineUiState {
+    fun stateFor(session: NextcloudSession): PhotoTimelineUiState = gate.read(
+        session.accountId.storageKey, null,
+    ) {
         val accountKey = previewCacheDigest(session)
         accountStates.remove(accountKey)?.let { existing ->
             accountStates[accountKey] = existing
-            return existing
+            return@read existing
         }
         val created = PhotoTimelineUiState()
         accountStates[accountKey] = created
         while (accountStates.size > MAXIMUM_ACCOUNT_STATES) accountStates.remove(accountStates.keys.first())
-        return created
-    }
+        created
+    } ?: PhotoTimelineUiState()
 
-    fun removeAccount(accountStorageKey: String) {
-        accountStates.remove(accountStorageKey)
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
+        accountStates.remove(accountStorageKey)?.let { retired ->
+            retired.timeline.value = PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE)
+            retired.backupStatuses.value = emptyMap()
+            retired.initialLoadCompleted.value = false
+        }
     }
 }
 
@@ -39,6 +53,13 @@ internal sealed interface CalendarLoadState {
     ) : CalendarLoadState
     data class Error(val message: String) : CalendarLoadState
 }
+
+internal fun calendarReadyMatchesRequest(
+    readyMonth: CalendarMonth,
+    readyWindow: GroupwareDavTimeWindow,
+    requestedMonth: CalendarMonth,
+    requestedWindow: GroupwareDavTimeWindow,
+): Boolean = readyMonth == requestedMonth && readyWindow == requestedWindow
 
 internal object CalendarWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
@@ -98,8 +119,7 @@ internal object UserStatusWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
 
-    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
-        gate.producer(session.accountId.storageKey)
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? = gate.producer(session.accountId.storageKey)
 
     fun get(session: NextcloudSession): UserStatusSurfaceState.Available? =
         gate.read(session.accountId.storageKey, null) {
@@ -215,7 +235,7 @@ internal fun removeUserStatusWorkspaceMemory(accountStorageKey: String) =
     UserStatusWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 
 internal fun removeNextcloudNativeWorkspaceMemory(accountStorageKey: String) {
-    PhotoTimelineUiStateRepository.removeAccount(accountStorageKey)
+    PhotoTimelineUiStateRepository.purgeRetiredAccount(accountStorageKey)
     ActivityWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
     TalkWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 }
