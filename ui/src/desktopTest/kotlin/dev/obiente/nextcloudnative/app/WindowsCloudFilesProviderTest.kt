@@ -339,7 +339,7 @@ class WindowsCloudFilesProviderTest {
             assertFalse(startup.isAlive)
             startupFailure.get()?.let { throw it }
             assertTrue(api.awaitPlaceholderFetches())
-            assertEquals(listOf("Apps"), api.completedPlaceholders.map(WindowsCloudPlaceholder::name))
+            assertEquals(listOf("Apps"), api.createdPlaceholderBatches.flatten().map(WindowsCloudPlaceholder::name).distinct())
         } finally {
             releaseCreate.countDown()
             startup.join(TimeUnit.SECONDS.toMillis(5))
@@ -1329,7 +1329,7 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
-    fun `patterned population still transfers the complete directory`() {
+    fun `patterned population still creates the complete directory`() {
         val root = createTempDirectory("windows-cloud-pattern-")
         val directory = WindowsCloudFileIdentity("account-01", "Apps", "\"directory\"", 0L, true)
         val text = WindowsCloudFileIdentity("account-01", "Apps/readme.txt", "\"text\"", 5L, false)
@@ -1344,7 +1344,7 @@ class WindowsCloudFilesProviderTest {
         provider.fetchPlaceholders(callbackInfo(root, directory), "*.txt")
 
         assertTrue(api.awaitPlaceholderFetches())
-        assertEquals(setOf("readme.txt", "photo.jpg"), api.completedPlaceholders.map { it.name }.toSet())
+        assertEquals(setOf("readme.txt", "photo.jpg"), api.createdPlaceholderBatches.flatten().map { it.name }.toSet())
         provider.close()
     }
 

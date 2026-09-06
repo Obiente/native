@@ -22,7 +22,7 @@ class WindowsCloudShellRegistrarTest {
         val root = installation.resolve("Cloud root; still one argument").toPath().createDirectories()
         val accountId = "a5".repeat(32)
         var invocation = emptyList<String>()
-        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath) { command, timeout ->
+        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath, recoveryRootsProvider = { emptyMap() }) { command, timeout ->
             invocation = command
             assertEquals(30L, timeout)
             0
@@ -103,7 +103,7 @@ class WindowsCloudShellRegistrarTest {
         val installation = createTempDirectory("nextcloud-shell-missing").toFile()
         val launcher = installation.resolve("NextcloudNative.exe").apply { writeText("launcher") }
         var invoked = false
-        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath) { _, _ ->
+        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath, recoveryRootsProvider = { emptyMap() }) { _, _ ->
             invoked = true
             0
         }
@@ -125,7 +125,7 @@ class WindowsCloudShellRegistrarTest {
         val root = installation.resolve("Cloud root").toPath().createDirectories()
         val accountId = "b6".repeat(32)
         val invocations = mutableListOf<List<String>>()
-        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath) { command, _ ->
+        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath, recoveryRootsProvider = { emptyMap() }) { command, _ ->
             invocations += command
             if (command[1] == "register") WINDOWS_SHELL_OWNED_PATH_CONFLICT_EXIT_CODE else 0
         }
@@ -155,7 +155,7 @@ class WindowsCloudShellRegistrarTest {
         val root = installation.resolve("Cloud root").toPath().createDirectories()
         val accountId = "b7".repeat(32)
         var exitCode = WINDOWS_SHELL_REGISTRATION_NOT_FOUND_EXIT_CODE
-        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath) { _, _ -> exitCode }
+        val registrar = PackagedWindowsCloudShellRegistrar(launcher.absolutePath, recoveryRootsProvider = { emptyMap() }) { _, _ -> exitCode }
 
         assertEquals(WindowsShellUnregistrationResult.NotFound, registrar.unregister(root, accountId))
         exitCode = WINDOWS_SHELL_UNSAFE_CONFLICT_EXIT_CODE

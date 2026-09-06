@@ -116,6 +116,37 @@ Explorer root under the checkout's ignored `target` directory. It checks saved
 registration ownership, rejection of a different requested path, and
 unregistration. It does not validate personal-account recovery or writeback.
 
+## Short placeholder identity regression
+
+Root enumeration accepts the registered root context when Windows omits the item
+identity, only for a matching nonzero root file ID. Account and normalized path
+checks still apply. Enumeration reconciles existing children before completing
+the callback, avoiding duplicate placeholder submissions.
+
+Item identities use a version 3 envelope padded to at least 256 bytes, including
+the checksum. This is an application compatibility measure: short directory
+identities reproduced `0x8007016b` on a local Windows installation. It is not a
+documented CFAPI minimum. Readers accept versions 1, 2, and 3; the registered
+root context remains byte-identical version 2 so an upgrade does not replace a
+healthy registration. Older binaries cannot decode version 3 item identities.
+
+**Last reviewed: 2026-09-06.** Local Windows tests passed creation, directory listing, hydration,
+restart, and recovery from actual corrupt version 2 placeholders while preserving
+a synthetic local file. This evidence does not qualify personal-account
+writeback or a published upgrade; check the [releases](https://github.com/obiente/native/releases)
+for available artifacts. On a Windows NTFS test checkout, run:
+
+```powershell
+.\gradlew.bat :ui:createDistributable
+$env:NATIVE_WINDOWS_TEST_LAUNCHER = (Resolve-Path 'ui/build/compose/binaries/main/app/NextcloudNative/NextcloudNative.exe').Path
+.\gradlew.bat :ui:desktopTest --tests '*WindowsCloud*'
+```
+
+The opt-in native tests use the packaged registrar, disposable roots, and an
+in-memory backend that rejects server mutations. Without the launcher variable,
+these integration tests are skipped. The legacy-corruption case also skips on
+Windows versions where the old encoding no longer reproduces the failure.
+
 ## WinGet delivery
 
 `tools/create-winget-manifests.ps1` generates a three-file WinGet manifest from
