@@ -28,6 +28,17 @@ internal inline fun readAndroidLocalUploadCapabilityPreference(read: () -> Strin
     )
 }
 
+internal inline fun decryptAndroidLocalUploadCapability(decrypt: () -> String): String = try {
+    decrypt()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (failure: InvalidSessionCiphertextException) {
+    throw AndroidLocalUploadCapabilityMalformedException(
+        "The encrypted local file selection metadata is invalid.",
+        failure,
+    )
+}
+
 internal inline fun <Result> readAndroidLocalUploadCapability(load: () -> Result): Result = try {
     load()
 } catch (cancelled: CancellationException) {
