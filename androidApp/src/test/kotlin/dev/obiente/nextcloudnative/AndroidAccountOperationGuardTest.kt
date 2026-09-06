@@ -227,6 +227,8 @@ class AndroidAccountOperationGuardTest {
     @Test
     fun remoteRevocationKeepsMutationsBlockedUntilLocalRemovalCommits() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val remoteRevoked = CompletableDeferred<Unit>()
         val allowLocalRemoval = CompletableDeferred<Unit>()
         var localRemovalCommitted = false
@@ -234,7 +236,7 @@ class AndroidAccountOperationGuardTest {
 
         val removal = async {
             revokeAndroidSessionWithAccountLease(
-                accountIdentity = "account-a",
+                expectedSession = session,
                 guard = guard,
                 preflight = {},
                 revoke = { remoteRevoked.complete(Unit) },
@@ -246,7 +248,7 @@ class AndroidAccountOperationGuardTest {
         }
         remoteRevoked.await()
         val mutation = async {
-            guard.withAccount("account-a") {
+            guard.withAccount(accountIdentity) {
                 mutationObservedCommittedRemoval = localRemovalCommitted
             }
         }
@@ -339,7 +341,6 @@ class AndroidAccountOperationGuardTest {
         val guard = AndroidAccountOperationGuard()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val session = NextcloudSession("https://cloud.example.test", "alice", "password")
-        val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val mutationLease = acquireAndroidDocumentMutationAccountLease(
             session,
             { session },
@@ -348,7 +349,7 @@ class AndroidAccountOperationGuardTest {
         )
         var removalEntered = false
         val removal = async {
-            withAndroidAccountRemovalLease(accountIdentity, guard, lifetimeGuard) {
+            withAndroidAccountRemovalLease(session, guard, lifetimeGuard) {
                 removalEntered = true
             }
         }
@@ -548,7 +549,7 @@ class AndroidAccountOperationGuardTest {
 
         withTimeout(1_000L) {
             withAndroidAccountRemovalLease(
-                NextcloudDocumentIds.accountKey(original),
+                original,
                 guard,
                 lifetimeGuard,
             ) { }

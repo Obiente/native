@@ -27,14 +27,28 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     accountIdentity: String,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
+    lifetimeAccountIdentity: String = accountIdentity,
     action: suspend () -> Result,
-): Result = lifetimeGuard.withRemoval(accountIdentity) {
+): Result = lifetimeGuard.withRemoval(lifetimeAccountIdentity) {
     guard.tryWithAccount(
         accountId = accountIdentity,
         unavailable = { rejectAndroidAccountRemovalForPendingDocumentChanges() },
         action = action,
     )
 }
+
+internal suspend fun <Result> withAndroidAccountRemovalLease(
+    session: NextcloudSession,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
+    action: suspend () -> Result,
+): Result = withAndroidAccountRemovalLease(
+    accountIdentity = NextcloudDocumentIds.accountKey(session),
+    guard = guard,
+    lifetimeGuard = lifetimeGuard,
+    lifetimeAccountIdentity = session.documentProviderIncarnationAccountIdentity(),
+    action = action,
+)
 
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
@@ -68,13 +82,13 @@ internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
 }
 
 internal suspend fun revokeAndroidSessionWithAccountLease(
-    accountIdentity: String,
+    expectedSession: NextcloudSession,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
     removeLocalAccount: suspend () -> Unit,
-) = withAndroidAccountRemovalLease(accountIdentity, guard, lifetimeGuard) {
+) = withAndroidAccountRemovalLease(expectedSession, guard, lifetimeGuard) {
     revokeAndroidSessionAfterRemovalPreflight(preflight, revoke, removeLocalAccount)
 }
 
@@ -86,11 +100,21 @@ internal class AndroidAccountRemovalLifetimeGuard {
         runBlocking { acquireRead(accountIdentity) }
 
     suspend fun <Result> withRemoval(accountIdentity: String, action: suspend () -> Result): Result {
-        val lease = acquireRemoval(accountIdentity)
+        return withRemovals(listOf(accountIdentity), action)
+    }
+
+    suspend fun <Result> withRemovals(
+        accountIdentities: Collection<String>,
+        action: suspend () -> Result,
+    ): Result {
+        val leases = mutableListOf<AndroidAccountOperationLease>()
         return try {
+            accountIdentities.distinct().sorted().forEach { accountIdentity ->
+                leases += acquireRemoval(accountIdentity)
+            }
             action()
         } finally {
-            lease.close()
+            leases.asReversed().forEach(AndroidAccountOperationLease::close)
         }
     }
 

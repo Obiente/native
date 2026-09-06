@@ -156,7 +156,7 @@ internal class AndroidAccountCredentialController(
             val session = current.sessions[accountId]
                 ?: return@withLock removeUnavailableAccount(accountId, current)
             val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
-            withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session)) {
+            withAndroidAccountRemovalLease(session) {
                 val active = current.registry.activeAccountId == accountId
                 var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                 removeAndroidAccountCredentialData(
@@ -196,7 +196,7 @@ internal class AndroidAccountCredentialController(
         val unavailableSession = NextcloudSession(target.record.serverUrl, target.record.loginName, appPassword = "")
         val accountIdentity = NextcloudDocumentIds.accountKey(unavailableSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(unavailableSession)
-        withAndroidAccountRemovalLease(accountIdentity) {
+        withAndroidAccountRemovalLease(unavailableSession) {
             var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
             removeUnavailableAndroidAccountCredentialData(
                 accountIdentity = accountIdentity,
@@ -239,11 +239,10 @@ internal class AndroidAccountCredentialController(
         check(current.activeSession == expectedSession) {
             "The account changed before its remote session could be revoked."
         }
-        val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(expectedSession)
         var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
         revokeAndroidSessionWithAccountLease(
-            accountIdentity = accountIdentity,
+            expectedSession = expectedSession,
             preflight = { documentRetirement = prepareAccountRemoval(expectedSession) },
             revoke = revokeRemoteSession,
             removeLocalAccount = {
@@ -274,9 +273,8 @@ internal class AndroidAccountCredentialController(
                 if (session == null) {
                     clearSession(read.state)
                 } else {
-                    val accountIdentity = NextcloudDocumentIds.accountKey(session)
                     val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
-                    withAndroidAccountRemovalLease(accountIdentity) {
+                    withAndroidAccountRemovalLease(session) {
                         var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                         removeAndroidAccountCredentialData(
                             active = true,
@@ -330,10 +328,11 @@ internal class AndroidAccountCredentialController(
         notifyDocumentRootsChanged()
     }
     private suspend fun clearInvalidStore(suspectEncrypted: String?) {
-        clearPersistedSession(
-            encodedReplacement = null,
-            replacement = AndroidAccountCredentialState.Empty,
-            suspectEncrypted = suspectEncrypted,
+        retireAndroidDocumentProviderIncarnationsForCredentialReset(
+            store = AndroidDocumentProviderIncarnationStore(appContext),
+            lifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
+            clearCredentials = { clearPersistedSession(null, AndroidAccountCredentialState.Empty, suspectEncrypted) },
+            recordCompletionFailure = ::recordAccountRemovalCleanupFailure,
         )
         notifyDocumentRootsChanged()
     }
@@ -349,9 +348,8 @@ internal class AndroidAccountCredentialController(
     ) {
         val activeSession = current.activeSession
         if (activeSession != null) {
-            val accountIdentity = NextcloudDocumentIds.accountKey(activeSession)
             val pendingCleanup = pendingAndroidAccountRemovalCleanup(activeSession)
-            withAndroidAccountRemovalLease(accountIdentity) {
+            withAndroidAccountRemovalLease(activeSession) {
                 var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                 removeRecoveredAndroidAccountCredentialData(
                     prepareAccountRemoval = { documentRetirement = prepareAccountRemoval(activeSession) },
