@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import kotlinx.coroutines.CancellationException
+import org.json.JSONObject
 
 internal class AndroidLocalUploadCapabilityUnavailableException(
     message: String,
@@ -67,3 +68,24 @@ internal inline fun <Result> readAndroidLocalUploadCapability(load: () -> Result
         failure,
     )
 }
+
+internal fun JSONObject.optionalStrictString(key: String): String? {
+    if (!has(key) || isNull(key)) return null
+    return requireStrictString(key)
+}
+
+internal fun JSONObject.requireStrictString(key: String): String = get(key).let { value ->
+    require(value is String) { "The $key value changed type." }
+    value
+}
+
+internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
+    if (!has(key) || isNull(key)) return null
+    return get(key).let { value ->
+        require(value is Boolean) { "The $key value changed type." }
+        value
+    }
+}
+
+internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
+    payload.optionalStrictBoolean("grantPreExisting") ?: false

@@ -197,6 +197,36 @@ internal fun <Permission> malformedDurableUploadPeerBlocksDirectCleanup(
     samePermission = samePermission,
 ) != DurableUploadPermissionPeerProtection.None
 
+internal enum class DurableUploadMalformedPeerCleanupDisposition {
+    Proceed,
+    Retry,
+    Quarantine,
+}
+
+internal fun <Permission> durableUploadMalformedPeerCleanupDisposition(
+    malformedPeers: Iterable<DurableUploadPermissionPeer<Permission>>,
+    targetSelectionId: String,
+    targetPermission: Permission,
+    samePermission: (Permission, Permission) -> Boolean,
+): DurableUploadMalformedPeerCleanupDisposition {
+    val peers = malformedPeers.toList()
+    if (peers.any { peer -> peer.selectionId != targetSelectionId && peer.permission == null }) {
+        return DurableUploadMalformedPeerCleanupDisposition.Quarantine
+    }
+    return if (
+        malformedDurableUploadPeerBlocksDirectCleanup(
+            peers,
+            targetSelectionId,
+            targetPermission,
+            samePermission,
+        )
+    ) {
+        DurableUploadMalformedPeerCleanupDisposition.Retry
+    } else {
+        DurableUploadMalformedPeerCleanupDisposition.Proceed
+    }
+}
+
 internal enum class DurableUploadPermissionCleanupPlan {
     ReleaseThenRemove,
     RemoveWithoutRelease,
