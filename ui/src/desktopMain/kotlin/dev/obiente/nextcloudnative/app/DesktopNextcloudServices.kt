@@ -3502,7 +3502,6 @@ class DesktopNextcloudServices(
         }
         session
     }
-
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         val persistedSession = accountOperationGuard.persistSessionAndActivateDynamicReads(
             persist = {
