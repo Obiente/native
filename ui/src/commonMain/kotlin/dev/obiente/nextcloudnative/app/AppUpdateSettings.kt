@@ -169,6 +169,7 @@ internal fun AppUpdateSettingsCard(
                 return@launch
             }
             installMessage = when (val install = services.beginAppUpdate(latest)) {
+                AppUpdateInstallResult.Restarting -> "nati.ve is restarting to finish the update."
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
                 AppUpdateInstallResult.Installed ->
@@ -198,8 +199,12 @@ internal fun AppUpdateSettingsCard(
             title = { Text("Install app update?") },
             text = {
                 Text(
-                    "nati.ve will download and verify version ${release.versionName}, then ask " +
-                        "the system package service to install it. Restart the app after installation.",
+                    if (release is DesktopDirectRelease && release.asset.platform == "windows") {
+                        "nati.ve will download and verify the update, close, and reopen automatically when it is installed."
+                    } else {
+                        "nati.ve will download and verify version ${release.versionName}, then ask " +
+                            "the system package service to install it. Restart the app after installation."
+                    },
                 )
             },
             confirmButton = {
@@ -209,7 +214,13 @@ internal fun AppUpdateSettingsCard(
                         beginInstall(release)
                     },
                 ) {
-                    Text("Install update")
+                    Text(
+                        if (release is DesktopDirectRelease && release.asset.platform == "windows") {
+                            "Update and restart"
+                        } else {
+                            "Install update"
+                        },
+                    )
                 }
             },
             dismissButton = {

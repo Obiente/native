@@ -168,6 +168,7 @@ import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
+import dev.obiente.nextcloudnative.app.diagnosticOutcome
 import dev.obiente.nextcloudnative.app.AppUpdateInstallResult
 import dev.obiente.nextcloudnative.app.AppUpdateInstallState
 import dev.obiente.nextcloudnative.app.AppUpdatePreferences
@@ -643,13 +644,7 @@ internal class AndroidNextcloudServices(
                         },
                         component = SupportDiagnosticComponent.Updates,
                         operation = "updates.install",
-                        outcome = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
-                            AppUpdateInstallResult.Installed -> "installed"
-                            is AppUpdateInstallResult.Cancelled -> "cancelled"
-                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
-                            is AppUpdateInstallResult.Rejected -> "rejected"
-                        },
+                        outcome = result.diagnosticOutcome(),
                         durationMillis = elapsedMillis(started),
                         fields = buildList {
                             add(SupportDiagnosticFieldDraft("release", release.versionName))

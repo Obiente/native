@@ -293,6 +293,7 @@ sealed interface AppUpdateCheckResult {
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
+    data object Restarting : AppUpdateInstallResult
     data object Installed : AppUpdateInstallResult
     data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
@@ -668,3 +669,12 @@ private fun String.isBoundedMarkdown(maxLength: Int): Boolean =
         none { character ->
             character.isISOControl() && character != '\n' && character != '\r' && character != '\t'
         }
+
+fun AppUpdateInstallResult.diagnosticOutcome(): String = when (this) {
+    AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
+    AppUpdateInstallResult.Restarting -> "restarting"
+    AppUpdateInstallResult.Installed -> "installed"
+    is AppUpdateInstallResult.Cancelled -> "cancelled"
+    is AppUpdateInstallResult.PermissionRequired -> "permission-required"
+    is AppUpdateInstallResult.Rejected -> "rejected"
+}

@@ -167,3 +167,30 @@ publicly trusted signing service is adopted, update the verifier, deep-sign
 project-owned executable content before packaging, sign the MSI last, retain
 RFC 3161 timestamps, and remove the unsigned-install disclosure only after the
 published artifact verifies successfully on a clean Windows installation.
+
+## In-app update handoff
+
+After the user chooses **Update and restart**, the Windows updater downloads and
+verifies the MSI, waits for the app to exit, then invokes Windows Installer with
+`/quiet /norestart`. No installer wizard is required. The handoff waits for the
+installer to finish, releases its single-update gate, and relaunches nati.ve.
+An installation failure relaunches the existing app with an update-failure
+notice when its launcher remains available. Windows policy failures remain
+failures; the updater does not fall back to elevation or disable security checks.
+
+The installer is instructed not to reboot Windows. A reboot-required result is
+accepted as installer completion, without automatically restarting the OS.
+The app's existing update/version checks remain authoritative for the running
+version after relaunch. The manual first-install MSI remains interactive.
+
+This is the source behavior for in-app Windows updates, not a claim that an
+artifact containing it has been published. An older installed updater still uses
+its original handoff for the first upgrade to a build containing this change.
+Automatic update checks continue to notify the user; this change does not opt
+users into unattended downloads or close their app on a schedule.
+
+Regression tests execute the generated handoff script with synthetic installer
+success, failure, and reboot-required results. They verify quiet arguments,
+quoted package paths, parent-exit ordering, gate release, and relaunch behavior
+without modifying an installed application. MSI behavior uses the documented
+[Windows Installer command-line options](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/msiexec).
