@@ -6,6 +6,8 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.accountRecord
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -193,6 +195,95 @@ class AndroidAccountRemovalRecoveryTest {
         assertFailsWith<IllegalStateException> {
             requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
         }
+    }
+
+    @Test
+    fun malformedCleanupBlocksSelectionBeforePersistencePublicationOrUploadResume() = runBlocking {
+        val events = mutableListOf<String>()
+        val snapshot = restoreAndroidPendingAccountRemovalCleanups(setOf("truncated-row"))
+
+        assertFailsWith<IllegalStateException> {
+            selectAndroidAccountAfterRemovalCleanup(
+                session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+                retryPendingCleanup = { requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot) },
+                registerSessionPrivateValues = { events += "publish-private-state" },
+                persistSelection = { events += listOf("persist-selection", "publish-account", "resume-uploads") },
+            )
+        }
+
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun malformedCleanupBlocksStartupAndExplicitCredentialLoadsBeforePrivatePublication() {
+        val session = NextcloudSession("https://cloud.example.test", "alice", "secret")
+        val snapshot = restoreAndroidPendingAccountRemovalCleanups(setOf("truncated-row"))
+        var privatePublications = 0
+        var publicSessionPublications = 0
+        val restore = {
+            restoreAndroidSessionAfterRemovalCleanup(session.accountId, { snapshot }) {
+                privatePublications += 1
+                session
+            }
+        }
+
+        val startup = AndroidFileSyncSessionSchedulingGuard().restorePersistedSession(
+            load = restore,
+            accountIdOf = NextcloudDocumentIds::accountKey,
+            publishAccount = { restored, _ -> if (restored != null) publicSessionPublications += 1 },
+        )
+
+        assertEquals(null, startup)
+        assertEquals(null, restore())
+        assertEquals(0, privatePublications)
+        assertEquals(0, publicSessionPublications)
+    }
+
+    @Test
+    fun credentialLoadsStayBlockedWhileAsyncCleanupStillOwnsTheMatchingTombstone() = runBlocking {
+        val session = NextcloudSession("https://cloud.example.test", "alice", "secret")
+        val pending = AndroidPendingAccountRemovalCleanup(
+            accountStorageKey = session.accountId.storageKey,
+            workIdentity = NextcloudDocumentIds.accountKey(session),
+        )
+        var encoded = setOf(encodeAndroidPendingAccountRemovalCleanup(pending))
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val worker = async {
+            recoverPendingAndroidAccountRemovalCleanups(
+                pending = setOf(pending),
+                accountOwnedByRegistry = { true },
+                removeAccountOwnedWork = {},
+                clearCleanup = {
+                    cleanupEntered.complete(Unit)
+                    releaseCleanup.await()
+                    encoded = emptySet()
+                },
+                recordFailure = {},
+            )
+        }
+        cleanupEntered.await()
+        var privatePublications = 0
+        val restore = {
+            restoreAndroidSessionAfterRemovalCleanup(
+                session.accountId,
+                { restoreAndroidPendingAccountRemovalCleanups(encoded) },
+            ) {
+                privatePublications += 1
+                session
+            }
+        }
+
+        assertEquals(
+            null,
+            AndroidFileSyncSessionSchedulingGuard().restorePersistedSession(restore, NextcloudDocumentIds::accountKey),
+        )
+        assertEquals(null, restore())
+        assertEquals(0, privatePublications)
+        releaseCleanup.complete(Unit)
+        assertTrue(worker.await())
+        assertEquals(session, restore())
+        assertEquals(1, privatePublications)
     }
 
     @Test

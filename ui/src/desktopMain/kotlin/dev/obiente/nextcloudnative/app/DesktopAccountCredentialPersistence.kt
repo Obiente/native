@@ -235,7 +235,7 @@ internal class DesktopAccountCredentialPersistence(
         val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
         val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
-        if (server == null && login == null) return
+        if (server == null && login == null && phase == null) return
         if (server.isNullOrBlank() || login.isNullOrBlank()) {
             credentialRollbackRecoveryUnavailable()
         }

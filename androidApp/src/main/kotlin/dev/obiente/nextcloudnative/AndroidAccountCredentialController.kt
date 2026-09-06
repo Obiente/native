@@ -74,32 +74,33 @@ internal class AndroidAccountCredentialController(
         registry: NextcloudAccountRegistry,
     ): NextcloudSession? = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
         if (registry.accounts.none { account -> account.id == accountId }) return@serialize null
-        val aggregateRead = readStore()
-        if (!androidCredentialStoreAllowsSessionRestore(aggregateRead)) return@serialize null
-        val aggregate = (aggregateRead as? AndroidAccountCredentialStoreRead.Available)?.state
-        val slotRead = readCredentialSlot(accountId)
-        if (slotRead is AndroidAccountCredentialSlotRead.Unsupported) return@serialize null
-        val storedSlot = (slotRead as? AndroidAccountCredentialSlotRead.Available)?.session
-        val restoredSlot = recoverAndroidAccountCredentialSlot(accountId, registry, storedSlot, aggregate = null)
-        val session = restoredSlot ?: recoverAndroidAccountCredentialSlot(
-            accountId,
-            registry,
-            storedSlot = null,
-            aggregate = aggregate,
-        ) ?: return@serialize null
-        if (storedSlot != session) {
-            runCatching {
-                commitPreferences(
-                    preferences.edit().putString(
-                        androidAccountCredentialSlotKey(accountId),
-                        encryptCredentialSlot(session),
-                    ),
-                )
+        restoreAndroidSessionAfterRemovalCleanup(accountId, accountRemovalCleanupJournal::snapshot) {
+            val aggregateRead = readStore()
+            if (!androidCredentialStoreAllowsSessionRestore(aggregateRead)) return@restoreAndroidSessionAfterRemovalCleanup null
+            val aggregate = (aggregateRead as? AndroidAccountCredentialStoreRead.Available)?.state
+            val slotRead = readCredentialSlot(accountId)
+            if (slotRead is AndroidAccountCredentialSlotRead.Unsupported) return@restoreAndroidSessionAfterRemovalCleanup null
+            val storedSlot = (slotRead as? AndroidAccountCredentialSlotRead.Available)?.session
+            val restoredSlot = recoverAndroidAccountCredentialSlot(accountId, registry, storedSlot, aggregate = null)
+            val session = restoredSlot ?: recoverAndroidAccountCredentialSlot(
+                accountId,
+                registry,
+                storedSlot = null,
+                aggregate = aggregate,
+            ) ?: return@restoreAndroidSessionAfterRemovalCleanup null
+            if (storedSlot != session) {
+                runCatching {
+                    commitPreferences(
+                        preferences.edit().putString(
+                            androidAccountCredentialSlotKey(accountId),
+                            encryptCredentialSlot(session),
+                        ),
+                    )
+                }
             }
+            session.also(registerSessionPrivateValues)
         }
-        session.also(registerSessionPrivateValues)
     }
-
     suspend fun saveSession(session: NextcloudSession): NextcloudSession =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
             retryPendingAccountRemovalCleanup(session)
@@ -142,10 +143,9 @@ internal class AndroidAccountCredentialController(
             )
             requireSupportedCredentialSlots(current.registry)
             val selected = current.select(accountId) ?: return@withLock null
-            val session = requireNotNull(selected.activeSession)
-            registerSessionPrivateValues(session)
-            replaceActiveState(selected, current.activeSession, suspectEncrypted)
-            session
+            selectAndroidAccountAfterRemovalCleanup(
+                requireNotNull(selected.activeSession), ::retryPendingAccountRemovalCleanup, registerSessionPrivateValues,
+            ) { replaceActiveState(selected, current.activeSession, suspectEncrypted) }
         }
 
     suspend fun removeAccount(accountId: NextcloudAccountId): Boolean =
@@ -712,7 +712,6 @@ internal class AndroidAccountCredentialController(
         }
         requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
     }
-
     private fun commitPreferences(editor: SharedPreferences.Editor) = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
         try {
             requireCommittedAndroidAccountCredentialEdit(editor)
