@@ -85,6 +85,15 @@ internal class DeckAttachmentUploadWorker(
                 )
                 return Result.retry()
             }
+            DurableUploadAccountResolution.DeferAccountActivation -> {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "account-deferred",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return Result.success()
+            }
             DurableUploadAccountResolution.AccountUnavailable -> {
                 return failQueuedDurableUploadForUnavailableAccount(
                     transitionToFailed = {

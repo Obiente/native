@@ -12,11 +12,21 @@ internal fun removeActiveAndroidAccountCredentialState(
 ): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
 
 internal fun NextcloudAccountRegistry?.asDurableRegistry(): DurableUploadAccountRegistry =
-    this?.let { registry -> DurableUploadAccountRegistry.Available(registry.accounts) }
+    this?.let { registry ->
+        DurableUploadAccountRegistry.Available(
+            accounts = registry.accounts,
+            activeAccountId = registry.activeAccountId,
+        )
+    }
         ?: DurableUploadAccountRegistry.Unavailable
 
 internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAccountRetentionSnapshot =
-    this?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
+    this?.let { registry ->
+        AndroidAccountRetentionSnapshot.Available(
+            accounts = registry.accounts,
+            activeAccountId = registry.activeAccountId,
+        )
+    }
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
 internal fun SharedPreferences.durableUploadAccountResolutionAvailable(): Boolean =
