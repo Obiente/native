@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative
 
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.security.GeneralSecurityException
+import javax.crypto.AEADBadTagException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -150,6 +152,54 @@ class AndroidDurableUploadSourcePreflightTest {
                     throw IOException("preferences unavailable")
                 }
             }
+        }
+        assertFailsWith<AndroidLocalUploadCapabilityReadException> {
+            readAndroidLocalUploadCapability {
+                decryptAndroidLocalUploadCapability {
+                    throw GeneralSecurityException("keystore temporarily unavailable")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `invalid encrypted capability envelope and authentication terminally fail the job`() = runBlocking {
+        listOf(
+            InvalidSessionCiphertextException(
+                "invalid base64 envelope",
+                IllegalArgumentException("bad base64"),
+            ),
+            InvalidSessionCiphertextException(
+                "authentication failed",
+                AEADBadTagException("bad tag"),
+            ),
+        ).forEach { failure ->
+            var queued = true
+            var terminalDispositions = 0
+            var transientRetries = 0
+            val result = processQueuedDurableUploadSource(
+                requireCapability = {
+                    readAndroidLocalUploadCapability {
+                        decryptAndroidLocalUploadCapability { throw failure }
+                    }
+                },
+                openSource = { error("Corrupt capability metadata must not open the provider.") },
+                onCapabilityUnavailable = {
+                    queued = false
+                    terminalDispositions += 1
+                    "failed"
+                },
+                onProviderUnavailable = {
+                    transientRetries += 1
+                    "retried"
+                },
+                onReady = { error("Corrupt capability metadata must not start an upload.") },
+            )
+
+            assertEquals("failed", result)
+            assertFalse(queued)
+            assertEquals(1, terminalDispositions)
+            assertEquals(0, transientRetries)
         }
     }
 
