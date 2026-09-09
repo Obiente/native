@@ -8,6 +8,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AsyncJvmSupportDiagnostics
 import dev.obiente.nextcloudnative.app.JvmSupportIntake
+import dev.obiente.nextcloudnative.app.JvmSupportAccountStorageCleanup
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -18,8 +19,12 @@ import dev.obiente.nextcloudnative.app.boundedSupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.runWithCleanupBeforeHandoff
 import java.io.File
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -81,6 +86,7 @@ internal object AndroidSupportDiagnostics {
  * restoring or mutating that directory while an earlier facade is still packaging or uploading.
  */
 internal object AndroidSupportIntakeCoordinator {
+    private val lock = ReentrantLock()
     @Volatile
     private var instance: JvmSupportIntake? = null
 
@@ -88,7 +94,7 @@ internal object AndroidSupportIntakeCoordinator {
         context: Context,
         diagnostics: AsyncJvmSupportDiagnostics,
         client: OkHttpClient,
-    ): JvmSupportIntake = instance ?: synchronized(this) {
+    ): JvmSupportIntake = instance ?: lock.withLock {
         val appContext = context.applicationContext ?: context
         instance ?: JvmSupportIntake(
             diagnostics = diagnostics,
@@ -98,6 +104,30 @@ internal object AndroidSupportIntakeCoordinator {
             supportMutationsAllowed = appContext.cloudMutationGate(),
         ).also { instance = it }
     }
+
+    suspend fun removeAccount(context: Context, accountIdentity: String) {
+        instance?.let { intake ->
+            intake.removeAccount(accountIdentity)
+            return
+        }
+        val intakeCreatedWhileWaiting = withContext(Dispatchers.IO) {
+            lock.withLock {
+                instance ?: run {
+                    val appContext = context.applicationContext ?: context
+                    JvmSupportAccountStorageCleanup(
+                        root = File(appContext.noBackupFilesDir, "support-submissions"),
+                        directorySync = ::syncAndroidSupportDirectory,
+                    ).removeAccount(accountIdentity, inMemoryArchive = null)
+                    null
+                }
+            }
+        }
+        intakeCreatedWhileWaiting?.removeAccount(accountIdentity)
+    }
+}
+
+private fun syncAndroidSupportDirectory(directory: File) {
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel -> channel.force(true) }
 }
 
 internal fun androidSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =

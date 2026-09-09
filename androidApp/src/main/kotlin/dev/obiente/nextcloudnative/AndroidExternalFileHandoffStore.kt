@@ -22,6 +22,7 @@ internal class AndroidExternalFileHandoffStoreException(message: String, cause: 
 internal class AndroidExternalFileHandoffStore(
     internal val stateFile: File,
     internal val managedContentRoot: File? = null,
+    private val deleteStateFile: (File) -> Boolean = File::delete,
 ) {
     constructor(context: Context) : this(
         File(context.applicationContext.noBackupFilesDir, STATE_DIRECTORY).resolve(STATE_FILE_NAME),
@@ -64,7 +65,7 @@ internal class AndroidExternalFileHandoffStore(
         val parent = stateFile.parentFile
             ?: throw AndroidExternalFileHandoffStoreException("External handoff state has no parent directory.")
         if (records.isEmpty()) {
-            if (stateFile.exists() && !stateFile.delete()) {
+            if (stateFile.exists() && (!deleteStateFile(stateFile) || stateFile.exists())) {
                 throw AndroidExternalFileHandoffStoreException("Could not clear external handoff state.")
             }
             return
@@ -101,6 +102,13 @@ internal class AndroidExternalFileHandoffStore(
         val root = managedContentRoot ?: return
         val directory = androidExternalHandoffContentDirectory(root, documentId)
         if (directory.exists() && (!directory.deleteRecursively() || directory.exists())) {
+            throw AndroidExternalFileHandoffStoreException("Could not clear managed external handoff content.")
+        }
+    }
+
+    fun deleteAllManagedContent() {
+        val root = managedContentRoot ?: return
+        if (root.exists() && (!root.deleteRecursively() || root.exists())) {
             throw AndroidExternalFileHandoffStoreException("Could not clear managed external handoff content.")
         }
     }

@@ -21,6 +21,21 @@ internal interface HomeWorkspaceLayoutStorage {
     }
 }
 
+internal fun homeWorkspaceAccountPersistenceKeys(
+    accountScopeDigest: String,
+    legacyAccountScopeDigest: String? = null,
+): Set<String> = buildSet {
+    setOfNotNull(accountScopeDigest, legacyAccountScopeDigest).forEach { digest ->
+        require(digest.length == 64 && digest.all { character -> character in '0'..'9' || character in 'a'..'f' }) {
+            "The home workspace account scope must be a canonical SHA-256 digest."
+        }
+        add("apps:pins:1:$digest")
+        HomeFormFactor.entries.forEach { formFactor ->
+            add(HomeWorkspaceScope(digest, formFactor).persistenceKey)
+        }
+    }
+}
+
 internal data class HomeWorkspaceLayoutLoad(
     val layout: HomeWorkspaceLayout,
     val storageAuthoritative: Boolean = true,

@@ -1,12 +1,17 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 
 class AndroidFileReadCacheTest {
     @Test
@@ -45,6 +50,69 @@ class AndroidFileReadCacheTest {
 
         assertNull(cache.cachedListing(ACCOUNT_A, "Notes"))
         assertEquals(listOf(bob), cache.cachedListing(ACCOUNT_B, "Notes")?.files)
+    }
+
+    @Test
+    fun accountRemovalDeletesOnlyItsPrivateListingCache() = withCache { root, cache ->
+        val alice = file("Notes/alice.md", "\"a\"")
+        val bob = file("Notes/bob.md", "\"b\"")
+        cache.storeListing(ACCOUNT_A, "Notes", listOf(alice), 10)
+        cache.storeListing(ACCOUNT_B, "Notes", listOf(bob), 20)
+
+        cache.clearAccount(ACCOUNT_A)
+
+        assertFalse(File(root, ACCOUNT_A).exists())
+        assertEquals(listOf(bob), cache.cachedListing(ACCOUNT_B, "Notes")?.files)
+    }
+
+    @Test
+    fun accountRemovalQuiescesListingCacheWritesBeforeCleanupCompletes() = runBlocking {
+        val root = Files.createTempDirectory("ncn-android-file-cache-removal-").toFile()
+        try {
+            val cache = AndroidFileReadCache(root)
+            val guard = AndroidAccountOperationGuard()
+            val session = NextcloudSession(
+                "https://cloud.example.test",
+                "alice",
+                "fixture-password",
+            )
+            val accountId = NextcloudDocumentIds.accountKey(session)
+            val readStarted = CompletableDeferred<Unit>()
+            val releaseRead = CompletableDeferred<Unit>()
+            var currentSession: NextcloudSession? = session
+            var cleanupCompleted = false
+            val read = async {
+                withRetainedAndroidAccountFileRead(session, { currentSession }, guard) {
+                    readStarted.complete(Unit)
+                    releaseRead.await()
+                    cache.storeListing(accountId, "Notes", listOf(file("Notes/a.md", "\"a\"")), 10)
+                }
+            }
+            readStarted.await()
+
+            val prematureRemoval = runCatching {
+                withAndroidAccountRemovalLease(accountId, guard) {
+                    currentSession = null
+                    cache.clearAccount(accountId)
+                    cleanupCompleted = true
+                }
+            }
+            assertTrue(prematureRemoval.isFailure)
+            assertFalse(cleanupCompleted)
+
+            releaseRead.complete(Unit)
+            read.await()
+            withAndroidAccountRemovalLease(accountId, guard) {
+                currentSession = null
+                cache.clearAccount(accountId)
+                cleanupCompleted = true
+            }
+
+            assertTrue(cleanupCompleted)
+            assertFalse(File(root, accountId).exists())
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test

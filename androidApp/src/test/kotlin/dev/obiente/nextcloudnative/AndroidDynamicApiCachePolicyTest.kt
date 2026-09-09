@@ -3,11 +3,38 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
+import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
+import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 class AndroidDynamicApiCachePolicyTest {
+    @Test
+    fun `Android services sharing a canonical cache root share removal fences`() {
+        val parent = Files.createTempDirectory("android-dynamic-process-state-").toFile()
+        try {
+            val first = androidDynamicApiProcessState(parent.resolve("cache"))
+            val second = androidDynamicApiProcessState(parent.resolve("nested/../cache"))
+
+            assertSame(first, second)
+            assertSame(first.cache, second.cache)
+            assertSame(first.coalescer, second.coalescer)
+        } finally {
+            parent.deleteRecursively()
+        }
+    }
+
     @Test
     fun `force network bypasses both Android dynamic cache reads`() = runBlocking {
         val coalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
@@ -65,5 +92,105 @@ class AndroidDynamicApiCachePolicyTest {
         assertEquals(0, cacheLoads)
         assertEquals(0, invalidations)
         assertEquals(1, networkLoads)
+    }
+
+    @Test
+    fun `account cleanup fences a late Android GET before deleting its cache`() = runBlocking {
+        supervisorScope {
+            val root = Files.createTempDirectory("android-dynamic-cache-cleanup-").toFile()
+            try {
+                val accountId = "a".repeat(64)
+                val requestIdentity = "GET /dashboard/widgets"
+                val cache = DynamicApiResponseCache(root)
+                val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
+                cache.store(accountId, requestIdentity, response)
+                val read = async {
+                    coalescer.execute(accountId, requestIdentity, load = {
+                        started.complete(Unit)
+                        release.await()
+                        response
+                    }, commit = { cache.store(accountId, requestIdentity, it) })
+                }
+                started.await()
+
+                clearAndroidDynamicApiState(accountId, coalescer, cache)
+                release.complete(Unit)
+
+                assertFails { read.await() }
+                assertNull(cache.load(accountId, requestIdentity, 1_024))
+            } finally {
+                root.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun `committed removal fences dynamic reads even when cleanup is cancelled`() = runBlocking {
+        val root = Files.createTempDirectory("android-dynamic-cancelled-cleanup-").toFile()
+        try {
+            val accountId = "c".repeat(64)
+            val requestIdentity = "GET /dashboard/widgets"
+            val cache = DynamicApiResponseCache(root)
+            val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+            cache.store(
+                accountId,
+                requestIdentity,
+                CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null),
+            )
+
+            val removal = launch {
+                currentCoroutineContext().cancel()
+                fenceAndroidDynamicApiStateForRemoval(accountId, coalescer, cache)
+            }
+            removal.join()
+
+            assertFails {
+                coalescer.execute(accountId, requestIdentity, load = { error("must remain fenced") })
+            }
+            assertNull(cache.load(accountId, requestIdentity, 1_024))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `second Android service cannot commit a GET that crossed account removal`() = runBlocking {
+        supervisorScope {
+            val root = Files.createTempDirectory("android-dynamic-cross-service-").toFile()
+            try {
+                val accountId = "b".repeat(64)
+                val requestIdentity = "GET /dashboard/widgets"
+                val firstService = androidDynamicApiProcessState(root)
+                val secondService = androidDynamicApiProcessState(root.resolve("."))
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
+                val read = async {
+                    secondService.coalescer.execute(accountId, requestIdentity, load = {
+                        started.complete(Unit)
+                        release.await()
+                        NextcloudApiResponse(200, response.body, response.contentType, response.etag)
+                    }, commit = { loaded ->
+                        secondService.cache.store(
+                            accountId,
+                            requestIdentity,
+                            CachedDynamicApiResponse(loaded.status, loaded.body, loaded.contentType, loaded.etag),
+                        )
+                    })
+                }
+                started.await()
+
+                clearAndroidDynamicApiState(accountId, firstService.coalescer, firstService.cache)
+                release.complete(Unit)
+
+                assertFails { read.await() }
+                assertNull(firstService.cache.load(accountId, requestIdentity, 1_024))
+            } finally {
+                root.deleteRecursively()
+            }
+        }
     }
 }

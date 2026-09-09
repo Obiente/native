@@ -2894,7 +2894,7 @@ class WindowsCloudFilesProviderTest {
         return payload + MessageDigest.getInstance("SHA-256").digest(payload)
     }
 
-    private class FakeBackend(
+    internal class FakeBackend(
         private val source: ByteArray,
         private val listed: List<WindowsCloudFileIdentity> = emptyList(),
         expectedUploads: Int = 0,
@@ -2921,7 +2921,6 @@ class WindowsCloudFilesProviderTest {
         private val remoteIdentities = listed.associateBy { identity -> identity.path }.toMutableMap()
         private val remoteContents = mutableMapOf<String, ByteArray>()
         private val scriptedLists = ArrayDeque<List<WindowsCloudFileIdentity>>()
-
         override fun resolve(path: String): WindowsCloudFileIdentity? = synchronized(this) {
             resolvedPaths += path
             remoteIdentities[path]
@@ -3019,7 +3018,7 @@ class WindowsCloudFilesProviderTest {
         }
     }
 
-    private class FakeApi(
+    internal class FakeApi(
         expectedTransfers: Int = 0,
         expectedConversions: Int = 0,
         expectedRenames: Int = 0,
@@ -3048,6 +3047,7 @@ class WindowsCloudFilesProviderTest {
         val connectFailures = mutableListOf<WindowsCloudFilesOperationException>()
         val disconnectAttempts = mutableListOf<Long>()
         var disconnectFailure: RuntimeException? = null
+        var beforeDisconnect: (() -> Unit)? = null
         var createPlaceholdersHook: ((Path, List<WindowsCloudPlaceholder>) -> Unit)? = null
         var updatePlaceholderFailure: WindowsCloudFilesOperationException? = null
         var updatePlaceholderFailuresRemaining: Int = Int.MAX_VALUE
@@ -3071,6 +3071,7 @@ class WindowsCloudFilesProviderTest {
             return 1L
         }
         override fun disconnect(connectionKey: Long) {
+            beforeDisconnect?.invoke()
             disconnectAttempts += connectionKey
             disconnectFailure?.let { throw it }
         }

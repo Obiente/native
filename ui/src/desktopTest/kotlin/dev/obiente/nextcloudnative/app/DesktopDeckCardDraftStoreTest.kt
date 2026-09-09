@@ -3,6 +3,9 @@ package dev.obiente.nextcloudnative.app
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -10,6 +13,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.json.JSONObject
 
 class DesktopDeckCardDraftStoreTest {
     @Test
@@ -122,8 +126,8 @@ class DesktopDeckCardDraftStoreTest {
         withStore { root, _, store ->
             val session = session()
             repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
-                root.resolve("${DesktopDeckCardDraftStore.FILE_PREFIX}${index.toString(16).padStart(64, '0')}" +
-                    DesktopDeckCardDraftStore.FILE_SUFFIX).writeText("not-an-envelope")
+                root.resolve(store.storageFileName(session, persisted(cardId = 10_000L + index).key))
+                    .writeText("not-an-envelope")
             }
 
             assertFailsWith<DeckCardDraftCapacityException> {
@@ -158,6 +162,229 @@ class DesktopDeckCardDraftStoreTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `each account has its own retention budget`() = withStore { root, _, store ->
+        val alice = session()
+        val bob = session(login = "bob")
+
+        repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+            store.save(alice, persisted(cardId = 20_000L + index))
+            store.save(bob, persisted(cardId = 30_000L + index))
+        }
+
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES * 2, root.listFiles().orEmpty().size)
+        assertEquals(persisted(cardId = 20_000L), store.load(alice, persisted(cardId = 20_000L).key))
+        assertEquals(persisted(cardId = 30_000L), store.load(bob, persisted(cardId = 30_000L).key))
+    }
+
+    @Test
+    fun `account removal is retryable and preserves another account`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-removal").toFile()
+        val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { (it + 1).toByte() }
+        val alice = session()
+        val bob = session(login = "bob")
+        val removed = persisted(cardId = 51L)
+        val retained = persisted(cardId = 52L)
+        try {
+            val writer = DesktopDeckCardDraftStore(root, fixedKey(key))
+            writer.save(alice, removed)
+            writer.save(bob, retained)
+            val aliceDraftName = writer.storageFileName(alice, removed.key)
+            val aliceMarkerName = aliceDraftName
+                .replaceFirst(DesktopDeckCardDraftStore.FILE_PREFIX, DesktopDeckCardDraftStore.SUBMITTED_FILE_PREFIX)
+                .removeSuffix(DesktopDeckCardDraftStore.FILE_SUFFIX) + DesktopDeckCardDraftStore.SUBMITTED_FILE_SUFFIX
+            root.resolve(aliceMarkerName).writeBytes(DesktopDeckCardDraftStore.SUBMITTED_MARKER_BYTES)
+            val alicePrefix = "${DesktopDeckCardDraftStore.FILE_PREFIX}${alice.accountId.storageKey}_"
+            val failing = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = fixedKey(key),
+                deleteFile = { file ->
+                    if (file.name.startsWith(alicePrefix)) false
+                    else Files.deleteIfExists(file.toPath()) || !file.exists()
+                },
+            )
+
+            assertFailsWith<IllegalStateException> {
+                failing.removeAccount(alice.accountId.storageKey, desktopFileCacheAccountId(alice))
+            }
+
+            writer.removeAccount(alice.accountId.storageKey, desktopFileCacheAccountId(alice))
+
+            assertNull(writer.load(alice, removed.key))
+            assertEquals(retained, writer.load(bob, retained.key))
+            assertTrue(root.listFiles().orEmpty().none { it.name.contains(alice.accountId.storageKey) })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `completed legacy migration is not rolled back when deletion must retry`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-migration").toFile()
+        val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { (it + 1).toByte() }
+        val session = session()
+        val original = persisted(title = "Legacy")
+        try {
+            val probe = DesktopDeckCardDraftStore(root, fixedKey(key))
+            val legacy = root.resolve(
+                probe.legacyStorageFileName(desktopFileCacheAccountId(session), original.key),
+            )
+            writeLegacyDraft(legacy, key, original)
+            val failing = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = fixedKey(key),
+                deleteFile = { file ->
+                    if (file == legacy) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+                },
+            )
+
+            failing.migrateLegacyEntries(session)
+            val updated = original.copy(draft = original.draft.copy(title = "Newer"))
+            assertFailsWith<IllegalStateException> { failing.save(session, updated) }
+            assertEquals(original, failing.load(session, original.key))
+            assertTrue(legacy.exists())
+
+            val restarted = DesktopDeckCardDraftStore(root, fixedKey(key))
+            restarted.save(session, updated)
+
+            assertEquals(updated, restarted.load(session, original.key))
+            assertTrue(!legacy.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy submitted markers must retire before replacement survives restart`() {
+        listOf("marker-only", "draft-deletion", "marker-deletion").forEach { failureMode ->
+            withStore { root, key, store ->
+                val session = session()
+                val original = persisted(title = "Submitted")
+                val replacement = persisted(title = "Fresh replacement")
+                val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), original.key))
+                val marker = root.resolve(
+                    legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker",
+                )
+                if (failureMode != "marker-only") writeLegacyDraft(legacy, key, original)
+                marker.writeBytes(DesktopDeckCardDraftStore.SUBMITTED_MARKER_BYTES)
+                val failedTarget = if (failureMode == "draft-deletion") legacy else marker
+                val failing = DesktopDeckCardDraftStore(
+                    root = root,
+                    keyProvider = fixedKey(key),
+                    deleteFile = { file ->
+                        if (file == failedTarget) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+                    },
+                )
+
+                assertNull(failing.load(session, original.key))
+                assertTrue(marker.exists())
+                assertFailsWith<IllegalStateException> { failing.save(session, replacement) }
+                assertTrue(marker.exists())
+
+                val restarted = DesktopDeckCardDraftStore(root, fixedKey(key))
+                restarted.save(session, replacement)
+
+                assertTrue(!legacy.exists())
+                assertTrue(!marker.exists())
+                repeat(2) {
+                    assertEquals(replacement, DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, original.key))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `submitted legacy draft cannot return after migration deletion fails`() = withStore { root, key, store ->
+        val session = session()
+        val original = persisted(title = "Submitted legacy draft")
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), original.key))
+        val marker = root.resolve(legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker")
+        writeLegacyDraft(legacy, key, original)
+        val originalEnvelope = legacy.readText()
+        val failing = DesktopDeckCardDraftStore(
+            root = root,
+            keyProvider = fixedKey(key),
+            deleteFile = { file ->
+                if (file == legacy) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+            },
+        )
+
+        assertEquals(original, failing.load(session, original.key))
+        failing.quarantineAfterSubmit(session, original.key)
+
+        assertEquals(originalEnvelope, legacy.readText())
+        assertTrue(marker.exists())
+        assertNull(failing.load(session, original.key))
+        assertNull(DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, original.key))
+        assertTrue(root.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `explicit legacy discard bypasses keyring and preserves unrelated recovery`() = withStore { root, key, store ->
+        val session = session()
+        val draftKey = persisted().key
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), draftKey))
+        val target = root.resolve(store.storageFileName(session, draftKey))
+        val marker = root.resolve(legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker")
+        val targetMarker = root.resolve(
+            target.name.replaceFirst("draft_v2_", "submitted_v2_").removeSuffix(".json.enc") + ".marker",
+        )
+        val unrelated = listOf(
+            store.legacyStorageFileName(desktopFileCacheAccountId(session(login = "bob")), draftKey),
+            store.legacyStorageFileName(desktopFileCacheAccountId(session), persisted(cardId = 91L).key),
+            store.storageFileName(session(login = "bob"), draftKey),
+        ).associateWith { "unrelated-unreadable" }
+        unrelated.forEach { (name, content) -> root.resolve(name).writeText(content) }
+        listOf(legacy, target, marker, targetMarker).forEach { it.writeText("unreadable") }
+        var failDeletion = true
+        val unavailable = DesktopDeckCardDraftStore(
+            root = root,
+            keyProvider = DesktopDeckDraftKeyProvider { error("No keyring access during explicit discard") },
+            deleteFile = { file ->
+                if (file == legacy && failDeletion) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+            },
+        )
+
+        assertFailsWith<DesktopDeckDraftRecoveryException> { store.load(session, draftKey) }
+        assertFailsWith<DesktopDeckDraftRecoveryException> { store.clear(session, draftKey) }
+        assertFailsWith<IllegalStateException> { unavailable.clear(session, draftKey, discardUnreadable = true) }
+        assertEquals("unreadable", legacy.readText())
+        failDeletion = false
+
+        unavailable.clear(session, draftKey, discardUnreadable = true)
+
+        assertEquals(unrelated, root.listFiles().orEmpty().associate { it.name to it.readText() })
+        val replacement = persisted(title = "Replacement")
+        store.save(session, replacement)
+        assertEquals(replacement, DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, draftKey))
+    }
+
+    @Test
+    fun `account removal preserves unreadable and other account legacy drafts`() =
+        withStore { root, key, store ->
+            val alice = session()
+            val bob = session(login = "bob")
+            val aliceLegacy = root.resolve("draft_${"a".repeat(64)}.json.enc").apply {
+                writeText("unreadable")
+            }
+            val bobDraft = persisted(cardId = 91L)
+            val bobLegacy = root.resolve(
+                store.legacyStorageFileName(desktopFileCacheAccountId(bob), bobDraft.key),
+            )
+            writeLegacyDraft(bobLegacy, key, bobDraft)
+            val aliceDraft = persisted(cardId = 92L)
+            val attributable = root.resolve(
+                store.legacyStorageFileName(desktopFileCacheAccountId(alice), aliceDraft.key),
+            )
+            writeLegacyDraft(attributable, key, aliceDraft)
+
+            store.removeAccount(alice.accountId.storageKey, desktopFileCacheAccountId(alice))
+
+            assertTrue(aliceLegacy.exists())
+            assertTrue(bobLegacy.exists())
+            assertFalse(attributable.exists())
+        }
 
     @Test
     fun `keyring failure does not delete a valid encrypted draft`() =
@@ -502,6 +729,42 @@ class DesktopDeckCardDraftStoreTest {
             dueFieldsEdited = true,
         ),
     )
+
+    private fun writeLegacyDraft(
+        file: java.io.File,
+        key: ByteArray,
+        persisted: PersistedDeckCardDraft,
+    ) {
+        val plaintext = JSONObject()
+            .put("version", DesktopDeckCardDraftStore.LEGACY_PLAINTEXT_FORMAT_VERSION)
+            .put("updatedAtEpochMillis", 100L)
+            .put("boardId", persisted.key.boardId)
+            .put("stackId", persisted.key.stackId)
+            .put("cardId", persisted.key.cardId)
+            .put("title", persisted.draft.title)
+            .put("descriptionMarkdown", persisted.draft.descriptionMarkdown)
+            .put("dueDate", persisted.draft.dueDate)
+            .put("dueTime", persisted.draft.dueTime)
+            .put("dueAtBeforeEditing", persisted.draft.dueAtBeforeEditing)
+            .put("dueFieldsEdited", persisted.draft.dueFieldsEdited)
+            .toString()
+            .encodeToByteArray()
+        val nonce = ByteArray(DesktopDeckCardDraftStore.GCM_NONCE_BYTES) { (it + 7).toByte() }
+        val cipher = Cipher.getInstance(DesktopDeckCardDraftStore.CIPHER_TRANSFORMATION)
+        cipher.init(
+            Cipher.ENCRYPT_MODE,
+            SecretKeySpec(key, DesktopDeckCardDraftStore.AES_ALGORITHM),
+            GCMParameterSpec(DesktopDeckCardDraftStore.GCM_TAG_BITS, nonce),
+        )
+        cipher.updateAAD(file.name.encodeToByteArray())
+        file.writeText(
+            JSONObject()
+                .put("version", DesktopDeckCardDraftStore.ENVELOPE_FORMAT_VERSION)
+                .put("nonce", Base64.getEncoder().encodeToString(nonce))
+                .put("ciphertext", Base64.getEncoder().encodeToString(cipher.doFinal(plaintext)))
+                .toString(),
+        )
+    }
 
     private class ToggleSecretStore : DesktopSecretStore {
         var secret: ByteArray? = null

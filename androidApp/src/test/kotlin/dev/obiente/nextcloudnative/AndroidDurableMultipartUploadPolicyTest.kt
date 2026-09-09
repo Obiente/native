@@ -4,9 +4,12 @@ import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -15,6 +18,49 @@ import kotlin.test.assertTrue
 import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
+    @Test
+    fun `account cleanup removes a row only after its source capability is released`() = runBlocking {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidDurableUploadJobs(
+                jobs = listOf(first, second),
+                cancelWork = { job -> events += "cancel:${job.id}" },
+                releaseCapability = { job ->
+                    events += "release:${job.id}"
+                    job == first
+                },
+                removeJob = { jobId -> events += "remove:$jobId" },
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "cancel:${first.id}",
+                "cancel:${second.id}",
+                "release:${first.id}",
+                "remove:${first.id}",
+                "release:${second.id}",
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `removing an account deletes only its queued upload recovery rows`() {
+        val storage = FakeDurableUploadEncryptedStorage()
+        val store = AndroidDurableMultipartUploadStore(storage, FakeDurableUploadCipher())
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        store.add(first)
+        store.add(second)
+
+        assertEquals(listOf(first), store.removeForAccount(ACCOUNT_A))
+        assertEquals(listOf(second), store.list())
+    }
+
     @Test
     fun `encrypted queue read and decryption failures preserve recoverable jobs`() {
         listOf("read", "decrypt").forEach { failureMode ->
@@ -266,6 +312,97 @@ class AndroidDurableMultipartUploadPolicyTest {
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(425))
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(429))
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(500))
+    }
+
+    @Test
+    fun `retained background account is deferred without reading its credential`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.DeferAccountActivation,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
+            ),
+        )
+    }
+
+    @Test
+    fun `unreadable account registry defers queued upload recovery`() {
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
+            durableUploadAccountMismatchOutcome(ACCOUNT_A, AndroidAccountRetentionSnapshot.Unavailable),
+        )
+    }
+
+    @Test
+    fun `active account with unreadable credential keeps its upload scheduled`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(
+                    accounts = listOf(retainedSession.accountRecord()),
+                    activeAccountId = retainedSession.accountId,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `valid account registry without expected account makes upload unavailable`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.AccountUnavailable,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(emptyList()),
+            ),
+        )
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.AccountUnavailable,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(
+                    listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `account activation resumes only its queued uploads`() {
+        val queuedForA = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val queuedForB = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val completedForA = fixtureJob(
+            index = 3,
+            account = ACCOUNT_A,
+            cardId = 44,
+            state = DurableUploadState.Completed,
+        )
+
+        assertEquals(
+            listOf(queuedForA),
+            queuedDurableUploadsForAccount(listOf(queuedForA, queuedForB, completedForA), ACCOUNT_A),
+        )
     }
 
     private fun fixtureJob(

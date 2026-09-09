@@ -4,6 +4,7 @@ import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.decodeFileSyncCoordinatorSnapshot
 import dev.obiente.nextcloudnative.app.encodeFileSyncCoordinatorSnapshot
+import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -25,6 +26,33 @@ internal data class AndroidFileSyncPersistedState(
         require(localDisplayNames.keys.all { id -> coordinator.pairs.any { it.id == id } })
         require(localDisplayNames.values.all { it.isNotBlank() && it.length <= 256 })
     }
+}
+
+internal fun removeAndroidFileSyncAccountPairs(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+): AndroidFileSyncPersistedState {
+    requireAndroidFileSyncAccountRemovalReady(state, accountId)
+    val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
+    val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
+    return AndroidFileSyncPersistedState(
+        coordinator = FileSyncCoordinatorState(retainedPairs),
+        localDisplayNames = state.localDisplayNames.filterKeys(retainedPairIds::contains),
+    )
+}
+
+internal fun requireAndroidFileSyncAccountRemovalReady(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+) {
+    require(accountId.isNotBlank())
+    state.coordinator.pairs
+        .filter { pair -> pair.accountId == accountId }
+        .forEach { pair ->
+            require(fileSyncOwnedUploads(pair).isEmpty()) {
+                "Owned remote upload state must be recovered before removing this account's sync pairs."
+            }
+        }
 }
 
 internal class AndroidFileSyncStore internal constructor(

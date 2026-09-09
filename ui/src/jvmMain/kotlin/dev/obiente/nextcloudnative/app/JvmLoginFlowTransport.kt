@@ -21,10 +21,10 @@ data class LoginPollHttpExecution(
     val selectedFallbackReason: LoginPollFallbackReason? = null,
 )
 
-fun executeLoginPollHttp(
+suspend fun executeLoginPollHttp(
     challenge: LoginChallenge,
     fallbackAlreadySelected: Boolean,
-    poll: (String) -> LoginPollHttpResponse,
+    poll: suspend (String) -> LoginPollHttpResponse,
     networkFailure: () -> JvmNetworkFailureDiagnostic?,
 ): LoginPollHttpExecution {
     val fallbackEndpoint = challenge.pollFallbackEndpoint
@@ -39,7 +39,7 @@ fun executeLoginPollHttp(
         selectedFallbackReason = selectedFallbackReason,
     )
 
-    fun attempt(endpoint: String): LoginPollHttpResponse = try {
+    suspend fun attempt(endpoint: String): LoginPollHttpResponse = try {
         poll(endpoint)
     } catch (failure: Throwable) {
         if (failure is CancellationException) throw failure

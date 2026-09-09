@@ -15,6 +15,26 @@ import kotlin.test.assertTrue
 
 class HomeWorkspaceLayoutTest {
     @Test
+    fun `account cleanup keys include canonical and legacy workspace state`() {
+        val current = "a".repeat(64)
+        val legacy = "b".repeat(64)
+
+        assertEquals(
+            setOf(
+                "apps:pins:1:$current",
+                "home:1:p:$current",
+                "home:1:t:$current",
+                "home:1:d:$current",
+                "apps:pins:1:$legacy",
+                "home:1:p:$legacy",
+                "home:1:t:$legacy",
+                "home:1:d:$legacy",
+            ),
+            homeWorkspaceAccountPersistenceKeys(current, legacy),
+        )
+    }
+
+    @Test
     fun `coordinator defers preference reads until its effect runs`() = runBlocking {
         val storage = RecordingHomeWorkspaceStorage()
         val currentScope = scope(HomeFormFactor.Phone)
