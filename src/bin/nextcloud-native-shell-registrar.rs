@@ -348,6 +348,7 @@ mod platform {
     use std::ffi::{OsStr, OsString};
     use std::mem::size_of;
     use std::path::{Path, PathBuf};
+    use windows::Security::Cryptography::Core::HashAlgorithmProvider;
     use windows::Security::Cryptography::CryptographicBuffer;
     use windows::Storage::Provider::{
         StorageProviderHardlinkPolicy, StorageProviderHydrationPolicy,
@@ -471,6 +472,61 @@ mod platform {
     }
     const PROVIDER_GUID: GUID = GUID::from_u128(0x6d456713_7d9a_4a39_90ce_127998de42d7);
 
+    // Match the complete root identity written by WindowsCloudFileIdentityCodec, including its
+    // checksum. Only its two known root encodings qualify; arbitrary placeholder context does not.
+    fn root_identity_context(
+        account_id: &str,
+        version: u16,
+    ) -> WindowsResult<windows::Storage::Streams::IBuffer> {
+        let mut payload = Vec::from(*b"NCFV");
+        payload.extend_from_slice(&version.to_be_bytes());
+        payload.push(1); // directory
+        payload.extend_from_slice(&0_i64.to_be_bytes());
+        if version == 2 {
+            payload.extend_from_slice(&(-1_i64).to_be_bytes()); // unknown modification time
+        }
+        payload.extend_from_slice(&(account_id.len() as u16).to_be_bytes());
+        payload.extend_from_slice(account_id.as_bytes());
+        payload.extend_from_slice(&[0, 0, 0, 4]); // empty path, four-byte revision
+        payload.extend_from_slice(b"root");
+        let algorithm = HashAlgorithmProvider::OpenAlgorithm(&HSTRING::from("SHA256"))?;
+        let digest = algorithm.HashData(&CryptographicBuffer::CreateFromByteArray(&payload)?)?;
+        let mut checksum = windows::core::Array::new();
+        CryptographicBuffer::CopyToByteArray(&digest, &mut checksum)?;
+        payload.extend_from_slice(&checksum);
+        CryptographicBuffer::CreateFromByteArray(&payload)
+    }
+
+    fn registration_is_owned(existing: &StorageProviderSyncRootInfo) -> WindowsResult<bool> {
+        let id = existing.Id()?;
+        let id_value = id.to_string();
+        let Some(account_id) = account_id_from_sync_root_id(&id_value) else {
+            return Ok(false);
+        };
+        // Include the current Windows SID, not just the provider prefix and account suffix.
+        if id != sync_root_id(account_id)? {
+            return Ok(false);
+        }
+        match existing.ProviderId()? {
+            provider if provider == PROVIDER_GUID => Ok(true),
+            provider if provider == GUID::zeroed() => {
+                // Windows can return an empty GUID for a persisted branded registration. Require
+                // the exact account-scoped root context before applying the usual path checks.
+                let context = existing.Context()?;
+                for version in [1, 2] {
+                    let expected = root_identity_context(account_id, version)?;
+                    if context.Length()? == expected.Length()?
+                        && CryptographicBuffer::Compare(&context, &expected)?
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
     struct OwnedHandle(HANDLE);
 
     impl Drop for OwnedHandle {
@@ -592,7 +648,7 @@ mod platform {
         let mut current_registration_is_ready = false;
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
             Ok(existing) => {
-                let provider_owned = existing.ProviderId()? == PROVIDER_GUID;
+                let provider_owned = registration_is_owned(&existing)?;
                 let current_state = if provider_owned {
                     current_registration_state(
                         &existing,
@@ -629,15 +685,12 @@ mod platform {
             let Ok(existing_id) = existing.Id() else {
                 continue;
             };
-            let Ok(existing_provider_id) = existing.ProviderId() else {
-                continue;
-            };
             // The exact current ID was handled above with its path recovery checks. Never make a
             // second, less-informed decision about that registration from the enumeration view.
             if existing_id == id {
                 continue;
             }
-            let provider_owned = existing_provider_id == PROVIDER_GUID;
+            let provider_owned = registration_is_owned(&existing).unwrap_or(false);
             let cleanup_state = if provider_owned {
                 non_current_registration_state(&existing, &existing_id, &root, &recoverable_roots)
             } else {
@@ -707,7 +760,7 @@ mod platform {
             }
             Err(failure) => return Err(failure.into()),
         };
-        if existing.ProviderId()? != PROVIDER_GUID {
+        if !registration_is_owned(&existing)? {
             return Err(Box::new(UnsafeRegistrationConflict));
         }
         match existing.Path().and_then(|folder| folder.Path()) {
@@ -808,6 +861,164 @@ mod platform {
                 unregister(root, account_id)
             }
             _ => Err("unsupported command".into()),
+        }
+    }
+    #[cfg(test)]
+    mod ownership_tests {
+        use super::*;
+
+        fn registration(
+            account: &str,
+            provider: GUID,
+            version: u16,
+        ) -> StorageProviderSyncRootInfo {
+            let info = StorageProviderSyncRootInfo::new().unwrap();
+            info.SetId(&sync_root_id(account).unwrap()).unwrap();
+            info.SetProviderId(provider).unwrap();
+            info.SetContext(&root_identity_context(account, version).unwrap())
+                .unwrap();
+            info
+        }
+
+        #[test]
+        fn accepts_known_root_context_for_an_empty_provider_guid() {
+            let _apartment = WinRtApartment::initialize().unwrap();
+            for version in [1, 2] {
+                let info = registration(&"a".repeat(64), GUID::zeroed(), version);
+                assert!(registration_is_owned(&info).unwrap());
+            }
+            let info = registration(&"a".repeat(64), PROVIDER_GUID, 2);
+            assert!(registration_is_owned(&info).unwrap());
+        }
+
+        #[test]
+        fn root_context_matches_jvm_codec_golden_vectors() {
+            let _apartment = WinRtApartment::initialize().unwrap();
+            let vectors = [
+                (
+                    1,
+                    "4e434656000101000000000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000004726f6f74da093d34d47512a77176207d7a1a99bc4e2195d4b108d1df5a760bd1af0db2ff",
+                ),
+                (
+                    2,
+                    "4e4346560002010000000000000000ffffffffffffffff00406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000004726f6f74cd1caa4b0547c9a4f510bddf5f7166b33d240914ed30eea742cb24f698f1fe6e",
+                ),
+            ];
+            for (version, expected) in vectors {
+                let context = root_identity_context(&"a".repeat(64), version).unwrap();
+                assert_eq!(
+                    CryptographicBuffer::EncodeToHexString(&context).unwrap(),
+                    HSTRING::from(expected)
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_foreign_provider_account_sid_and_namespace() {
+            let _apartment = WinRtApartment::initialize().unwrap();
+            let account = "a".repeat(64);
+            let info = registration(&account, GUID::from_u128(1), 2);
+            assert!(!registration_is_owned(&info).unwrap());
+            info.SetProviderId(GUID::zeroed()).unwrap();
+            info.SetId(&sync_root_id(&"b".repeat(64)).unwrap()).unwrap();
+            assert!(!registration_is_owned(&info).unwrap());
+            for id in [
+                format!("Obiente.NextcloudNative!S-1-5-0!{account}"),
+                format!("Other.Provider!S-1-5-0!{account}"),
+                "Obiente.NextcloudNative!invalid".to_owned(),
+            ] {
+                info.SetId(&HSTRING::from(id)).unwrap();
+                assert!(!registration_is_owned(&info).unwrap());
+            }
+        }
+
+        #[test]
+        fn rejects_missing_malformed_oversized_and_tampered_context() {
+            let _apartment = WinRtApartment::initialize().unwrap();
+            let info = registration(&"a".repeat(64), GUID::zeroed(), 2);
+            let mut original = windows::core::Array::new();
+            CryptographicBuffer::CopyToByteArray(&info.Context().unwrap(), &mut original).unwrap();
+            let mut cases = vec![vec![], vec![0], vec![0; 4097], original[..128].to_vec()];
+            // Check checksum damage, unsupported version, file identity and a non-root revision.
+            for index in [128, 5, 6, 96] {
+                let mut changed = original.to_vec();
+                changed[index] ^= 1;
+                cases.push(changed);
+            }
+            for bytes in cases {
+                info.SetContext(&CryptographicBuffer::CreateFromByteArray(&bytes).unwrap())
+                    .unwrap();
+                assert!(!registration_is_owned(&info).unwrap());
+            }
+        }
+
+        #[test]
+        #[ignore = "Creates a disposable Explorer root; explicit Windows integration test"]
+        fn persisted_root_can_be_owned_and_unregistered() {
+            let _apartment = WinRtApartment::initialize().unwrap();
+            let account = format!(
+                "{:064x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let root = std::env::current_dir()
+                .unwrap()
+                .join("target")
+                .join(format!("native-shell-test-{account}"));
+            std::fs::create_dir(&root).unwrap();
+            let id = sync_root_id(&account).unwrap();
+            struct Cleanup(HSTRING, PathBuf);
+            impl Drop for Cleanup {
+                fn drop(&mut self) {
+                    let _ = StorageProviderSyncRootManager::Unregister(&self.0);
+                    let _ = std::fs::remove_dir(&self.1);
+                }
+            }
+            let _cleanup = Cleanup(id.clone(), root.clone());
+            let info = registration(&account, PROVIDER_GUID, 2);
+            info.SetPath(
+                &StorageFolder::GetFolderFromPathAsync(&HSTRING::from(root.as_path()))
+                    .unwrap()
+                    .join()
+                    .unwrap(),
+            )
+            .unwrap();
+            info.SetDisplayNameResource(&HSTRING::from("nati.ve disposable test"))
+                .unwrap();
+            info.SetIconResource(&HSTRING::from("shell32.dll,3"))
+                .unwrap();
+            info.SetHydrationPolicy(StorageProviderHydrationPolicy::Progressive)
+                .unwrap();
+            info.SetHydrationPolicyModifier(
+                StorageProviderHydrationPolicyModifier::AutoDehydrationAllowed,
+            )
+            .unwrap();
+            info.SetPopulationPolicy(StorageProviderPopulationPolicy::Full)
+                .unwrap();
+            info.SetInSyncPolicy(
+                StorageProviderInSyncPolicy::FileCreationTime
+                    | StorageProviderInSyncPolicy::FileLastWriteTime
+                    | StorageProviderInSyncPolicy::DirectoryCreationTime
+                    | StorageProviderInSyncPolicy::DirectoryLastWriteTime,
+            )
+            .unwrap();
+            info.SetHardlinkPolicy(StorageProviderHardlinkPolicy::None)
+                .unwrap();
+            info.SetShowSiblingsAsGroup(false).unwrap();
+            info.SetVersion(&HSTRING::from(env!("CARGO_PKG_VERSION")))
+                .unwrap();
+            info.SetAllowPinning(true).unwrap();
+            StorageProviderSyncRootManager::Register(&info).unwrap();
+            let persisted =
+                StorageProviderSyncRootManager::GetSyncRootInformationForId(&id).unwrap();
+            assert!(registration_is_owned(&persisted).unwrap());
+            assert!(unregister(root.with_extension("different"), account.clone()).is_err());
+            assert!(StorageProviderSyncRootManager::GetSyncRootInformationForId(&id).is_ok());
+            unregister(root.clone(), account).unwrap();
+            assert!(root.is_dir());
+            assert!(StorageProviderSyncRootManager::GetSyncRootInformationForId(&id).is_err());
         }
     }
 }

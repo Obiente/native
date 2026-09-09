@@ -145,7 +145,7 @@ class FileSyncContentIdentityTest {
             verificationResult("size-changed", "local-1", "remote-1", 42L, digest),
         )
         val local = listOf(
-            fileOnDevice("current", "local-1", 42L),
+            fileOnDevice("current", "local-1", 42L).copy(contentHash = digest),
             fileOnDevice("local-changed", "local-2", 42L),
             fileOnDevice("remote-changed", "local-1", 42L),
             fileOnDevice("size-changed", "local-1", 43L),
@@ -160,6 +160,70 @@ class FileSyncContentIdentityTest {
         assertEquals(
             listOf(results.first()),
             currentFileSyncContentVerificationResults(local, remote, results),
+        )
+    }
+
+    @Test
+    fun `cached mismatch is discarded when an exact local hash changes under weak metadata`() {
+        val oldDigest = "sha256:" + "ab".repeat(32)
+        val newDigest = "sha256:" + "cd".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, oldDigest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(contentHash = newDigest)
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
+        )
+    }
+
+    @Test
+    fun `cached mismatch is discarded when fresh exact local evidence is unavailable`() {
+        val digest = "sha256:" + "ab".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, digest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(contentHash = null)
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
+        )
+    }
+
+    @Test
+    fun `cached mismatches reuse fresh replacement authentication without starvation`() {
+        val firstDigest = "sha256:" + "ab".repeat(32)
+        val secondDigest = "sha256:" + "cd".repeat(32)
+        val results = listOf(
+            verificationResult("first", "local-1", "remote-1", 42L, firstDigest),
+            verificationResult("second", "local-2", "remote-2", 42L, secondDigest),
+        )
+        val local = listOf(
+            fileOnDevice("first", "local-1", 42L).copy(replacementAuthentication = firstDigest),
+            fileOnDevice("second", "local-2", 42L).copy(replacementAuthentication = secondDigest),
+        )
+        val remote = listOf(
+            fileOnServer("first", "remote-1", 42L),
+            fileOnServer("second", "remote-2", 42L),
+        )
+
+        assertEquals(results, currentFileSyncContentVerificationResults(local, remote, results))
+    }
+
+    @Test
+    fun `fresh planning hash takes precedence over older replacement authentication`() {
+        val oldDigest = "sha256:" + "ab".repeat(32)
+        val newDigest = "sha256:" + "cd".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, oldDigest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(
+            contentHash = newDigest,
+            replacementAuthentication = oldDigest,
+        )
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
         )
     }
 

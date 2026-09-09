@@ -14,7 +14,7 @@ apk_size="$(stat --format='%s' "$apk")"
 apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
 max_android_apk_bytes=268435456
 
-GITHUB_REPOSITORY="Obiente/nc-native" \
+GITHUB_REPOSITORY="Obiente/native" \
     "$project_root/tools/create-android-update-manifest.sh" \
     "$manifest" \
     "nightly-v1" \
@@ -29,7 +29,7 @@ GITHUB_REPOSITORY="Obiente/nc-native" \
 "$project_root/tools/verify-android-update-manifest-assets.sh" \
     "$manifest" \
     "$apk" \
-    "Obiente/nc-native" \
+    "Obiente/native" \
     "$tag" \
     "nightly-v1" \
     "$tag" \
@@ -42,7 +42,7 @@ jq -e 'keys == [
 ]' "$manifest" >/dev/null
 
 maximum_manifest="$temporary_directory/update-manifest-maximum.json"
-GITHUB_REPOSITORY="Obiente/nc-native" \
+GITHUB_REPOSITORY="Obiente/native" \
     "$project_root/tools/create-android-update-manifest.sh" \
     "$maximum_manifest" \
     "nightly-v1" \
@@ -54,7 +54,7 @@ GITHUB_REPOSITORY="Obiente/nc-native" \
     "$apk_sha256" \
     '["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]'
 
-if GITHUB_REPOSITORY="Obiente/nc-native" \
+if GITHUB_REPOSITORY="Obiente/native" \
     "$project_root/tools/create-android-update-manifest.sh" \
     "$temporary_directory/update-manifest-oversized.json" \
     "nightly-v1" \
@@ -82,7 +82,7 @@ PATH="$fake_bin:$PATH" FAKE_APK_SIZE="$max_android_apk_bytes" \
     "$project_root/tools/verify-android-update-manifest-assets.sh" \
     "$maximum_manifest" \
     "$apk" \
-    "Obiente/nc-native" \
+    "Obiente/native" \
     "$tag" \
     "nightly-v1" \
     "$tag" \
@@ -95,7 +95,7 @@ if PATH="$fake_bin:$PATH" FAKE_APK_SIZE="$((max_android_apk_bytes + 1))" \
     "$project_root/tools/verify-android-update-manifest-assets.sh" \
     "$oversized_manifest" \
     "$apk" \
-    "Obiente/nc-native" \
+    "Obiente/native" \
     "$tag" \
     "nightly-v1" \
     "$tag" \
@@ -108,7 +108,7 @@ printf 'changed APK bytes\n' >>"$apk"
 if "$project_root/tools/verify-android-update-manifest-assets.sh" \
     "$manifest" \
     "$apk" \
-    "Obiente/nc-native" \
+    "Obiente/native" \
     "$tag" \
     "nightly-v1" \
     "$tag" \

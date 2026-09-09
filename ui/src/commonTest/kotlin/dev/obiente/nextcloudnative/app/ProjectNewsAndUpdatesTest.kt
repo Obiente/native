@@ -146,17 +146,17 @@ class ProjectNewsAndUpdatesTest {
             packageName = "dev.obiente.nextcloudnative",
             minimumAndroidSdk = 26,
             apkUrl =
-                "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/" +
+                "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/" +
                     "nextcloud-native-0.1.0-alpha.1-android.apk",
             apkSize = 123_456,
             apkSha256 = "a".repeat(64),
             signingCertificateSha256Digests = listOf("b".repeat(64)),
             releaseNotesUrl =
-                "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1",
+                "https://github.com/obiente/native/releases/tag/v0.1.0-alpha.1",
         )
         val encoded = Json.encodeToString(release).encodeToByteArray()
         val immutableMetadataUrl =
-            "https://github.com/Obiente/nc-native/releases/download/" +
+            "https://github.com/obiente/native/releases/download/" +
                 "v0.1.0-alpha.1/update-manifest.json"
 
         assertEquals(
@@ -183,12 +183,12 @@ class ProjectNewsAndUpdatesTest {
             )
         }
         listOf(
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/../update.apk",
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/%2e%2e.apk",
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/update%2Fbad.apk",
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1//update.apk",
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/update.apk?x=1",
-            "https://github.com/Obiente/nc-native/releases/download/v0.1.0-alpha.1/update.zip",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/../update.apk",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/%2e%2e.apk",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/update%2Fbad.apk",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1//update.apk",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/update.apk?x=1",
+            "https://github.com/obiente/native/releases/download/v0.1.0-alpha.1/update.zip",
         ).forEach { invalidUrl ->
             assertFailsWith<IllegalArgumentException>(invalidUrl) {
                 validateAndroidDirectRelease(
@@ -198,9 +198,9 @@ class ProjectNewsAndUpdatesTest {
             }
         }
         listOf(
-            "https://github.com/Obiente/nc-native/releases/tag/../private",
-            "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.2",
-            "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1?source=app",
+            "https://github.com/obiente/native/releases/tag/../private",
+            "https://github.com/obiente/native/releases/tag/v0.1.0-alpha.2",
+            "https://github.com/obiente/native/releases/tag/v0.1.0-alpha.1?source=app",
         ).forEach { invalidUrl ->
             assertFailsWith<IllegalArgumentException>(invalidUrl) {
                 validateAndroidDirectRelease(
@@ -223,16 +223,16 @@ class ProjectNewsAndUpdatesTest {
             packageName = "dev.obiente.nextcloudnative",
             minimumAndroidSdk = 26,
             apkUrl =
-                "https://github.com/Obiente/nc-native/releases/download/$tag/" +
+                "https://github.com/obiente/native/releases/download/$tag/" +
                     "nextcloud-native-$tag-android.apk",
             apkSize = 123_456,
             apkSha256 = "a".repeat(64),
             signingCertificateSha256Digests = listOf("b".repeat(64)),
-            releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
+            releaseNotesUrl = "https://github.com/obiente/native/releases/tag/$tag",
         )
         val encoded = Json.encodeToString(release).encodeToByteArray()
         val immutableMetadataUrl =
-            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json"
+            "https://github.com/obiente/native/releases/download/$tag/update-manifest.json"
 
         assertEquals(
             release,

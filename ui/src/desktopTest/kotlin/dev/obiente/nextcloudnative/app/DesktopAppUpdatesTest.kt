@@ -125,8 +125,8 @@ class DesktopAppUpdatesTest {
 
     @Test
     fun windowsInstallerMetadataPreservesTheInternetTrustBoundary() {
-        val source = "https://github.com/Obiente/nc-native/releases/download/v1/NextcloudNative.msi"
-        val notes = "https://github.com/Obiente/nc-native/releases/tag/v1"
+        val source = "https://github.com/obiente/native/releases/download/v1/NextcloudNative.msi"
+        val notes = "https://github.com/obiente/native/releases/tag/v1"
 
         assertEquals(
             "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$source\r\nReferrerUrl=$notes\r\n",
@@ -539,12 +539,12 @@ class DesktopAppUpdatesTest {
                     platform = "linux",
                     format = "rpm",
                     architecture = "x86_64",
-                    url = "https://github.com/Obiente/nc-native/releases/download/" +
+                    url = "https://github.com/obiente/native/releases/download/" +
                         "v0.1.0-alpha.2/nextcloudnative.rpm",
                     size = 1,
                     sha256 = "a".repeat(64),
                 ),
-                releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.2",
+                releaseNotesUrl = "https://github.com/obiente/native/releases/tag/v0.1.0-alpha.2",
             )
 
             assertEquals(AndroidUpdateChannel.Nightly, updater.updateChannel())

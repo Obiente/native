@@ -168,6 +168,30 @@ class MarketingCaptureOwnershipTest {
     }
 
     @Test
+    fun rejectedInitialRenamePreservesOriginalCatalog() {
+        withTemporaryDirectory("capture-locked-directory") { parent ->
+            val current = Files.createDirectory(parent.resolve("screenshots"))
+            val staged = Files.createDirectory(parent.resolve("staged"))
+            Files.writeString(current.resolve("capture-manifest.json"), "old manifest")
+            Files.write(current.resolve("old.png"), byteArrayOf(1, 2, 3))
+            Files.write(staged.resolve("new.png"), byteArrayOf(9, 8, 7))
+            val before = snapshot(current)
+
+            assertFailsWith<IOException> {
+                promoteStagedCaptureDirectory(current, staged) { _, _ ->
+                    throw IOException("injected directory lock")
+                }
+            }
+
+            assertEquals(before.keys, snapshot(current).keys)
+            before.forEach { (name, bytes) ->
+                assertContentEquals(bytes, snapshot(current).getValue(name))
+            }
+            assertContentEquals(byteArrayOf(9, 8, 7), Files.readAllBytes(staged.resolve("new.png")))
+        }
+    }
+
+    @Test
     fun `failed non-atomic promotion restores byte-identical old catalog`() {
         withTemporaryDirectory("capture-rollback") { parent ->
             val current = Files.createDirectory(parent.resolve("screenshots"))

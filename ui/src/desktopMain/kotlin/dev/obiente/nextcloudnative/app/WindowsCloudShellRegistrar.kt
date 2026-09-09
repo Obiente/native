@@ -196,7 +196,7 @@ internal fun windowsCloudShellDisplayName(session: NextcloudSession): String {
         host.isNotEmpty() -> host
         else -> "account"
     }
-    return "Nextcloud Native - $accountLabel [${accountId.take(WINDOWS_SHELL_ACCOUNT_TAG_CHARACTERS)}]"
+    return "nati.ve - $accountLabel [${accountId.take(WINDOWS_SHELL_ACCOUNT_TAG_CHARACTERS)}]"
 }
 
 private fun String.windowsShellLabelPart(maxCharacters: Int): String =

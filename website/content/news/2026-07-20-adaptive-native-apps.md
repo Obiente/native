@@ -14,7 +14,7 @@ imageCaption: The production adaptive Compose renderer turns verified inventory 
 
 **Historical article, reviewed 2026-08-20.** This post records product direction
 at publication. It is not a platform support list, and parts of the design remain
-planned. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+planned. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) for the current state.
 
 A Nextcloud can hold much more than files. It can be your photo library, group chat,

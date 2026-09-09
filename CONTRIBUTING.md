@@ -1,6 +1,6 @@
-# Contributing to Nextcloud Native
+# Contributing to nati.ve
 
-Nextcloud Native is an independent Obiente project. Contributions are welcome,
+nati.ve is an independent Obiente project. Contributions are welcome,
 especially protocol research, reusable semantic components, accessibility
 improvements, compatibility fixtures, and tests against different Nextcloud
 versions.
@@ -9,7 +9,7 @@ versions.
 contribution requirements may have changed. Check [`gradle.properties`](gradle.properties),
 the [version catalog](gradle/libs.versions.toml), the
 [Build and test workflow](.github/workflows/ci.yml), [`AGENTS.md`](AGENTS.md),
-and the [latest releases](https://github.com/Obiente/nc-native/releases) before
+and the [latest releases](https://github.com/obiente/native/releases) before
 starting work.
 
 ## Before you start
@@ -91,6 +91,26 @@ UTF-8 letters and translations. Run
 `bash tools/check-repository.sh` to catch smart quotes, typographic dashes,
 Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
 formatting characters.
+
+### Windows filesystem test prerequisites
+
+The full desktop suite and repository checks create disposable symbolic links
+for path-safety and Linux service fixtures. On Windows, the test process must
+have permission to create those links. Without that permission, Windows reports
+that a required privilege is not held, and Node.js reports `EPERM`. These are
+fixture setup failures, not successful safety checks.
+
+Run these checks from a terminal with the required symbolic-link privilege.
+Pass `--no-daemon` to Gradle so tests do not reuse a daemon started without that
+privilege. Keep the tests enabled: replacing links with ordinary files would bypass the
+behavior they verify. The Git Bash text-hygiene fixture converts its temporary
+paths for the native Windows scanner, including paths sent through stdin.
+
+The aggregate repository check also builds a Debian fixture with `dpkg-deb`.
+Run that check in Linux (including a configured WSL distribution or Linux
+container) with Rust, Node.js, Git, Python 3, jq, and Debian packaging tools
+available. Windows-only fixture checks can run from Git Bash; Node.js launches
+the manifest scripts through Bash using Windows-compatible paths.
 
 ### Isolated Android emulator tests
 

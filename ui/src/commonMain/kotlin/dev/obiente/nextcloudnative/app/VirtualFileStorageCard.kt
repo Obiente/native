@@ -75,7 +75,7 @@ internal fun VirtualFileStorageCard(
                             VirtualFilePlatformIntegration.LinuxFilesystemMount ->
                                 "Browse placeholders in your Linux file manager. Content downloads when opened."
                             VirtualFilePlatformIntegration.InAppOnDemandCache ->
-                                "Files opened in Nextcloud Native are kept in a managed on-demand cache."
+                                "Files opened in nati.ve are kept in a managed on-demand cache."
                             VirtualFilePlatformIntegration.WindowsCloudFiles ->
                                 "Browse everything in File Explorer. Files download when opened and local edits sync back."
                             VirtualFilePlatformIntegration.AppleFileProvider ->

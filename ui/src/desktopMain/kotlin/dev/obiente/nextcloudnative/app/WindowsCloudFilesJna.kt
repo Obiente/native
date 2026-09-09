@@ -104,7 +104,7 @@ internal class JnaWindowsCloudFilesApi(
 
     init {
         require(isWindowsDesktop()) { "CldApi.dll is only available on Windows." }
-        require(Native.POINTER_SIZE == 8) { "Nextcloud Native Cloud Files requires 64-bit Windows." }
+        require(Native.POINTER_SIZE == 8) { "nati.ve Cloud Files requires 64-bit Windows." }
         cldApi = Native.load("CldApi", CldApi::class.java)
         kernelFiles = Native.load("kernel32", KernelFileApi::class.java)
     }
@@ -562,9 +562,9 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     private fun dispatchCallback(callbacks: WindowsCloudFilesCallbacks, infoPointer: Pointer, parameters: Pointer) {
+        val type = requireNotNull(currentCallbackType.get()) { "The Cloud Files callback type was not bound." }
         val nativeInfo = CfCallbackInfo(infoPointer).apply { read() }
-        val identity = nativeInfo.fileIdentity?.takeIf { nativeInfo.fileIdentityLength > 0 }
-            ?.getByteArray(0L, nativeInfo.fileIdentityLength)
+        val identity = nativeInfo.windowsCloudCallbackIdentity(type == CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS)
         val info = WindowsCloudCallbackInfo(
             connectionKey = nativeInfo.connectionKey,
             transferKey = nativeInfo.transferKey,
@@ -577,7 +577,6 @@ internal class JnaWindowsCloudFilesApi(
             fileSize = nativeInfo.fileSize,
             priorityHint = nativeInfo.priorityHint.toInt() and 0xff,
         )
-        val type = requireNotNull(currentCallbackType.get()) { "The Cloud Files callback type was not bound." }
         val union = PARAMETERS_UNION_OFFSET
         when (type) {
             CF_CALLBACK_TYPE_FETCH_DATA -> callbacks.fetchData(

@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -54,19 +56,81 @@ class DesktopDeckCardDraftStoreTest {
         }
 
     @Test
-    fun `corrupt ciphertext is discarded without affecting another draft`() =
+    fun `malformed ciphertext is preserved across load save clear and pruning`() =
         withStore { root, _, store ->
             val session = session()
             val damaged = persisted(cardId = 42L, title = "Damaged")
             val safe = persisted(cardId = 43L, title = "Safe")
             store.save(session, damaged)
-            store.save(session, safe)
             val damagedFile = root.resolve(store.storageFileName(session, damaged.key))
             damagedFile.writeText("""{"version":1,"nonce":"bad","ciphertext":"bad"}""")
+            val malformedBytes = damagedFile.readBytes()
 
-            assertNull(store.load(session, damaged.key))
-            assertFalse(damagedFile.exists())
+            assertFailsWith<DesktopDeckDraftRecoveryException> {
+                store.load(session, damaged.key)
+            }
+            assertFailsWith<DesktopDeckDraftRecoveryException> {
+                store.save(session, damaged.copy(draft = damaged.draft.copy(title = "Replacement")))
+            }
+            assertFailsWith<DesktopDeckDraftRecoveryException> {
+                store.clear(session, damaged.key)
+            }
+            assertContentEquals(malformedBytes, damagedFile.readBytes())
+
+            store.save(session, safe)
+
+            assertContentEquals(malformedBytes, damagedFile.readBytes())
             assertEquals(safe, store.load(session, safe.key))
+        }
+
+    @Test
+    fun `explicit discard removes permanently unreadable ciphertext`() =
+        withStore { root, _, store ->
+            val session = session()
+            val damaged = persisted()
+            store.save(session, damaged)
+            val damagedFile = root.resolve(store.storageFileName(session, damaged.key))
+            damagedFile.writeText("not-an-envelope")
+
+            assertFailsWith<DesktopDeckDraftRecoveryException> {
+                store.load(session, damaged.key)
+            }
+
+            store.clear(session, damaged.key, discardUnreadable = true)
+
+            assertFalse(damagedFile.exists())
+        }
+
+    @Test
+    fun `unreadable drafts count toward the retention ceiling`() =
+        withStore { root, _, store ->
+            val session = session()
+            val damaged = persisted(cardId = 1L)
+            store.save(session, damaged)
+            root.resolve(store.storageFileName(session, damaged.key)).writeText("not-an-envelope")
+
+            (2L..(DeckCardDraftRetention.MAX_ENTRIES + 3L)).forEach { cardId ->
+                store.save(session, persisted(cardId = cardId))
+            }
+
+            assertEquals(DeckCardDraftRetention.MAX_ENTRIES, root.listFiles().orEmpty().size)
+            assertTrue(root.resolve(store.storageFileName(session, damaged.key)).exists())
+        }
+
+    @Test
+    fun `unreadable drafts cannot grow beyond the retention ceiling`() =
+        withStore { root, _, store ->
+            val session = session()
+            repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+                root.resolve("${DesktopDeckCardDraftStore.FILE_PREFIX}${index.toString(16).padStart(64, '0')}" +
+                    DesktopDeckCardDraftStore.FILE_SUFFIX).writeText("not-an-envelope")
+            }
+
+            assertFailsWith<DeckCardDraftCapacityException> {
+                store.save(session, persisted())
+            }
+
+            assertEquals(DeckCardDraftRetention.MAX_ENTRIES, root.listFiles().orEmpty().size)
         }
 
     @Test
@@ -156,6 +220,146 @@ class DesktopDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `transient secret store failure preserves draft through restart save and dismissal clear`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts").toFile()
+        val secretStore = ToggleSecretStore()
+        val session = session()
+        val persisted = persisted()
+        try {
+            val initial = storeWithPlatformKey(root, secretStore)
+            initial.save(session, persisted)
+            val file = root.resolve(initial.storageFileName(session, persisted.key))
+            val originalBytes = file.readBytes()
+            secretStore.failure = DesktopSecretStoreUnavailableException(
+                "Synthetic locked keyring.",
+            )
+            val restarted = storeWithPlatformKey(root, secretStore)
+
+            assertFailsWith<DesktopSecretStoreUnavailableException> {
+                restarted.load(session, persisted.key)
+            }
+            assertFailsWith<DesktopSecretStoreUnavailableException> {
+                restarted.save(
+                    session,
+                    persisted.copy(draft = persisted.draft.copy(title = "Replacement")),
+                )
+            }
+            assertFailsWith<DesktopSecretStoreUnavailableException> {
+                restarted.clear(session, persisted.key)
+            }
+            assertContentEquals(originalBytes, file.readBytes())
+
+            secretStore.failure = null
+            assertEquals(
+                persisted,
+                storeWithPlatformKey(root, secretStore).load(session, persisted.key),
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `missing key is not replaced while an encrypted draft exists`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts").toFile()
+        val secretStore = ToggleSecretStore()
+        val session = session()
+        val persisted = persisted()
+        try {
+            val firstStore = storeWithPlatformKey(root, secretStore)
+            firstStore.save(session, persisted)
+            val file = root.resolve(firstStore.storageFileName(session, persisted.key))
+            val originalBytes = file.readBytes()
+            secretStore.secret = null
+
+            val failure = assertFailsWith<DeckCardDraftResetRequiredException> {
+                storeWithPlatformKey(root, secretStore).save(
+                    session,
+                    persisted.copy(draft = persisted.draft.copy(title = "Replacement")),
+                )
+            }
+
+            assertTrue(failure.message.orEmpty().contains("encrypted drafts still exist"))
+            assertNull(secretStore.secret)
+            assertContentEquals(originalBytes, file.readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unreadable draft directory requires the existing secret`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts").toFile()
+        try {
+            assertTrue(desktopDeckLegacySecretRequired(root) { null })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `generated key is rejected when secure storage does not persist it`() {
+        var saves = 0
+        val secretStore = object : DesktopSecretStore {
+            override fun load(reference: DesktopSecretReference): ByteArray? = null
+
+            override fun save(
+                reference: DesktopSecretReference,
+                username: String?,
+                secret: ByteArray,
+            ) {
+                saves += 1
+            }
+
+            override fun clear(reference: DesktopSecretReference) = Unit
+        }
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = secretStore,
+            legacySecretRequired = { false },
+        )
+
+        repeat(2) {
+            val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+                provider.encryptionKey()
+            }
+            assertTrue(failure.message.orEmpty().contains("could not be verified"))
+        }
+
+        assertEquals(2, saves)
+    }
+
+    @Test
+    fun `generated key is rejected when secure storage readback changes it`() {
+        var saved = false
+        val replacement = Base64.getEncoder().encode(
+            ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { 0x5a },
+        )
+        val secretStore = object : DesktopSecretStore {
+            override fun load(reference: DesktopSecretReference): ByteArray? =
+                replacement.copyOf().takeIf { saved }
+
+            override fun save(
+                reference: DesktopSecretReference,
+                username: String?,
+                secret: ByteArray,
+            ) {
+                saved = true
+            }
+
+            override fun clear(reference: DesktopSecretReference) = Unit
+        }
+
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+            PlatformDeckDraftKeyProvider(
+                secretStore = secretStore,
+                legacySecretRequired = { false },
+            ).encryptionKey()
+        }
+
+        assertTrue(failure.message.orEmpty().contains("changed during secure storage verification"))
+    }
+
+    @Test
     fun `clear removes only the requested account resource`() =
         withStore { root, _, store ->
             val session = session()
@@ -170,6 +374,34 @@ class DesktopDeckCardDraftStoreTest {
             assertEquals(second, store.load(session, second.key))
             assertEquals(1, root.listFiles().orEmpty().size)
         }
+
+    @Test
+    fun `publish and delete sync the draft directory entry`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-directory-sync").toFile()
+        val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { (it + 1).toByte() }
+        val session = session()
+        val persisted = persisted()
+        val syncedDraftPresence = mutableListOf<Boolean>()
+        try {
+            lateinit var draftFile: java.io.File
+            val store = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = fixedKey(key),
+                syncDirectory = { directory ->
+                    assertEquals(root.canonicalFile, directory.canonicalFile)
+                    syncedDraftPresence += draftFile.exists()
+                },
+            )
+            draftFile = root.resolve(store.storageFileName(session, persisted.key))
+
+            store.save(session, persisted)
+            store.clear(session, persisted.key)
+
+            assertEquals(listOf(true, false), syncedDraftPresence)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 
     @Test
     fun `submitted draft quarantine blocks recovery when immediate deletion fails`() {
@@ -235,6 +467,17 @@ class DesktopDeckCardDraftStoreTest {
     private fun fixedKey(key: ByteArray): DesktopDeckDraftKeyProvider =
         DesktopDeckDraftKeyProvider { key.copyOf() }
 
+    private fun storeWithPlatformKey(
+        root: java.io.File,
+        secretStore: ToggleSecretStore,
+    ): DesktopDeckCardDraftStore = DesktopDeckCardDraftStore(
+        root = root,
+        keyProvider = PlatformDeckDraftKeyProvider(
+            secretStore = secretStore,
+            legacySecretRequired = { desktopDeckLegacySecretRequired(root) },
+        ),
+    )
+
     private fun session(
         login: String = "alice",
         password: String = "secret",
@@ -259,4 +502,28 @@ class DesktopDeckCardDraftStoreTest {
             dueFieldsEdited = true,
         ),
     )
+
+    private class ToggleSecretStore : DesktopSecretStore {
+        var secret: ByteArray? = null
+        var failure: RuntimeException? = null
+
+        override fun load(reference: DesktopSecretReference): ByteArray? {
+            failure?.let { throw it }
+            return secret?.copyOf()
+        }
+
+        override fun save(
+            reference: DesktopSecretReference,
+            username: String?,
+            secret: ByteArray,
+        ) {
+            failure?.let { throw it }
+            this.secret = secret.copyOf()
+        }
+
+        override fun clear(reference: DesktopSecretReference) {
+            failure?.let { throw it }
+            secret = null
+        }
+    }
 }

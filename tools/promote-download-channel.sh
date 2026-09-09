@@ -6,7 +6,7 @@ pointer_tag="${2:?Pointer tag is required.}"
 immutable_tag="${3:?Immutable tag is required.}"
 asset_directory="${4:?Asset directory is required.}"
 
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ "$pointer_tag" == "channel-nightly" ]]
 [[ "$immutable_tag" =~ ^nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8}$ ]]
 [[ -d "$asset_directory" ]]

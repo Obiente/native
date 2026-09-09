@@ -848,7 +848,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     }
 
     private fun requireSession(): NextcloudSession = services.loadSession()
-        ?: throw FileNotFoundException("Sign in to Nextcloud Native to browse files.")
+        ?: throw FileNotFoundException("Sign in to nati.ve to browse files.")
 
     private fun requireReference(documentId: String, session: NextcloudSession): NextcloudDocumentReference =
         providerCall(

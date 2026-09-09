@@ -62,9 +62,9 @@ release = ET.Element(
 description = ET.SubElement(release, "description")
 paragraph = ET.SubElement(description, "p")
 if release_type == "development":
-    paragraph.text = f"Nextcloud Native development build {release_name}."
+    paragraph.text = f"nati.ve development build {release_name}."
 else:
-    paragraph.text = f"Nextcloud Native {release_name}."
+    paragraph.text = f"nati.ve {release_name}."
 releases.insert(0, release)
 
 output.parent.mkdir(parents=True, exist_ok=True)

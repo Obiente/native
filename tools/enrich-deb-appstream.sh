@@ -44,9 +44,9 @@ elif ! sed -n '/^Depends:/p' "$control" |
     sed -i '/^Depends:/ s/$/, libsecret-tools/' "$control"
 fi
 if grep -q '^Homepage:' "$control"; then
-    sed -i 's|^Homepage:.*|Homepage: https://nc-native.obiente.dev/|' "$control"
+    sed -i 's|^Homepage:.*|Homepage: https://nati.ve/|' "$control"
 else
-    sed -i '/^Description:/i Homepage: https://nc-native.obiente.dev/' "$control"
+    sed -i '/^Description:/i Homepage: https://nati.ve/' "$control"
 fi
 mapfile -d '' desktop_entries < <(
     find "$root" -type f -name 'nextcloudnative-NextcloudNative.desktop' -print0
@@ -54,6 +54,7 @@ mapfile -d '' desktop_entries < <(
 [[ "${#desktop_entries[@]}" -eq 1 ]]
 desktop_entry="${desktop_entries[0]}"
 sed -i \
+    -e 's|^Name=.*|Name=nati.ve|' \
     -e 's|^Comment=.*|Comment=One native client for your complete Nextcloud account|' \
     -e 's|^Categories=.*|Categories=Network;FileTransfer;Utility;|' \
     -e 's|^Icon=.*|Icon=dev.obiente.nextcloudnative|' \

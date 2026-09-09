@@ -27,7 +27,7 @@ class DesktopVirtualFileProviderLocationTest {
         val parent = Files.createTempDirectory("virtual-provider-rename-").toFile()
         val otherParent = Files.createTempDirectory("virtual-provider-move-").toFile()
         try {
-            val current = VirtualFileProviderLocation(parent.absolutePath, "Nextcloud Native")
+            val current = VirtualFileProviderLocation(parent.absolutePath, "nati.ve")
 
             assertEquals(
                 false,
@@ -68,7 +68,7 @@ class DesktopVirtualFileProviderLocationTest {
         try {
             assertFailsWith<IllegalArgumentException> {
                 validateDesktopVirtualFileProviderLocation(
-                    VirtualFileProviderLocation(missingParent.absolutePath, "Nextcloud Native"),
+                    VirtualFileProviderLocation(missingParent.absolutePath, "nati.ve"),
                 )
             }
             assertEquals(false, missingParent.exists())
@@ -152,7 +152,7 @@ class DesktopVirtualFileProviderLocationTest {
             assertEquals(true, hasInvalidDesktopVirtualFileCacheRoot(parent.toPath()))
             assertFailsWith<IllegalArgumentException> {
                 validateDesktopVirtualFileProviderLocation(
-                    VirtualFileProviderLocation(parent.absolutePath, "Nextcloud Native"),
+                    VirtualFileProviderLocation(parent.absolutePath, "nati.ve"),
                 )
             }
             assertEquals("not a directory", invalidCache.readText())
@@ -165,7 +165,7 @@ class DesktopVirtualFileProviderLocationTest {
     fun locationResultMessagesRemainBoundedForLongValidPaths() {
         val message = virtualFileLocationActionMessage(
             "Virtual files will appear at ",
-            "/${"nested/".repeat(1_000)}Nextcloud Native",
+            "/${"nested/".repeat(1_000)}nati.ve",
         )
 
         assertEquals(MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH, message.length)

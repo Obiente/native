@@ -4,7 +4,7 @@ This is a maintainer guide for producing signed APT and RPM repository
 snapshots. It does not claim that a public repository is currently available.
 
 **Last reviewed: 2026-08-20.** Distribution endpoints and release channels may
-have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+have changed. Check the [latest releases](https://github.com/obiente/native/releases)
 before publishing or configuring a client.
 
 GitHub release attachments remain useful as immutable source artifacts, but
@@ -42,6 +42,12 @@ The builder requires the full 40-character fingerprint in
 the active GnuPG home. Public clients receive only the exported certificate.
 Never commit the secret key or its backup.
 
+The examples use `https://packages.example.org` as a placeholder. Replace it
+with the deployed package origin; the website domain does not establish a
+package repository endpoint. APT `Origin` and `Label` retain `Nextcloud Native`
+as repository identities so existing clients do not require release-info-change
+acceptance solely for the product rename.
+
 ## Build a repository snapshot
 
 Install AppStream, `apt-ftparchive`, `cpio`, `createrepo_c`, `dpkg-deb`,
@@ -53,7 +59,7 @@ tools/build-linux-package-repositories.sh \
   dist \
   linux-repository \
   prerelease \
-  https://packages.nc-native.obiente.dev
+  https://packages.example.org
 ```
 
 `linux-repository` must not already exist. `dist` must contain at least one
@@ -67,7 +73,7 @@ repository pointer only after the complete snapshot is available.
 Do not trust a certificate fetched only from the package origin. Before a
 channel is made public, its full 40-character signing fingerprint must also be
 published in the corresponding release at
-`https://github.com/Obiente/nc-native/releases`. That GitHub-hosted value is the
+`https://github.com/obiente/native/releases`. That GitHub-hosted value is the
 independently authenticated expected fingerprint. Download the certificate to
 a temporary file, inspect it locally, and compare the complete value before
 installing a clean export of it:
@@ -81,7 +87,7 @@ chmod 700 "$verification_home"
 trap 'rm -r -- "$verification_home"' EXIT
 curl --fail --proto '=https' --tlsv1.2 \
   --output nextcloud-native.asc \
-  https://packages.nc-native.obiente.dev/keys/nextcloud-native.asc
+  https://packages.example.org/keys/nextcloud-native.asc
 GNUPGHOME="$verification_home" gpg --batch --import nextcloud-native.asc
 mapfile -t actual_fingerprints < <(
   GNUPGHOME="$verification_home" gpg --batch --with-colons --list-keys |

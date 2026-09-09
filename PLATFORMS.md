@@ -1,11 +1,11 @@
 # Platform strategy
 
-This document defines the platform boundary for Nextcloud Native. It separates
+This document defines the platform boundary for nati.ve. It separates
 portable product behavior from operating-system integration so shared code does
 not erase native security, lifecycle, accessibility, or filesystem semantics.
 
 **Last reviewed: 2026-09-01.** Implementation and release availability may
-have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
+have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published artifacts and their limitations.
 
 The target architecture has three portable layers and thin platform products:
@@ -174,3 +174,20 @@ that operating system.
 
 The dependency order and acceptance gates are defined in
 [ROADMAP.md](ROADMAP.md), especially the platform productization milestone.
+
+## Installed display names
+
+Android's application label is `nati.ve`. Linux launcher and AppStream names are
+`nati.ve`, including the launcher rewritten into Debian packages. macOS packages
+use `nati.ve.app` and the `nati.ve` Dock name. Windows product and shortcut names
+are described in [Windows release packaging](docs/windows-release.md#installed-application-name).
+
+The Android application ID, Linux package and desktop-file IDs, persisted data
+paths, and Windows upgrade identity remain unchanged. These are compatibility
+identifiers, independent of the displayed brand. On macOS, remove the previous
+`NextcloudNative.app` after installing `nati.ve.app` to avoid keeping two app
+bundles; the DMG does not migrate an existing bundle automatically.
+
+These names describe source packaging configuration, not confirmation that a
+release containing it has been published. Check the
+[release artifacts](https://github.com/Obiente/native/releases) for availability.

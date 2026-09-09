@@ -73,7 +73,7 @@ test("the runtime refresh uses the cached same-origin endpoint", async () => {
 
 test("runtime refresh only uses the endpoint on its deployed origin", () => {
   assert.equal(
-    shouldRefreshGithubRepository({ origin: "https://nc-native.obiente.dev" }),
+    shouldRefreshGithubRepository({ origin: "https://nati.ve" }),
     true,
   );
   for (const origin of [
@@ -81,7 +81,7 @@ test("runtime refresh only uses the endpoint on its deployed origin", () => {
     "http://127.0.0.1:4173",
     "file://",
     "https://preview.example.invalid",
-    "https://nc-native.obiente.dev.example.invalid",
+    "https://nati.ve.example.invalid",
   ]) {
     assert.equal(shouldRefreshGithubRepository({ origin }), false, origin);
   }

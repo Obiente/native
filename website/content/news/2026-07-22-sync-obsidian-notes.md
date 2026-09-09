@@ -14,7 +14,7 @@ imageCaption: The production folder-pair UI shows the synthetic vault direction,
 
 **Historical article, reviewed 2026-08-20.** This post explains the folder-sync
 design recorded at publication, not a guarantee for every release or vault. Check
-the [current releases](https://github.com/Obiente/nc-native/releases),
+the [current releases](https://github.com/obiente/native/releases),
 [compatibility notes](/compatibility/), and the current [Android folder-sync guide](/guides/android/folder-sync/)
 before testing it with real notes.
 

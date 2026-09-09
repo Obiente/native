@@ -80,8 +80,8 @@ private fun launchDesktopProcess(arguments: Array<String>) {
     if (desktopUpdateHandoffActive()) {
         JOptionPane.showMessageDialog(
             null,
-            "Nextcloud Native is updating and will reopen when installation finishes.",
-            "Nextcloud Native update in progress",
+            "nati.ve is updating and will reopen when installation finishes.",
+            "nati.ve update in progress",
             JOptionPane.INFORMATION_MESSAGE,
         )
         return
@@ -113,8 +113,8 @@ private fun launchDesktopProcess(arguments: Array<String>) {
         DesktopSingleInstanceStart.Failed -> {
             JOptionPane.showMessageDialog(
                 null,
-                "Nextcloud Native could not activate its existing desktop process.",
-                "Nextcloud Native",
+                "nati.ve could not activate its existing desktop process.",
+                "nati.ve",
                 JOptionPane.ERROR_MESSAGE,
             )
             return
@@ -278,7 +278,7 @@ private fun launchDesktopProcess(arguments: Array<String>) {
             SwingUtilities.invokeLater {
                 JOptionPane.showMessageDialog(
                     mainWindow.value,
-                    "The Windows update did not complete. Nextcloud Native is still available.",
+                    "The Windows update did not complete. nati.ve is still available.",
                     "Update did not complete",
                     JOptionPane.ERROR_MESSAGE,
                 )
@@ -292,7 +292,7 @@ private fun launchDesktopProcess(arguments: Array<String>) {
             trayPopupVisible.value = false
             trayPopupWindow.value?.isVisible = false
         },
-        title = "Nextcloud Native sync activity",
+        title = "nati.ve sync activity",
         icon = appIcon,
         state = rememberWindowState(
             position = WindowPosition(Alignment.BottomEnd),
@@ -354,7 +354,7 @@ private fun launchDesktopProcess(arguments: Array<String>) {
             }
         },
         visible = windowVisible.value,
-        title = "Nextcloud Native",
+        title = "nati.ve",
         icon = appIcon,
         state = mainWindowState,
     ) {

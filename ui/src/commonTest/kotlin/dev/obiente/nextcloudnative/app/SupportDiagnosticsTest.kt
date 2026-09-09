@@ -44,7 +44,7 @@ class SupportDiagnosticsTest {
                 fields = listOf(
                     SupportDiagnosticFieldDraft(
                         "local_path",
-                        "D:\\Fixtures\\Private Person\\Nextcloud Native\\Photos\\private.jpg",
+                        "D:\\Fixtures\\Private Person\\nati.ve\\Photos\\private.jpg",
                         SupportDiagnosticValuePrivacy.LocalPath,
                     ),
                     SupportDiagnosticFieldDraft(

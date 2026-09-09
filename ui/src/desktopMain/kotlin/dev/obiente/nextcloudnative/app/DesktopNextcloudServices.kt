@@ -355,7 +355,7 @@ internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
     require(
         Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
             !Files.isSymbolicLink(cacheRoot),
-    ) { "The selected location contains an invalid Nextcloud Native cache folder." }
+    ) { "The selected location contains an invalid nati.ve cache folder." }
 }
 
 internal fun hasInvalidDesktopVirtualFileCacheRoot(parent: Path): Boolean {
@@ -1833,7 +1833,7 @@ class DesktopNextcloudServices(
             providerActive = active,
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
-                windows -> "Nextcloud Native in File Explorer"
+                windows -> "nati.ve in File Explorer"
                 else -> null
             },
             providerLocationConfiguration = if (linux) {
@@ -2226,7 +2226,7 @@ class DesktopNextcloudServices(
         withContext(Dispatchers.IO) {
             val selectedFile = invokeOnSwingEventThread {
                 val chooser = JFileChooser().apply {
-                    dialogTitle = "Choose where Nextcloud Native appears"
+                    dialogTitle = "Choose where nati.ve appears"
                     fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
                     isAcceptAllFileFilterUsed = false
                     initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let {
@@ -3068,7 +3068,7 @@ class DesktopNextcloudServices(
             failedCount = failed,
             message = when {
                 paused -> "Sync is paused"
-                conflicts + failed > 0 -> "Open Nextcloud Native to review sync problems"
+                conflicts + failed > 0 -> "Open nati.ve to review sync problems"
                 else -> null
             },
             accountLabel = loadSession()?.loginName,
@@ -3284,7 +3284,7 @@ class DesktopNextcloudServices(
                 cached.readBytes().takeIf { publicContentSha256(it) == image.sha256 }
                     ?.let { return@withContext it }
             }
-            projectContentHttpClient.newCall(Request.Builder().url(image.url).get().build())
+            projectContentHttpClient.newCall(Request.Builder().url(canonicalProjectNewsImageRequestUrl(image.url)).get().build())
                 .execute().use { response ->
                     check(response.isSuccessful) {
                         "Project news image request failed (HTTP ${response.code})."
@@ -3400,7 +3400,7 @@ class DesktopNextcloudServices(
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
                         severity = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened,
+                            AppUpdateInstallResult.ConfirmationOpened, AppUpdateInstallResult.Restarting,
                             AppUpdateInstallResult.Installed,
                             -> SupportDiagnosticSeverity.Info
                             is AppUpdateInstallResult.Cancelled,
@@ -3410,13 +3410,7 @@ class DesktopNextcloudServices(
                         },
                         component = SupportDiagnosticComponent.Updates,
                         operation = "updates.install",
-                        outcome = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
-                            AppUpdateInstallResult.Installed -> "installed"
-                            is AppUpdateInstallResult.Cancelled -> "cancelled"
-                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
-                            is AppUpdateInstallResult.Rejected -> "rejected"
-                        },
+                        outcome = result.diagnosticOutcome(),
                         durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
                         message = when (result) {
                             is AppUpdateInstallResult.PermissionRequired -> result.message
@@ -3891,7 +3885,7 @@ class DesktopNextcloudServices(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key)
+        deckCardDrafts.clear(session, key, discardUnreadable)
     }
     override suspend fun quarantineSubmittedDeckCardDraft(
         session: NextcloudSession,

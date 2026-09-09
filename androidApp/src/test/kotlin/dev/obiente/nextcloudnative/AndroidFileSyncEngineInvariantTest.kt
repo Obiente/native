@@ -23,13 +23,41 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
+    @Test
+    fun verifiedContentHashWinsOverEarlierSafScanEvidence() {
+        val verified = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "same-revision",
+            size = 2L,
+            contentHash = "sha256:${"2".repeat(64)}",
+        )
+        val unverified = verified.copy(relativePath = "Other.bin", contentHash = null)
+        val scanHashes = mapOf(
+            verified.relativePath to "sha256:${"1".repeat(64)}",
+            unverified.relativePath to "sha256:${"3".repeat(64)}",
+        )
+
+        val reconciled = retainNewestAndroidFileSyncLocalContentHashes(
+            localEntries = listOf(verified, unverified),
+            scanContentHashes = scanHashes,
+            verifiedPaths = setOf(verified.relativePath),
+        )
+
+        assertEquals(verified.contentHash, reconciled[0].contentHash)
+        assertEquals(scanHashes.getValue(unverified.relativePath), reconciled[1].contentHash)
+    }
+
     @Test
     fun largeFileDirectoryReplacementKeepsTheDirectoryUntilProtectedPublication() {
         val directory = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
@@ -206,29 +234,252 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertFailsWith<IllegalStateException> {
             removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    true
+                },
+                cleanRemoteUploads = { events += "remote"; true },
                 cleanLedger = {
                     events += "clean"
                     error("ledger unavailable")
                 },
                 persistRemoval = { events += "persist" },
                 cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
             )
         }
 
-        assertEquals(listOf("clean"), events)
+        assertEquals(listOf("reconcile", "remote", "clean"), events)
     }
 
     @Test
-    fun pairRemovalPersistsBeforeCancellingItsSchedule() = runBlocking {
+    fun pairRemovalReconcilesBeforePersistingAndReleasingItsGrant() = runBlocking {
         val events = mutableListOf<String>()
 
-        removeConfiguredFileSyncPair(
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
+            cleanRemoteUploads = { events += "remote"; true },
             cleanLedger = { events += "clean" },
             persistRemoval = { events += "persist" },
             cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
         )
 
-        assertEquals(listOf("clean", "persist", "cancel"), events)
+        assertTrue(removed)
+        assertEquals(listOf("reconcile", "remote", "clean", "persist", "cancel", "release"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateAndGrantWhenLocalRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                false
+            },
+            cleanRemoteUploads = { events += "remote"; true },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateWhenRemoteRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
+            cleanRemoteUploads = {
+                events += "remote"
+                false
+            },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile", "remote"), events)
+    }
+
+    @Test
+    fun pairRemovalAllowsExpiredSafGrantWhenNoRecoveryIsPending() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = false,
+        ) { reconciled = true }
+
+        assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalDoesNotTraverseALargeGrantedTreeWithoutPendingRecovery() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = false,
+        ) {
+            reconciled = true
+            error("A tree without owned recovery rows must not be traversed")
+        }
+
+        assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRetainsExpiredSafGrantPairWhileRecoveryIsPending() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
+
+        assertFalse(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRecoveryContinuationTracksCoroutineJobCancellation() {
+        val job = Job()
+        val shouldContinue = androidFileSyncJobContinuation(job)
+
+        assertTrue(shouldContinue())
+        job.cancel()
+
+        assertFalse(shouldContinue())
+    }
+
+    @Test
+    fun pairRemovalStopsAfterAReconciliationThatCancelsItsJob() = runBlocking {
+        val events = mutableListOf<String>()
+        val removal = launch {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    currentCoroutineContext().cancel()
+                    true
+                },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalFinishesCleanupNonCancellablyAfterPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = {
+                    events += "persist"
+                    removal.cancel()
+                },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.start()
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
+    fun pairRemovalCannotBeCancelledBetweenLedgerCleanupAndPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = {
+                    events += "clean"
+                    removal.cancel()
+                },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.start()
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
+    fun pairRemovalReconcilesDownloadsWhenAnotherPairRetainsTheSafGrant() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
+
+        assertTrue(safeToRemove)
+        assertTrue(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRecoveryPropagatesCancellationBeforeAnyMutation() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    throw CancellationException("pair removal cancelled")
+                },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        assertEquals(listOf("reconcile"), events)
     }
 
     @Test

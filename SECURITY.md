@@ -1,13 +1,13 @@
 # Security policy
 
-Nextcloud Native handles app passwords, private files, messages, contacts, and
+nati.ve handles app passwords, private files, messages, contacts, and
 other sensitive account data. Please do not report vulnerabilities in a public
 issue.
 
 ## Reporting a vulnerability
 
 Report vulnerabilities privately through
-[GitHub private vulnerability reporting](https://github.com/Obiente/nc-native/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/obiente/native/security/advisories/new).
 If that channel is unavailable, contact the Obiente maintainers privately
 before sharing technical details.
 
@@ -25,7 +25,7 @@ coordinate a fix, and credit reporters who want attribution.
 ## Supported versions
 
 **Last reviewed: 2026-08-20.** Release and security-support status may have
-changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+changed. Check the [latest releases](https://github.com/obiente/native/releases)
 and their notes for current published limitations.
 
 The project is pre-release at this review date. Reports are assessed against

@@ -4,10 +4,10 @@ import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { guidePlatformHubForPath } from "./guide-platforms.js";
 
-export const siteUrl = "https://nc-native.obiente.dev";
+export const siteUrl = "https://nati.ve";
 
 function brandedTitle(title) {
-  const suffix = " | Nextcloud Native";
+  const suffix = " | nati.ve";
   return title.length + suffix.length <= 60 ? `${title}${suffix}` : title;
 }
 
@@ -43,9 +43,9 @@ export function metadataFor(path) {
   }
   if (path === "/guides/") {
     return {
-      title: "Android, Linux and Windows guides | Nextcloud Native",
+      title: "Android, Linux and Windows guides | nati.ve",
       description:
-        "Choose Android, Linux, or Windows instructions for Nextcloud Native setup, offline files, folder sync, photo backup, Calendar, and desktop integration.",
+        "Choose Android, Linux, or Windows instructions for nati.ve setup, offline files, folder sync, photo backup, Calendar, and desktop integration.",
       canonical: `${siteUrl}/guides/`,
       type: "website",
     };
@@ -68,18 +68,18 @@ export function metadataFor(path) {
   }
   if (path === "/news/") {
     return {
-      title: "Project journal | Nextcloud Native",
+      title: "Project journal | nati.ve",
       description:
-        "Dated product and design notes about Nextcloud Native app rendering, folder sync, Obsidian workflows, Android media backup, and platform integration.",
+        "Dated product and design notes about nati.ve app rendering, folder sync, Obsidian workflows, Android media backup, and platform integration.",
       canonical: `${siteUrl}/news/`,
       type: "website",
     };
   }
   if (path === "/visual-qa/") {
     return {
-      title: "Visual QA catalog | Nextcloud Native",
+      title: "Visual QA catalog | nati.ve",
       description:
-        "Browse synthetic desktop and mobile screenshots rendered directly from the Nextcloud Native Compose UI.",
+        "Browse synthetic desktop and mobile screenshots rendered directly from the nati.ve Compose UI.",
       canonical: `${siteUrl}/visual-qa/`,
       type: "website",
       robots: "noindex,follow",
@@ -87,7 +87,7 @@ export function metadataFor(path) {
   }
   if (path === changelog.path) {
     return {
-      title: "Changelog | Nextcloud Native",
+      title: "Changelog | nati.ve",
       description: metadataDescription(changelog.description),
       canonical: `${siteUrl}${changelog.path}`,
       type: "website",
@@ -105,7 +105,7 @@ export function metadataFor(path) {
   }
 
   return {
-    title: "Nextcloud Native for Android, Linux and Windows | Obiente",
+    title: "nati.ve for Android, Linux and Windows | Obiente",
     description:
       "Open-source native Nextcloud alpha for Android, Linux, and Windows. Test Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
     canonical: `${siteUrl}/`,
@@ -122,7 +122,7 @@ export function socialImageDetailsFor(metadata) {
     url: socialImageFor(metadata),
     alt:
       metadata.imageAlt ??
-      "Nextcloud Native desktop and mobile clients connected to Nextcloud",
+      "nati.ve wordmark with mint and blue curves on charcoal",
     width: metadata.imageWidth ?? 1280,
     height: metadata.imageHeight ?? 640,
     type: "image/png",
@@ -147,7 +147,7 @@ export function sharingHeadFor(metadata) {
     `<meta property="og:description" content="${escapeAttribute(metadata.description)}">`,
     `<meta property="og:type" content="${escapeAttribute(metadata.type)}">`,
     `<meta property="og:url" content="${escapeAttribute(metadata.canonical)}">`,
-    `<meta property="og:site_name" content="Nextcloud Native">`,
+    `<meta property="og:site_name" content="nati.ve">`,
     `<meta property="og:locale" content="en_US">`,
     `<meta property="og:image" content="${escapeAttribute(image.url)}">`,
     `<meta property="og:image:secure_url" content="${escapeAttribute(image.url)}">`,

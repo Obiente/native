@@ -1,10 +1,18 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -113,11 +121,111 @@ internal fun <T> loadFileSyncPresentationSnapshot(
 }
 
 internal suspend fun removeConfiguredFileSyncPair(
+    reconcileLocalDownloads: suspend () -> Boolean,
+    cleanRemoteUploads: suspend () -> Boolean,
     cleanLedger: suspend () -> Unit,
     persistRemoval: suspend () -> Unit,
     cancelSchedule: suspend () -> Unit,
-) {
+    releaseLocalGrant: suspend () -> Unit,
+): Boolean {
+    if (!reconcileLocalDownloads()) return false
+    currentCoroutineContext().ensureActive()
+    if (!cleanRemoteUploads()) return false
+    currentCoroutineContext().ensureActive()
+    commitConfiguredFileSyncPairRemoval(
+        cleanLedger = cleanLedger,
+        persistRemoval = persistRemoval,
+        cancelSchedule = cancelSchedule,
+        releaseLocalGrant = releaseLocalGrant,
+    )
+    return true
+}
+
+internal suspend fun commitConfiguredFileSyncPairRemoval(
+    cleanLedger: suspend () -> Unit,
+    persistRemoval: suspend () -> Unit,
+    cancelSchedule: suspend () -> Unit,
+    releaseLocalGrant: suspend () -> Unit,
+) = withContext(NonCancellable) {
     cleanLedger()
     persistRemoval()
-    cancelSchedule()
+    try {
+        cancelSchedule()
+    } finally {
+        releaseLocalGrant()
+    }
+}
+
+internal suspend fun reconcileSafDownloadsBeforePairRemoval(
+    context: Context,
+    localRootId: String,
+): Boolean {
+    if (!localRootId.startsWith("content://")) return true
+    val shouldContinue = androidFileSyncJobContinuation(currentCoroutineContext()[Job])
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    val treeUri = Uri.parse(localRootId)
+    val hasPersistedGrant = try {
+        context.contentResolver.persistedUriPermissions.any { permission ->
+            permission.uri == treeUri && permission.isReadPermission && permission.isWritePermission
+        }
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        return false
+    }
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    val hasPendingRecovery = try {
+        createAndroidSafDownloadOwnershipStore(
+            context.applicationContext,
+            localRootId,
+        ).hasPendingTransactions()
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        return false
+    }
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    val reconciled = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
+        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
+    }
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    return reconciled
+}
+
+internal fun androidFileSyncJobContinuation(job: Job?): () -> Boolean =
+    { job?.isActive != false && !Thread.currentThread().isInterrupted }
+
+internal fun reconcileSafDownloadsBeforePairRemoval(
+    hasPersistedGrant: Boolean,
+    hasPendingRecovery: Boolean,
+    reconcile: () -> Unit,
+): Boolean {
+    if (!hasPendingRecovery) return true
+    if (!hasPersistedGrant) return false
+    return try {
+        reconcile()
+        true
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        false
+    }
+}
+
+internal fun releaseSafGrantAfterPairRemoval(
+    context: Context,
+    localRootId: String,
+    releasesLocalGrant: Boolean,
+) {
+    if (!releasesLocalGrant) return
+    try {
+        context.contentResolver.releasePersistableUriPermission(
+            Uri.parse(localRootId),
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        )
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        // The pair is gone, so a later picker can release or replace this stale grant.
+    }
 }

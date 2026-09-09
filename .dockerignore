@@ -1,5 +1,6 @@
 .git
 .github/*
+!.github/social-preview.png
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/ci.yml

@@ -16,7 +16,7 @@ imageCaption: The native folder sync center keeps folder mappings, transfer heal
 design, not equal support on every operating system. Android, Linux, and Windows have
 folder pairs in the current repository. Windows also has separate Cloud Files integration.
 Authenticated iPhone, iPad, and macOS products are not supported. Check the
-[current releases](https://github.com/Obiente/nc-native/releases) and
+[current releases](https://github.com/obiente/native/releases) and
 [compatibility notes](/compatibility/) before using important data.
 
 A synchronized folder should still feel like a folder. A photo editor should be able

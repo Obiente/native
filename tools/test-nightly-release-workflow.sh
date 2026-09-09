@@ -260,7 +260,7 @@ fi
 tag="nightly-20260726-1430-run42-abcdef12"
 version_code="$("$project_root/tools/derive-android-version-code.sh" 42 nightly)"
 manifest="$temporary_directory/update-manifest.json"
-GITHUB_REPOSITORY="Obiente/nc-native" \
+GITHUB_REPOSITORY="Obiente/native" \
     "$project_root/tools/create-android-update-manifest.sh" \
     "$manifest" \
     "nightly-v1" \

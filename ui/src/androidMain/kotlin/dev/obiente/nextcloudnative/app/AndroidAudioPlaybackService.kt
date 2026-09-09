@@ -69,7 +69,7 @@ class AndroidAudioPlaybackService : MediaSessionService() {
                 )
             }
             OkHttpDataSource.Factory(httpClient)
-                .setUserAgent("Nextcloud Native")
+                .setUserAgent("nati.ve")
                 .apply {
                     if (authorization != null) {
                         setDefaultRequestProperties(mapOf("Authorization" to "Basic $authorization"))

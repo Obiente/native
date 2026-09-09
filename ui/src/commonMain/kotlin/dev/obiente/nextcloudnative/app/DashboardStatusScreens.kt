@@ -647,51 +647,6 @@ internal fun rememberNativeDashboardState(
 }
 
 @Composable
-private fun DashboardHeader(
-    title: String,
-    subtitle: String,
-    onBack: (() -> Unit)?,
-    onRefresh: () -> Unit,
-    onCustomize: (() -> Unit)? = null,
-    onSearch: (() -> Unit)? = null,
-    onSettings: (() -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(
-            horizontal = NextcloudSpacing.Medium,
-            vertical = NextcloudSpacing.Small,
-        ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(NextcloudIcons.Back, contentDescription = "Back")
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (onSearch != null) {
-            IconButton(onClick = onSearch) {
-                Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
-            }
-        }
-        IconButton(onClick = onRefresh) {
-            Icon(NextcloudIcons.Refresh, contentDescription = dashboardRefreshDescription(title))
-        }
-        HomeWorkspaceActions(onCustomize, onSettings)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
-
-@Composable
 private fun DashboardUnavailableNotice(
     showingSavedContent: Boolean,
     onRetry: () -> Unit,
@@ -776,67 +731,6 @@ internal fun homeDashboardWidgetBindings(
         val sectionId = widget.availableHomeSectionId(occupied)
         occupied += sectionId
         HomeDashboardWidgetBinding(sectionId = sectionId, widget = widget)
-    }
-}
-
-@Composable
-private fun DashboardQuickActionsCard(
-    installedApps: List<NextcloudAppEntry>,
-    pinnedAppIds: List<String>,
-    onOpenApp: (NextcloudAppEntry) -> Unit,
-) {
-    val quickApps = remember(installedApps, pinnedAppIds) {
-        installedApps
-            .filter { canonicalAppWorkspaceId(it.id) in pinnedAppIds }
-            .distinctBy { canonicalAppWorkspaceId(it.id) }
-            .sortedBy { pinnedAppIds.indexOf(canonicalAppWorkspaceId(it.id)) }
-            .take(MAX_APP_WORKSPACE_PINS)
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
-        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large)) {
-            Text(
-                "Quick actions",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (quickApps.isEmpty()) {
-                Text(
-                    if (pinnedAppIds.isEmpty()) {
-                        "Pin apps from Apps to add quick actions."
-                    } else {
-                        "Your pinned apps are not currently available."
-                    },
-                    modifier = Modifier.padding(top = NextcloudSpacing.Medium),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    quickApps.forEach { app ->
-                        FilterChip(
-                            selected = false,
-                            onClick = { onOpenApp(app) },
-                            label = { Text(app.name, maxLines = 1) },
-                            leadingIcon = {
-                                Icon(
-                                    NextcloudIcons.app(app.id),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 

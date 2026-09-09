@@ -563,7 +563,7 @@ private fun PrivacyTab(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
         Text("What private support means", style = MaterialTheme.typography.titleLarge)
         PrivacyPoint("Nothing is uploaded automatically. Sending always requires your explicit confirmation.")
-        PrivacyPoint("Nextcloud Native reports are retained by Obiente Support for 30 days unless deleted first.")
+        PrivacyPoint("nati.ve reports are retained by Obiente Support for 30 days unless deleted first.")
         PrivacyPoint(
             "Reports and replies are not end-to-end encrypted. Authorized maintainers can read them.",
         )

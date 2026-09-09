@@ -848,7 +848,7 @@ class DesktopSecretStoreTest {
         val store = WindowsCredentialManagerSecretStore()
         val reference = DesktopSecretReference(
             targetName = "Obiente/NextcloudNative/test/${UUID.randomUUID()}",
-            label = "Nextcloud Native test credential",
+            label = "nati.ve test credential",
             attributes = mapOf("application" to "dev.obiente.nextcloudnative.test"),
         )
         val secret = "synthetic-app-password".encodeToByteArray()

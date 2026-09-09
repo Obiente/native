@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img">
-  <title>Nextcloud Native adaptive architecture</title>
-  <desc>Nextcloud Native checks what a server offers, understands it safely, chooses a useful view, and presents it as a native Android or desktop app.</desc>
+  <title>nati.ve adaptive architecture</title>
+  <desc>nati.ve checks what a server offers, understands it safely, chooses a useful view, and presents it as a native Android or desktop app.</desc>
   <style>
     .title { font: 700 24px sans-serif; fill: #f7f5fa; }
     .heading { font: 700 18px sans-serif; fill: #f7f5fa; }

@@ -16,73 +16,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.channels.Channels
 import java.security.MessageDigest
-import java.util.UUID
-
-internal data class AndroidLocalSyncDocument(
-    val entry: LocalSyncEntry,
-    val uri: Uri,
-    val displayName: String,
-)
-
-internal data class AndroidFileSyncContentHashRead(
-    val contentHash: String?,
-    val bytesRead: Long,
-) {
-    init {
-        require(bytesRead >= 0L)
-    }
-}
-
-internal interface AndroidFileSyncLocalTree {
-    fun scan(
-        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
-    ): List<AndroidLocalSyncDocument>
-    fun contentHash(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        maximumBytes: Long,
-    ): String?
-    fun contentHashRead(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        maximumBytes: Long,
-    ): AndroidFileSyncContentHashRead = AndroidFileSyncContentHashRead(
-        contentHash(path, expectedLocalRevision, expectedBytes, maximumBytes),
-        expectedBytes,
-    )
-    fun contentRangeHash(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        offset: Long,
-        length: Int,
-    ): String? = null
-    fun stageForUpload(
-        path: String,
-        destination: File,
-        maximumBytes: Long,
-        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
-    ): LocalSyncEntry
-    fun createDirectory(path: String, expectedLocalRevision: String?)
-    fun writeFile(path: String, source: File, expectedLocalRevision: String?)
-    fun writeFileFromStream(
-        path: String,
-        expectedLocalRevision: String?,
-        write: (OutputStream) -> Unit,
-    ) {
-        val temporary = File.createTempFile("nextcloud-native-local-stream-", ".tmp")
-        try {
-            FileOutputStream(temporary).use(write)
-            writeFile(path, temporary, expectedLocalRevision)
-        } finally {
-            temporary.delete()
-        }
-    }
-    fun delete(path: String, expectedLocalRevision: String)
-    fun resolve(path: String): AndroidLocalSyncDocument?
-}
 
 /**
  * Revision-guarded adapter over one persisted Storage Access Framework tree.
@@ -93,6 +26,7 @@ internal interface AndroidFileSyncLocalTree {
 internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
+    private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -109,14 +43,19 @@ internal class AndroidSafFileSyncLocalTree(
 
     override fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+        shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
+        val ownershipDirectory = downloadOwnershipStore.indexed()
+        indexRecoveryLocationsIfNeeded(ownershipDirectory, shouldContinue)
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
             val (parentPath, parentUri) = pending.removeFirst()
             require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
-            for (document in children(parentUri, parentPath)) {
+            for (document in children(parentUri, parentPath, ownershipDirectory, shouldContinue)) {
+                requireScanContinuation(shouldContinue)
                 if (!includes(document.entry.relativePath, document.entry.kind)) continue
                 require(result.size < MAX_ENTRIES) { "The local folder contains too many entries." }
                 result += document
@@ -126,6 +65,119 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    private fun indexRecoveryLocations(
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+        shouldContinue: () -> Boolean,
+    ) {
+        val pending = ArrayDeque<Pair<String, Uri>>()
+        val visited = mutableSetOf<String>()
+        var observedEntries = 0
+        pending += "" to rootUri
+        while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
+            val (parentPath, parentUri) = pending.removeFirst()
+            require(visited.add(parentUri.toString())) { "The local folder contains a directory cycle." }
+            require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
+            val documents = rawChildren(parentUri, parentPath)
+            val observedNames = documents.mapTo(mutableSetOf(), AndroidLocalSyncDocument::displayName)
+            ownershipDirectory.observeRecoveryNames(
+                parentUri.toString(),
+                observedNames,
+            )
+            val ownedRecoveryTokens = ownershipDirectory.forDirectory(parentUri.toString())
+                .transactions(observedNames)
+                .mapTo(mutableSetOf(), AndroidSafOwnedDownloadTransaction::token)
+            observedEntries = Math.addExact(observedEntries, documents.size)
+            require(observedEntries <= MAX_ENTRIES) { "The local folder contains too many entries." }
+            documents.filter { document ->
+                document.entry.kind == SyncEntryKind.Directory &&
+                    shouldTraverseAndroidSafRecoveryDirectory(document.displayName, ownedRecoveryTokens)
+            }.forEach { document -> pending += document.entry.relativePath to document.uri }
+        }
+    }
+
+    private fun indexRecoveryLocationsIfNeeded(
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+        shouldContinue: () -> Boolean,
+    ) = indexAndroidSafRecoveryLocationsIfNeeded(ownershipDirectory) {
+        indexRecoveryLocations(ownershipDirectory, shouldContinue)
+    }
+
+    override fun authenticateFileForReplacement(
+        path: String,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        val current = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(current.entry.kind == SyncEntryKind.File) { "The local item changed type after the sync scan." }
+        authenticatedReplacementSnapshot(
+            document = current,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = expectedContentHash,
+            expectedReplacementAuthentication = expectedContentHash,
+            shouldContinue = shouldContinue,
+        )
+    }
+
+    override fun strengthenReplacementEntries(
+        documents: List<AndroidLocalSyncDocument>,
+        protectedPaths: Set<String>,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidLocalSyncDocument> = strengthenAndroidSafReplacementEntries(
+        documents = documents,
+        protectedPaths = protectedPaths,
+        contentReadBudget = contentReadBudget,
+        contentHash = { document -> replacementContentHash(document, shouldContinue) },
+    )
+
+    override fun reconcileOwnedDownloads(shouldContinue: () -> Boolean) {
+        requireScanContinuation(shouldContinue)
+        val ownershipDirectory = downloadOwnershipStore.indexed()
+        indexRecoveryLocationsIfNeeded(
+            ownershipDirectory = ownershipDirectory,
+            shouldContinue = shouldContinue,
+        )
+        val pending = ArrayDeque<Pair<String, Uri>>()
+        pending += "" to rootUri
+        var visitedEntries = 0
+        while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
+            val (parentPath, parentUri) = pending.removeFirst()
+            require(parentPath.count { it == '/' } < MAX_DEPTH) {
+                "The local recovery folder is nested too deeply."
+            }
+            val publisher = downloadPublisher(
+                parentUri,
+                parentPath,
+                shouldContinue,
+                ownershipDirectory,
+            )
+            publisher.reconcileForSync()
+            requireScanContinuation(shouldContinue)
+            val listedChildren = rawChildren(parentUri, parentPath)
+            requireScanContinuation(shouldContinue)
+            val visibleUris = publisher.visibleDocuments(
+                listedChildren.map { document ->
+                    AndroidSafPublicationDocument(document.uri, document.displayName)
+                },
+            ).mapTo(mutableSetOf()) { it.document }
+            listedChildren.forEach { document ->
+                requireScanContinuation(shouldContinue)
+                if (document.uri !in visibleUris) return@forEach
+                require(visitedEntries < MAX_ENTRIES) {
+                    "The local recovery folder contains too many entries."
+                }
+                visitedEntries += 1
+                if (document.entry.kind == SyncEntryKind.Directory) {
+                    pending += document.entry.relativePath to document.uri
+                }
+            }
+        }
+        requireScanContinuation(shouldContinue)
     }
 
     override fun contentHash(
@@ -218,24 +270,72 @@ internal class AndroidSafFileSyncLocalTree(
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
+        createDirectoryForDownload(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            expectedReplacementAuthentication = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+        )
+    }
+
+    override fun createDirectoryForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
+        shouldContinue: () -> Boolean,
+    ) {
         val existing = resolve(path)
         if (expectedLocalRevision == null) {
             require(existing == null) { "The local folder appeared after the sync scan." }
         } else {
-            require(existing?.entry?.revision == expectedLocalRevision) {
-                "The local folder changed after the sync scan."
+            requireNotNull(existing) { "The local item disappeared after the sync scan." }
+        }
+        if (
+            authenticateExistingAndroidSafDirectory(existing?.entry?.kind) {
+                authenticatedReplacementSnapshot(
+                    document = requireNotNull(existing),
+                    expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                    expectedContentHash = expectedContentHash,
+                    expectedReplacementAuthentication = expectedReplacementAuthentication,
+                    shouldContinue = shouldContinue,
+                )
             }
-            require(existing.entry.kind == SyncEntryKind.Directory)
+        ) {
             return
         }
+        val replacementSnapshot = existing?.let { document ->
+            authenticatedReplacementSnapshot(
+                document = document,
+                expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                expectedContentHash = expectedContentHash,
+                expectedReplacementAuthentication = expectedReplacementAuthentication,
+                shouldContinue = shouldContinue,
+            )
+        }
         val parent = ensureParent(path)
-        val created = DocumentsContract.createDocument(
-            resolver,
-            parent,
-            DocumentsContract.Document.MIME_TYPE_DIR,
-            path.substringAfterLast('/'),
-        )
-        requireNotNull(created) { "The local folder could not be created." }
+        val parentPath = path.substringBeforeLast('/', "")
+        val finalName = path.substringAfterLast('/')
+        if (existing == null) {
+            createAndroidSafDirectoryAfterCancellationCheck(shouldContinue) {
+                createDirectoryDocument(parent, finalName)
+            }
+        } else {
+            val directory = publicationDirectory(parent, parentPath)
+            downloadPublisher(parent, parentPath, shouldContinue).publish(
+                finalName = finalName,
+                currentDocument = existing.uri,
+                backupContentIdentity = requireNotNull(replacementSnapshot).let(
+                    ::androidSafReplacementContentIdentity,
+                ),
+                createStage = directory::createDirectory,
+                revalidateCurrent = {
+                    requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
+                },
+                prepareStage = {},
+            )
+        }
     }
 
     override fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
@@ -250,76 +350,175 @@ internal class AndroidSafFileSyncLocalTree(
         expectedLocalRevision: String?,
         write: (OutputStream) -> Unit,
     ) {
+        writeFileFromStreamForDownload(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            expectedReplacementAuthentication = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+            write = write,
+        )
+    }
+
+    override fun writeFileFromStreamForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
+        shouldContinue: () -> Boolean,
+        write: (OutputStream) -> Unit,
+    ) {
         val current = resolve(path)
         if (expectedLocalRevision == null) {
             require(current == null) { "The local file appeared after the sync scan." }
         } else {
-            require(current?.entry?.revision == expectedLocalRevision) {
-                "The local file changed after the sync scan."
-            }
-            require(current.entry.kind == SyncEntryKind.File) { "The local item changed type." }
+            requireNotNull(current) { "The local item disappeared after the sync scan." }
+        }
+        val replacementSnapshot = current?.let { document ->
+            authenticatedReplacementSnapshot(
+                document = document,
+                expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                expectedContentHash = expectedContentHash,
+                expectedReplacementAuthentication = expectedReplacementAuthentication,
+                shouldContinue = shouldContinue,
+            )
         }
         val parentUri = ensureParent(path)
+        val parentPath = path.substringBeforeLast('/', "")
         val finalName = path.substringAfterLast('/')
-        val token = UUID.randomUUID().toString()
-        val stagedName = ".$finalName.nextcloud-native-download-$token"
-        val staged = requireNotNull(
-            DocumentsContract.createDocument(
-                resolver,
-                parentUri,
-                "application/octet-stream",
-                stagedName,
-            ),
-        ) { "A staged local file could not be created." }
-        var backup: Uri? = null
-        try {
-            writeDocument(staged, write)
-            if (current != null) {
-                backup = requireNotNull(
-                    DocumentsContract.renameDocument(
-                        resolver,
-                        current.uri,
-                        ".$finalName.nextcloud-native-backup-$token",
-                    ),
-                ) { "The existing local file could not be protected before replacement." }
-            }
-            requireNotNull(DocumentsContract.renameDocument(resolver, staged, finalName)) {
-                "The staged local file could not be published."
-            }
-            backup?.let { DocumentsContract.deleteDocument(resolver, it) }
-        } catch (failure: Throwable) {
-            runCatching { DocumentsContract.deleteDocument(resolver, staged) }
-            backup?.let { protected ->
-                runCatching { DocumentsContract.renameDocument(resolver, protected, finalName) }
-            }
-            throw failure
-        }
+        downloadPublisher(parentUri, parentPath, shouldContinue)
+            .publish(
+                finalName = finalName,
+                currentDocument = current?.uri,
+                backupContentIdentity = replacementSnapshot?.let(::androidSafReplacementContentIdentity),
+                revalidateCurrent = {
+                    requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
+                },
+                write = write,
+            )
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
+        deleteForSync(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            expectedReplacementAuthentication = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+        )
+    }
+
+    override fun deleteForSync(
+        path: String,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        requireDeletionContinuation(shouldContinue)
         val current = requireNotNull(resolve(path)) { "The local item was already removed." }
-        require(current.entry.revision == expectedLocalRevision) {
-            "The local item changed after the sync scan."
-        }
-        require(DocumentsContract.deleteDocument(resolver, current.uri)) {
-            "The local item could not be removed."
+        val authenticatedSnapshot = authenticatedReplacementSnapshot(
+            document = current,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = expectedContentHash,
+            expectedReplacementAuthentication = expectedReplacementAuthentication,
+            shouldContinue = shouldContinue,
+        )
+        requireDeletionContinuation(shouldContinue)
+        requireUnchangedReplacement(path, authenticatedSnapshot, shouldContinue)
+        requireDeletionContinuation(shouldContinue)
+        val parentPath = path.substringBeforeLast('/', "")
+        val parentUri = if (parentPath.isBlank()) rootUri else requireNotNull(resolve(parentPath)) {
+            "The local item's parent folder disappeared before deletion."
+        }.uri
+        downloadPublisher(parentUri, parentPath, shouldContinue).delete(
+            finalName = path.substringAfterLast('/'),
+            currentDocument = current.uri,
+            backupContentIdentity = androidSafReplacementContentIdentity(authenticatedSnapshot),
+        )
+    }
+
+    private fun requireDeletionContinuation(shouldContinue: () -> Boolean) {
+        if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+            throw kotlinx.coroutines.CancellationException("The local deletion was cancelled.")
         }
     }
 
-    override fun resolve(path: String): AndroidLocalSyncDocument? {
+    override fun resolve(path: String): AndroidLocalSyncDocument? = resolve(path, ::children)
+
+    private fun resolveRaw(path: String): AndroidLocalSyncDocument? = resolve(path, ::rawChildren)
+
+    private fun resolve(
+        path: String,
+        listChildren: (parentUri: Uri, parentPath: String) -> List<AndroidLocalSyncDocument>,
+    ): AndroidLocalSyncDocument? {
         if (path.isBlank()) return null
         var parentPath = ""
         var parentUri = rootUri
         val segments = path.split('/')
         require(segments.size <= MAX_DEPTH)
         segments.forEachIndexed { index, segment ->
-            val match = children(parentUri, parentPath).singleOrNull { it.displayName == segment } ?: return null
+            val match = listChildren(parentUri, parentPath).singleOrNull {
+                it.displayName == segment
+            } ?: return null
             if (index == segments.lastIndex) return match
             if (match.entry.kind != SyncEntryKind.Directory) return null
             parentPath = match.entry.relativePath
             parentUri = match.uri
         }
         return null
+    }
+
+    private fun replacementSnapshot(
+        document: AndroidLocalSyncDocument,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidSafReplacementEvidence> = collectAndroidSafReplacementEvidence(
+        document = document,
+        shouldContinue = shouldContinue,
+        maximumDepth = MAX_DEPTH,
+        maximumEntries = MAX_ENTRIES,
+        listChildren = { parent -> rawChildren(parent.uri, parent.entry.relativePath) },
+        contentHash = { file -> replacementContentHash(file, shouldContinue) },
+    )
+
+    private fun replacementContentHash(
+        document: AndroidLocalSyncDocument,
+        shouldContinue: () -> Boolean,
+    ): String {
+        return requireNotNull(resolver.openInputStream(document.uri)) {
+            "The local replacement item could not be opened for verification."
+        }.use { input ->
+            hashAndroidSafReplacementContent(input, document.entry.size, shouldContinue)
+        }
+    }
+
+    private fun requireUnchangedReplacement(
+        path: String,
+        expected: List<AndroidSafReplacementEvidence>?,
+        shouldContinue: () -> Boolean,
+    ) {
+        val current = resolveRaw(path)
+        val actual = current?.let { replacementSnapshot(it, shouldContinue) }
+        requireUnchangedAndroidSafReplacement(expected, actual)
+    }
+
+    private fun authenticatedReplacementSnapshot(
+        document: AndroidLocalSyncDocument,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidSafReplacementEvidence> {
+        val snapshot = replacementSnapshot(document, shouldContinue)
+        requireExpectedAndroidSafReplacement(
+            expected = document.entry.copy(
+                revision = expectedLocalRevision,
+                contentHash = expectedContentHash,
+                replacementAuthentication = expectedReplacementAuthentication,
+            ),
+            actual = snapshot,
+        )
+        return snapshot
     }
 
     private fun ensureParent(path: String): Uri {
@@ -348,18 +547,67 @@ internal class AndroidSafFileSyncLocalTree(
         return currentUri
     }
 
-    private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
+    private fun children(
+        parentUri: Uri,
+        parentPath: String,
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory = downloadOwnershipStore,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    ): List<AndroidLocalSyncDocument> {
+        requireScanContinuation(shouldContinue)
+        val publisher = downloadPublisher(
+            parentUri,
+            parentPath,
+            shouldContinue = shouldContinue,
+            ownershipDirectory = ownershipDirectory,
+        )
+        publisher.reconcileForSync()
+        requireScanContinuation(shouldContinue)
+        val listedChildren = rawChildren(parentUri, parentPath)
+        val visibleUris = publisher.visibleDocuments(
+            listedChildren.map { document ->
+                AndroidSafPublicationDocument(document.uri, document.displayName)
+            },
+        ).mapTo(mutableSetOf()) { it.document }
+        return listedChildren.filter { it.uri in visibleUris }
+    }
+
+    private fun downloadPublisher(
+        parentUri: Uri,
+        parentPath: String,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory = downloadOwnershipStore,
+    ): AndroidSafDownloadPublisher<Uri> = AndroidSafDownloadPublisher(
+        directory = publicationDirectory(parentUri, parentPath),
+        ownership = ownershipDirectory.forDirectory(parentUri.toString()),
+        contentIdentity = { document ->
+            replacementContentIdentity(parentUri, parentPath, document, shouldContinue)
+        },
+    )
+
+    private fun replacementContentIdentity(
+        parentUri: Uri,
+        parentPath: String,
+        document: Uri,
+        shouldContinue: () -> Boolean,
+    ): String? = rawChildren(parentUri, parentPath)
+        .singleOrNull { child -> child.uri == document }
+        ?.let { child -> androidSafReplacementContentIdentity(replacementSnapshot(child, shouldContinue)) }
+
+    private fun rawChildren(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val parentId = DocumentsContract.getDocumentId(parentUri)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        return resolver.query(childrenUri, PROJECTION, null, null, null)?.use { cursor ->
+        val cursor = requireNotNull(resolver.query(childrenUri, PROJECTION, null, null, null)) {
+            "The local file provider could not list the selected folder."
+        }
+        return cursor.use {
             buildList {
-                while (cursor.moveToNext()) {
-                    val documentId = cursor.getString(0)
-                    val name = cursor.getString(1)?.takeIf(String::isNotBlank) ?: continue
+                while (it.moveToNext()) {
+                    val documentId = it.getString(0)
+                    val name = it.getString(1)?.takeIf(String::isNotBlank) ?: continue
                     if (name.contains('/') || name.any(Char::isISOControl)) continue
-                    val mimeType = cursor.getString(2).orEmpty()
-                    val modified = if (cursor.isNull(3)) 0L else cursor.getLong(3)
-                    val size = if (cursor.isNull(4)) null else cursor.getLong(4).coerceAtLeast(0L)
+                    val mimeType = it.getString(2).orEmpty()
+                    val modified = if (it.isNull(3)) 0L else it.getLong(3)
+                    val size = if (it.isNull(4)) null else it.getLong(4).coerceAtLeast(0L)
                     val path = if (parentPath.isBlank()) name else "$parentPath/$name"
                     val kind = if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
                         SyncEntryKind.Directory
@@ -384,6 +632,46 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }.orEmpty()
     }
+
+    private fun publicationDirectory(
+        parentUri: Uri,
+        parentPath: String,
+    ): AndroidSafPublicationDirectory<Uri> = object : AndroidSafPublicationDirectory<Uri> {
+        override fun documents(): List<AndroidSafPublicationDocument<Uri>> =
+            rawChildren(parentUri, parentPath).map { document ->
+                AndroidSafPublicationDocument(document.uri, document.displayName)
+            }
+
+        override fun createFile(displayName: String): Uri = requireNotNull(
+            DocumentsContract.createDocument(
+                resolver,
+                parentUri,
+                "application/octet-stream",
+                displayName,
+            ),
+        ) { "A staged local file could not be created." }
+
+        override fun createDirectory(displayName: String): Uri = requireNotNull(
+            createDirectoryDocument(parentUri, displayName),
+        ) { "A staged local folder could not be created." }
+
+        override fun writeFile(document: Uri, write: (OutputStream) -> Unit) {
+            writeDocument(document, write)
+        }
+
+        override fun rename(document: Uri, displayName: String): Uri? =
+            DocumentsContract.renameDocument(resolver, document, displayName)
+
+        override fun delete(document: Uri): Boolean = DocumentsContract.deleteDocument(resolver, document)
+    }
+
+    private fun createDirectoryDocument(parentUri: Uri, displayName: String): Uri? =
+        DocumentsContract.createDocument(
+            resolver,
+            parentUri,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            displayName,
+        )
 
     private fun writeDocument(uri: Uri, write: (OutputStream) -> Unit) {
         val descriptor = requireNotNull(resolver.openFileDescriptor(uri, "rwt")) {
@@ -417,18 +705,38 @@ internal class AndroidSafFileSyncLocalTree(
     }
 }
 
+internal inline fun indexAndroidSafRecoveryLocationsIfNeeded(
+    ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+    indexRecoveryLocations: () -> Unit,
+) {
+    if (ownershipDirectory.hasPendingTransactions()) indexRecoveryLocations()
+}
+
+internal fun shouldTraverseAndroidSafRecoveryDirectory(
+    displayName: String,
+    ownedRecoveryTokens: Set<String>,
+): Boolean = ownedRecoveryTokens.none(displayName::contains)
+
+internal fun requireScanContinuation(shouldContinue: () -> Boolean) {
+    if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+        throw kotlinx.coroutines.CancellationException("The local sync scan was cancelled.")
+    }
+}
+
 internal fun knownAndroidFileSyncModifiedEpochMillis(value: Long): Long? = value.takeIf { it > 0L }
 
 internal fun sha256SyncContentHash(
     input: InputStream,
     expectedBytes: Long,
     maximumBytes: Long,
-): String? = sha256SyncContentHashRead(input, expectedBytes, maximumBytes).contentHash
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+): String? = sha256SyncContentHashRead(input, expectedBytes, maximumBytes, shouldContinue).contentHash
 
 internal fun sha256SyncContentHashRead(
     input: InputStream,
     expectedBytes: Long,
     maximumBytes: Long,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): AndroidFileSyncContentHashRead {
     require(expectedBytes >= 0L)
     require(maximumBytes > 0L)
@@ -437,7 +745,7 @@ internal fun sha256SyncContentHashRead(
     val buffer = ByteArray(64 * 1024)
     var total = 0L
     while (true) {
-        if (Thread.currentThread().isInterrupted) {
+        if (!shouldContinue() || Thread.currentThread().isInterrupted) {
             throw kotlinx.coroutines.CancellationException("File identity verification cancelled.")
         }
         val read = input.read(buffer)

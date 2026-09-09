@@ -1,4 +1,4 @@
-# Nextcloud Native repository instructions
+# nati.ve repository instructions
 
 **Last reviewed: 2026-08-20.** Architecture, toolchains, checks, and release
 state may have changed. [`AGENTS.md`](../AGENTS.md) is the authoritative
@@ -11,7 +11,7 @@ and update this summary in the same change.
 
 ## Product and architecture
 
-Nextcloud Native is an independent, adaptive native client for Nextcloud. It
+nati.ve is an independent, adaptive native client for Nextcloud. It
 renders native Compose experiences from typed APIs and semantic models; it does
 not embed Nextcloud web pages. Prefer reusable behavior inferred from
 capabilities, contracts, data shapes, and field semantics. Add app-specific

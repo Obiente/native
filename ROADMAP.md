@@ -1,16 +1,16 @@
-# Nextcloud Native product and engineering roadmap
+# nati.ve product and engineering roadmap
 
 **Last reviewed: 2026-08-20.** Planned scope, ordering, and priorities may have
 changed. The [public GitHub Project](https://github.com/orgs/Obiente/projects/4)
 is the source of truth for active work and priority.
 
-Nextcloud Native is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
+nati.ve is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
 
 This roadmap is dependency-driven rather than date-driven. Milestones advance only when their acceptance gates pass. Feature count does not override data safety, battery use, accessibility, protocol correctness, or preservation of originals.
 
 ## 1. Product promise
 
-Nextcloud Native should make a self-hosted cloud feel like one operating-system service:
+nati.ve should make a self-hosted cloud feel like one operating-system service:
 
 - files appear in native pickers and file managers;
 - selected folders remain genuinely available offline and synchronize both ways;
@@ -275,7 +275,7 @@ DocumentsProvider alone is not advertised as sufficient for Obsidian until teste
 
 ## 10. M3: selective, offline, continuous two-way sync
 
-This is the highest-trust feature in the roadmap. The official Nextcloud desktop client maintains a sync journal and creates a local conflicted copy when local and remote both change; see the official [conflict behavior](https://docs.nextcloud.com/server/latest/user_manual/en/desktop/conflicts.html), [`syncengine.cpp`](https://github.com/nextcloud/desktop/blob/master/src/libsync/syncengine.cpp), and [`syncjournaldb.cpp`](https://github.com/nextcloud/desktop/blob/master/src/common/syncjournaldb.cpp). The Android client also has an [`InternalTwoWaySyncWork`](https://github.com/nextcloud/android/blob/master/app/src/main/java/com/nextcloud/client/jobs/InternalTwoWaySyncWork.kt), but Nextcloud Native requires a shared, fully journaled implementation with stronger conflict visibility.
+This is the highest-trust feature in the roadmap. The official Nextcloud desktop client maintains a sync journal and creates a local conflicted copy when local and remote both change; see the official [conflict behavior](https://docs.nextcloud.com/server/latest/user_manual/en/desktop/conflicts.html), [`syncengine.cpp`](https://github.com/nextcloud/desktop/blob/master/src/libsync/syncengine.cpp), and [`syncjournaldb.cpp`](https://github.com/nextcloud/desktop/blob/master/src/common/syncjournaldb.cpp). The Android client also has an [`InternalTwoWaySyncWork`](https://github.com/nextcloud/android/blob/master/app/src/main/java/com/nextcloud/client/jobs/InternalTwoWaySyncWork.kt), but nati.ve requires a shared, fully journaled implementation with stronger conflict visibility.
 
 ### Sync set model
 

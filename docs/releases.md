@@ -3,7 +3,7 @@
 **Last reviewed: 2026-08-20.** The active version and release policy may have
 changed. The `ncVersion*` values in [`gradle.properties`](../gradle.properties),
 the [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
-[latest releases](https://github.com/Obiente/nc-native/releases) are the current
+[latest releases](https://github.com/obiente/native/releases) are the current
 sources of truth.
 
 Curated releases use the `0.x.y` prerelease line. Every GitHub release must be

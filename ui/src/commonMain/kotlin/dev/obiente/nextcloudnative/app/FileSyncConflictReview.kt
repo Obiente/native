@@ -226,6 +226,9 @@ private fun FileSyncConflictSideRow(
 internal fun FileSyncDecisionReason.readableDecisionReason(): String = when (this) {
     FileSyncDecisionReason.FirstSyncCollision -> "Both folders already contain this path."
     FileSyncDecisionReason.SimultaneousEdit -> "Both copies changed since the last completed sync."
+    FileSyncDecisionReason.UnverifiedLocalContent ->
+        "The device copy could not be authenticated for automatic replacement. Move it aside before " +
+            "scanning again to use the Nextcloud copy, or keep it when uploads are enabled."
     FileSyncDecisionReason.LocalDeletion -> "The device copy was deleted."
     FileSyncDecisionReason.RemoteDeletion -> "The Nextcloud copy was deleted."
     FileSyncDecisionReason.TypeChanged -> "One side is a file and the other is a folder."

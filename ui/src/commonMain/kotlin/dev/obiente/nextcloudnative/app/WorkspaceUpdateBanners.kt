@@ -64,12 +64,12 @@ internal fun AppUpdateAvailableBanner(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
+                Text("nati.ve ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
                 Text(
                     if (release is AndroidDirectRelease) {
                         "Review the certificate-verified APK before installing."
                     } else {
-                        "Review the downloaded package before opening the system installer."
+                        "Review the update before installing."
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )

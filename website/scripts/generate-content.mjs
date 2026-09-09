@@ -135,7 +135,7 @@ const sources = [
     title: "Contributing",
     shortTitle: "Contributing",
     description:
-      "Build requirements, validation commands and contribution guidance for Nextcloud Native.",
+      "Build requirements, validation commands and contribution guidance for nati.ve.",
   },
   {
     file: "SECURITY.md",
@@ -462,8 +462,8 @@ await writeFile(
 const searchIndex = [
   {
     path: "/",
-    title: "Nextcloud Native for Android, Linux and Windows",
-    shortTitle: "Nextcloud Native",
+    title: "nati.ve for Android, Linux and Windows",
+    shortTitle: "nati.ve",
     description:
       "Open-source native Nextcloud alpha with Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
     text:
@@ -543,7 +543,7 @@ async function allProjectItems() {
 const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
 
 const githubRepositoryResult = await resolveGithubRepositoryData({
-  loadLive: () => githubJson("https://api.github.com/repos/Obiente/nc-native"),
+  loadLive: () => githubJson("https://api.github.com/repos/obiente/native"),
   loadSnapshot: async () => JSON.parse(await readFile(repositorySnapshotFile, "utf8")),
 });
 if (githubRepositoryResult.warning) {
@@ -564,7 +564,7 @@ try {
     allProjectItems(),
     githubProjectItems(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
-      "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
+      "https://api.github.com/repos/obiente/native/milestones?state=all&per_page=100",
     ),
   ]);
   const projectRoadmapItems = projectItems.map(roadmapItem).filter(Boolean);
