@@ -890,7 +890,7 @@ class DesktopAccountCredentialPersistenceTest {
             persistence.saveSession(original)
         }
         assertEquals(original.appPassword, secrets.load(desktopAccountSecretReference(original.accountId))?.decodeToString())
-        assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+        assertEquals("rollback-completed", preferences.get("accountCredentialSavePhase", null))
     }
 
     @Test

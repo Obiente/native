@@ -119,7 +119,7 @@ internal class DesktopAccountCredentialPersistence(
         } catch (failure: Exception) {
             var credentialRollbackCompleted = false
             try {
-                markPendingCredentialSaveRollback()
+                persistPendingCredentialSavePhase(CREDENTIAL_SAVE_ROLLBACK)
                 if (previousSecret == null) {
                     secretStore.clear(secretReference)
                 } else {
@@ -129,6 +129,7 @@ internal class DesktopAccountCredentialPersistence(
                         previousSecret,
                     )
                 }
+                persistPendingCredentialSavePhase(CREDENTIAL_SAVE_ROLLBACK_COMPLETED)
                 secretStore.clear(rollbackReference)
                 credentialRollbackCompleted = true
             } catch (rollbackFailure: Exception) {
@@ -204,7 +205,7 @@ internal class DesktopAccountCredentialPersistence(
             )
             return legacy
         }
-        clearLegacyCredentialAfterMigration(legacy)
+        retryPendingLegacyCredentialCleanup(legacy)
         return legacy
     }
 
@@ -224,10 +225,6 @@ internal class DesktopAccountCredentialPersistence(
     private fun migrateLegacyCredential(session: NextcloudSession) {
         persistPendingLegacyCredentialCleanup(session)
         saveSecret(session)
-        clearLegacyCredentialAfterMigration(session)
-    }
-
-    private fun clearLegacyCredentialAfterMigration(session: NextcloudSession) {
         retryPendingLegacyCredentialCleanup(session)
     }
 
@@ -254,6 +251,7 @@ internal class DesktopAccountCredentialPersistence(
             CREDENTIAL_SAVE_SECRET_WRITING,
             CREDENTIAL_SAVE_SECRET_WRITTEN,
             CREDENTIAL_SAVE_ROLLBACK,
+            CREDENTIAL_SAVE_ROLLBACK_COMPLETED,
         )
         if (phase !in knownPhases) {
             credentialRollbackRecoveryUnavailable()
@@ -284,6 +282,7 @@ internal class DesktopAccountCredentialPersistence(
             }
             try {
                 secretStore.save(secretReference, registry.accounts.first { it.id == accountId }.loginName, rollbackSecret)
+                persistPendingCredentialSavePhase(CREDENTIAL_SAVE_ROLLBACK_COMPLETED)
                 secretStore.clear(rollbackReference)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -301,7 +300,7 @@ internal class DesktopAccountCredentialPersistence(
                 credentialRollbackRecoveryUnavailable(failure)
             }
         }
-        if (phase == CREDENTIAL_SAVE_PREPARED) {
+        if (phase == CREDENTIAL_SAVE_PREPARED || phase == CREDENTIAL_SAVE_ROLLBACK_COMPLETED) {
             try {
                 secretStore.clear(rollbackReference)
             } catch (cancelled: CancellationException) {
@@ -458,10 +457,10 @@ internal class DesktopAccountCredentialPersistence(
         throw DesktopCredentialRollbackRecoveryUnavailableException(failure)
     }
 
-    private fun markPendingCredentialSaveRollback() {
+    private fun persistPendingCredentialSavePhase(phase: String) {
         val previousPhase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         try {
-            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, CREDENTIAL_SAVE_ROLLBACK)
+            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, phase)
             flushPreferences()
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -754,6 +753,7 @@ internal class DesktopAccountCredentialPersistence(
         const val CREDENTIAL_SAVE_SECRET_WRITING = "secret-writing"
         const val CREDENTIAL_SAVE_SECRET_WRITTEN = "secret-written"
         const val CREDENTIAL_SAVE_ROLLBACK = "rollback"
+        const val CREDENTIAL_SAVE_ROLLBACK_COMPLETED = "rollback-completed"
     }
 }
 
