@@ -2388,7 +2388,7 @@ class DesktopNextcloudServices(
         true
     }
 
-    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
+    override suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String?): FileSyncLocalRoot? =
         fileSyncEngine.chooseLocalRoot(initialRootHint)
 
     override suspend fun loadFileSyncCenter(

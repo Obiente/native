@@ -1,8 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
+import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
@@ -96,6 +96,82 @@ internal fun <T> deferFileSyncSnapshotActionUntilIdle(
     }
     job.invokeOnCompletion { onFinished() }
     return job
+}
+
+internal suspend fun reconcileFileSyncCapabilities(
+    lock: Mutex,
+    load: () -> AndroidFileSyncPersistedState,
+    capabilities: AndroidFileSyncCapabilityLifecycle,
+) {
+    lock.withLock {
+        try {
+            capabilities.reconcile(load())
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Fail closed. A later process retries without releasing from incomplete metadata.
+        }
+    }
+}
+
+internal suspend fun reconcileRestoredFileSyncSetup(
+    context: Context,
+    session: dev.obiente.nextcloudnative.app.NextcloudSession,
+    restoredLocalRoot: dev.obiente.nextcloudnative.app.FileSyncLocalRoot?,
+): Boolean = AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+    AndroidFileSyncCapabilityLifecycle(context).reconcileRestoredSetup(
+        accountId = AndroidFileSyncCapabilityAccountId(NextcloudDocumentIds.accountKey(session)),
+        restoredLocalRootId = restoredLocalRoot?.localRootId,
+        state = AndroidFileSyncStore(context).load(),
+    )
+}
+
+internal fun recoverFailedFileSyncPairSave(
+    pairId: String,
+    load: () -> AndroidFileSyncPersistedState,
+    abandonUncommittedPair: (String) -> Unit,
+): Boolean {
+    val commitIsPresent = try {
+        load().coordinator.pairs.any { it.id == pairId }
+    } catch (_: Exception) {
+        return false
+    }
+    if (!commitIsPresent) runCatching { abandonUncommittedPair(pairId) }
+    return commitIsPresent
+}
+
+internal fun bindAndPersistFileSyncPair(
+    pairId: String,
+    bindReady: () -> Unit,
+    persist: () -> Unit,
+    load: () -> AndroidFileSyncPersistedState,
+    abandonUncommittedPair: (String) -> Unit,
+) {
+    try {
+        bindReady()
+        persist()
+    } catch (failure: Exception) {
+        if (recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)) return
+        throw failure
+    }
+}
+
+internal fun scheduleCommittedFileSyncPair(schedule: () -> Unit): Boolean = try {
+    schedule()
+    true
+} catch (failure: CancellationException) {
+    throw failure
+} catch (_: Exception) {
+    false
+}
+
+internal fun committedFileSyncPairResult(schedule: () -> Unit): FileSyncCenterActionResult {
+    val scheduled = scheduleCommittedFileSyncPair(schedule)
+    return FileSyncCenterActionResult.Completed(if (scheduled) {
+        "Folder sync pair added. Run it to review the first sync."
+    } else {
+        "Folder sync pair added. Automatic checks will retry when folder sync status is loaded."
+    })
 }
 
 /**
@@ -212,38 +288,21 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
         false
     }
 }
-
-internal fun releaseSafGrantAfterPairRemoval(
-    context: Context,
-    localRootId: String,
-    releasesLocalGrant: Boolean,
-) {
-    if (!releasesLocalGrant) return
-    try {
-        context.contentResolver.releasePersistableUriPermission(
-            Uri.parse(localRootId),
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-        )
-    } catch (failure: CancellationException) {
-        throw failure
-    } catch (_: Exception) {
-        // The pair is gone, so a later picker can release or replace this stale grant.
-    }
-}
-
 internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String) {
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         val store = AndroidFileSyncStore(context)
-        val current = store.load()
-        val (retiredPairs, retainedPairs) = current.coordinator.pairs.partition { pair ->
-            pair.accountId == accountId
-        }
+        val current = store.loadAndReconcileUploadCleanups()
+        val capabilities = AndroidFileSyncCapabilityLifecycle(context)
+        capabilities.retireAccountSetup(
+            AndroidFileSyncCapabilityAccountId(accountId),
+            state = current,
+        )
+        val retiredPairs = reconcileAndroidFileSyncAccountRetirement(current, accountId, capabilities)
         if (retiredPairs.isEmpty()) return@withLock
         val scheduler = AndroidFileSyncScheduler(context)
         val notifications = AndroidNotificationCoordinator(context)
         retireConfiguredFileSyncAccountPairs(
             retiredPairs = retiredPairs,
-            retainedPairs = retainedPairs,
             reconcileLocalDownloads = { pair ->
                 reconcileSafDownloadsBeforePairRemoval(context, pair.localRootId)
             },
@@ -251,22 +310,30 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
             cancelNotification = { pair ->
                 notifications.cancel(pair.accountId, androidFileSyncNotificationId(pair.id))
             },
+            prepareLocalGrantCleanup = capabilities::preparePairCleanup,
             persistRetirement = { store.save(removeAndroidFileSyncAccountPairs(current, accountId)) },
-            releaseLocalGrant = { localRootId ->
-                releaseSafGrantAfterPairRemoval(context, localRootId, releasesLocalGrant = true)
-            },
+            finishLocalGrantCleanup = { pairId -> capabilities.finishPairCleanupOrRetry(pairId, store::load) },
         )
     }
 }
 
+internal fun reconcileAndroidFileSyncAccountRetirement(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+    capabilities: AndroidFileSyncCapabilityLifecycle,
+): List<FileSyncPair> {
+    capabilities.reconcile(state)
+    return state.coordinator.pairs.filter { pair -> pair.accountId == accountId }
+}
+
 internal suspend fun retireConfiguredFileSyncAccountPairs(
     retiredPairs: List<FileSyncPair>,
-    retainedPairs: List<FileSyncPair>,
     reconcileLocalDownloads: suspend (FileSyncPair) -> Boolean,
     cancelSchedule: suspend (FileSyncPair) -> Unit,
     cancelNotification: suspend (FileSyncPair) -> Unit,
+    prepareLocalGrantCleanup: suspend (String) -> Unit,
     persistRetirement: suspend () -> Unit,
-    releaseLocalGrant: suspend (String) -> Unit,
+    finishLocalGrantCleanup: suspend (String) -> Unit,
 ) {
     retiredPairs.forEach { pair ->
         check(reconcileLocalDownloads(pair)) {
@@ -274,21 +341,20 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
         }
         currentCoroutineContext().ensureActive()
     }
+    withContext(NonCancellable) {
+        retiredPairs.forEach { pair -> prepareLocalGrantCleanup(pair.id) }
+    }
+    currentCoroutineContext().ensureActive()
+
     retiredPairs.forEach { pair ->
         cancelSchedule(pair)
         cancelNotification(pair)
     }
     currentCoroutineContext().ensureActive()
 
-    val retainedLocalRoots = retainedPairs.mapTo(hashSetOf()) { pair -> pair.localRootId }
-    val releasedLocalRoots = retiredPairs.asSequence()
-        .map { pair -> pair.localRootId }
-        .filter { localRootId -> localRootId.startsWith("content://") && localRootId !in retainedLocalRoots }
-        .distinct()
-        .toList()
     withContext(NonCancellable) {
-        releasedLocalRoots.forEach { localRootId -> releaseLocalGrant(localRootId) }
         persistRetirement()
+        retiredPairs.forEach { pair -> finishLocalGrantCleanup(pair.id) }
     }
 }
 
