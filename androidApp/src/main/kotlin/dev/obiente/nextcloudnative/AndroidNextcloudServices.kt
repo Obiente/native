@@ -2366,6 +2366,27 @@ internal class AndroidNextcloudServices(
         path: String,
         size: Long,
         expectedEtag: String,
+    ): NextcloudFileRangeSession = openFileRangeSession(
+        session, userId, path, size, expectedEtag, accountLeaseHeld = false,
+    )
+
+    internal fun openFileRangeSessionWhileAccountLeaseHeld(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession = openFileRangeSession(
+        session, userId, path, size, expectedEtag, accountLeaseHeld = true,
+    )
+
+    private fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+        accountLeaseHeld: Boolean,
     ): NextcloudFileRangeSession {
         require(size > 0L) { "The file range session size must be positive." }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
@@ -2373,7 +2394,10 @@ internal class AndroidNextcloudServices(
         val authorization = androidFileRangeAuthorization(session)
         val closed = AtomicBoolean(false)
         val activity = AndroidFileRangeSessionActivity()
-        return openTrackedAndroidFileRangeSession(session, { loadSession(session.accountId) }, activity) {
+        return openTrackedAndroidFileRangeSession(
+            session, { loadSession(session.accountId) }, activity,
+            accountLeaseHeld = accountLeaseHeld,
+        ) {
             NextcloudFileRangeSession(
             size = size,
             readBlock = { offset, length ->
@@ -3905,29 +3929,6 @@ internal class AndroidNextcloudServices(
             <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>
         """.trimIndent()
         val NON_APP_CAPABILITIES = setOf("core", "theming")
-    }
-}
-
-internal class AndroidFileRangeUnsupportedException(message: String) : Exception(message)
-
-internal suspend fun probeSeekableExternalHandoffGeneration(
-    file: NextcloudFile,
-    verifyEmptyGeneration: suspend () -> Unit,
-    openRangeSession: (size: Long, etag: String) -> NextcloudFileRangeSession,
-): Boolean {
-    val size = file.size ?: return false
-    val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
-    if (size == 0L) {
-        verifyEmptyGeneration()
-        return true
-    }
-    val rangeSession = openRangeSession(size, etag)
-    return try {
-        rangeSession.read(0L, 1).size == 1
-    } catch (_: AndroidFileRangeUnsupportedException) {
-        false
-    } finally {
-        rangeSession.close()
     }
 }
 

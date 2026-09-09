@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import android.util.Base64
+import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
@@ -139,9 +140,10 @@ internal fun openTrackedAndroidFileRangeSession(
     activity: AndroidFileRangeSessionActivity,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     coordinator: AndroidFileRangeSessionCoordinator = ANDROID_FILE_RANGE_SESSION_COORDINATOR,
+    accountLeaseHeld: Boolean = false,
     openSource: () -> NextcloudFileRangeSession,
 ): NextcloudFileRangeSession {
-    val lease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(expectedSession))
+    val lease = if (accountLeaseHeld) null else guard.acquireBlocking(NextcloudDocumentIds.accountKey(expectedSession))
     return try {
         if (resolveSession() != expectedSession) {
             throw FileNotFoundException("The account changed before the file range session could start.")
@@ -155,7 +157,7 @@ internal fun openTrackedAndroidFileRangeSession(
         activity.close()
         throw failure
     } finally {
-        lease.close()
+        lease?.close()
     }
 }
 
@@ -163,3 +165,39 @@ internal fun androidFileRangeAuthorization(session: NextcloudSession): String = 
     "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
     Base64.NO_WRAP,
 )
+
+internal fun AndroidNextcloudServices.openDocumentProviderFileRangeSession(
+    session: NextcloudSession,
+    userId: String,
+    path: String,
+    size: Long,
+    expectedEtag: String,
+    accountLeaseHeld: Boolean,
+): NextcloudFileRangeSession = if (accountLeaseHeld) {
+    openFileRangeSessionWhileAccountLeaseHeld(session, userId, path, size, expectedEtag)
+} else {
+    openFileRangeSession(session, userId, path, size, expectedEtag)
+}
+
+internal class AndroidFileRangeUnsupportedException(message: String) : Exception(message)
+
+internal suspend fun probeSeekableExternalHandoffGeneration(
+    file: NextcloudFile,
+    verifyEmptyGeneration: suspend () -> Unit,
+    openRangeSession: (size: Long, etag: String) -> NextcloudFileRangeSession,
+): Boolean {
+    val size = file.size ?: return false
+    val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
+    if (size == 0L) {
+        verifyEmptyGeneration()
+        return true
+    }
+    val rangeSession = openRangeSession(size, etag)
+    return try {
+        rangeSession.read(0L, 1).size == 1
+    } catch (_: AndroidFileRangeUnsupportedException) {
+        false
+    } finally {
+        rangeSession.close()
+    }
+}

@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -453,6 +455,58 @@ class AndroidAccountOperationGuardTest {
             )
         }
         withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) { }
+    }
+
+    @Test
+    fun recoveryRangeSessionUsesHeldAccountLeaseAndStillValidatesSession() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        var sourceOpened = false
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            guard.withAccount(NextcloudDocumentIds.accountKey(session)) {
+                val read = executor.submit<Boolean> {
+                    runBlocking {
+                        val rangeSession = openTrackedAndroidFileRangeSession(
+                            expectedSession = session,
+                            resolveSession = { session },
+                            activity = AndroidFileRangeSessionActivity(),
+                            guard = guard,
+                            coordinator = coordinator,
+                            accountLeaseHeld = true,
+                            openSource = {
+                                sourceOpened = true
+                                NextcloudFileRangeSession(8L, { _, length -> ByteArray(length) })
+                            },
+                        )
+                        try {
+                            rangeSession.read(0L, 1).size == 1
+                        } finally {
+                            rangeSession.close()
+                        }
+                    }
+                }
+                assertTrue(read.get(1, TimeUnit.SECONDS))
+
+                assertFailsWith<FileNotFoundException> {
+                    openTrackedAndroidFileRangeSession(
+                        expectedSession = session,
+                        resolveSession = { session.copy(appPassword = "replacement-password") },
+                        activity = AndroidFileRangeSessionActivity(),
+                        guard = guard,
+                        coordinator = coordinator,
+                        accountLeaseHeld = true,
+                        openSource = { error("stale recovery source must not open") },
+                    )
+                }
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertTrue(sourceOpened)
     }
 
     @Test

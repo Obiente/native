@@ -4,4 +4,4 @@ pull: 446
 platforms: android
 user-facing: yes
 
-Android file and folder pickers now reject the app's own document provider so selected uploads and sync roots always come from an independent storage source.
+Android pickers now reject the app's own document provider, ensuring uploads and sync roots use independent storage. Legacy self-provider cleanup can read uncached replacement files without blocking account removal.

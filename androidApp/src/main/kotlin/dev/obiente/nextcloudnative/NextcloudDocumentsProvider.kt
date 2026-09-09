@@ -223,14 +223,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         }
 
-        return openVirtualFileProxy(session, account.userId, file, signal)
+        return openVirtualFileProxy(session, account.userId, file, signal, recoveryAuthorized)
     }
 
     private fun openVirtualFileProxy(
         session: NextcloudSession,
         userId: String,
         file: NextcloudFile,
-        signal: CancellationSignal?,
+        signal: CancellationSignal?, accountLeaseHeld: Boolean,
     ): ParcelFileDescriptor {
         val size = file.size ?: throw FileNotFoundException(
             "Nextcloud did not provide a file size for seekable access.",
@@ -250,12 +250,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 virtualFiles.discardHydrationStagingFile(empty)
             }
         }
-        val rangeSession = services.openFileRangeSession(
+        val rangeSession = services.openDocumentProviderFileRangeSession(
             session = session,
             userId = userId,
             path = file.path,
-            size = size,
-            expectedEtag = etag,
+            size = size, expectedEtag = etag, accountLeaseHeld = accountLeaseHeld,
         )
         val staging = try {
             virtualFiles.prepareHydration(session, size)
