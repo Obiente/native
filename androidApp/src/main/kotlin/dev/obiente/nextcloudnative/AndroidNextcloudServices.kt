@@ -1347,35 +1347,33 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
         path: String,
-    ): NextcloudFileListing = withRetainedAndroidAccountFileRead(session, { loadSession(session.accountId) }) read@{
-        val accountId = NextcloudDocumentIds.accountKey(session)
-        try {
-            val response = request(
-                method = "PROPFIND",
-                url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-                session = session,
-                body = DAV_PROPERTIES,
-                contentType = "application/xml; charset=utf-8",
-                headers = mapOf("Depth" to "1", "Accept" to "application/xml"),
-            )
-            if (response.status == 207) {
-                val files = parseDavFiles(response.body, userId).drop(1)
-                    .sortedWith(compareByDescending<NextcloudFile> { it.isDirectory }.thenBy { it.name.lowercase() })
-                runCatching { fileReadCache.storeListing(accountId, path, files) }
-                NextcloudFileListing(files, NextcloudFileListingSource.Network)
-            } else {
-                if (response.status >= 500) {
-                    fileReadCache.cachedListing(accountId, path)?.files?.let {
-                        return@read NextcloudFileListing(it, NextcloudFileListingSource.Cache)
-                    }
-                }
-                throw NextcloudFileListingHttpException(response.status)
-            }
-        } catch (failure: IOException) {
-            fileReadCache.cachedListing(accountId, path)?.files
-                ?.let { NextcloudFileListing(it, NextcloudFileListingSource.Cache) }
-                ?: throw failure
-        }
+    ): NextcloudFileListing = listFilesWithSource(session, userId, path, accountLeaseHeld = false)
+
+    internal suspend fun listFilesWhileAccountLeaseHeld(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+    ): List<NextcloudFile> = listFilesWithSource(session, userId, path, accountLeaseHeld = true).files
+
+    private suspend fun listFilesWithSource(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        accountLeaseHeld: Boolean,
+    ): NextcloudFileListing = loadAndroidAccountFileListing(
+        session, { loadSession(session.accountId) }, fileReadCache, path, accountLeaseHeld,
+    ) {
+        val response = request(
+            method = "PROPFIND",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
+            session = session,
+            body = DAV_PROPERTIES,
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Depth" to "1", "Accept" to "application/xml"),
+        )
+        AndroidDavFileListingResponse(
+            response.status, if (response.status == 207) parseDavFiles(response.body, userId) else emptyList(),
+        )
     }
 
     override suspend fun listFilesCachedWithSource(
