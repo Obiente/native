@@ -274,20 +274,20 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
 
         listOf(appOwnedPeer, exactPeer, unknownPeer).forEach { peer ->
             assertTrue(
-                malformedDurableUploadPeerBlocksDirectCleanup(
+                durableUploadMalformedPeerCleanupDisposition(
                     malformedPeers = listOf(peer),
                     targetSelectionId = "selection-valid",
                     targetPermission = sharedUri,
                     samePermission = String::equals,
-                ),
+                ) != DurableUploadMalformedPeerCleanupDisposition.Proceed,
             )
             assertTrue(
-                malformedDurableUploadPeerBlocksDirectCleanup(
+                durableUploadMalformedPeerCleanupDisposition(
                     malformedPeers = listOf(peer),
                     targetSelectionId = "selection-malformed",
                     targetPermission = sharedUri,
                     samePermission = String::equals,
-                ),
+                ) != DurableUploadMalformedPeerCleanupDisposition.Proceed,
             )
         }
     }
@@ -302,6 +302,72 @@ class AndroidLocalUploadCapabilityOverflowRecoveryTest {
         )
 
         assertEquals(DurableUploadMalformedPeerCleanupDisposition.Quarantine, disposition)
+    }
+
+    @Test
+    fun `same permission malformed peer with stable provenance ambiguity quarantines valid cleanup`() {
+        val sharedUri = "content://synthetic/shared"
+
+        listOf(null, true).forEach { grantPreExisting ->
+            val disposition = durableUploadMalformedPeerCleanupDisposition(
+                malformedPeers = listOf(peer("selection-malformed", sharedUri, grantPreExisting)),
+                targetSelectionId = "selection-valid",
+                targetPermission = sharedUri,
+                samePermission = String::equals,
+            )
+
+            assertEquals(DurableUploadMalformedPeerCleanupDisposition.Quarantine, disposition)
+        }
+    }
+
+    @Test
+    fun `preexisting valid target removes only its metadata despite any malformed peer provenance`() {
+        val sharedUri = "content://synthetic/shared"
+
+        listOf(null, false, true).forEach { peerGrantPreExisting ->
+            val peers = listOf(peer("selection-malformed", sharedUri, peerGrantPreExisting))
+            val disposition = durableUploadMalformedPeerCleanupDisposition(
+                malformedPeers = peers,
+                targetSelectionId = "selection-valid-preexisting",
+                targetPermission = sharedUri,
+                samePermission = String::equals,
+                targetGrantPreExisting = true,
+            )
+            val cleanupPlan = durableUploadPermissionCleanupPlan(
+                grantPreExisting = true,
+                peerProtection = protection("selection-valid-preexisting", sharedUri, peers.toTypedArray()),
+            )
+            val events = mutableListOf<String>()
+
+            assertEquals(DurableUploadMalformedPeerCleanupDisposition.Proceed, disposition)
+            assertTrue(releaseDurableUploadCapability(
+                releasePermission = {
+                    if (cleanupPlan == DurableUploadPermissionCleanupPlan.ReleaseThenRemove) events += "release"
+                },
+                isPermissionAbsent = { cleanupPlan == DurableUploadPermissionCleanupPlan.RemoveWithoutRelease },
+                removeMetadata = { events += "remove-target"; true },
+            ))
+            assertEquals(listOf("remove-target"), events)
+        }
+    }
+
+    @Test
+    fun `recoverable malformed owner still retries while unrelated malformed grants permit cleanup`() {
+        val sharedUri = "content://synthetic/shared"
+        val appOwnedPeer = peer("selection-malformed", sharedUri, grantPreExisting = false)
+
+        assertEquals(
+            DurableUploadMalformedPeerCleanupDisposition.Retry,
+            durableUploadMalformedPeerCleanupDisposition(
+                listOf(appOwnedPeer), "selection-valid", sharedUri, String::equals,
+            ),
+        )
+        assertEquals(
+            DurableUploadMalformedPeerCleanupDisposition.Proceed,
+            durableUploadMalformedPeerCleanupDisposition(
+                listOf(appOwnedPeer), "selection-valid", "content://synthetic/unrelated", String::equals,
+            ),
+        )
     }
 
     @Test

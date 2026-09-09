@@ -223,9 +223,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             return@synchronized retainCapabilityCleanup(file.selectionId)
         }
         when (malformedPeerCleanupDisposition(
-            malformedCapabilities = snapshot.malformedCapabilities,
-            targetSelectionId = file.selectionId,
-            targetPermissionIdentity = source.uri.toString(),
+            snapshot.malformedCapabilities, file.selectionId, source.uri.toString(), source.grantPreExisting,
         )) {
             DurableUploadMalformedPeerCleanupDisposition.Quarantine ->
                 return@synchronized quarantineCapabilityCleanup(file.selectionId, onQuarantined)
@@ -621,6 +619,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
         targetSelectionId: String,
         targetPermissionIdentity: String,
+        targetGrantPreExisting: Boolean = false,
     ): DurableUploadMalformedPeerCleanupDisposition = durableUploadMalformedPeerCleanupDisposition(
         malformedPeers = malformedCapabilities.values.asSequence().map { capability ->
             DurableUploadPermissionPeer(
@@ -632,6 +631,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         targetSelectionId = targetSelectionId,
         targetPermission = targetPermissionIdentity,
         samePermission = String::equals,
+        targetGrantPreExisting = targetGrantPreExisting,
     )
 
     private fun persistedSource(file: LocalUploadFile): SelectedSource {
