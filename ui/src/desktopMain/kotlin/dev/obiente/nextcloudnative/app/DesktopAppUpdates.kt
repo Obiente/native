@@ -269,19 +269,30 @@ internal class DesktopAppUpdater(
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val desktopRelease = release as? DesktopDirectRelease
-            ?: return AppUpdateInstallResult.Rejected("This is not a desktop update package.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "This is not a desktop update package.",
+                "desktop-package-type",
+            )
         if (desktopRelease.updateChannel != updateChannel()) {
             return AppUpdateInstallResult.Rejected(
                 "The update channel changed. Check again before downloading this package.",
+                "desktop-channel-changed",
             )
         }
         if (!updateMutex.tryLock()) {
-            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+            return AppUpdateInstallResult.Rejected(
+                "An app update is already in progress.",
+                "desktop-already-running",
+            )
         }
+        var diagnosticStage = "preflight"
         try {
             val support = support()
             if (!support.canCheckDirectUpdates || !isNewerAppRelease(support.currentVersionCode, desktopRelease)) {
-                return AppUpdateInstallResult.Rejected("This release cannot update the installed desktop package.")
+                return AppUpdateInstallResult.Rejected(
+                    "This release cannot update the installed desktop package.",
+                    "desktop-release-ineligible",
+                )
             }
             val selectedTarget = requireNotNull(target)
             check(desktopRelease.asset.platform == selectedTarget.platform)
@@ -290,6 +301,7 @@ internal class DesktopAppUpdater(
             check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
                 "Could not create the desktop app-update cache."
             }
+            diagnosticStage = "cache"
             val packageFile = File(updateDirectory, desktopRelease.asset.url.substringAfterLast('/'))
             val temporary = File(updateDirectory, "${packageFile.name}.part")
             cleanupDesktopUpdatePackages(updateDirectory, activePartial = temporary)
@@ -302,6 +314,7 @@ internal class DesktopAppUpdater(
                 totalBytes = desktopRelease.asset.size,
                 resumedFromBytes = 0,
             )
+            diagnosticStage = "download"
             downloadDesktopUpdatePackage(
                 client = client,
                 release = desktopRelease,
@@ -322,6 +335,7 @@ internal class DesktopAppUpdater(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            diagnosticStage = "verification"
             check(temporary.sha256() == desktopRelease.asset.sha256) {
                 "Update checksum verification failed."
             }
@@ -330,21 +344,26 @@ internal class DesktopAppUpdater(
                 packageFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING,
             )
+            diagnosticStage = "installer-preparation"
             prepareInstaller(packageFile, desktopRelease)
             mutableInstallState.value = AppUpdateInstallState.Installing(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            diagnosticStage = "installer-handoff"
             return when (openInstaller(packageFile)) {
                 DesktopPackageInstallerOutcome.InstallerHandoffStarted -> {
-                    mutableInstallState.value = AppUpdateInstallState.ConfirmationOpened(
-                        desktopRelease.versionName,
-                        desktopRelease.versionCode,
-                    )
+                    val restarting = selectedTarget.platform == "windows"
+                    mutableInstallState.value = if (restarting) {
+                        AppUpdateInstallState.Installing(desktopRelease.versionName, desktopRelease.versionCode)
+                    } else {
+                        AppUpdateInstallState.ConfirmationOpened(desktopRelease.versionName, desktopRelease.versionCode)
+                    }
                     onInstallerConfirmationOpened(selectedTarget)
-                    AppUpdateInstallResult.ConfirmationOpened
+                    if (restarting) AppUpdateInstallResult.Restarting else AppUpdateInstallResult.ConfirmationOpened
                 }
                 DesktopPackageInstallerOutcome.InstallationCompleted -> {
+                    diagnosticStage = "installed-version-verification"
                     val installedVersion = installedPackageVersion(selectedTarget)
                     requireInstalledDesktopPackageVersion(installedVersion, desktopRelease.packageVersion)
                     mutableInstallState.value = AppUpdateInstallState.Installed(
@@ -393,6 +412,7 @@ internal class DesktopAppUpdater(
             )
             return AppUpdateInstallResult.Rejected(
                 failure.message ?: "The desktop update could not be verified.",
+                "desktop-$diagnosticStage",
             )
         } finally {
             cancellationRequested = false
@@ -474,7 +494,7 @@ private fun File.isDesktopUpdatePartial(): Boolean {
 internal val DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS: Long = TimeUnit.HOURS.toMillis(6)
 
 private val DESKTOP_UPDATE_PACKAGE_EXTENSIONS = setOf("deb", "rpm", "msi", "dmg", "pkg")
-private val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
+internal val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
 private const val DESKTOP_PACKAGE_NAME = "nextcloudnative"
 private const val DESKTOP_PACKAGE_QUERY_TIMEOUT_MILLIS = 500L
 private const val DESKTOP_PACKAGE_QUERY_MAX_OUTPUT_CHARACTERS = 64
@@ -555,22 +575,23 @@ internal fun executeDesktopUpdateRequest(
     request: Request,
     onCallChanged: (Call?) -> Unit = {},
 ): Response {
-    val initialCall = client.newCall(request)
+    val canonicalRequest = if (request.url.host == "github.com") request.newBuilder().url(canonicalReleaseDownloadRequestUrl(request.url.toString())).build() else request
+    val initialCall = client.newCall(canonicalRequest)
     onCallChanged(initialCall)
     val initialResponse = initialCall.execute()
     if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
     return try {
         check(
-            request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+            canonicalRequest.url.host == "github.com" &&
+                canonicalRequest.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) { "Unexpected redirect while loading update content." }
         val location = requireNotNull(initialResponse.header("Location"))
-        val redirectedUrl = requireNotNull(request.url.resolve(location))
+        val redirectedUrl = requireNotNull(canonicalRequest.url.resolve(location))
         check(isTrustedDesktopReleaseAssetRedirect(redirectedUrl.toString())) {
             "GitHub release download redirected to an untrusted destination."
         }
         initialResponse.close()
-        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        val redirectedCall = client.newCall(canonicalRequest.newBuilder().url(redirectedUrl).build())
         onCallChanged(redirectedCall)
         redirectedCall.execute()
     } catch (failure: Exception) {
@@ -663,9 +684,9 @@ internal fun startWindowsInstallerAfterAppExit(
     check(Files.isRegularFile(powershell.toPath(), LinkOption.NOFOLLOW_LINKS)) {
         "The trusted Windows PowerShell executable could not be found."
     }
-    val launcher = requireNotNull(launcherFile) { "The installed Nextcloud Native launcher is unavailable." }
+    val launcher = requireNotNull(launcherFile) { "The installed nati.ve launcher is unavailable." }
     check(Files.isRegularFile(launcher.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-        "The installed Nextcloud Native launcher could not be found."
+        "The installed nati.ve launcher could not be found."
     }
     val updateGate = updateGateFile.toPath().toAbsolutePath().normalize()
     val updateGateDirectory = requireNotNull(updateGate.parent)
@@ -869,46 +890,6 @@ private fun writeWindowsInstallerHandoffScript(directory: File): File {
     return target
 }
 
-internal fun runLinuxNativePackageInstaller(
-    packageFile: File,
-    commandResolver: (File) -> List<String>? = ::linuxNativePackageInstallerCommand,
-    commandRunner: (List<String>) -> Int = ::runNativePackageInstallerCommand,
-): Boolean {
-    val command = commandResolver(packageFile) ?: return false
-    check(Files.isRegularFile(packageFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-        "The verified Linux update package is no longer a regular file."
-    }
-    val exitCode = commandRunner(command)
-    check(exitCode == 0) { "The system package transaction failed with exit code $exitCode." }
-    return true
-}
-
-private fun runNativePackageInstallerCommand(command: List<String>): Int {
-    val process = ProcessBuilder(command).inheritIO().start()
-    return try {
-        process.waitFor()
-    } catch (interrupted: InterruptedException) {
-        process.destroy()
-        Thread.currentThread().interrupt()
-        throw IOException("The system package transaction was interrupted.", interrupted)
-    }
-}
-
-internal fun linuxNativePackageInstallerCommand(
-    packageFile: File,
-    executableAvailable: (File) -> Boolean = { executable -> executable.isFile && executable.canExecute() },
-): List<String>? {
-    if (packageFile.extension.lowercase() !in DESKTOP_LINUX_PACKAGE_FORMATS) return null
-    val packageKitClient = File("/usr/bin/pkcon")
-    if (!executableAvailable(packageKitClient)) return null
-    return listOf(
-        packageKitClient.absolutePath,
-        "--noninteractive",
-        "install-local",
-        packageFile.toPath().toAbsolutePath().normalize().toString(),
-    )
-}
-
 private fun File.sha256(): String {
     val digest = MessageDigest.getInstance("SHA-256")
     inputStream().use { input ->
@@ -936,103 +917,6 @@ private const val WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS = 5L
 private const val WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS = 25L
 private const val WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS = 2L
 private const val WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES = 128L
-private val WINDOWS_INSTALLER_HANDOFF_SCRIPT = """
-    param(
-        [Parameter(Mandatory = ${'$'}true)][long]${'$'}ParentProcessId,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}InstallerPath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}LauncherPath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}UpdateGatePath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementPath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}AcknowledgementToken,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}CancellationPath,
-        [Parameter(Mandatory = ${'$'}true)][string]${'$'}CancellationToken
-    )
-
-    ${'$'}ErrorActionPreference = 'Stop'
-    ${'$'}updateGateStream = ${'$'}null
-    ${'$'}relaunchApplication = ${'$'}false
-    ${'$'}relaunchWithFailure = ${'$'}false
-    function Test-HandoffCancellation {
-        if (-not (Test-Path -LiteralPath ${'$'}CancellationPath -PathType Leaf)) {
-            return ${'$'}false
-        }
-        ${'$'}cancellationInfo = Get-Item -LiteralPath ${'$'}CancellationPath -ErrorAction SilentlyContinue
-        if (${'$'}null -eq ${'$'}cancellationInfo -or
-            ${'$'}cancellationInfo.Length -gt 128) {
-            return ${'$'}false
-        }
-        ${'$'}recordedToken = Get-Content -LiteralPath ${'$'}CancellationPath -Raw -ErrorAction SilentlyContinue
-        return ${'$'}recordedToken -eq ${'$'}CancellationToken
-    }
-    try {
-        if (-not (Test-Path -LiteralPath ${'$'}InstallerPath -PathType Leaf) -or
-            -not (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
-            throw 'The verified installer or application launcher is unavailable.'
-        }
-        ${'$'}updateGateStream = [System.IO.File]::Open(
-            ${'$'}UpdateGatePath,
-            [System.IO.FileMode]::OpenOrCreate,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::None
-        )
-        ${'$'}updateGateStream.SetLength(0)
-        ${'$'}gateBytes = [System.Text.Encoding]::ASCII.GetBytes([string]${'$'}PID)
-        ${'$'}updateGateStream.Write(${'$'}gateBytes, 0, ${'$'}gateBytes.Length)
-        ${'$'}updateGateStream.Flush(${'$'}true)
-        Set-Content -LiteralPath ${'$'}AcknowledgementPath -Value ${'$'}AcknowledgementToken -NoNewline -Encoding ascii
-        if (Test-HandoffCancellation) {
-            throw 'The Windows installer handoff was cancelled before application exit.'
-        }
-        Wait-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue
-        if (Test-HandoffCancellation) {
-            throw 'The Windows installer handoff was cancelled before installer launch.'
-        }
-        ${'$'}msiexecPath = Join-Path ${'$'}env:SystemRoot 'System32\msiexec.exe'
-        if (-not (Test-Path -LiteralPath ${'$'}msiexecPath -PathType Leaf)) {
-            throw 'The Windows Installer service executable is unavailable.'
-        }
-        ${'$'}quotedInstallerPath = '"' + ${'$'}InstallerPath + '"'
-        ${'$'}installerProcess = Start-Process -FilePath ${'$'}msiexecPath `
-            -ArgumentList @('/i', ${'$'}quotedInstallerPath, 'NEXTCLOUD_NATIVE_UPDATER_HANDOFF=1') `
-            -PassThru -Wait
-        ${'$'}successfulExitCodes = @(0, 1641, 3010)
-        if (${'$'}installerProcess.ExitCode -notin ${'$'}successfulExitCodes) {
-            throw "The Windows installer exited with code ${'$'}(${'$'}installerProcess.ExitCode)."
-        }
-        ${'$'}relaunchApplication = ${'$'}true
-    } catch {
-        if (-not (Get-Process -Id ${'$'}ParentProcessId -ErrorAction SilentlyContinue) -and
-            (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
-            ${'$'}relaunchApplication = ${'$'}true
-            ${'$'}relaunchWithFailure = ${'$'}true
-        }
-    } finally {
-        Remove-Item -LiteralPath ${'$'}AcknowledgementPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath ${'$'}CancellationPath -Force -ErrorAction SilentlyContinue
-        if (${'$'}null -ne ${'$'}updateGateStream) {
-            ${'$'}updateGateStream.Dispose()
-        }
-        Remove-Item -LiteralPath ${'$'}UpdateGatePath -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath ${'$'}PSCommandPath -Force -ErrorAction SilentlyContinue
-    }
-    if (${'$'}relaunchApplication -and (Test-Path -LiteralPath ${'$'}LauncherPath -PathType Leaf)) {
-        try {
-            if (${'$'}relaunchWithFailure) {
-                Start-Process -FilePath ${'$'}LauncherPath `
-                    -ArgumentList @('--update-handoff-failed') `
-                    -ErrorAction Stop
-            } else {
-                Start-Process -FilePath ${'$'}LauncherPath -ErrorAction Stop
-            }
-        } catch {
-            if (-not ${'$'}relaunchWithFailure) {
-                Start-Process -FilePath ${'$'}LauncherPath `
-                    -ArgumentList @('--update-handoff-failed') `
-                    -ErrorAction SilentlyContinue
-            }
-        }
-    }
-""".trimIndent() + "\r\n"
 
 internal const val DESKTOP_VERSION_NAME_PROPERTY = "dev.obiente.nextcloudnative.versionName"
 internal const val DESKTOP_VERSION_CODE_PROPERTY = "dev.obiente.nextcloudnative.versionCode"

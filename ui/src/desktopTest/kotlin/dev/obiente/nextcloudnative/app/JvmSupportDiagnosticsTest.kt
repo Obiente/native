@@ -404,7 +404,7 @@ class JvmSupportDiagnosticsTest {
         val root = createTempDirectory("support-diagnostics-export").toFile()
         val diagnostics = diagnostics(root)
         diagnostics.registerPrivateValue("https://cloud.example.test")
-        diagnostics.record(failureEvent("D:\\Fixtures\\Person\\Nextcloud Native\\private.jpg"))
+        diagnostics.record(failureEvent("D:\\Fixtures\\Person\\nati.ve\\private.jpg"))
         val destination = File(root, "support-report.zip")
 
         diagnostics.writeBundle(
@@ -414,7 +414,7 @@ class JvmSupportDiagnosticsTest {
                 SupportDiagnosticFieldDraft("virtual_files", "enabled"),
                 SupportDiagnosticFieldDraft(
                     "sync_root",
-                    "D:\\Fixtures\\Person\\Nextcloud Native",
+                    "D:\\Fixtures\\Person\\nati.ve",
                     SupportDiagnosticValuePrivacy.LocalPath,
                 ),
             ),
@@ -435,6 +435,7 @@ class JvmSupportDiagnosticsTest {
                 File(root, "redaction-key-v1").readText().trim(),
             ).forEach { privateValue -> assertFalse(privateValue in combined, privateValue) }
             assertTrue("Reports are never uploaded automatically" in combined)
+            assertTrue("one-time runtime snapshot of memory, buffers, uptime, threads" in combined)
             assertTrue("\"eventCount\":1" in combined)
             assertTrue("<local-path:" in combined)
             val manifest = JSONObject(

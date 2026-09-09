@@ -61,6 +61,9 @@ data class LocalSyncEntry(
     val size: Long? = null,
     val contentHash: String? = null,
     val modifiedEpochMillis: Long? = null,
+    val contentIdentityUnverified: Boolean = false,
+    val replacementContentIdentityUnavailable: Boolean = false,
+    val replacementAuthentication: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
@@ -73,6 +76,19 @@ data class LocalSyncEntry(
         require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash) {
             "The local sync content hash is invalid."
         }
+        require(!contentIdentityUnverified || kind == SyncEntryKind.File)
+        require(
+            !replacementContentIdentityUnavailable ||
+                kind == SyncEntryKind.Directory ||
+                contentIdentityUnverified,
+        )
+        require(!replacementContentIdentityUnavailable || contentHash == null)
+        require(
+            replacementAuthentication == null ||
+                replacementAuthentication.isNotBlank() &&
+                replacementAuthentication.length <= MAX_FILE_SYNC_REVISION_LENGTH &&
+                replacementAuthentication.none(Char::isISOControl),
+        )
     }
 }
 
@@ -122,10 +138,13 @@ data class FileSyncBaseline(
     val kind: SyncEntryKind,
     val localRevision: String?,
     val remoteEtag: String?,
+    val contentHash: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
         require(localRevision != null || remoteEtag != null)
+        require(contentHash == null || kind == SyncEntryKind.File)
+        require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash)
     }
 }
 
@@ -285,6 +304,7 @@ sealed interface FileSyncOperation {
 enum class FileSyncDecisionReason {
     FirstSyncCollision,
     SimultaneousEdit,
+    UnverifiedLocalContent,
     LocalDeletion,
     RemoteDeletion,
     TypeChanged,
@@ -328,6 +348,9 @@ private fun planSyncPath(
     baseline: FileSyncBaseline?,
     configuration: FileSyncConfiguration,
 ): FileSyncOperation? {
+    if (local?.replacementContentIdentityUnavailable == true) {
+        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.UnverifiedLocalContent)
+    }
     if (local != null && remote != null && local.kind != remote.kind) {
         return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.TypeChanged)
     }
@@ -336,6 +359,13 @@ private fun planSyncPath(
     }
     if (baseline != null && remote != null && remote.kind != baseline.kind) {
         return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.TypeChanged)
+    }
+    if (
+        local?.kind == SyncEntryKind.File &&
+        remote?.kind == SyncEntryKind.File &&
+        local.contentIdentityUnverified
+    ) {
+        return FileSyncOperation.Skipped(path, "Exact content verification is continuing in the background.")
     }
     if (
         local?.kind == SyncEntryKind.File &&
@@ -352,7 +382,8 @@ private fun planSyncPath(
         return planFirstSync(path, local, remote, configuration)
     }
 
-    val localChanged = local?.revision != baseline.localRevision
+    val localContentChanged = local?.contentHash != null && local.contentHash != baseline.contentHash
+    val localChanged = local?.revision != baseline.localRevision || localContentChanged
     val remoteChanged = remote?.etag != baseline.remoteEtag
     return when {
         !localChanged && !remoteChanged -> null
@@ -480,6 +511,9 @@ private fun planRemoteDeletion(
     if (configuration.direction == FileSyncDirection.UploadOnly) {
         return FileSyncOperation.Upload(path, null)
     }
+    if (local.contentIdentityUnverified) {
+        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)
+    }
     if (localChanged) {
         return if (configuration.direction == FileSyncDirection.DownloadOnly) {
             FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)
@@ -499,7 +533,9 @@ private fun resolveEditConflict(
     local: LocalSyncEntry,
     remote: RemoteSyncEntry,
     configuration: FileSyncConfiguration,
-): FileSyncOperation = resolveConflict(
+): FileSyncOperation = if (local.contentIdentityUnverified) {
+    FileSyncOperation.Skipped(path, "Exact content verification is continuing in the background.")
+} else resolveConflict(
     path,
     local,
     remote,

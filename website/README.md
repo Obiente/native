@@ -1,9 +1,13 @@
-# Nextcloud Native website
+# nati.ve website
 
 The project homepage is a provider-neutral Vue site. Its production build
 prerenders the homepage and every selected repository Markdown document to
 plain HTML, then emits a sitemap and a small client bundle for search and
 interactive previews.
+
+**Last reviewed: 2026-08-20.** Published routes, platform availability, and
+deployment configuration may have changed. The production site and current
+build configuration are the source of truth.
 
 Project updates live in `content/news/`. Each Markdown file has strict
 frontmatter and becomes a prerendered article, search result, sitemap entry,
@@ -37,6 +41,18 @@ The content generator reads the canonical Markdown files from the repository
 root before starting Vite. Changes to those files require restarting the local
 server or running `npm run content`.
 
+For native UI review, run the website from the same worktree as the app changes:
+
+```bash
+npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+Open `http://localhost:4173/visual-qa/`. Website source changes update through
+Vite. Native Kotlin changes need a new capture run using the workflow below;
+when `public/screenshots/capture-manifest.json` changes, the dev server
+regenerates the catalog metadata and reloads the page. This displays real
+Compose captures, not an interactive browser build of the native app.
+
 The roadmap page also reads the public GitHub project views and milestones at
 build time. It never needs or embeds a GitHub token. If GitHub is unavailable
 or rate-limited, generation falls back to the repository-owned workstream
@@ -57,10 +73,12 @@ routes such as `/roadmap/` resolve to their prerendered `index.html`.
 
 These surfaces intentionally serve different readers:
 
-- `content/news/*.md` contains long, visual product stories for people who use
-  Nextcloud and contributors who want the implementation context. News is
-  living documentation: keep its `lastUpdated` date, screenshots, capability
-  boundaries, and UI wording current when the product changes.
+- `content/news/*.md` contains dated product and design stories. Preserve the
+  publication date and treat `lastUpdated` as the date of the last correction,
+  not a promise that the article tracks every later release. If an audit finds
+  that current-tense text described a plan rather than working software,
+  correct the claim and add a dated historical note. Link readers to current
+  releases and compatibility information for support decisions.
 - per-version release notes are short installer-facing summaries and
   limitations under `/releases/`.
 - `changes/unreleased/*.md` provides the live user-facing entries contributed
@@ -91,6 +109,10 @@ filename list. Each scenario uses production Compose components and
 deterministic synthetic models. The workflow does not use adb, an emulator, a
 phone, a Nextcloud account, or network-backed application services.
 
+A capture proves that the real Compose interface rendered the named synthetic
+state at the captured revision. It does not prove that a published package
+completed the workflow against a live server or device.
+
 Production and pull request deployments validate the committed manifest, fully
 decode each PNG, and check its dimensions and hash without requiring unrelated
 UI source changes to regenerate the catalog:
@@ -111,8 +133,7 @@ npm run --prefix website verify:captures:fresh
 If the freshness command reports stale inputs, run the capture wrapper with
 JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
 scenario, feature, surface, state, platform, viewport, and pixel metadata.
-Future scenario entries may also identify the pull request they review. This
-contributor-only catalog is prerendered for direct access but intentionally
+This contributor-only catalog is prerendered for direct access but intentionally
 excluded from the public sitemap and search index.
 
 For same-repository pull requests, the refresh workflow prepares an untrusted
@@ -139,8 +160,18 @@ For a local check, `docker compose -f website/compose.yml up --build` provides
 the same image. In production, place the container behind the Obiente reverse
 proxy and terminate TLS there.
 
+The container returns a permanent HTTP 301 redirect for requests whose Host is
+`nc-native.obiente.dev`, preserving the original path and query string at
+`https://nati.ve`. Obiente Cloud must route both domains to this container and
+preserve the incoming Host header. Configure DNS and valid HTTPS certificates
+for both domains before deploying the redirect. Requests to `nati.ve`, preview
+domains, and localhost continue to serve the site directly.
+The old `/news-feed-v1.json` and `/screenshots/` endpoints also serve directly:
+installed clients reject redirects for this content. Keep their frozen feed
+URLs intact; new clients request the canonical host directly.
+
 The container exposes `/api/github-repository` as a cached, same-origin proxy
-for the public `Obiente/nc-native` repository metadata. The website uses it to
+for the public `obiente/native` repository metadata. The website uses it to
 refresh the displayed star count without a deployment. Nginx refreshes the
 upstream response at most once every ten minutes and can serve its last cached
 response during temporary GitHub failures. The prerendered count remains the
@@ -157,7 +188,7 @@ publish the protocol verification key at the site root. The production Obiente
 Cloud deployment must set `INDEXNOW_PRODUCTION=1`; the submitter is fail-closed
 when that variable is absent or has any other value. On container startup, a
 background deployment hook waits until the exact static-build fingerprint is
-visible at `https://nc-native.obiente.dev` before submitting that build's
+visible at `https://nati.ve` before submitting that build's
 crawlable URLs to the global IndexNow endpoint. HTTP 200 and the initial
 key-verification HTTP 202 response are recorded as successful for that
 container, so an ordinary restart does not notify the same build again.
@@ -167,6 +198,6 @@ containers leave it unset and exit before contacting IndexNow, even when their
 static output happens to match the production website.
 
 The canonical hostname is currently configured as
-`https://nc-native.obiente.dev` in the prerender and crawler metadata. Change
+`https://nati.ve` in the prerender and crawler metadata. Change
 that value in `src/entry-server.js`, `scripts/prerender.mjs`,
 `public/robots.txt`, and `index.html` together if the final hostname differs.

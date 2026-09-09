@@ -51,6 +51,7 @@ internal class NextcloudFileSyncWorker(
         val engine = AndroidFileSyncEngine(applicationContext)
         val result = runCatching { engine.runPair(session, userId, pairId) }
             .getOrElse { failure ->
+                rethrowAndroidFileSyncCancellation(failure)
                 val disposition = backgroundSyncFailureDisposition(runAttemptCount)
                 services.recordSupportDiagnosticForAccountIdentity(
                     accountId,
@@ -85,8 +86,7 @@ internal class NextcloudFileSyncWorker(
                     id = stableNotificationId(pairId),
                     accountKey = accountId,
                     path = conflict.relativePath,
-                    detail = "${pair.conflicts.size} sync conflict" +
-                        if (pair.conflicts.size == 1) " needs review." else "s need review.",
+                    detail = syncConflictNotificationDetail(pair.conflictCount),
                 ),
             )
         }
@@ -105,7 +105,7 @@ internal class NextcloudFileSyncWorker(
                     fields = backgroundSyncCompletionDiagnosticFields(
                         pairId = pairId,
                         failedCount = pair.failedCount,
-                        conflictCount = pair.conflicts.size,
+                        conflictCount = pair.conflictCount,
                         result = result,
                     ),
                 ),
@@ -166,6 +166,12 @@ internal class NextcloudFileSyncWorker(
         const val KEY_ACCOUNT_ID = "account_id"
         const val KEY_USER_ID = "user_id"
     }
+}
+
+internal fun syncConflictNotificationDetail(conflictCount: Int): String {
+    require(conflictCount > 0)
+    return "$conflictCount sync conflict" +
+        if (conflictCount == 1) " needs review." else "s need review."
 }
 
 internal enum class BackgroundSyncWorkerDisposition {

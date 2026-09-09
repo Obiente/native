@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -47,6 +45,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.NextcloudSegmentedControl
+import dev.obiente.nextcloudnative.app.design.NextcloudSegmentedOption
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 
@@ -157,38 +157,14 @@ private fun ChoresCompactNavigation(
     destinations: List<NativeWorkspaceNavigationItem>,
     onNavigate: (String) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-    ) {
-        destinations.forEach { destination ->
-            Surface(
-                color = if (destination.selected) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                },
-                contentColor = if (destination.selected) {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                shape = RoundedCornerShape(NextcloudRadii.Pill),
-                modifier = Modifier.selectable(
-                    selected = destination.selected,
-                    role = Role.Tab,
-                    onClick = { if (!destination.selected) onNavigate(destination.id) },
-                ),
-            ) {
-                Text(
-                    destination.label,
-                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-            }
-        }
-    }
+    NextcloudSegmentedControl(
+        options = destinations.map { NextcloudSegmentedOption(it.id, it.label) },
+        selectedId = destinations.firstOrNull { it.selected }?.id,
+        onSelected = { id -> destinations.firstOrNull { it.id == id && !it.selected }?.let { onNavigate(it.id) } },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
+        accessibilityLabel = "Chores sections",
+        role = Role.Tab,
+    )
 }
 
 @Composable

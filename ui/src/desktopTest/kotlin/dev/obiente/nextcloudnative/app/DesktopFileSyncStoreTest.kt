@@ -289,9 +289,159 @@ class DesktopFileSyncStoreTest {
                         while (statement.step()) add(statement.getText(1))
                     }
                 }
-                assertEquals("3", version)
+                assertEquals("4", version)
                 assertTrue(setOf("state", "relative_path", "detail").all { it in columns })
             }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `verification progress is stored in rows instead of the bounded pair record`() {
+        val directory = Files.createTempDirectory("desktop-sync-progress-rows-").toFile()
+        try {
+            val progress = (0 until 5_000).map { index ->
+                FileSyncContentVerificationProgress(
+                    candidate = FileSyncContentVerificationCandidate(
+                        relativePath = "Archive/$index-${"x".repeat(900)}.bin",
+                        localRevision = "local-$index",
+                        remoteEtag = "remote-$index",
+                        expectedSizeBytes = 16L * 1024L * 1024L,
+                    ),
+                    verifiedBytes = 8L * 1024L * 1024L,
+                    aggregateHash = EMPTY_FILE_SYNC_IDENTITY_AGGREGATE,
+                )
+            }
+            val pair = FileSyncPair(
+                id = "progress-pair",
+                accountId = "account",
+                localRootId = "progress-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                contentVerificationProgress = progress,
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)),
+                pair.id,
+            )
+
+            assertEquals(
+                progress.sortedBy { it.candidate.relativePath },
+                store.loadPair(pair.id).coordinator.pairs.single().contentVerificationProgress,
+            )
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                val pairRecordBytes = connection.prepare(
+                    "SELECT length(record) FROM sync_pairs WHERE id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                val progressRows = connection.prepare(
+                    "SELECT COUNT(*) FROM sync_content_verification WHERE pair_id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                assertTrue(pairRecordBytes < 64L * 1024L)
+                assertEquals(progress.size.toLong(), progressRows)
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `abandoned upload ownership is stored in rows outside the bounded pair record`() {
+        val directory = Files.createTempDirectory("desktop-sync-cleanup-rows-").toFile()
+        try {
+            val cleanups = (0 until 2_000).map { index ->
+                FileSyncPendingUploadCleanup(
+                    uploadId = "00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}",
+                    relativePath = "Archive/${index.toString().padStart(4, '0')}-${"x".repeat(3_000)}.bin",
+                    assembledStageEtag = "stage-$index",
+                )
+            }
+            val pair = FileSyncPair(
+                id = "cleanup-pair",
+                accountId = "account",
+                localRootId = "cleanup-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                pendingUploadCleanups = cleanups,
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)),
+                pair.id,
+            )
+
+            assertEquals(cleanups, store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                val pairRecordBytes = connection.prepare(
+                    "SELECT length(record) FROM sync_pairs WHERE id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                val cleanupRows = connection.prepare(
+                    "SELECT COUNT(*) FROM sync_upload_cleanups WHERE pair_id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                assertTrue(pairRecordBytes < 64L * 1024L)
+                assertEquals(cleanups.size.toLong(), cleanupRows)
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `later execution transitions preserve cleanup ownership retained by earlier work`() {
+        val directory = Files.createTempDirectory("desktop-sync-cleanup-transition-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "cleanup-transition-pair",
+                accountId = "account",
+                localRootId = "cleanup-transition-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val stale = DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root))
+            val cleanup = FileSyncPendingUploadCleanup(
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                relativePath = "archive.bin",
+                replacementBackupEtag = "directory-etag",
+            )
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            store.savePair(stale, pair.id)
+
+            store.saveExecutionTransition(
+                stale, pair.id, workId = 1L, workItem = null,
+                uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Retain(cleanup),
+            )
+            store.saveExecutionTransition(stale, pair.id, workId = 2L, workItem = null)
+
+            assertEquals(listOf(cleanup), store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
+            store.saveExecutionTransition(
+                stale, pair.id, workId = 2L, workItem = null,
+                uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Complete(cleanup.uploadId),
+            )
+            assertTrue(store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups.isEmpty())
         } finally {
             directory.deleteRecursively()
         }
@@ -439,11 +589,20 @@ class DesktopFileSyncStoreTest {
 
             store.savePair(expected, pair.id)
             val restored = store.loadPair(pair.id)
+            val account = store.loadAccount(pair.accountId, trayLimit = 1)
 
             assertEquals(
-                FileSyncExecutionState.Ready,
+                FileSyncExecutionState.Failed,
                 restored.coordinator.pairs.single().workItems.single().state,
             )
+            assertEquals(
+                INTERRUPTED_FILE_SYNC_FAILURE_MESSAGE,
+                restored.coordinator.pairs.single().workItems.single().failureMessage,
+            )
+            assertEquals(0, account.workByPairId.getValue(pair.id).readyCount)
+            assertEquals(1, account.workByPairId.getValue(pair.id).failedCount)
+            assertEquals(FileSyncExecutionState.Failed, account.trayWorkItems.single().workItem.state)
+            assertEquals(INTERRUPTED_FILE_SYNC_FAILURE_MESSAGE, account.trayWorkItems.single().workItem.failureMessage)
             assertEquals(pair.configuration, restored.coordinator.pairs.single().configuration)
             assertEquals(expected.roots, restored.roots)
         } finally {

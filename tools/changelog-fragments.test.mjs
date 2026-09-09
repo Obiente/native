@@ -110,6 +110,20 @@ test("internal work requires an explicit no-user-facing marker", () => {
   assert.equal(parsed.userFacing, false);
 });
 
+test("internal work may omit issue and pull request references", () => {
+  const parsed = parseFragment(
+    fragment({
+      category: "internal",
+      issue: "none",
+      pull: "none",
+      userFacing: "no",
+      summary: "Repository maintenance remains valid before a pull request exists.",
+    }),
+  );
+  assert.equal(parsed.issue, null);
+  assert.equal(parsed.pull, null);
+});
+
 test("security fragments retain their release category", () => {
   const parsed = parseFragment(
     fragment({
@@ -186,7 +200,7 @@ test("website changelog composition replaces only the live Unreleased section", 
 test("release note preparation shares the user-facing aggregation", () => {
   const parsed = parseFragment(fragment(), "changes/unreleased/42.md");
   const notes = composeReleaseNotes("0.2.0-alpha.1", [parsed]);
-  assert.match(notes, /^# Nextcloud Native 0\.2\.0-alpha\.1/m);
+  assert.match(notes, /^# nati\.ve 0\.2\.0-alpha\.1/m);
   assert.match(notes, /^## Features$/m);
   assert.match(notes, /\[Android, Desktop\]/);
   assert.doesNotMatch(notes, /issue #42/);

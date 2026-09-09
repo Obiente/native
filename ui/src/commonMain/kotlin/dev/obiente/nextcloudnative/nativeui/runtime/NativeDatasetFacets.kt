@@ -18,7 +18,7 @@ internal data class NativeDatasetFacetOption(
 )
 
 internal enum class NativeDatasetSortMode(val label: String) {
-    Server("Server order"),
+    Server("Default order"),
     NameAscending("Name A-Z"),
     NameDescending("Name Z-A"),
 }
@@ -141,10 +141,7 @@ internal fun browseNativeDatasetRecords(
     val faceted = filterNativeDatasetRecords(records, selections)
     val searched = searchQuery.trim().takeIf(String::isNotBlank)?.let { query ->
         faceted.filter { record ->
-            nativeRecordPresentation(resource, record).title.contains(query, ignoreCase = true) ||
-                resource.fields.any { field ->
-                    record.presentationValue(field.id)?.contains(query, ignoreCase = true) == true
-                }
+            nativeRecordMatchesCollectionQuery(resource, record, query)
         }
     } ?: faceted
     val alphabetical = compareBy<NativeRecord>(

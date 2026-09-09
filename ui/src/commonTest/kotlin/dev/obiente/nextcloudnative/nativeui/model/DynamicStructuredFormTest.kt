@@ -166,6 +166,41 @@ class DynamicStructuredFormTest {
         )
     }
 
+    @Test
+    fun `repeatable schema normalizes proven read only response members`() {
+        val spec = assertNotNull(
+            Json.parseToJsonElement(
+                """
+                {
+                  "type":"array",
+                  "format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT",
+                  "minItems":1,
+                  "maxItems":1,
+                  "items":{
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["serverId","name"],
+                    "properties":{
+                      "serverId":{"type":"integer","readOnly":true},
+                      "name":{"type":"string"}
+                    }
+                  }
+                }
+                """.trimIndent(),
+            ).repeatableObjectInputSpec(),
+        )
+
+        assertEquals(listOf("name"), spec.fields.map(RepeatableObjectInputFieldSpec::id))
+        assertEquals(setOf("serverId"), spec.observedReadOnlyFieldIds)
+        assertEquals(
+            """[{"name":"Milk"}]""",
+            spec.canonicalJson("""[{"serverId":42,"name":"Milk"}]""").toString(),
+        )
+        assertFailsWith<IllegalStateException> {
+            spec.canonicalJson("""[{"unknown":42,"name":"Milk"}]""")
+        }
+    }
+
     private fun decimalSpec(
         minimum: String? = null,
         maximum: String? = null,

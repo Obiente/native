@@ -333,10 +333,10 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     path.join(websiteRoot, "index.html"),
     "utf8",
   );
-  const appSource = await readFile(
-    path.join(websiteRoot, "src", "App.vue"),
-    "utf8",
-  );
+  const appSource = (await Promise.all([
+    readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
+    readFile(path.join(websiteRoot, "src", "components", "NativeHome.vue"), "utf8"),
+  ])).join("\n");
   const entryServer = await readFile(
     path.join(websiteRoot, "src", "entry-server.js"),
     "utf8",
@@ -366,9 +366,9 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     (appSource.match(/:aria-pressed=/gu) ?? []).length,
     3,
   );
-  assert.match(appSource, /class="product-hero-mobile"/u);
+  assert.match(appSource, /class="native-hero-mobile"/u);
   assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
-  assert.match(appSource, /class="product-hero-desktop"/u);
+  assert.match(appSource, /class="native-hero-desktop"/u);
   assert.match(appSource, /:src="heroDesktopCapture\.websitePath"/u);
   assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
   assert.match(appSource, /capture\.pullRequest/u);
@@ -384,19 +384,19 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   assert.match(appSource, /const systemTheme = ref\(initialTheme\.system\)/u);
   assert.match(appSource, /window\.matchMedia\("\(prefers-color-scheme: light\)"\)/u);
   assert.match(appSource, /nextcloud-native-theme/u);
-  assert.match(appSource, /homepage-overview-desktop-dark/u);
-  assert.match(appSource, /homepage-overview-desktop-light/u);
+  assert.match(appSource, /homepage-files-desktop-dark/u);
+  assert.match(appSource, /homepage-files-desktop-light/u);
   assert.match(appSource, /function newsCapture\(post\)/u);
   assert.match(appSource, /post\.websiteImageLight/u);
   assert.match(appSource, /post\.websiteImageDark/u);
   assert.equal((appSource.match(/:src="newsCapture\(/gu) ?? []).length, 4);
   assert.match(styles, /:root\[data-theme="light"\]/u);
-  assert.match(styles, /--primary:\s*#cbb3fd/u);
-  assert.match(styles, /--primary-action:\s*#cbb3fd/u);
-  assert.match(styles, /--app-icon-container:\s*#24232e/u);
-  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary:\s*#684a9e/u);
-  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary-action:\s*#ebddff/u);
-  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--app-icon-container:\s*#f0e8f9/u);
+  assert.match(styles, /--primary:\s*#52e0b4/u);
+  assert.match(styles, /--primary-action:\s*#52e0b4/u);
+  assert.match(styles, /--app-icon-container:\s*#253039/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary:\s*#087d62/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--primary-action:\s*#dff7ef/u);
+  assert.match(styles, /:root\[data-theme="light"\][\s\S]*?--app-icon-container:\s*#e5f0ff/u);
   assert.match(
     styles,
     /@media \(max-width:\s*1120px\)[\s\S]*?\.product-hero-mobile\s*\{[^}]*left:\s*1\.5%;/u,
@@ -409,7 +409,7 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   assert.doesNotMatch(styles, /animation(?:-iteration-count)?:\s*[^;{}]*infinite/u);
   assert.doesNotMatch(
     appSource,
-    /class="product-hero-mobile"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+    /class="native-hero-mobile"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
   );
 });
 
@@ -434,7 +434,7 @@ test("homepage captures route synthetic fixtures through production app surfaces
   assert.match(appSource, /HomepageFilesDesktopDark,[\s\S]*?FilesScreen\(/u);
   assert.match(appSource, /HomepageConversationsDesktopDark,[\s\S]*?ChatScreen\(/u);
   assert.match(appSource, /HomepagePhotosDesktopDark,[\s\S]*?MarketingPhotoFolderScenario\(scenario, assets\)/u);
-  assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(\)/u);
+  assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(scenario\)/u);
   assert.match(appSource, /HomepageAppsDesktopDark,[\s\S]*?MarketingAdaptiveAppScenario\(scenario\)/u);
   assert.doesNotMatch(appSource, /MarketingHomepageFilesScenario|MarketingHomepageConversationsScenario/u);
   assert.ok(

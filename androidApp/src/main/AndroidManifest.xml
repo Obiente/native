@@ -78,6 +78,24 @@
                     android:scheme="nextcloudnative" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".AndroidShareUploadActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/Theme.NextcloudNative">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
         <provider
             android:name=".NextcloudDocumentsProvider"
             android:authorities="${applicationId}.documents"

@@ -24,6 +24,53 @@ internal fun initialNativeRepeatableObjectDraft(
     }
 }
 
+internal fun initialNativeCreateRepeatableObjectDraft(
+    fields: List<FieldSpec>,
+    initialValues: Map<String, String>,
+): Map<String, List<RepeatableObjectInputRow>>? {
+    val repeatableFieldIds = fields
+        .filter { field -> field.repeatableObjectInput != null }
+        .mapTo(hashSetOf(), FieldSpec::id)
+    return initialNativeRepeatableObjectDraft(
+        fields = fields,
+        initialValues = initialValues.filterNot { (fieldId, value) ->
+            fieldId in repeatableFieldIds && value.isBlank()
+        },
+    )
+}
+
+internal sealed interface NativeRepeatableObjectSubmitEncoding {
+    data class Ready(val values: Map<String, String>) : NativeRepeatableObjectSubmitEncoding
+    data class Invalid(val fieldErrors: Map<String, String>) : NativeRepeatableObjectSubmitEncoding
+}
+
+internal fun encodeNativeRepeatableObjectSubmitValues(
+    values: Map<String, List<RepeatableObjectInputRow>>,
+    specs: Map<String, RepeatableObjectInputSpec>,
+): NativeRepeatableObjectSubmitEncoding {
+    if (values.keys != specs.keys) {
+        return NativeRepeatableObjectSubmitEncoding.Invalid(
+            specs.keys.associateWith { "This structured value could not be validated." },
+        )
+    }
+    val encoded = linkedMapOf<String, String>()
+    val errors = linkedMapOf<String, String>()
+    specs.forEach { (fieldId, spec) ->
+        try {
+            encoded[fieldId] = spec.encode(values.getValue(fieldId))
+        } catch (failure: IllegalArgumentException) {
+            errors[fieldId] = failure.message ?: "Review the structured items."
+        } catch (failure: IllegalStateException) {
+            errors[fieldId] = failure.message ?: "Review the structured items."
+        }
+    }
+    return if (errors.isEmpty()) {
+        NativeRepeatableObjectSubmitEncoding.Ready(encoded)
+    } else {
+        NativeRepeatableObjectSubmitEncoding.Invalid(errors)
+    }
+}
+
 internal fun addNativeRepeatableObjectRow(
     rows: List<RepeatableObjectInputRow>,
     spec: RepeatableObjectInputSpec,
@@ -47,7 +94,8 @@ internal fun updateNativeRepeatableObjectValue(
     field: RepeatableObjectInputFieldSpec,
     value: String,
 ): List<RepeatableObjectInputRow> {
-    if (rowIndex !in rows.indices || value.length > MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH) {
+    // The draft state rejects oversized candidates with an error instead of silently dropping input.
+    if (rowIndex !in rows.indices) {
         return rows
     }
     val updatedValues = rows[rowIndex].values.toMutableMap().apply {
@@ -245,4 +293,5 @@ private fun RepeatableObjectInputSpec.decodeNativeRepeatableObjectRows(
 private const val MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH = 4_096
 private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELDS = 64
 private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELD_ID_LENGTH = 256
-private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH = 256 * 1_024
+// The whole form shares this budget, including JSON escaping and field identifiers.
+private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH = 16 * 1_024

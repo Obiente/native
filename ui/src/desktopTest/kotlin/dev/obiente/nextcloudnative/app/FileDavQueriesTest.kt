@@ -22,9 +22,10 @@ class FileDavQueriesTest {
         assertFalse("morgan&lee" in request)
         val predicate = request.substringAfter("<d:where>").substringBefore("</d:where>")
         assertTrue("<d:displayname/>" in predicate)
-        assertTrue("<d:getcontenttype/>" in predicate)
+        assertFalse("<d:getcontenttype/>" in predicate)
         assertFalse("<oc:owner-display-name/>" in predicate)
         val selected = request.substringAfter("<d:select>").substringBefore("</d:select>")
+        assertTrue("<d:getcontenttype/>" in selected)
         assertFalse("<oc:comments-unread/>" in selected)
     }
 

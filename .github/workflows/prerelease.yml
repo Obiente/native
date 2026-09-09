@@ -96,7 +96,7 @@ jobs:
         run: cat docs/prerelease-checklist.md >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -170,7 +170,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -248,7 +248,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -593,7 +593,7 @@ jobs:
                 'The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.'
               printf '\n'
               printf '%s\n' \
-                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo Obiente/nc-native` and compare the file with `SHA256SUMS`.'
+                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo obiente/native` and compare the file with `SHA256SUMS`.'
             } >>"${RUNNER_TEMP}/release-notes.md"
           fi
 
@@ -691,7 +691,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           else
             test "${#assets[@]}" -gt 0
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
@@ -701,7 +701,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           fi
 
           if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
@@ -725,7 +725,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0

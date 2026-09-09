@@ -99,6 +99,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
     testImplementation(kotlin("test"))
+    testImplementation(libs.org.json)
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.junit)

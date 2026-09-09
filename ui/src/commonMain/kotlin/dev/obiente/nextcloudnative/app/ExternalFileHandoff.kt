@@ -1,6 +1,35 @@
 package dev.obiente.nextcloudnative.app
 
-const val MAX_EXTERNAL_FILE_HANDOFF_BYTES = 64L * 1024L * 1024L
+/** Largest detached payload that may be materialized as a ByteArray before handoff. */
+const val MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES = 64L * 1024L * 1024L
+
+/** Space kept free while staging a streamed handoff so the app cannot fill the user's volume. */
+const val STAGED_FILE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
+
+/**
+ * Converts current storage capacity into a transfer bound without imposing a product file-size cap.
+ * A known byte count is admitted exactly; an unknown response may consume only the currently safe space.
+ */
+fun stagedFileTransferLimit(
+    availableBytes: Long,
+    declaredByteCount: Long?,
+    reserveBytes: Long = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+): Long {
+    require(availableBytes >= 0L) { "Available storage must not be negative." }
+    require(declaredByteCount == null || declaredByteCount >= 0L) { "The declared file size must not be negative." }
+    require(reserveBytes >= 0L) { "The free-space reserve must not be negative." }
+    val safeAvailableBytes = if (availableBytes >= reserveBytes) availableBytes - reserveBytes else 0L
+    check(declaredByteCount == null || declaredByteCount <= safeAvailableBytes) {
+        "There is not enough free space for the temporary file copy."
+    }
+    check(safeAvailableBytes > 0L || declaredByteCount == 0L) {
+        "There is not enough free space for the temporary file copy."
+    }
+    return declaredByteCount?.coerceAtLeast(1L) ?: safeAvailableBytes
+}
+
+/** A detached full-file GET must never publish a partial or bodyless successful response. */
+fun isFullDetachedFileResponse(status: Int): Boolean = status == 200
 
 enum class ExternalFileHandoffAction {
     Share,
@@ -9,12 +38,12 @@ enum class ExternalFileHandoffAction {
 
 data class ExternalFileHandoffCapability(
     val supportedActions: Set<ExternalFileHandoffAction>,
-    val maximumFileBytes: Long,
+    val maximumInMemoryFileBytes: Long,
     val supportsSeekableRemoteStreaming: Boolean = false,
 ) {
     init {
         require(supportedActions.isNotEmpty()) { "At least one external file action must be supported." }
-        require(maximumFileBytes > 0L) { "The external file size limit must be positive." }
+        require(maximumInMemoryFileBytes > 0L) { "The in-memory handoff threshold must be positive." }
     }
 }
 
@@ -33,7 +62,7 @@ sealed interface ExternalFileHandoffSupport {
 
 enum class ExternalFileHandoffRejection {
     Directory,
-    FileTooLarge,
+    InMemoryReadTooLarge,
     UnsupportedAction,
     MissingVersion,
     VersionChanged,
@@ -42,6 +71,7 @@ enum class ExternalFileHandoffRejection {
 
 sealed interface ExternalFileHandoffResult {
     data class Launched(val action: ExternalFileHandoffAction) : ExternalFileHandoffResult
+    data class Cancelled(val action: ExternalFileHandoffAction) : ExternalFileHandoffResult
     data class Rejected(
         val reason: ExternalFileHandoffRejection,
         val message: String,
@@ -71,12 +101,6 @@ fun validateExternalFileHandoff(
         ExternalFileHandoffRejection.MissingVersion,
         "Refresh the folder before sending this file to another app.",
     )
-    file.size != null &&
-        file.size > capability.maximumFileBytes &&
-        !file.canUseSeekableRemoteHandoff(capability) -> ExternalFileHandoffResult.Rejected(
-        ExternalFileHandoffRejection.FileTooLarge,
-        "${file.name} is larger than the ${formatHandoffByteLimit(capability.maximumFileBytes)} handoff limit.",
-    )
     else -> null
 }
 
@@ -89,11 +113,6 @@ fun validateDeckAttachmentHandoff(
         ExternalFileHandoffRejection.UnsupportedAction,
         "This platform does not support opening this attachment in another app.",
     )
-    attachment.byteCount != null && attachment.byteCount > capability.maximumFileBytes ->
-        ExternalFileHandoffResult.Rejected(
-            ExternalFileHandoffRejection.FileTooLarge,
-            "${attachment.name} is larger than the external handoff limit.",
-        )
     else -> null
 }
 
@@ -126,8 +145,8 @@ fun validateDownloadedExternalFile(
     require(maximumBytes > 0L)
     if (downloaded.bytes.size.toLong() > maximumBytes) {
         return ExternalFileHandoffResult.Rejected(
-            ExternalFileHandoffRejection.FileTooLarge,
-            "The downloaded file is larger than the external handoff limit.",
+            ExternalFileHandoffRejection.InMemoryReadTooLarge,
+            "The downloaded file is too large for the in-memory handoff path.",
         )
     }
     val selectedEtag = selected.etag?.trim()?.takeIf(String::isNotEmpty)
@@ -194,12 +213,6 @@ private fun isSafeMimeCharacter(character: Char): Boolean =
 private fun ExternalFileHandoffAction.displayName(): String = when (this) {
     ExternalFileHandoffAction.Share -> "sharing"
     ExternalFileHandoffAction.OpenWith -> "opening with another app"
-}
-
-private fun formatHandoffByteLimit(bytes: Long): String = when {
-    bytes % (1024L * 1024L) == 0L -> "${bytes / (1024L * 1024L)} MiB"
-    bytes % 1024L == 0L -> "${bytes / 1024L} KiB"
-    else -> "$bytes byte"
 }
 
 private const val MAX_EXTERNAL_FILENAME_LENGTH = 180

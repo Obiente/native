@@ -1324,7 +1324,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = "signed-package-without-openapi"))
             server.enqueue(MockResponse(body = appInfo("cospend", "4.0.2")))
             server.enqueue(MockResponse(body = githubTree("openapi-client.json")))
-            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","paths":{}}"""))
+            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","servers":[{"url":"/apps/cospend"}],"paths":{}}"""))
             val acquirer = SignedAppStoreContractAcquirer(
                 httpClient = OkHttpClient(),
                 appStoreBaseUrl = server.url("api/v1").toString(),
@@ -1480,6 +1480,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = """
                 openapi: 3.0.1
                 info: { title: Example, version: 1.0.0 }
+                servers: [{ url: /apps/cospend }]
                 components:
                   schemas:
                     Recipe:
@@ -1547,7 +1548,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = "signed-package-without-openapi"))
             server.enqueue(MockResponse(body = appInfo("cospend", "4.0.3")))
             server.enqueue(MockResponse(body = githubTree("openapi.json")))
-            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","paths":{}}"""))
+            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","servers":[{"url":"/apps/cospend"}],"paths":{}}"""))
             val acquirer = SignedAppStoreContractAcquirer(
                 httpClient = OkHttpClient(),
                 appStoreBaseUrl = server.url("api/v1").toString(),
@@ -1777,9 +1778,8 @@ class SignedAppStoreContractAcquirerTest {
 
     private fun openApiYaml(version: String, path: String): String = """
         openapi: 3.0.1
-        info:
-          title: Example
-          version: $version
+        info: { title: Example, version: $version }
+        servers: [{ url: /apps/cospend }]
         paths:
           $path:
             get:

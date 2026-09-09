@@ -1,12 +1,19 @@
 # Windows MSI release qualification
 
-Nextcloud Native produces one per-user x86-64 MSI for Windows. The MSI is the
-only supported Windows package format while native Credential Manager and Cloud
-Files integration are being qualified.
+This document defines the qualification and integrity requirements for the
+per-user x86-64 Windows MSI.
+
+**Last reviewed: 2026-08-20.** Package availability, signing, and qualification
+state may have changed. Check the [latest releases](https://github.com/obiente/native/releases)
+and their release notes before installing or publishing an MSI. The
+[Publish prerelease workflow](../.github/workflows/prerelease.yml) and
+[`tools/verify-windows-package.ps1`](../tools/verify-windows-package.ps1) define
+the current automated release checks.
 
 ## Current trust state
 
-Windows MSIs are currently published without an Authenticode signature. A
+At the review date, Windows MSIs are published without an Authenticode
+signature. A
 self-signed certificate is not used because it would not be trusted by normal
 Windows installations and asking users to install a custom root certificate
 would weaken their security boundary.
@@ -39,7 +46,7 @@ Verify a downloaded MSI's provenance with GitHub CLI:
 
 ```powershell
 gh attestation verify .\NextcloudNative-<version>.msi `
-  --repo Obiente/nc-native
+  --repo obiente/native
 ```
 
 Verify its release checksum with PowerShell:
@@ -90,6 +97,9 @@ previous published package:
 - upgrade preserves account, sync, cache, and recovery state and starts only
   the new version;
 - account removal disconnects and unregisters its sync root;
+- recovery accepts an empty saved provider GUID only with the exact Windows
+  user, account root context, checksum, and permitted path; foreign identities
+  and damaged or unsupported context remain rejected;
 - uninstall leaves no active provider process or unusable registered sync
   root;
 - silent installation and uninstall work for package-manager validation.
@@ -97,6 +107,45 @@ previous published package:
 Explorer and writeback qualification uses disposable synthetic accounts. Do
 not use personal file trees or include server, account, path, or credential
 details in logs and public artifacts.
+
+Run `cargo test --locked --bin nextcloud-native-shell-registrar` for deterministic
+registration ownership coverage. On a Windows test checkout on NTFS, also run
+`cargo test --locked --bin nextcloud-native-shell-registrar persisted_root_can_be_owned_and_unregistered -- --ignored`.
+That explicit integration test creates and removes only its disposable empty
+Explorer root under the checkout's ignored `target` directory. It checks saved
+registration ownership, rejection of a different requested path, and
+unregistration. It does not validate personal-account recovery or writeback.
+
+## Short placeholder identity regression
+
+Root enumeration accepts the registered root context when Windows omits the item
+identity, only for a matching nonzero root file ID. Account and normalized path
+checks still apply. Enumeration reconciles existing children before completing
+the callback, avoiding duplicate placeholder submissions.
+
+Item identities use a version 3 envelope padded to at least 256 bytes, including
+the checksum. This is an application compatibility measure: short directory
+identities reproduced `0x8007016b` on a local Windows installation. It is not a
+documented CFAPI minimum. Readers accept versions 1, 2, and 3; the registered
+root context remains byte-identical version 2 so an upgrade does not replace a
+healthy registration. Older binaries cannot decode version 3 item identities.
+
+**Last reviewed: 2026-09-06.** Local Windows tests passed creation, directory listing, hydration,
+restart, and recovery from actual corrupt version 2 placeholders while preserving
+a synthetic local file. This evidence does not qualify personal-account
+writeback or a published upgrade; check the [releases](https://github.com/obiente/native/releases)
+for available artifacts. On a Windows NTFS test checkout, run:
+
+```powershell
+.\gradlew.bat :ui:createDistributable
+$env:NATIVE_WINDOWS_TEST_LAUNCHER = (Resolve-Path 'ui/build/compose/binaries/main/app/NextcloudNative/NextcloudNative.exe').Path
+.\gradlew.bat :ui:desktopTest --tests '*WindowsCloud*'
+```
+
+The opt-in native tests use the packaged registrar, disposable roots, and an
+in-memory backend that rejects server mutations. Without the launcher variable,
+these integration tests are skipped. The legacy-corruption case also skips on
+Windows versions where the old encoding no longer reproduces the failure.
 
 ## WinGet delivery
 
@@ -110,7 +159,7 @@ to `microsoft/winget-pkgs` only for a published release that installs and
 uninstalls silently and has completed the Windows acceptance checks. WinGet may
 reject an unsigned installer during automated or manual validation.
 
-## Future signing
+## Signing evolution
 
 Free SignPath Foundation signing can be added later if the project is accepted.
 A paid or exportable PFX workflow is intentionally not configured. When a
@@ -118,3 +167,45 @@ publicly trusted signing service is adopted, update the verifier, deep-sign
 project-owned executable content before packaging, sign the MSI last, retain
 RFC 3161 timestamps, and remove the unsigned-install disclosure only after the
 published artifact verifies successfully on a clean Windows installation.
+
+## In-app update handoff
+
+After the user chooses **Update and restart**, the Windows updater downloads and
+verifies the MSI, waits for the app to exit, then invokes Windows Installer with
+`/quiet /norestart`. No installer wizard is required. The handoff waits for the
+installer to finish, releases its single-update gate, and relaunches nati.ve.
+An installation failure relaunches the existing app with an update-failure
+notice when its launcher remains available. Windows policy failures remain
+failures; the updater does not fall back to elevation or disable security checks.
+
+The installer is instructed not to reboot Windows. A reboot-required result is
+accepted as installer completion, without automatically restarting the OS.
+The app's existing update/version checks remain authoritative for the running
+version after relaunch. The manual first-install MSI remains interactive.
+
+This is the source behavior for in-app Windows updates, not a claim that an
+artifact containing it has been published. An older installed updater still uses
+its original handoff for the first upgrade to a build containing this change.
+Automatic update checks continue to notify the user; this change does not opt
+users into unattended downloads or close their app on a schedule.
+
+Regression tests execute the generated handoff script with synthetic installer
+success, failure, and reboot-required results. They verify quiet arguments,
+quoted package paths, parent-exit ordering, gate release, and relaunch behavior
+without modifying an installed application. MSI behavior uses the documented
+[Windows Installer command-line options](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/msiexec).
+
+## Installed application name
+
+The MSI product name, launcher description, desktop shortcut, and Start menu
+shortcut are `nati.ve`.
+The package verifier checks both shortcuts as well as the product name. The
+packaging step applies display metadata before artifact verification and
+attestation. WinGet uses the branded MSI display name for installed-app matching.
+
+The `NextcloudNative.exe` launcher, installation directory, MSI upgrade UUID,
+and `Obiente.NextcloudNative` WinGet identifier remain stable so existing update,
+startup, and Explorer registrations keep resolving the same installation.
+Artifact filenames also retain the legacy Windows name. A newly built installer
+is required to update installed display metadata; replacing the app JAR alone
+does not rename existing shortcuts or the Windows installed-app entry.

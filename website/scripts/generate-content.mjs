@@ -122,12 +122,20 @@ const sources = [
       "How Android, iOS, Windows, macOS and Linux share domain rules while keeping native system integrations.",
   },
   {
+    file: "docs/shared-ui-controls.md",
+    path: "/shared-ui-controls/",
+    title: "Shared native choice controls",
+    shortTitle: "Shared controls",
+    description:
+      "Reusable native view switchers and form choices, their real consumers, and the state and permission boundaries they preserve.",
+  },
+  {
     file: "CONTRIBUTING.md",
     path: "/contributing/",
     title: "Contributing",
     shortTitle: "Contributing",
     description:
-      "Build requirements, validation commands and contribution guidance for Nextcloud Native.",
+      "Build requirements, validation commands and contribution guidance for nati.ve.",
   },
   {
     file: "SECURITY.md",
@@ -194,9 +202,10 @@ function textOnly(source) {
 }
 
 function headingsFrom(source) {
-  return [...source.matchAll(/^#{2,4}\s+(.+)$/gm)].map((match) => ({
-    title: match[1].replace(/[`*_]/g, "").trim(),
-    anchor: slugify(match[1]),
+  return [...source.matchAll(/^(#{2,4})[\t ]+(.+)$/gm)].map((match) => ({
+    title: match[2].replace(/[`*_]/g, "").trim(),
+    anchor: slugify(match[2]),
+    level: match[1].length,
   }));
 }
 
@@ -453,12 +462,12 @@ await writeFile(
 const searchIndex = [
   {
     path: "/",
-    title: "Nextcloud Native for your complete Nextcloud account",
-    shortTitle: "Nextcloud Native",
+    title: "nati.ve for Android, Linux and Windows",
+    shortTitle: "nati.ve",
     description:
-      "One genuinely native client for Files, sync, Photos, Memories, Talk, groupware, installed apps, administration, and operating-system integration.",
+      "Open-source native Nextcloud alpha with Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
     text:
-      "Android iOS iPadOS Linux Windows macOS native Nextcloud client Files offline sync multiple accounts background transfer global search photo backup Memories Recognize Live Photos non-destructive editing Talk calls Mail Calendar Contacts Tasks Notes Deck Tables Cookbook Cospend Music Office Obsidian folder sync administration",
+      "Android Linux Windows native Nextcloud alpha Files offline sync multiple accounts background transfer global search photo backup Memories Recognize Live Photos Talk history Mail Calendar Contacts Tasks Notes Deck Tables Cookbook Cospend Music Obsidian folder sync planned iOS iPadOS macOS",
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
@@ -534,7 +543,7 @@ async function allProjectItems() {
 const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
 
 const githubRepositoryResult = await resolveGithubRepositoryData({
-  loadLive: () => githubJson("https://api.github.com/repos/Obiente/nc-native"),
+  loadLive: () => githubJson("https://api.github.com/repos/obiente/native"),
   loadSnapshot: async () => JSON.parse(await readFile(repositorySnapshotFile, "utf8")),
 });
 if (githubRepositoryResult.warning) {
@@ -555,7 +564,7 @@ try {
     allProjectItems(),
     githubProjectItems(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
-      "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
+      "https://api.github.com/repos/obiente/native/milestones?state=all&per_page=100",
     ),
   ]);
   const projectRoadmapItems = projectItems.map(roadmapItem).filter(Boolean);

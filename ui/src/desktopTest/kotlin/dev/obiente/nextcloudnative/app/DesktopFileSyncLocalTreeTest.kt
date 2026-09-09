@@ -26,9 +26,9 @@ class DesktopFileSyncLocalTreeTest {
                 ignoredPatterns = listOf("Photos/Ignore"),
             )
 
-            val entries = DesktopFileSyncLocalTree(root.toFile()).scan { path, kind ->
+            val entries = DesktopFileSyncLocalTree(root.toFile()).scan(includes = { path, kind ->
                 configuration.includesSyncPath(path, kind)
-            }.map { it.entry.relativePath }
+            }).map { it.entry.relativePath }
 
             assertEquals(listOf("Photos", "Photos/Keep", "Photos/Keep/a.RAF", "Photos/Keep/a.jpg"), entries)
         } finally {
@@ -187,7 +187,7 @@ class DesktopFileSyncLocalTreeTest {
             val tree = DesktopFileSyncLocalTree(
                 root.toFile(),
                 changeTokenProvider = { "stable-change-token" },
-            ) {
+            ) { _, _ ->
                 digestCount += 1
                 "a".repeat(64)
             }
@@ -214,7 +214,7 @@ class DesktopFileSyncLocalTreeTest {
             val tree = DesktopFileSyncLocalTree(
                 root.toFile(),
                 changeTokenProvider = { null },
-            ) {
+            ) { _, _ ->
                 digestCount += 1
                 "b".repeat(64)
             }
@@ -291,6 +291,52 @@ class DesktopFileSyncLocalTreeTest {
 
             assertTrue(Files.isDirectory(root.resolve("Albums/Shared")))
             assertFalse(root.toFile().walkTopDown().any { ".nextcloud-native-" in it.name })
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `oversized scan stops before hashing file content`() {
+        val root = Files.createTempDirectory("desktop-sync-capacity-")
+        try {
+            root.resolve("one.txt").writeText("one")
+            root.resolve("two.txt").writeText("two")
+            root.resolve("three.txt").writeText("three")
+            var digestCount = 0
+            val tree = DesktopFileSyncLocalTree(
+                root = root.toFile(),
+                maximumEntries = 2,
+            ) { _, _ ->
+                digestCount += 1
+                "c".repeat(64)
+            }
+
+            val failure = assertFailsWith<DesktopFileSyncScanLimitException> { tree.scan() }
+
+            assertEquals(2, failure.maximumEntries)
+            assertEquals(3, failure.observedEntries)
+            assertEquals(0, digestCount)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `scan cancellation stops before hashing file content`() {
+        val root = Files.createTempDirectory("desktop-sync-stop-")
+        try {
+            root.resolve("one.txt").writeText("one")
+            var digestCount = 0
+            val tree = DesktopFileSyncLocalTree(root.toFile()) { _, _ ->
+                digestCount += 1
+                "d".repeat(64)
+            }
+
+            assertFailsWith<DesktopFileSyncScanStoppedException> {
+                tree.scan(shouldContinue = { false })
+            }
+            assertEquals(0, digestCount)
         } finally {
             root.toFile().deleteRecursively()
         }

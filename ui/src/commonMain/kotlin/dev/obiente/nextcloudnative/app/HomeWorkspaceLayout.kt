@@ -208,10 +208,10 @@ fun defaultHomeWorkspaceLayout(scope: HomeWorkspaceScope): HomeWorkspaceLayout =
         sections = when (scope.formFactor) {
             HomeFormFactor.Phone -> listOf(
                 section(HomeSectionIds.QuickActions, visible = true, HomeSectionSize.Compact),
-                section(HomeSectionIds.RecentFiles, visible = true, HomeSectionSize.Comfortable),
-                section(HomeSectionIds.PhotoBackup, visible = true, HomeSectionSize.Compact),
                 section(HomeSectionIds.Upcoming, visible = true, HomeSectionSize.Compact),
                 section(HomeSectionIds.Activity, visible = true, HomeSectionSize.Compact),
+                section(HomeSectionIds.RecentFiles, visible = true, HomeSectionSize.Compact),
+                section(HomeSectionIds.PhotoBackup, visible = true, HomeSectionSize.Compact),
                 section(HomeSectionIds.Favorites, visible = false, HomeSectionSize.Compact),
                 section(HomeSectionIds.Storage, visible = false, HomeSectionSize.Compact),
             )

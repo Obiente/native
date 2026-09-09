@@ -64,7 +64,7 @@ PATH="$temporary/bin:$PATH" \
     FAKE_FAILURE_MARKER="$temporary/upload-failed" \
     FAKE_UPLOADED="$temporary/uploaded" \
     "$project_root/tools/promote-download-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     nightly-20260813-0800-run1-01234567 \
     "$temporary/assets"
@@ -93,7 +93,7 @@ PATH="$temporary/bin:$PATH" \
     FAKE_FAILURE_MARKER="$temporary/upload-failed" \
     FAKE_UPLOADED="$temporary/downgrade-uploaded" \
     "$project_root/tools/promote-download-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     nightly-20260813-0800-run1-01234567 \
     "$temporary/assets"
@@ -113,7 +113,7 @@ if PATH="$temporary/bin:$PATH" \
     FAKE_FAIL_UPLOAD_ONCE="nextcloud-native-windows-x86_64.msi" \
     FAKE_UPLOADED="$temporary/failed-uploaded" \
     "$project_root/tools/promote-download-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     nightly-20260815-0800-run3-fedcba98 \
     "$temporary/assets"; then

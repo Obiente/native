@@ -3,11 +3,130 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FileSyncCoordinatorTest {
+    @Test
+    fun `verified content mismatch survives unchanged scans without another read`() {
+        val local = LocalSyncEntry("same-name.md", SyncEntryKind.File, "local-1", size = 42L)
+        val remote = RemoteSyncEntry("same-name.md", SyncEntryKind.File, "remote-1", size = 42L)
+        val mismatch = FileSyncContentVerificationCandidate("same-name.md", "local-1", "remote-1", 42L)
+        val localDigest = "sha256:" + "44".repeat(32)
+
+        var scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 10L,
+            verifiedContentMismatches = listOf(mismatch),
+            verifiedContentMismatchHashes = mapOf(mismatch.relativePath to localDigest),
+        )
+
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(localDigest, scanned.pair().workItems.single().contentMismatchLocalHash)
+        assertEquals(listOf(mismatch), scanned.pair().knownFileSyncContentMismatches())
+        assertEquals(
+            listOf(FileSyncContentVerificationResult(mismatch, localDigest, null)),
+            scanned.pair().knownFileSyncContentMismatchResults(),
+        )
+        assertEquals(
+            emptyList(),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+
+        scanned = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(scanned))
+        scanned = scanFileSyncPair(scanned, PAIR_ID, listOf(local), listOf(remote), nowEpochMillis = 20L)
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(
+            listOf(mismatch.copy(remoteEtag = "remote-2")),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote.copy(etag = "remote-2")),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+    }
+
+    @Test
+    fun `conflict batch validates every choice before changing coordinator state`() {
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-2")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-2")),
+            nowEpochMillis = 10L,
+        )
+        val conflicts = scanned.pair().workItems
+        val resolved = resolveFileSyncDecisions(
+            scanned,
+            PAIR_ID,
+            conflicts.map { work ->
+                FileSyncConflictResolution(work.id, FileSyncDecisionChoice.UseLocal)
+            },
+        )
+
+        assertTrue(resolved.pair().workItems.all { it.state == FileSyncExecutionState.Ready })
+        assertTrue(resolved.pair().workItems.all { it.operation is FileSyncOperation.Upload })
+
+        val invalid = listOf(
+            FileSyncConflictResolution(conflicts.first().id, FileSyncDecisionChoice.UseLocal),
+            FileSyncConflictResolution(conflicts.last().id, FileSyncDecisionChoice.PropagateDeletion),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            resolveFileSyncDecisions(scanned, PAIR_ID, invalid)
+        }
+        assertTrue(scanned.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+    }
+
+    @Test
+    fun `rejected stale batch can be rescanned from the pre-decision state`() {
+        val original = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-1")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val workIds = original.pair().workItems.mapTo(mutableSetOf(), FileSyncWorkItem::id)
+        val resolved = resolveFileSyncDecisions(
+            original,
+            PAIR_ID,
+            workIds.map { FileSyncConflictResolution(it, FileSyncDecisionChoice.UseLocal) },
+        )
+        val latestLocal = listOf(local("one.md", "local-2"), local("two.md", "local-1"))
+        val latestRemote = listOf(remote("one.md", "remote-2"), remote("two.md", "remote-1"))
+        val partiallyRetained = scanFileSyncPair(
+            resolved,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+
+        assertTrue(!partiallyRetained.pair().retainsResolvedFileSyncDecisions(workIds))
+        assertTrue(partiallyRetained.pair().workItems.any { it.state == FileSyncExecutionState.Ready })
+
+        val rejected = scanFileSyncPair(
+            original,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+        assertTrue(rejected.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+        assertTrue(rejected.pair().workItems.all { it.decision?.state == FileSyncDecisionState.Pending })
+    }
+
     @Test
     fun `conflict decision becomes guarded command and baseline advances only after verification`() {
         val baseline = baseline("Vault/today.md", "local-1", "remote-1")
@@ -53,6 +172,16 @@ class FileSyncCoordinatorTest {
             FileSyncExecutionSuccess(synchronizedBaselines = listOf(verified)),
         )
 
+        assertEquals(listOf(verified), state.pair().baselines)
+        assertEquals(emptyList(), state.pair().workItems)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local("Vault/today.md", "local-2")),
+            listOf(remote("Vault/today.md", "remote-3")),
+            nowEpochMillis = 30,
+        )
         assertEquals(listOf(verified), state.pair().baselines)
         assertEquals(emptyList(), state.pair().workItems)
     }
@@ -374,7 +503,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-1", "remote-1")),
+            listOf(baseline("Vault/today.md", "local-1", "remote-1", digest)),
             state.pair().baselines,
         )
 
@@ -387,7 +516,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-2", "remote-2")),
+            listOf(baseline("Vault/today.md", "local-2", "remote-2", digest)),
             state.pair().baselines,
         )
     }
@@ -527,6 +656,197 @@ class FileSyncCoordinatorTest {
         assertEquals(FileSyncExecutionState.Ready, reset.state)
         assertEquals(0, reset.attemptCount)
         assertNull(reset.failureMessage)
+    }
+
+    @Test
+    fun `rescan retains abandoned upload ownership until remote cleanup completes`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val workId = coordinator.pair().workItems.single().id
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, 20L).state
+        coordinator = checkpointFileSyncUpload(
+            coordinator,
+            PAIR_ID,
+            workId,
+            newFileSyncUploadCheckpoint(
+                "01234567-89ab-cdef-0123-456789abcdef",
+                local.revision,
+                nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+                contentRevision = "sha256:${"4".repeat(64)}",
+            ).let { checkpoint ->
+                checkpoint.copy(
+                    uploadedChunks = checkpoint.chunkCount,
+                    commitInFlight = true,
+                    assembledStageEtag = "stage-etag",
+                )
+            },
+        )
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Interrupted upload")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 30L,
+        )
+
+        val cleanup = coordinator.pair().pendingUploadCleanups.single()
+        assertEquals("large.bin", cleanup.relativePath)
+        assertEquals("stage-etag", cleanup.assembledStageEtag)
+        assertEquals(cleanup, fileSyncOwnedUploads(coordinator.pair()).single())
+        assertFailsWith<IllegalArgumentException> { removeFileSyncPair(coordinator, PAIR_ID) }
+
+        coordinator = completeFileSyncUploadCleanup(coordinator, PAIR_ID, cleanup.uploadId)
+        assertTrue(fileSyncOwnedUploads(coordinator.pair()).isEmpty())
+        assertTrue(removeFileSyncPair(coordinator, PAIR_ID).pairs.isEmpty())
+    }
+
+    @Test
+    fun `rescan retains commit in flight work when publication changed the destination etag`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val original = coordinator.pair().workItems.single()
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+            contentRevision = "sha256:${"4".repeat(64)}",
+        ).let { progress ->
+            progress.copy(
+                uploadedChunks = progress.chunkCount,
+                commitInFlight = true,
+                assembledStageEtag = "published-etag",
+            )
+        }
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, original.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, original.id, "Publication response was lost")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(RemoteSyncEntry("large.bin", SyncEntryKind.File, "published-etag", local.size)),
+            nowEpochMillis = 30L,
+        )
+
+        val retained = coordinator.pair().workItems.single()
+        assertEquals(original.id, retained.id)
+        assertEquals(checkpoint, retained.uploadCheckpoint)
+        assertEquals(original.operation, retained.operation)
+        assertTrue(coordinator.pair().pendingUploadCleanups.isEmpty())
+    }
+
+    @Test
+    fun `rescan replans commit in flight work when another client changed the destination`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val original = coordinator.pair().workItems.single()
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+        ).let { progress ->
+            progress.copy(
+                uploadedChunks = progress.chunkCount,
+                commitInFlight = true,
+                assembledStageEtag = "owned-stage-etag",
+            )
+        }
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, original.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, original.id, "Guarded publication failed")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(RemoteSyncEntry("large.bin", SyncEntryKind.File, "concurrent-etag", local.size)),
+            nowEpochMillis = 30L,
+        )
+
+        val replanned = coordinator.pair().workItems.single()
+        assertFalse(replanned.id == original.id)
+        assertEquals(null, replanned.uploadCheckpoint)
+        assertEquals("concurrent-etag", (replanned.operation as FileSyncOperation.Upload).expectedRemoteEtag)
+        assertEquals(checkpoint.uploadId, coordinator.pair().pendingUploadCleanups.single().uploadId)
+        assertNull(claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 40L).command)
+    }
+
+    @Test
+    fun `replacement backup generation remains durable after upload work is abandoned`() {
+        val local = LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        val remote = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(remote),
+            nowEpochMillis = 10L,
+        )
+        val work = coordinator.pair().workItems.single()
+        coordinator = resolveFileSyncDecision(
+            coordinator,
+            PAIR_ID,
+            work.id,
+            FileSyncDecisionChoice.UseLocal,
+        )
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+        )
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, work.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, work.id, "Upload interrupted")
+
+        assertEquals(
+            mapOf(checkpoint.uploadId to remote.etag),
+            fileSyncOwnedReplacementBackupEtags(coordinator.pair()),
+        )
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(remote),
+            nowEpochMillis = 30L,
+        )
+
+        assertEquals(remote.etag, coordinator.pair().pendingUploadCleanups.single().replacementBackupEtag)
     }
 
     @Test
@@ -856,8 +1176,12 @@ class FileSyncCoordinatorTest {
     private fun remote(path: String, etag: String, contentHash: String? = null) =
         RemoteSyncEntry(path, SyncEntryKind.File, etag, contentHash = contentHash)
 
-    private fun baseline(path: String, localRevision: String, remoteEtag: String) =
-        FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag)
+    private fun baseline(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        contentHash: String? = null,
+    ) = FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag, contentHash)
 
     private companion object {
         const val PAIR_ID = "obsidian-notes"

@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,6 +42,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
+import kotlin.time.Instant
 
 /**
  * Bounded transfer-history surface.
@@ -78,7 +81,7 @@ internal fun MediaTransferCenterScreen(
             onBack = onBack,
         )
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.widthIn(max = 1100.dp).fillMaxSize(),
             state = listState,
             contentPadding = PaddingValues(NextcloudSpacing.XLarge),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -126,7 +129,7 @@ internal fun MediaTransferCenterScreen(
                             )
                             if (statusMessageIsError) {
                                 OutlinedButton(enabled = !loading, onClick = onRetry) {
-                                    Text("Try again")
+                                    Text("Refresh history")
                                 }
                             }
                         }
@@ -229,21 +232,17 @@ private fun MediaTransferSummary(summary: MediaBackupLedgerSummary) {
             modifier = Modifier.padding(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
-            Text("Upload activity", style = MaterialTheme.typography.titleMedium)
             Text(
                 "${summary.uploading} active | ${summary.pending} pending",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(
-                "${summary.failed} need attention | ${summary.succeeded} completed",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (summary.failed > 0) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text("${summary.failed} need attention", style = MaterialTheme.typography.bodySmall,
+                    color = if (summary.failed > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${summary.succeeded} completed", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (summary.uploading > 0) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
@@ -260,41 +259,32 @@ private fun MediaTransferFilters(
     onClearCompleted: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Column(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            items(MediaTransferSection.entries, key = MediaTransferSection::name) { section ->
-                FilterChip(
-                    selected = selected == section,
-                    onClick = { onSelect(section) },
-                    label = { Text("${section.label()} ${summary.count(section)}") },
-                )
-            }
+        MediaTransferSection.entries.forEach { section ->
+            FilterChip(
+                selected = selected == section,
+                onClick = { onSelect(section) },
+                label = { Text("${section.label()} ${summary.count(section)}") },
+            )
         }
         if (selected == MediaTransferSection.Completed) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                NextcloudCardOverflow(
-                    itemLabel = "transfer history",
-                    actions = listOf(
-                        NextcloudCardAction(
-                            label = "Clear completed history",
-                            destructive = true,
-                            enabled = summary.succeeded > 0 && clearEnabled,
-                            onClick = onClearCompleted,
-                        ),
+            NextcloudCardOverflow(
+                itemLabel = "transfer history",
+                actions = listOf(
+                    NextcloudCardAction(
+                        label = "Clear completed history",
+                        destructive = true,
+                        enabled = summary.succeeded > 0 && clearEnabled,
+                        onClick = onClearCompleted,
                     ),
-                    expanded = menuExpanded,
-                    onExpandedChange = { menuExpanded = it },
-                )
-            }
+                ),
+                expanded = menuExpanded,
+                onExpandedChange = { menuExpanded = it },
+            )
         }
     }
 }
@@ -367,7 +357,7 @@ private fun MediaTransferCard(
             }
             val metadata = buildList {
                 record.local?.size?.let { add(formatTransferBytes(it)) }
-                if (record.attemptCount > 0) add("Attempt ${record.attemptCount}")
+                add(mediaTransferProgressLabel(record))
             }
             if (metadata.isNotEmpty()) {
                 Text(
@@ -387,6 +377,15 @@ private fun MediaTransferCard(
             }
         }
     }
+}
+
+internal fun mediaTransferProgressLabel(record: MediaBackupLedgerRecord): String = when (record.transferState) {
+    MediaBackupTransferState.Pending -> "Waiting to upload"
+    MediaBackupTransferState.Uploading -> "Uploading"
+    MediaBackupTransferState.Failed -> if (record.attemptCount == 1) "1 failed attempt" else "${record.attemptCount} failed attempts"
+    MediaBackupTransferState.Succeeded -> record.receipt?.let {
+        "Verified ${Instant.fromEpochMilliseconds(it.verifiedAtEpochMillis).toString().replace('T', ' ').take(16)} UTC"
+    } ?: "Upload verified"
 }
 
 private fun MediaTransferSection.label(): String = when (this) {

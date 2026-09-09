@@ -374,7 +374,6 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     val navigationLinks = acyclicNavigationLinks(actionsById)
     val rootDestinations = layouts
         .asSequence()
-        .filter(DynamicLayout::isRootNavigationLayout)
         .mapNotNull { layout ->
             val action = layout.sourceActionId?.let(actionsById::get) ?: return@mapNotNull null
             action.takeIf(DynamicAction::isRootReadAction)
@@ -409,14 +408,17 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         ) {
             return@mapNotNull null
         }
-        if (rootResourceIds.none { root -> root.sameResourceAs(form.resourceId) }) return@mapNotNull null
+        val belongsToVisibleRoot = rootResourceIds.any { root -> root.sameResourceAs(form.resourceId) }
+        if (!belongsToVisibleRoot) return@mapNotNull null
         DynamicNavigationFormAction(
             formId = form.id,
             label = form.title,
             resourceId = form.resourceId,
             actionId = action.id,
         )
-    }.distinctBy { action -> action.label.normalizedActionLabel() }
+    }.distinctBy { action ->
+        action.resourceId.resourceIdentity() to action.label.normalizedActionLabel()
+    }
         .sortedWith(compareBy(DynamicNavigationFormAction::label, DynamicNavigationFormAction::formId))
 
     if (selectedRecord == null) return DynamicNavigationPlan(rootDestinations, rootForms)
@@ -526,8 +528,8 @@ private fun DynamicAction.isVerifiedCompiledUploadForm(form: DynamicForm): Boole
     return intent == ActionIntent.execute &&
         effect == ActionEffect.upload &&
         risk == ActionRisk.mutating &&
-        hasVerifiedDynamicContractEvidence() &&
-        form.hasVerifiedDynamicContractEvidence() &&
+        hasTrustedRootMutationEvidence() &&
+        form.hasTrustedRootMutationEvidence() &&
         form.resourceId.sameResourceAs(resourceId) &&
         fileSchema["type"] == JsonPrimitive("string") &&
         fileSchema["format"] == JsonPrimitive("binary") &&
@@ -804,35 +806,15 @@ private fun DynamicLayout.isCollectionNavigationLayout(): Boolean = kind == Layo
 private fun DynamicLayout.isContextualNavigationLayout(): Boolean =
     isCollectionNavigationLayout() || kind == LayoutKind.detail
 
-private fun DynamicLayout.isRootNavigationLayout(): Boolean =
-    isCollectionNavigationLayout() || kind == LayoutKind.detail && resourceId.rootSingletonIdentity() in ROOT_SINGLETON_IDENTITIES
-
-private fun String.rootSingletonIdentity(): String = lowercase().filter(Char::isLetterOrDigit)
-
-private val ROOT_SINGLETON_IDENTITIES = setOf(
-    "capabilities",
-    "config",
-    "configuration",
-    "household",
-    "prefs",
-    "preferences",
-    "profile",
-    "settings",
-    "status",
-    "team",
-)
-
 private fun DynamicAction.isCollectionReadAction(): Boolean =
-    binding.method == HttpMethod.GET && intent == ActionIntent.list && risk == ActionRisk.readOnly
-
-private fun DynamicAction.isContextualReadAction(): Boolean =
-    binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) && risk == ActionRisk.readOnly
+    isContextualReadAction() && intent == ActionIntent.list
 
 private fun DynamicAction.isRootReadAction(): Boolean =
     binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
         risk == ActionRisk.readOnly &&
         !binding.hasUnboundRequiredBodyFields() &&
-        !isInteractiveLookupHelper()
+        !isInteractiveLookupHelper() &&
+        hasPositiveRootReadEvidence()
 
 /**
  * Search-as-you-type endpoints are data sources for relation pickers, not standalone app roots.

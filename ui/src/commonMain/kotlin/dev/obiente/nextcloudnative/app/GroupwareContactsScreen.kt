@@ -56,31 +56,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 
-private sealed interface ContactsLoadState {
-    data object Loading : ContactsLoadState
-    data class Ready(
-        val addressBooks: List<GroupwareAddressBook>,
-        val contacts: List<GroupwareContact>,
-    ) : ContactsLoadState
-    data class Error(val message: String) : ContactsLoadState
-}
-
-private object ContactsWorkspaceMemoryCache {
-    private val entries = linkedMapOf<String, ContactsLoadState.Ready>()
-
-    fun get(session: NextcloudSession, userId: String): ContactsLoadState.Ready? {
-        val key = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId"
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, userId: String, value: ContactsLoadState.Ready) {
-        val key = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId"
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_CONTACT_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativeGroupwareContactsScreen(
@@ -108,6 +83,8 @@ fun NativeGroupwareContactsScreen(
     var loadAttempt by remember { mutableStateOf(0) }
     var selectedContactHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
+    var editingContact by remember(accountScope) { mutableStateOf<GroupwareContact?>(null) }
+    var editLoading by remember(accountScope) { mutableStateOf(false) }
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
@@ -131,6 +108,7 @@ fun NativeGroupwareContactsScreen(
         if (navigationCommitInProgress) {
             creating = false
             editing = false
+            editingContact = null
         }
     }
 
@@ -238,7 +216,7 @@ fun NativeGroupwareContactsScreen(
     LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
         if (!mutationRecoveryLoaded) return@LaunchedEffect
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
-            runCatching {
+            runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavDetailRequest(postcondition.href),
@@ -255,7 +233,7 @@ fun NativeGroupwareContactsScreen(
         } else {
             refreshing = true
         }
-        runCatching {
+        runCatchingPreservingCancellation {
             val principal = parseGroupwarePrincipalHref(
                 services.executeGroupwareDav(session, groupwareDavPrincipalDiscoveryRequest()),
             )
@@ -268,23 +246,22 @@ fun NativeGroupwareContactsScreen(
                 groupwareDavCollectionDiscoveryRequest(addressBookHome),
             )
             val addressBooks = parseGroupwareAddressBooks(discovery)
+            val retentionBudget = GroupwareContactRetentionBudget()
+            var concurrentlyDeletedObjectCount = 0
             val contacts = addressBooks.flatMap { addressBook ->
-                parseGroupwareContacts(
-                    addressBook.href,
-                    services.executeGroupwareDav(
-                        session,
-                        groupwareDavCollectionQueryRequest(
-                            collectionHref = addressBook.href,
-                            kind = GroupwareDavKind.Contact,
-                            maxResults = 250,
-                        ),
-                    ),
-                )
+                loadGroupwareContactsInBatches(
+                    addressBookHref = addressBook.href,
+                    retentionBudget = retentionBudget,
+                    onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+                ) { request -> services.executeGroupwareDav(session, request) }
             }.sortedBy { it.displayName.lowercase() }
-            ContactsLoadState.Ready(addressBooks, contacts)
+            ContactsLoadState.Ready(addressBooks, contacts) to concurrentlyDeletedObjectCount
         }.onSuccess { loaded ->
-            state = loaded
-            ContactsWorkspaceMemoryCache.store(session, userId, loaded)
+            state = loaded.first
+            ContactsWorkspaceMemoryCache.store(session, userId, loaded.first)
+            if (loaded.second > 0) {
+                refreshError = "${loaded.second} contacts changed during refresh; the remaining contacts are current."
+            }
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
                     if (!clearMutationRecovery()) return@onSuccess
@@ -292,6 +269,7 @@ fun NativeGroupwareContactsScreen(
                         is ContactMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
                             editing = false
+                            editingContact = null
                             selectedContactHref = null
                         }
                         is ContactMutationPostcondition.Delete -> selectedContactHref = null
@@ -314,10 +292,53 @@ fun NativeGroupwareContactsScreen(
 
     val ready = state as? ContactsLoadState.Ready
     val selected = ready?.contacts?.firstOrNull { contact -> contact.href == selectedContactHref }
+    val selectedAddressBook = ready?.addressBooks?.firstOrNull { addressBook ->
+        addressBook.href == selected?.addressBookHref
+    }
     LaunchedEffect(ready, selectedContactHref) {
         if (ready != null && selectedContactHref != null && selected == null) {
             selectedContactHref = null
             editing = false
+            editingContact = null
+        }
+    }
+    LaunchedEffect(
+        editing,
+        selected?.href,
+        selectedAddressBook?.href,
+        mutationInProgress,
+        services,
+        session,
+    ) {
+        if (mutationInProgress || !contactEditRequiresFullLoad(editing, selected?.href, editingContact?.href)) {
+            return@LaunchedEffect
+        }
+        val contact = selected ?: run {
+            editing = false
+            return@LaunchedEffect
+        }
+        val addressBook = selectedAddressBook?.takeIf(GroupwareAddressBook::writable) ?: run {
+            editing = false
+            return@LaunchedEffect
+        }
+        editLoading = true
+        mutationError = null
+        try {
+            val loaded = loadGroupwareContactForEditing(
+                addressBook.href,
+                contact.href,
+                contact.etag,
+            ) { request -> services.executeGroupwareDav(session, request) }
+            if (editing && selectedContactHref == contact.href) editingContact = loaded
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            if (selectedContactHref == contact.href) {
+                editing = false
+                mutationError = "The complete contact could not be loaded for editing. Try again."
+            }
+        } finally {
+            editLoading = false
         }
     }
     val editorVisible = creating ||
@@ -525,23 +546,26 @@ fun NativeGroupwareContactsScreen(
     }
 
     selected?.let { contact ->
-        val addressBook = ready.addressBooks.firstOrNull { it.href == contact.addressBookHref }
-        if (editing && addressBook != null) {
+        val addressBook = selectedAddressBook
+        val fullContact = editingContact?.takeIf { it.href == contact.href }
+        if (editing && addressBook != null && fullContact != null) {
             ContactEditorDialog(
-                contact = contact,
+                contact = fullContact,
                 addressBooks = listOf(addressBook),
                 error = mutationError,
-                onDismiss = { editing = false; mutationError = null },
+                onDismiss = { editing = false; editingContact = null; mutationError = null },
                 mutationInProgress = mutationInProgress,
                 recoveryAvailable = mutationRecoveryState != null,
                 onOpenRecovery = {
                     editing = false
+                    editingContact = null
                     showRecoveryOptions = true
                 },
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationDiscardConfirmed = { request ->
                     editing = false
+                    editingContact = null
                     onNavigationConfirmed(request)
                 },
                 onNavigationCancelled = onNavigationCancelled,
@@ -552,19 +576,19 @@ fun NativeGroupwareContactsScreen(
                         },
                     ) {
                         val content = updateGroupwareContactContent(
-                            contact, draft.name, draft.email, draft.phone,
+                            fullContact, draft.name, draft.email, draft.phone,
                             draft.organization, draft.address, draft.notes,
                         )
                         content to GroupwareDavMutationSpec(
                             kind = GroupwareDavKind.Contact,
                             mutation = GroupwareDavMutation.Update,
-                            objectHref = contact.href,
-                            etag = contact.etag,
+                            objectHref = fullContact.href,
+                            etag = fullContact.etag,
                             content = content,
                         ).toGroupwareDavRequest()
                     } ?: return@save
                     val (updatedContent, request) = prepared
-                    val postcondition = contactUpdatePostcondition(contact, draft, updatedContent)
+                    val postcondition = contactUpdatePostcondition(fullContact, draft, updatedContent)
                     if (postcondition == null) {
                         mutationError = "The updated contact could not be verified locally. Check its fields and try again."
                         return@save
@@ -586,6 +610,7 @@ fun NativeGroupwareContactsScreen(
                                 return@launch
                             }
                             editing = false
+                            editingContact = null
                             selectedContactHref = null
                             loadAttempt += 1
                         } catch (failure: CancellationException) {
@@ -601,9 +626,19 @@ fun NativeGroupwareContactsScreen(
             ContactDetailDialog(
                 contact = contact,
                 canEdit = !mutationInProgress && addressBook?.writable == true && contact.etag != null,
+                editLoading = editLoading,
                 error = mutationError,
-                onDismiss = { selectedContactHref = null; mutationError = null },
-                onEdit = { if (!mutationInProgress) editing = true },
+                onDismiss = {
+                    selectedContactHref = null
+                    editingContact = null
+                    mutationError = null
+                },
+                onEdit = {
+                    if (!mutationInProgress && !editLoading) {
+                        mutationError = null
+                        editing = true
+                    }
+                },
                 onDelete = { if (!mutationInProgress) confirmDelete = true },
             )
         }
@@ -676,7 +711,6 @@ fun NativeGroupwareContactsScreen(
     }
 }
 
-private const val MAXIMUM_RETAINED_CONTACT_ACCOUNTS = 4
 private const val CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE =
     "The server response was interrupted, so the contact result is unknown. " +
         "Refresh to verify it before trying another change."
@@ -745,42 +779,6 @@ private fun ContactsError(message: String, retry: () -> Unit) {
         Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
         Button(onClick = retry) { Text("Try again") }
     }
-}
-
-@Composable
-private fun ContactDetailDialog(
-    contact: GroupwareContact,
-    canEdit: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(NextcloudIcons.app("contacts"), contentDescription = null) },
-        title = { Text(contact.displayName) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                contact.organization?.let { Text(it, fontWeight = FontWeight.SemiBold) }
-                contact.emails.forEach { Text(it) }
-                contact.phones.forEach { Text(it) }
-                contact.address?.let { Text(it) }
-                contact.birthday?.let { Text("Birthday: $it") }
-                contact.notes?.let { Text(it) }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            }
-        },
-        confirmButton = {
-            if (canEdit) TextButton(onClick = onEdit) { Text("Edit") }
-            else TextButton(onClick = onDismiss) { Text("Close") }
-        },
-        dismissButton = {
-            if (canEdit) TextButton(onClick = onDelete) {
-                Text("Delete", color = MaterialTheme.colorScheme.error)
-            }
-        },
-    )
 }
 
 @Serializable

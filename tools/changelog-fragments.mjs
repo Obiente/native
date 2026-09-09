@@ -125,7 +125,7 @@ export function parseFragment(source, relativePath = "fragment.md") {
 
   const issue = parseReference(metadata.get("issue"), "issue", relativePath);
   const pull = parseReference(metadata.get("pull"), "pull", relativePath);
-  if (issue === null && pull === null) {
+  if (issue === null && pull === null && category !== "internal") {
     fail(`${relativePath}: provide an issue or pull request reference.`);
   }
 
@@ -360,7 +360,7 @@ export function composeReleaseNotes(version, fragments) {
   });
   if (!body) fail("No user-facing unreleased fragments are available.");
   return [
-    `# Nextcloud Native ${version}`,
+    `# nati.ve ${version}`,
     "",
     body,
     "",

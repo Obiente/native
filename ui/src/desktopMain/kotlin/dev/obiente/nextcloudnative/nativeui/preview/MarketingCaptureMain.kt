@@ -46,7 +46,7 @@ fun main(arguments: Array<String>) {
     }
 }
 
-private fun captureMarketingScreenshots(
+private suspend fun captureMarketingScreenshots(
     arguments: Array<String>,
     captureContext: CoroutineContext,
 ) {
@@ -143,7 +143,7 @@ private fun captureMarketingScreenshots(
     }
 }
 
-private fun capture(
+private suspend fun capture(
     output: Path,
     width: Int,
     height: Int,
@@ -186,6 +186,7 @@ private fun capture(
         repeat(warmUpFrames) {
             scene.render().close()
         }
+        settleShellSwitcherCapture(scenario, scene)
         val rendered = scene.render()
         try {
             rawMediaCapture?.verify()

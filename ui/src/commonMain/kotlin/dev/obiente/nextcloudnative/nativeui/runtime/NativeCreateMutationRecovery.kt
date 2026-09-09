@@ -164,7 +164,8 @@ internal fun nativeChoresInviteMutationRecoveryPlan(
         activeReadAction.binding.method != HttpMethod.GET ||
         activeReadAction.binding.path != "/apps/chores/api/v1.0/team" ||
         activeReadAction.resourceId != resource.id ||
-        action.confidence != Confidence.verified || activeReadAction.confidence != Confidence.verified ||
+        !action.hasSignedPackageMutationConfidence() ||
+        !activeReadAction.hasSignedPackageMutationConfidence() ||
         action.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
     ) {
@@ -209,7 +210,8 @@ internal fun nativeCreateMutationRecoveryPlan(
         !collectionComplete || records.size > MAX_CREATE_BASELINE_RECORDS ||
         action.intent != ActionIntent.create || action.effect != ActionEffect.create ||
         action.risk == ActionRisk.readOnly || action.binding.method != HttpMethod.POST ||
-        action.confidence != Confidence.verified || activeReadAction.confidence != Confidence.verified ||
+        !action.hasSignedPackageMutationConfidence() ||
+        !activeReadAction.hasSignedPackageMutationConfidence() ||
         action.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.intent !in setOf(ActionIntent.list, ActionIntent.read) ||
@@ -273,7 +275,7 @@ internal suspend fun executeNativeCreateMutation(
     pendingMutationStore: NativePendingMutationStore,
 ): NativeActionExecutionResult {
     val key = plan.pendingKey
-    val existing = runCatching { pendingMutationStore.load(key) }.getOrElse { failure ->
+    val existing = runCatchingUnlessCancelled { pendingMutationStore.load(key) }.getOrElse { failure ->
         return NativeActionExecutionResult.Failure(
             failure.message ?: "The saved create recovery marker could not be read.",
             NativeActionFailureOutcome.Unknown,
@@ -289,8 +291,8 @@ internal suspend fun executeNativeCreateMutation(
             )
         val matchesCurrentRequest = pending.requestValues == request.values &&
             pending.confirmed == request.confirmed
-        if (runCatching { pendingMutationStore.postconditionSatisfied(key, existing) }.getOrDefault(false)) {
-            runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
+        if (runCatchingUnlessCancelled { pendingMutationStore.postconditionSatisfied(key, existing) }.getOrDefault(false)) {
+            runCatchingUnlessCancelled { pendingMutationStore.clear(key) }.getOrElse { failure ->
                 return NativeActionExecutionResult.Failure(
                     failure.message ?: "The confirmed create recovery marker could not be cleared.",
                     NativeActionFailureOutcome.Unknown,
@@ -306,7 +308,7 @@ internal suspend fun executeNativeCreateMutation(
                 NativeActionFailureOutcome.Unknown,
             )
         } else if (!matchesCurrentRequest) {
-            runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
+            runCatchingUnlessCancelled { pendingMutationStore.clear(key) }.getOrElse { failure ->
                 return NativeActionExecutionResult.Failure(
                     failure.message ?: "The superseded staged create could not be cleared.",
                     NativeActionFailureOutcome.Rejected,
@@ -327,7 +329,7 @@ internal suspend fun executeNativeCreateMutation(
                 "This create request could not be staged safely.",
                 NativeActionFailureOutcome.Rejected,
             )
-        runCatching { pendingMutationStore.save(key, stagedMarker) }.getOrElse { failure ->
+        runCatchingUnlessCancelled { pendingMutationStore.save(key, stagedMarker) }.getOrElse { failure ->
             return NativeActionExecutionResult.Failure(
                 failure.message ?: "This create request could not be staged safely.",
                 NativeActionFailureOutcome.Rejected,
@@ -336,7 +338,7 @@ internal suspend fun executeNativeCreateMutation(
     }
     val transportMarker = stagedMarker +
         (CREATE_MARKER_PHASE_KEY to NativeCreateMutationPhase.TransportMayHaveObserved.name)
-    runCatching { pendingMutationStore.save(key, transportMarker) }.getOrElse { failure ->
+    runCatchingUnlessCancelled { pendingMutationStore.save(key, transportMarker) }.getOrElse { failure ->
         return NativeActionExecutionResult.Failure(
             failure.message ?: "This create request could not enter its durable send phase.",
             NativeActionFailureOutcome.Rejected,
@@ -346,7 +348,7 @@ internal suspend fun executeNativeCreateMutation(
     if ((result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected) {
         // A definitive rejection is safe to retry. Restore the pre-transport phase before clearing
         // so a failed clear cannot leave a known-rejected request permanently marked ambiguous.
-        return runCatching {
+        return runCatchingUnlessCancelled {
             pendingMutationStore.save(key, checkNotNull(stagedMarker))
             pendingMutationStore.clear(key)
         }.fold(
@@ -359,7 +361,10 @@ internal suspend fun executeNativeCreateMutation(
             },
         )
     }
-    if (runCatching { pendingMutationStore.postconditionSatisfied(key, transportMarker) }.getOrDefault(false)) {
+    if (runCatchingUnlessCancelled {
+            pendingMutationStore.postconditionSatisfied(key, transportMarker)
+        }.getOrDefault(false)
+    ) {
         return clearConfirmedCreateMarker(pendingMutationStore, key)
     }
     return when (result) {
@@ -442,7 +447,7 @@ internal fun nativeCreateMutationPostcondition(
 private suspend fun clearConfirmedCreateMarker(
     store: NativePendingMutationStore,
     key: NativePendingMutationKey,
-): NativeActionExecutionResult = runCatching { store.clear(key) }.fold(
+): NativeActionExecutionResult = runCatchingUnlessCancelled { store.clear(key) }.fold(
     onSuccess = { NativeActionExecutionResult.Success("The created record is confirmed by the server.") },
     onFailure = { failure ->
         NativeActionExecutionResult.Failure(
@@ -565,6 +570,10 @@ private fun NativeRecord.completeStructuredObjectList(fieldId: String): List<Map
         }
     }
 }
+
+private fun ActionSpec.hasSignedPackageMutationConfidence(): Boolean =
+    confidence in setOf(Confidence.high, Confidence.verified) &&
+        evidence.any { item -> item.source == EvidenceSource.verifiedAppPackage }
 
 private fun nativeCreateExpectedIdentity(values: Map<String, String>): String = publicContentSha256(
     values.toSortedMap().entries.joinToString("\u0000") { (name, value) -> "$name\u0000$value" }

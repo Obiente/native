@@ -89,7 +89,6 @@ internal class DesktopFileSyncStore(
             connection.close()
         }
     }
-
     @Synchronized
     fun loadPair(pairId: String): DesktopFileSyncPersistedState {
         require(pairId.isNotBlank() && pairId.length <= 256)
@@ -113,7 +112,7 @@ internal class DesktopFileSyncStore(
             migrateLegacyState(connection)
             val pairs = readPairRecords(connection).filter { it.accountId == accountId }
             val rootIds = pairs.mapTo(mutableSetOf(), FileSyncPair::localRootId)
-            val roots = readRoots(connection).filter { it.id in rootIds }
+            val roots = readDesktopFileSyncRoots(connection).filter { it.id in rootIds }
             val completedCounts = pairs.associate { pair ->
                 pair.id to countPairRows(connection, "sync_baselines", pair.id, MAX_FILE_SYNC_ENTRIES)
             }
@@ -149,10 +148,17 @@ internal class DesktopFileSyncStore(
             migrateLegacyState(connection)
             val before = readPairState(connection, pairId).coordinator.pairs.singleOrNull()
             transaction(connection) {
-                upsertRootRecord(connection, root)
+                upsertDesktopFileSyncRoot(connection, root)
                 upsertPairRecord(connection, pair)
-                persistBaselines(connection, pairId, before?.baselines.orEmpty(), pair.baselines)
+                persistDesktopFileSyncBaselines(connection, pairId, before?.baselines.orEmpty(), pair.baselines)
+                persistDesktopFileSyncContentVerificationProgress(
+                    connection,
+                    pairId,
+                    before?.contentVerificationProgress.orEmpty(),
+                    pair.contentVerificationProgress,
+                )
                 persistWork(connection, pairId, before?.workItems.orEmpty(), pair.workItems)
+                persistDesktopFileSyncPairUploadCleanups(connection, pairId, before, pair)
                 putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
             }
         } finally {
@@ -187,6 +193,7 @@ internal class DesktopFileSyncStore(
         workItem: FileSyncWorkItem?,
         synchronizedBaselines: List<FileSyncBaseline> = emptyList(),
         removedBaselinePaths: Set<String> = emptySet(),
+        uploadCleanupChange: DesktopFileSyncUploadCleanupChange? = null,
     ) {
         DesktopFileSyncPersistedState(state.coordinator, state.roots)
         val pair = state.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -198,6 +205,7 @@ internal class DesktopFileSyncStore(
         try {
             initializeSchema(connection)
             migrateLegacyState(connection)
+            val storedUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pairId)
             transaction(connection) {
                 val synchronizedPaths = synchronizedBaselines.map(FileSyncBaseline::relativePath).toSet()
                 val resultingBaselineCount = if (synchronizedPaths.isEmpty() && removedBaselinePaths.isEmpty()) {
@@ -207,7 +215,12 @@ internal class DesktopFileSyncStore(
                 }
                 upsertPairRecord(connection, pair)
                 persistWorkRecord(connection, pairId, workId, workItem)
-                synchronizedBaselines.forEach { baseline -> upsertBaselineRecord(connection, pairId, baseline) }
+                persistDesktopFileSyncExecutionUploadCleanups(
+                    connection, pairId, storedUploadCleanups, uploadCleanupChange,
+                )
+                synchronizedBaselines.forEach { baseline ->
+                    upsertDesktopFileSyncBaseline(connection, pairId, baseline)
+                }
                 removedBaselinePaths.forEach { path ->
                     delete(connection, "DELETE FROM sync_baselines WHERE pair_id = ? AND relative_path = ?", pairId, path)
                 }
@@ -219,7 +232,6 @@ internal class DesktopFileSyncStore(
             connection.close()
         }
     }
-
     private fun requireBaselineCapacity(
         connection: SQLiteConnection,
         pairId: String,
@@ -273,16 +285,27 @@ internal class DesktopFileSyncStore(
                 "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
         )
         connection.execSQL(
+            "CREATE TABLE IF NOT EXISTS sync_content_verification (" +
+                "pair_id TEXT NOT NULL, relative_path TEXT NOT NULL, record BLOB NOT NULL, " +
+                "PRIMARY KEY(pair_id, relative_path), " +
+                "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
+        )
+        connection.execSQL(
             "CREATE TABLE IF NOT EXISTS sync_work (" +
                 "pair_id TEXT NOT NULL, work_id INTEGER NOT NULL, state TEXT NOT NULL, " +
                 "relative_path TEXT NOT NULL, detail TEXT, record BLOB NOT NULL, " +
                 "PRIMARY KEY(pair_id, work_id), " +
                 "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
         )
+        ensureDesktopFileSyncUploadCleanupTable(connection)
         val schemaVersion = metadataValue(connection, SCHEMA_VERSION_KEY)
         when (schemaVersion) {
             null -> putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
-            PREVIOUS_DATABASE_SCHEMA_VERSION -> migrateWorkIndexColumns(connection)
+            LEGACY_DATABASE_SCHEMA_VERSION -> {
+                migrateWorkIndexColumns(connection)
+                migrateContentVerificationRows(connection)
+            }
+            INDEXED_WORK_DATABASE_SCHEMA_VERSION -> migrateContentVerificationRows(connection)
             DATABASE_SCHEMA_VERSION -> Unit
             else -> require(false) {
                 "The desktop folder sync database version is unsupported."
@@ -292,6 +315,7 @@ internal class DesktopFileSyncStore(
             "CREATE INDEX IF NOT EXISTS sync_work_pair_state_path " +
                 "ON sync_work(pair_id, state, relative_path, work_id)",
         )
+        migrateInlineDesktopFileSyncUploadCleanups(connection) { pair -> upsertPairRecord(connection, pair) }
     }
 
     private fun migrateWorkIndexColumns(connection: SQLiteConnection) {
@@ -328,6 +352,21 @@ internal class DesktopFileSyncStore(
                 statement.getLong(0)
             }
             check(missingIndexValues == 0L) { "Could not index the existing desktop folder sync work." }
+            putMetadata(connection, SCHEMA_VERSION_KEY, INDEXED_WORK_DATABASE_SCHEMA_VERSION)
+        }
+    }
+
+    private fun migrateContentVerificationRows(connection: SQLiteConnection) {
+        transaction(connection) {
+            readPairRecords(connection).forEach { pair ->
+                persistDesktopFileSyncContentVerificationProgress(
+                    connection,
+                    pair.id,
+                    emptyList(),
+                    pair.contentVerificationProgress,
+                )
+                upsertPairRecord(connection, pair)
+            }
             putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
         }
     }
@@ -344,13 +383,13 @@ internal class DesktopFileSyncStore(
     private fun readOverview(connection: SQLiteConnection): DesktopFileSyncPersistedState =
         DesktopFileSyncPersistedState(
             coordinator = FileSyncCoordinatorState(readPairRecords(connection)),
-            roots = readRoots(connection),
+            roots = readDesktopFileSyncRoots(connection),
         )
 
     private fun readPairState(connection: SQLiteConnection, pairId: String): DesktopFileSyncPersistedState {
         val pair = readPairRecords(connection, pairId).singleOrNull()
         val roots = pair?.let { selected ->
-            readRoots(connection).filter { it.id == selected.localRootId }
+            readDesktopFileSyncRoots(connection).filter { it.id == selected.localRootId }
         }.orEmpty()
         return DesktopFileSyncPersistedState(
             coordinator = recoverInterruptedFileSyncWork(
@@ -358,8 +397,11 @@ internal class DesktopFileSyncStore(
                     pair?.let {
                         listOf(
                             it.copy(
-                                baselines = readBaselines(connection, pairId),
+                                baselines = readDesktopFileSyncBaselines(connection, pairId),
+                                contentVerificationProgress =
+                                    readDesktopFileSyncContentVerificationProgress(connection, pairId),
                                 workItems = readWork(connection, pairId),
+                                pendingUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pairId),
                             ),
                         )
                     }.orEmpty(),
@@ -367,20 +409,6 @@ internal class DesktopFileSyncStore(
             ),
             roots = roots,
         )
-    }
-
-    private fun readRoots(connection: SQLiteConnection): List<DesktopFileSyncRootRecord> {
-        val roots = connection.prepare(
-            "SELECT id, absolute_path, display_name FROM sync_roots ORDER BY id LIMIT ${MAX_FILE_SYNC_PAIRS + 1}",
-        ).use { statement ->
-            buildList {
-                while (statement.step()) {
-                    add(DesktopFileSyncRootRecord(statement.getText(0), statement.getText(1), statement.getText(2)))
-                }
-            }
-        }
-        require(roots.size <= MAX_FILE_SYNC_PAIRS) { "The desktop folder sync database contains too many roots." }
-        return roots
     }
 
     private fun readPairRecords(connection: SQLiteConnection, pairId: String? = null): List<FileSyncPair> {
@@ -395,7 +423,9 @@ internal class DesktopFileSyncStore(
                 while (statement.step()) {
                     val pair = decodeFileSyncPairRecord(statement.getBlob(1))
                     require(pair.id == statement.getText(0))
-                    add(pair)
+                    add(pair.copy(
+                        pendingUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pair.id),
+                    ))
                 }
             }
         }
@@ -403,26 +433,6 @@ internal class DesktopFileSyncStore(
             "The desktop folder sync database contains too many pair records."
         }
         return pairs
-    }
-
-    private fun readBaselines(connection: SQLiteConnection, pairId: String): List<FileSyncBaseline> {
-        val baselines = buildList {
-            connection.prepare(
-                "SELECT relative_path, record FROM sync_baselines WHERE pair_id = ? " +
-                    "ORDER BY relative_path LIMIT ${MAX_FILE_SYNC_ENTRIES + 1}",
-            ).use { statement ->
-                statement.bindText(1, pairId)
-                while (statement.step()) {
-                    val baseline = decodeFileSyncBaselineRecord(statement.getBlob(1))
-                    require(baseline.relativePath == statement.getText(0))
-                    add(baseline)
-                }
-            }
-        }
-        require(baselines.size <= MAX_FILE_SYNC_ENTRIES) {
-            "The desktop folder sync database contains too many baselines for one pair."
-        }
-        return baselines
     }
 
     private fun readWork(connection: SQLiteConnection, pairId: String): List<FileSyncWorkItem> {
@@ -464,11 +474,11 @@ internal class DesktopFileSyncStore(
         val conflictCount = counts[FileSyncExecutionState.AwaitingDecision] ?: 0
         val skippedCount = counts[FileSyncExecutionState.Skipped] ?: 0
         return DesktopFileSyncWorkOverview(
-            readyCount = (counts[FileSyncExecutionState.Ready] ?: 0) +
-                (counts[FileSyncExecutionState.Running] ?: 0),
+            readyCount = counts[FileSyncExecutionState.Ready] ?: 0,
             runningCount = 0,
             conflictCount = conflictCount,
-            failedCount = counts[FileSyncExecutionState.Failed] ?: 0,
+            failedCount = (counts[FileSyncExecutionState.Failed] ?: 0) +
+                (counts[FileSyncExecutionState.Running] ?: 0),
             skippedCount = skippedCount,
             conflicts = if (conflictCount == 0) {
                 emptyList()
@@ -540,8 +550,8 @@ internal class DesktopFileSyncStore(
             "SELECT pair_id, work_id, state, relative_path, record FROM sync_work " +
                 "WHERE pair_id IN ($placeholders) AND state != ? " +
                 "ORDER BY CASE " +
-                "WHEN state IN ('AwaitingDecision', 'Failed') THEN 1 " +
-                "WHEN state IN ('Ready', 'Running') THEN 2 ELSE 3 END, relative_path, work_id LIMIT $limit",
+                "WHEN state IN ('AwaitingDecision', 'Failed', 'Running') THEN 1 " +
+                "WHEN state = 'Ready' THEN 2 ELSE 3 END, relative_path, work_id LIMIT $limit",
         ).use { statement ->
             pairIds.forEachIndexed { index, pairId -> statement.bindText(index + 1, pairId) }
             statement.bindText(pairIds.size + 1, FileSyncExecutionState.Skipped.name)
@@ -556,11 +566,7 @@ internal class DesktopFileSyncStore(
                     add(
                         DesktopFileSyncScopedWorkItem(
                             pairId,
-                            if (decoded.state == FileSyncExecutionState.Running) {
-                                decoded.copy(state = FileSyncExecutionState.Ready)
-                            } else {
-                                decoded
-                            },
+                            recoverInterruptedFileSyncWork(decoded),
                         ),
                     )
                 }
@@ -569,7 +575,7 @@ internal class DesktopFileSyncStore(
     }
 
     private fun countPairRows(connection: SQLiteConnection, table: String, pairId: String, maximum: Int): Int {
-        require(table == "sync_baselines" || table == "sync_work")
+        require(table == "sync_baselines" || table == "sync_content_verification" || table == "sync_work")
         val count = connection.prepare("SELECT COUNT(*) FROM $table WHERE pair_id = ?").use { statement ->
             statement.bindText(1, pairId)
             check(statement.step())
@@ -589,7 +595,7 @@ internal class DesktopFileSyncStore(
         (oldRoots.keys - newRoots.keys).forEach { id -> delete(connection, "DELETE FROM sync_roots WHERE id = ?", id) }
         newRoots.forEach { (id, root) ->
             if (oldRoots[id] != root) {
-                upsertRootRecord(connection, root)
+                upsertDesktopFileSyncRoot(connection, root)
             }
         }
 
@@ -601,32 +607,29 @@ internal class DesktopFileSyncStore(
         }
         newPairs.forEach { (pairId, pair) ->
             val oldPair = oldPairs[pairId]
-            val pairRecord = pair.copy(baselines = emptyList(), workItems = emptyList())
-            val oldPairRecord = oldPair?.copy(baselines = emptyList(), workItems = emptyList())
+            val pairRecord = pair.copy(
+                baselines = emptyList(),
+                contentVerificationProgress = emptyList(),
+                workItems = emptyList(),
+            )
+            val oldPairRecord = oldPair?.copy(
+                baselines = emptyList(),
+                contentVerificationProgress = emptyList(),
+                workItems = emptyList(),
+            )
             if (pairRecord != oldPairRecord) {
                 upsertPairRecord(connection, pair)
             }
-            persistBaselines(connection, pairId, oldPair?.baselines.orEmpty(), pair.baselines)
+            persistDesktopFileSyncBaselines(connection, pairId, oldPair?.baselines.orEmpty(), pair.baselines)
+            persistDesktopFileSyncContentVerificationProgress(
+                connection,
+                pairId,
+                oldPair?.contentVerificationProgress.orEmpty(),
+                pair.contentVerificationProgress,
+            )
             persistWork(connection, pairId, oldPair?.workItems.orEmpty(), pair.workItems)
+            persistDesktopFileSyncPairUploadCleanups(connection, pairId, oldPair, pair)
             putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
-        }
-    }
-
-    private fun persistBaselines(
-        connection: SQLiteConnection,
-        pairId: String,
-        before: List<FileSyncBaseline>,
-        after: List<FileSyncBaseline>,
-    ) {
-        val old = before.associateBy(FileSyncBaseline::relativePath)
-        val current = after.associateBy(FileSyncBaseline::relativePath)
-        (old.keys - current.keys).forEach { path ->
-            delete(connection, "DELETE FROM sync_baselines WHERE pair_id = ? AND relative_path = ?", pairId, path)
-        }
-        current.forEach { (path, baseline) ->
-            if (old[path] != baseline) {
-                upsertBaselineRecord(connection, pairId, baseline)
-            }
         }
     }
 
@@ -658,33 +661,17 @@ internal class DesktopFileSyncStore(
                 "ON CONFLICT(id) DO UPDATE SET record = excluded.record",
         ).use { statement ->
             statement.bindText(1, pair.id)
-            statement.bindBlob(2, encodeFileSyncPairRecord(pair.copy(baselines = emptyList(), workItems = emptyList())))
-            check(!statement.step())
-        }
-    }
-
-    private fun upsertRootRecord(connection: SQLiteConnection, root: DesktopFileSyncRootRecord) {
-        connection.prepare(
-            "INSERT OR REPLACE INTO sync_roots(id, absolute_path, display_name) VALUES (?, ?, ?)",
-        ).use { statement ->
-            statement.bindText(1, root.id)
-            statement.bindText(2, root.absolutePath)
-            statement.bindText(3, root.displayName)
-            check(!statement.step())
-        }
-    }
-
-    private fun upsertBaselineRecord(
-        connection: SQLiteConnection,
-        pairId: String,
-        baseline: FileSyncBaseline,
-    ) {
-        connection.prepare(
-            "INSERT OR REPLACE INTO sync_baselines(pair_id, relative_path, record) VALUES (?, ?, ?)",
-        ).use { statement ->
-            statement.bindText(1, pairId)
-            statement.bindText(2, baseline.relativePath)
-            statement.bindBlob(3, encodeFileSyncBaselineRecord(baseline))
+            statement.bindBlob(
+                2,
+                encodeFileSyncPairRecord(
+                    pair.copy(
+                        baselines = emptyList(),
+                        contentVerificationProgress = emptyList(),
+                        workItems = emptyList(),
+                        pendingUploadCleanups = emptyList(),
+                    ),
+                ),
+            )
             check(!statement.step())
         }
     }
@@ -802,7 +789,8 @@ private const val LEGACY_IMPORT_KEY = "legacy_v1_import"
 private const val SCHEMA_VERSION_KEY = "schema_version"
 private const val BASELINE_COUNT_KEY_PREFIX = "baseline_count:"
 private const val MAX_FILE_SYNC_SKIPPED_REASONS = 20
-private const val PREVIOUS_DATABASE_SCHEMA_VERSION = "2"
-private const val DATABASE_SCHEMA_VERSION = "3"
+private const val LEGACY_DATABASE_SCHEMA_VERSION = "2"
+private const val INDEXED_WORK_DATABASE_SCHEMA_VERSION = "3"
+private const val DATABASE_SCHEMA_VERSION = "4"
 
 private fun baselineCountKey(pairId: String): String = BASELINE_COUNT_KEY_PREFIX + pairId

@@ -40,7 +40,7 @@ enum class DesktopFileSyncProgressStage {
     Failed,
 }
 
-data class DesktopFileSyncProgressEvent(
+internal data class DesktopFileSyncProgressEvent(
     val pairId: String,
     val workId: Long,
     val relativePath: String,
@@ -51,6 +51,9 @@ data class DesktopFileSyncProgressEvent(
     val sizeBytes: Long?,
     val stage: DesktopFileSyncProgressStage,
     val failureMessage: String? = null,
+    val attemptCount: Int = 1,
+    val snapshot: DesktopFileSyncSnapshotDiagnostics = DesktopFileSyncSnapshotDiagnostics.Unknown,
+    val failureDiagnostic: DesktopFileSyncFailureDiagnostic? = null,
 ) {
     init {
         require(pairId.isNotBlank())
@@ -60,6 +63,7 @@ data class DesktopFileSyncProgressEvent(
         require(completedOperations in 0..totalOperations)
         require(totalOperations > 0)
         require(sizeBytes == null || sizeBytes >= 0L)
+        require(attemptCount > 0)
         require((stage == DesktopFileSyncProgressStage.Failed) == (failureMessage != null))
         require(failureMessage == null || failureMessage.isNotBlank())
     }
@@ -105,18 +109,18 @@ internal fun FileSyncOperation.toTrayActivityPhase(): DesktopFileSyncTrayActivit
 }
 
 fun DesktopFileSyncTraySnapshot.tooltip(): String = when (phase) {
-    DesktopFileSyncTrayPhase.Syncing -> "Nextcloud Native - syncing"
-    DesktopFileSyncTrayPhase.Paused -> "Nextcloud Native - sync paused"
+    DesktopFileSyncTrayPhase.Syncing -> "nati.ve - syncing"
+    DesktopFileSyncTrayPhase.Paused -> "nati.ve - sync paused"
     DesktopFileSyncTrayPhase.NeedsAttention -> buildString {
-        append("Nextcloud Native - attention needed")
+        append("nati.ve - attention needed")
         if (conflictCount > 0) {
             append("; ").append(conflictCount).append(if (conflictCount == 1) " conflict" else " conflicts")
         }
         if (failedCount > 0) append("; ").append(failedCount).append(" failed")
     }
     DesktopFileSyncTrayPhase.Idle -> when {
-        pairCount == 0 -> "Nextcloud Native - no sync folders"
-        pendingCount > 0 -> "Nextcloud Native - $pendingCount pending"
-        else -> "Nextcloud Native - up to date"
+        pairCount == 0 -> "nati.ve - no sync folders"
+        pendingCount > 0 -> "nati.ve - $pendingCount pending"
+        else -> "nati.ve - up to date"
     }
 }

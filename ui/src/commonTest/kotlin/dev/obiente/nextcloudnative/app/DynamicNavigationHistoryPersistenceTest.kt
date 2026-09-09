@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import kotlinx.serialization.encodeToString
@@ -29,6 +30,25 @@ class DynamicNavigationHistoryPersistenceTest {
 
         assertEquals(team, retainedChoresNavigationContext(team, invitation))
         assertEquals(invitation, retainedChoresNavigationContext(null, invitation))
+        assertEquals(
+            team,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Chores, team, null),
+        )
+        assertEquals(
+            null,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Team, team, null),
+            "The Team header must retain the root create-team action.",
+        )
+        assertEquals(
+            invitation,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Invitations, team, invitation),
+        )
+        assertTrue(
+            showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Team),
+            "The loaded Team roster must retain its contextual invite-member action.",
+        )
+        assertFalse(showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Chores))
+        assertTrue(showDynamicCollectionCreateAction(null, NativeChoresWorkspaceKind.Chores))
     }
 
     @Test

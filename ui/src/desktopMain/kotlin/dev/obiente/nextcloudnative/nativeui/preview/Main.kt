@@ -13,7 +13,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.configureSwingGlobalsForCompose
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
@@ -56,7 +58,19 @@ import javax.swing.SwingUtilities
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-fun main(arguments: Array<String>) {
+fun main(arguments: Array<String>) = runDesktopEntryPoint(arguments)
+
+@OptIn(ExperimentalComposeUiApi::class)
+internal fun runDesktopEntryPoint(
+    arguments: Array<String>,
+    configureComposePlatform: () -> Unit = { configureSwingGlobalsForCompose() },
+    launch: (Array<String>) -> Unit = ::launchDesktopProcess,
+) {
+    configureComposePlatform()
+    launch(arguments)
+}
+
+private fun launchDesktopProcess(arguments: Array<String>) {
     val supportDiagnosticsRoot = desktopSupportDiagnosticsDirectory()
     installDesktopBootstrapUncaughtDiagnosticHandler(supportDiagnosticsRoot)
     if (arguments.contentEquals(arrayOf("--unregister-windows-sync-root"))) {
@@ -66,8 +80,8 @@ fun main(arguments: Array<String>) {
     if (desktopUpdateHandoffActive()) {
         JOptionPane.showMessageDialog(
             null,
-            "Nextcloud Native is updating and will reopen when installation finishes.",
-            "Nextcloud Native update in progress",
+            "nati.ve is updating and will reopen when installation finishes.",
+            "nati.ve update in progress",
             JOptionPane.INFORMATION_MESSAGE,
         )
         return
@@ -99,8 +113,8 @@ fun main(arguments: Array<String>) {
         DesktopSingleInstanceStart.Failed -> {
             JOptionPane.showMessageDialog(
                 null,
-                "Nextcloud Native could not activate its existing desktop process.",
-                "Nextcloud Native",
+                "nati.ve could not activate its existing desktop process.",
+                "nati.ve",
                 JOptionPane.ERROR_MESSAGE,
             )
             return
@@ -264,7 +278,7 @@ fun main(arguments: Array<String>) {
             SwingUtilities.invokeLater {
                 JOptionPane.showMessageDialog(
                     mainWindow.value,
-                    "The Windows update did not complete. Nextcloud Native is still available.",
+                    "The Windows update did not complete. nati.ve is still available.",
                     "Update did not complete",
                     JOptionPane.ERROR_MESSAGE,
                 )
@@ -278,7 +292,7 @@ fun main(arguments: Array<String>) {
             trayPopupVisible.value = false
             trayPopupWindow.value?.isVisible = false
         },
-        title = "Nextcloud Native sync activity",
+        title = "nati.ve sync activity",
         icon = appIcon,
         state = rememberWindowState(
             position = WindowPosition(Alignment.BottomEnd),
@@ -340,7 +354,7 @@ fun main(arguments: Array<String>) {
             }
         },
         visible = windowVisible.value,
-        title = "Nextcloud Native",
+        title = "nati.ve",
         icon = appIcon,
         state = mainWindowState,
     ) {
@@ -397,6 +411,7 @@ internal fun runOnAwtEventThread(action: () -> Unit) {
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message
+    is FileSyncCenterActionResult.Stopped -> message
     is FileSyncCenterActionResult.Rejected -> reason
     is FileSyncCenterActionResult.Unsupported -> reason
 }

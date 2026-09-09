@@ -1,29 +1,45 @@
 package dev.obiente.nextcloudnative
 
-import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 
 internal fun createAndroidFileSyncLocalTree(
-    resolver: ContentResolver,
+    context: Context,
     rootId: String,
-    contentHashPaths: Set<String> = emptySet(),
-): AndroidFileSyncLocalTree =
-    if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
+): AndroidFileSyncLocalTree {
+    val appContext = context.applicationContext
+    return if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
         AndroidMediaStoreSyncLocalTree(
             root = resolveMediaStoreSyncRoot(rootId, Environment.getExternalStorageDirectory()),
-            contentHashPaths = contentHashPaths,
         )
     } else {
-        AndroidSafFileSyncLocalTree(resolver, rootId, contentHashPaths)
+        AndroidSafFileSyncLocalTree(
+            resolver = appContext.contentResolver,
+            rootId = rootId,
+            downloadOwnershipStore = createAndroidSafDownloadOwnershipStore(appContext, rootId),
+        )
     }
+}
+
+internal fun createAndroidSafDownloadOwnershipStore(
+    context: Context,
+    treeIdentity: String,
+): AndroidSafDownloadOwnershipStore = androidSafDownloadOwnershipStoreForTree(
+    baseDirectory = File(context.filesDir, "file-sync-saf-download-ownership"),
+    treeIdentity = treeIdentity,
+)
 
 internal fun resolveMediaStoreSyncRoot(rootId: String, externalStorageRoot: File): File {
     require(rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
@@ -47,7 +63,6 @@ internal fun resolveMediaStoreSyncRoot(rootId: String, externalStorageRoot: File
  */
 internal class AndroidMediaStoreSyncLocalTree(
     private val root: File,
-    private val contentHashPaths: Set<String> = emptySet(),
 ) : AndroidFileSyncLocalTree {
     init {
         require(root.isDirectory && root.canRead()) { "The detected media folder is unavailable." }
@@ -55,35 +70,75 @@ internal class AndroidMediaStoreSyncLocalTree(
 
     override fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+        shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
-        return mediaFolderSyncFiles(root)
+        return mediaFolderSyncFiles(root, shouldContinue = shouldContinue)
             .map { file -> file.toSyncDocument(file.name) }
             .filter { document -> includes(document.entry.relativePath, document.entry.kind) }
     }
 
-    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun contentHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): String? {
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision) {
+            "The local file changed before content verification."
+        }
+        require(before.entry.size == expectedBytes) { "The local file size changed before content verification." }
+        val hash = before.uri.toFile().inputStream().use { input ->
+            sha256SyncContentHash(input, expectedBytes, maximumBytes)
+        }
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during content verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
+            "The local file changed during content verification."
+        }
+        return hash
+    }
+
+    override fun contentRangeHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+    ): String {
+        require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
+        require(before.entry.size == expectedBytes)
+        val hash = FileChannel.open(before.uri.toFile().toPath(), StandardOpenOption.READ).use { channel ->
+            channel.position(offset)
+            hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length)
+        }
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes)
+        return hash
+    }
+
+    override fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): LocalSyncEntry {
         val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(before.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((before.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
-        FileInputStream(before.uri.toFile()).use { input ->
-            FileOutputStream(destination).use { output ->
-                var copied = 0L
-                val buffer = ByteArray(BUFFER_BYTES)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    copied += count
-                    require(copied <= maximumBytes) { "The local file exceeds the sync size limit." }
-                    output.write(buffer, 0, count)
-                }
-                output.fd.sync()
-            }
+        val stagedContentHash = FileInputStream(before.uri.toFile()).use { input ->
+            stageAndroidFileSyncUpload(input, destination, before.entry.size, maximumBytes, shouldContinue)
         }
         val after = requireNotNull(resolve(path)) { "The local file disappeared while it was read." }
-        require(after.entry.revision == before.entry.revision) {
+        require(after.entry.revision == before.entry.revision && after.entry.size == before.entry.size) {
             "The local file changed while it was being prepared for upload."
         }
-        return after.entry
+        return after.entry.copy(
+            revision = androidStagedFileSyncRevision(stagedContentHash),
+            size = destination.length(),
+            contentHash = stagedContentHash,
+        )
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
@@ -119,30 +174,14 @@ internal class AndroidMediaStoreSyncLocalTree(
     private fun File.toSyncDocument(relativePath: String): AndroidLocalSyncDocument {
         val kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
         val size = if (kind == SyncEntryKind.File) length().coerceAtLeast(0L) else null
+        val modified = lastModified().coerceAtLeast(0L)
         return AndroidLocalSyncDocument(
             entry = LocalSyncEntry(
                 relativePath = relativePath,
                 kind = kind,
-                revision = fileRevision(relativePath, kind, lastModified(), size),
+                revision = fileRevision(relativePath, kind, modified, size),
                 size = size,
-                contentHash = if (
-                    kind == SyncEntryKind.File &&
-                    relativePath in contentHashPaths &&
-                    size != null &&
-                    size <= ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES
-                ) {
-                    runCatching {
-                        inputStream().use { input ->
-                            sha256SyncContentHash(
-                                input,
-                                expectedBytes = size,
-                                maximumBytes = ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES,
-                            )
-                        }
-                    }.getOrNull()
-                } else {
-                    null
-                },
+                modifiedEpochMillis = knownAndroidFileSyncModifiedEpochMillis(modified),
             ),
             uri = Uri.fromFile(this),
             displayName = name,
@@ -177,7 +216,6 @@ internal class AndroidMediaStoreSyncLocalTree(
     private fun Uri.toFile(): File = File(requireNotNull(path))
 
     private companion object {
-        const val BUFFER_BYTES = 64 * 1024
     }
 }
 
@@ -192,11 +230,14 @@ internal const val MAX_MEDIA_FOLDER_SYNC_ENTRIES = 20_000
 internal fun mediaFolderSyncFiles(
     root: File,
     maximumEntries: Int = MAX_MEDIA_FOLDER_SYNC_ENTRIES,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): List<File> {
     require(maximumEntries > 0)
     val result = mutableListOf<File>()
     var exceedsLimit = false
+    requireScanContinuation(shouldContinue)
     forEachMediaFolderSyncFile(root) {
+        requireScanContinuation(shouldContinue)
         if (result.size >= maximumEntries) {
             exceedsLimit = true
             false
@@ -205,6 +246,7 @@ internal fun mediaFolderSyncFiles(
             true
         }
     }
+    requireScanContinuation(shouldContinue)
     require(!exceedsLimit) { "The local media folder contains too many uploadable files." }
     return result.sortedBy { it.name.lowercase() }
 }

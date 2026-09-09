@@ -335,7 +335,7 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
-    fun `verified shape-only finance lists become insights after numeric fields are observed`() {
+    fun `verified budget category lists keep their category presentation when numeric fields are observed`() {
         val shapeOnly = view(NativeComponent.collectionList)
         val budgetCategories = ResourceSpec(
             id = "categories",
@@ -351,7 +351,7 @@ class GenericNativeRendererStateTest {
             NativeRecord("two", mapOf("budgetAmount" to "25", "budgetPeriod" to "weekly")),
         )
 
-        assertEquals(GenericNativeSurface.Insights, shapeOnly.genericSurface(budgetCategories, financeRecords))
+        assertEquals(GenericNativeSurface.List, shapeOnly.genericSurface(budgetCategories, financeRecords))
         assertEquals(
             GenericNativeSurface.List,
             shapeOnly.genericSurface(
@@ -1534,7 +1534,7 @@ class GenericNativeRendererStateTest {
         assertEquals("Milk", projection.records.first().values["dataByAlias.item"])
         assertEquals("2", projection.records.first().values["dataByAlias.quantity"])
         assertEquals(
-            listOf("dataByAlias.item", "dataByAlias.quantity", "id"),
+            listOf("dataByAlias.item", "dataByAlias.quantity"),
             nativeTableFields(projection.resource, projection.records).map { it.id },
         )
     }

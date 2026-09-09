@@ -1,5 +1,12 @@
 # Linux package repositories
 
+This is a maintainer guide for producing signed APT and RPM repository
+snapshots. It does not claim that a public repository is currently available.
+
+**Last reviewed: 2026-08-20.** Distribution endpoints and release channels may
+have changed. Check the [latest releases](https://github.com/obiente/native/releases)
+before publishing or configuring a client.
+
 GitHub release attachments remain useful as immutable source artifacts, but
 they are not an APT or RPM repository. Native package-manager distribution
 requires indexed repository trees, an HTTPS origin, and a dedicated OpenPGP
@@ -18,12 +25,9 @@ a directory containing the complete retained set of `.deb` and `.rpm` files:
 - an exported public certificate, fingerprint, checksums, and example
   `nextcloud-native.sources` and `nextcloud-native.repo` client configuration.
 
-The input may contain more than the UI package. A future native
-`nextcloud-native-vfs` host-service package should be built separately, declare
-its systemd or D-Bus lifecycle in native package metadata, and be placed beside
-the UI packages before the repository indexes are generated. This keeps the
-privileged filesystem integration out of the UI process and lets APT or DNF
-install, update, and remove both components transactionally.
+The input may contain more than one package. Each package must declare its own
+lifecycle and dependencies in native package metadata before it is added to a
+repository snapshot.
 
 ## Signing identity
 
@@ -38,6 +42,12 @@ The builder requires the full 40-character fingerprint in
 the active GnuPG home. Public clients receive only the exported certificate.
 Never commit the secret key or its backup.
 
+The examples use `https://packages.example.org` as a placeholder. Replace it
+with the deployed package origin; the website domain does not establish a
+package repository endpoint. APT `Origin` and `Label` retain `Nextcloud Native`
+as repository identities so existing clients do not require release-info-change
+acceptance solely for the product rename.
+
 ## Build a repository snapshot
 
 Install AppStream, `apt-ftparchive`, `cpio`, `createrepo_c`, `dpkg-deb`,
@@ -49,7 +59,7 @@ tools/build-linux-package-repositories.sh \
   dist \
   linux-repository \
   prerelease \
-  https://packages.nc-native.obiente.dev
+  https://packages.example.org
 ```
 
 `linux-repository` must not already exist. `dist` must contain at least one
@@ -63,7 +73,7 @@ repository pointer only after the complete snapshot is available.
 Do not trust a certificate fetched only from the package origin. Before a
 channel is made public, its full 40-character signing fingerprint must also be
 published in the corresponding release at
-`https://github.com/Obiente/nc-native/releases`. That GitHub-hosted value is the
+`https://github.com/obiente/native/releases`. That GitHub-hosted value is the
 independently authenticated expected fingerprint. Download the certificate to
 a temporary file, inspect it locally, and compare the complete value before
 installing a clean export of it:
@@ -77,7 +87,7 @@ chmod 700 "$verification_home"
 trap 'rm -r -- "$verification_home"' EXIT
 curl --fail --proto '=https' --tlsv1.2 \
   --output nextcloud-native.asc \
-  https://packages.nc-native.obiente.dev/keys/nextcloud-native.asc
+  https://packages.example.org/keys/nextcloud-native.asc
 GNUPGHOME="$verification_home" gpg --batch --import nextcloud-native.asc
 mapfile -t actual_fingerprints < <(
   GNUPGHOME="$verification_home" gpg --batch --with-colons --list-keys |
@@ -105,6 +115,8 @@ generated configuration references that local certificate. Both package and
 repository-metadata signature checking are enabled.
 
 The public origin must serve files byte-for-byte over HTTPS and preserve the
-repository paths. Do not use GitHub Pages for the package payloads: the current
-site-size and bandwidth limits are too small for retaining multiple native
-desktop package versions.
+repository paths. Hosting selection, retention, and publication are operational
+decisions; this guide does not designate a currently supported public package
+origin. The checked-in
+[`tools/build-linux-package-repositories.sh`](../tools/build-linux-package-repositories.sh)
+is the source of truth for the generated repository layout.

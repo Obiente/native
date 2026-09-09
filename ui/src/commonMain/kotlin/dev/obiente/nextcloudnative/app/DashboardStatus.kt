@@ -139,13 +139,7 @@ internal fun dashboardItemsFetchResult(
 internal fun isDashboardApiUnavailable(response: NextcloudApiResponse): Boolean {
     if (response.status == 404) return true
     if (response.status !in 200..299) return false
-    val statusCode = runCatching {
-        val root = dashboardJson.parseToJsonElement(response.body.decodeToString()).jsonObject
-        val ocs = root["ocs"] as? JsonObject
-        val meta = ocs?.get("meta") as? JsonObject
-        (meta?.get("statuscode") as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
-    }.getOrNull()
-    return statusCode == 404
+    return dashboardOcsStatusCode(response) == 404
 }
 
 internal fun DashboardItemsRequestPlan.v1FallbackRequest(
@@ -792,8 +786,8 @@ private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashb
             title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
             subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
             link = item.optionalDashboardLink("link"),
-            iconUrl = item.optionalDashboardLink("iconUrl"),
-            overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
+            iconUrl = item.optionalDashboardIconLink("iconUrl"),
+            overlayIconUrl = item.optionalDashboardIconLink("overlayIconUrl"),
             sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
         )
     }
@@ -855,6 +849,9 @@ private fun JsonObject.optionalDashboardLink(name: String): String? {
     require(value.isSafeDashboardLink()) { "The dashboard $name is unsafe." }
     return value
 }
+
+private fun JsonObject.optionalDashboardIconLink(name: String): String? =
+    optionalDashboardText(name, MAX_DASHBOARD_LINK_LENGTH)?.takeIf(String::isSafeDashboardLink)
 
 private fun String.isSafeDashboardLink(): Boolean {
     if (any { it.isISOControl() || it.isWhitespace() } || '\\' in this || startsWith("//")) return false

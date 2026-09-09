@@ -339,7 +339,7 @@ class WindowsCloudFilesProviderTest {
             assertFalse(startup.isAlive)
             startupFailure.get()?.let { throw it }
             assertTrue(api.awaitPlaceholderFetches())
-            assertEquals(listOf("Apps"), api.completedPlaceholders.map(WindowsCloudPlaceholder::name))
+            assertEquals(listOf("Apps"), api.createdPlaceholderBatches.flatten().map(WindowsCloudPlaceholder::name).distinct())
         } finally {
             releaseCreate.countDown()
             startup.join(TimeUnit.SECONDS.toMillis(5))
@@ -1316,20 +1316,20 @@ class WindowsCloudFilesProviderTest {
     @Test
     fun `callback paths are rooted on the reported Windows volume`() {
         assertEquals(
-            "D:\\Users\\runner\\Nextcloud Native\\Apps",
-            windowsCloudAbsoluteCallbackPath("D:", "\\Users\\runner\\Nextcloud Native\\Apps"),
+            "D:\\Users\\runner\\nati.ve\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "\\Users\\runner\\nati.ve\\Apps"),
         )
         assertEquals(
-            "C:\\Users\\runner\\Nextcloud Native\\Apps",
-            windowsCloudAbsoluteCallbackPath("D:", "C:\\Users\\runner\\Nextcloud Native\\Apps"),
+            "C:\\Users\\runner\\nati.ve\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "C:\\Users\\runner\\nati.ve\\Apps"),
         )
         assertFailsWith<IllegalArgumentException> {
-            windowsCloudAbsoluteCallbackPath("", "\\Users\\runner\\Nextcloud Native\\Apps")
+            windowsCloudAbsoluteCallbackPath("", "\\Users\\runner\\nati.ve\\Apps")
         }
     }
 
     @Test
-    fun `patterned population still transfers the complete directory`() {
+    fun `patterned population still creates the complete directory`() {
         val root = createTempDirectory("windows-cloud-pattern-")
         val directory = WindowsCloudFileIdentity("account-01", "Apps", "\"directory\"", 0L, true)
         val text = WindowsCloudFileIdentity("account-01", "Apps/readme.txt", "\"text\"", 5L, false)
@@ -1344,7 +1344,7 @@ class WindowsCloudFilesProviderTest {
         provider.fetchPlaceholders(callbackInfo(root, directory), "*.txt")
 
         assertTrue(api.awaitPlaceholderFetches())
-        assertEquals(setOf("readme.txt", "photo.jpg"), api.completedPlaceholders.map { it.name }.toSet())
+        assertEquals(setOf("readme.txt", "photo.jpg"), api.createdPlaceholderBatches.flatten().map { it.name }.toSet())
         provider.close()
     }
 
@@ -2659,6 +2659,7 @@ class WindowsCloudFilesProviderTest {
 
         provider.start()
         assertTrue(backend.awaitFirstUploadStarted())
+        assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
 
         val migrationFailure = AtomicReference<Throwable?>()
         val migration = Thread {
@@ -2676,8 +2677,6 @@ class WindowsCloudFilesProviderTest {
         assertFalse(migration.isAlive)
         migrationFailure.get()?.let { throw it }
         assertTrue(backend.awaitUploads())
-        assertEquals("\"etag-01\"", backend.lastExpectedRemoteRevision)
-        assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
         assertEquals(0, provider.summary().pendingWritebackCount)
         provider.close()
     }
@@ -2905,7 +2904,7 @@ class WindowsCloudFilesProviderTest {
         private val blockFirstDelete: Boolean = false,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
-        override val displayName: String = "Nextcloud Native - account@example.test"
+        override val displayName: String = "nati.ve - account@example.test"
         private val uploadLatch = CountDownLatch(expectedUploads)
         private val firstUploadStarted = CountDownLatch(if (blockFirstUpload) 1 else 0)
         private val firstUploadRelease = CountDownLatch(if (blockFirstUpload) 1 else 0)

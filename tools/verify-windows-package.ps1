@@ -59,13 +59,17 @@ function Read-MsiProperty {
     }
 }
 
-function Read-MsiFileNames {
+function Read-MsiNames {
+    param(
+        [ValidateSet("File", "Shortcut")][string]$Table,
+        [ValidateSet("FileName", "Name")][string]$Column
+    )
     $view = $database.GetType().InvokeMember(
         "OpenView",
         "InvokeMethod",
         $null,
         $database,
-        @("SELECT ``FileName`` FROM ``File``")
+        @("SELECT ``$Column`` FROM ``$Table``")
     )
     try {
         $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
@@ -97,7 +101,7 @@ $productVersion = Read-MsiProperty -Name "ProductVersion"
 $manufacturer = Read-MsiProperty -Name "Manufacturer"
 $upgradeCode = Read-MsiProperty -Name "UpgradeCode"
 
-if ($productName -ne "NextcloudNative") {
+if ($productName -ne "nati.ve") {
     throw "Unexpected Windows product name: $productName"
 }
 if ($productVersion -ne $ExpectedVersion) {
@@ -111,11 +115,16 @@ if ($upgradeCode.ToUpperInvariant() -ne $expectedUpgradeCode) {
     throw "Unexpected Windows upgrade identity."
 }
 
-$packagedFiles = @(Read-MsiFileNames)
+$packagedFiles = @(Read-MsiNames -Table File -Column FileName)
 foreach ($requiredFile in @("NextcloudNativeShellRegistrar.exe", "NextcloudNative.ico")) {
     if ($requiredFile -notin $packagedFiles) {
         throw "The Windows MSI does not contain $requiredFile."
     }
+}
+
+$shortcuts = @(Read-MsiNames -Table Shortcut -Column Name)
+if ($shortcuts.Count -ne 2 -or @($shortcuts | Where-Object { $_ -ne "nati.ve" }).Count -ne 0) {
+    throw "The desktop and Start menu shortcuts must both be named nati.ve."
 }
 
 $signature = Get-AuthenticodeSignature -LiteralPath $package.FullName

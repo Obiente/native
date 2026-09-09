@@ -1,11 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
+import dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
@@ -29,9 +29,11 @@ internal fun MarketingCalendarWorkspaceScenario(
             activeAppId = "calendar",
             workspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
         ) {
-            DesktopGroupwareCalendarWorkspace(
+            if (editor) MarketingCalendarEventEditorCapture()
+            else DesktopGroupwareCalendarWorkspace(
                 month = CalendarMonth(2026, 8),
                 selectedDate = "20260804",
+                todayDate = "20260804",
                 view = view,
                 calendars = calendars,
                 events = events,
@@ -53,34 +55,43 @@ internal fun MarketingCalendarWorkspaceScenario(
             )
         }
     } else {
+        NextcloudAdaptiveShell(
+            selected = NextcloudDestination.Apps, onSelected = {},
+            identity = marketingDesktopIdentity(avatar = assets.avatar), activeAppId = "calendar",
+        ) {
         Column(Modifier.fillMaxSize()) {
-            ScreenHeader("Calendar", "Your schedule · August 2026", onBack = {})
-            MobileGroupwareCalendarWorkspace(
-                month = CalendarMonth(2026, 8),
-                selectedDate = "20260804",
-                view = view,
-                calendars = calendars,
-                events = events,
-                hiddenCalendarHrefs = emptySet(),
-                query = "",
-                onPrevious = {},
-                onNext = {},
-                onToday = {},
-                onViewChanged = {},
-                onQueryChanged = {},
-                onCalendarVisibilityChanged = { _, _ -> },
-                onSelectDate = {},
-                onSelectEvent = {},
-                modifier = Modifier.weight(1f),
-            )
-            NextcloudBottomNavigation(selected = NextcloudDestination.Apps, onSelected = {})
+            if (editor) Box(Modifier.weight(1f)) { MarketingCalendarEventEditorCapture() }
+            else {
+                CalendarPhoneTopBar(onBack = {}, onRefresh = {}, onCreate = {}, createEnabled = true)
+                MobileGroupwareCalendarWorkspace(
+                    month = CalendarMonth(2026, 8),
+                    selectedDate = "20260804",
+                    todayDate = "20260804",
+                    view = view,
+                    calendars = calendars,
+                    events = events,
+                    hiddenCalendarHrefs = emptySet(),
+                    query = "",
+                    onPrevious = {},
+                    onNext = {},
+                    onToday = {},
+                    onViewChanged = {},
+                    onQueryChanged = {},
+                    onCalendarVisibilityChanged = { _, _ -> },
+                    onSelectDate = {},
+                    onSelectEvent = {},
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
         }
     }
-    if (editor) MarketingCalendarEventEditorCapture()
 }
 
 internal fun MarketingCaptureScenario.marketingCalendarView(): CalendarWorkspaceView =
-    if (surface.contains("agenda", ignoreCase = true) || state.contains("agenda", ignoreCase = true)) {
+    if (this == MarketingCaptureScenario.CalendarWeekMobile || this == MarketingCaptureScenario.CalendarWeekDesktop) {
+        CalendarWorkspaceView.Week
+    } else if (surface.contains("agenda", ignoreCase = true) || state.contains("agenda", ignoreCase = true)) {
         CalendarWorkspaceView.Agenda
     } else {
         CalendarWorkspaceView.Month
@@ -142,7 +153,7 @@ private val marketingCalendarEvents = listOf(
     ),
     marketingCalendarEvent(
         "product", "standup-3", "Product stand-up",
-        "20260803T083000Z", "20260803T090000Z", recurrenceRule = "Every weekday",
+        "20260803T083000Z", "20260803T090000Z", recurrenceRule = "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
     ),
     marketingCalendarEvent(
         "community", "volunteer", "Community garden volunteers",
@@ -162,7 +173,7 @@ private val marketingCalendarEvents = listOf(
     ),
     marketingCalendarEvent(
         "birthdays", "elena-birthday", "Elena's birthday",
-        "20260810", "20260811", allDay = true, recurrenceRule = "Yearly",
+        "20260810", "20260811", allDay = true, recurrenceRule = "FREQ=YEARLY",
     ),
     marketingCalendarEvent(
         "product", "research", "User research synthesis",
@@ -193,3 +204,22 @@ private val marketingCalendarEvents = listOf(
         "20260828T093000Z", "20260828T103000Z",
     ),
 )
+
+@Composable
+internal fun MarketingCalendarEventEditorCapture() {
+    val event = marketingCalendarEvents.first { it.uid == "design-review" }
+    EventEditorDialog(
+        event = event,
+        initialDate = event.start.take(8),
+        calendars = marketingCalendarCalendars.filter { it.href == event.calendarHref },
+        onDismiss = {}, error = null, onSave = { _, _ -> }, inPlace = true,
+    )
+}
+
+@Composable
+internal fun MarketingCalendarRecurringEventDetailCapture() {
+    EventDetailDialog(
+        event = marketingCalendarEvents.first { it.uid == "standup-3" },
+        canEdit = true, onDismiss = {}, onEdit = {}, onDelete = {}, error = null, inPlace = true,
+    )
+}

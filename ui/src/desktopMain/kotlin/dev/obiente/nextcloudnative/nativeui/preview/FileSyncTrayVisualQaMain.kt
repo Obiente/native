@@ -75,7 +75,7 @@ fun main() = application {
 
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Nextcloud Native tray QA",
+        title = "nati.ve tray QA",
         state = rememberWindowState(width = 430.dp, height = 560.dp),
         undecorated = true,
         // Keep the QA surface opaque so it renders without a compositor under Xvfb.

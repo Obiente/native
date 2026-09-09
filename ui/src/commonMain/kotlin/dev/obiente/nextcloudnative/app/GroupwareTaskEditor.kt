@@ -1,0 +1,232 @@
+package dev.obiente.nextcloudnative.app
+
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+
+private const val MAX_TASK_EDITOR_SAVED_STATE_CHARACTERS = 32 * 1_024
+
+internal data class GroupwareTaskEditorState(
+    val title: String,
+    val dueDate: String,
+    val description: String,
+    val completed: Boolean,
+    val calendarHref: String?,
+    val editStartEtag: String?,
+)
+
+internal fun encodeGroupwareTaskEditorStateForSavedState(
+    state: GroupwareTaskEditorState,
+): List<String>? {
+    val values = listOf(
+        state.title,
+        state.dueDate,
+        state.description,
+        state.completed.toString(),
+        state.calendarHref.orEmpty(),
+        state.editStartEtag.orEmpty(),
+    )
+    return values.takeIf { encoded ->
+        encoded.sumOf { value -> value.length } <= MAX_TASK_EDITOR_SAVED_STATE_CHARACTERS
+    }
+}
+
+internal fun decodeGroupwareTaskEditorStateFromSavedState(
+    values: List<String>,
+): GroupwareTaskEditorState? = values.takeIf {
+    it.size == 6 && it.sumOf(String::length) <= MAX_TASK_EDITOR_SAVED_STATE_CHARACTERS
+}?.let { encoded ->
+    GroupwareTaskEditorState(
+        title = encoded[0],
+        dueDate = encoded[1],
+        description = encoded[2],
+        completed = encoded[3].toBooleanStrictOrNull() ?: return null,
+        calendarHref = encoded[4].ifEmpty { null },
+        editStartEtag = encoded[5].ifEmpty { null },
+    )
+}
+
+internal fun acceptGroupwareTaskEditorChange(
+    candidate: GroupwareTaskEditorState,
+): GroupwareTaskEditorState? = candidate.takeIf {
+    encodeGroupwareTaskEditorStateForSavedState(it) != null
+}
+
+private val GroupwareTaskEditorStateSaver = Saver<GroupwareTaskEditorState?, List<String>>(
+    save = { state -> state?.let(::encodeGroupwareTaskEditorStateForSavedState) },
+    restore = { values -> decodeGroupwareTaskEditorStateFromSavedState(values) },
+)
+
+@Composable
+internal fun TaskEditorDialog(
+    task: GroupwareTask?,
+    calendars: List<GroupwareCalendar>,
+    mutationInProgress: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSave: (TaskDraft, GroupwareCalendar, String?) -> Unit,
+) {
+    val editorKey = task?.instanceId ?: "new-task"
+    val initialState = remember(editorKey) {
+        GroupwareTaskEditorState(
+            title = task?.title.orEmpty(),
+            dueDate = task?.due?.take(8)?.let { compact ->
+                if (compact.length == 8) {
+                    "${compact.take(4)}-${compact.substring(4, 6)}-${compact.takeLast(2)}"
+                } else {
+                    ""
+                }
+            }.orEmpty(),
+            description = task?.description.orEmpty(),
+            completed = task?.completed == true,
+            calendarHref = task?.calendarHref ?: calendars.firstOrNull()?.href,
+            editStartEtag = task?.etag,
+        )
+    }
+    var savedEditorState by rememberSaveable(editorKey, stateSaver = GroupwareTaskEditorStateSaver) {
+        mutableStateOf(acceptGroupwareTaskEditorChange(initialState))
+    }
+    val editorState = savedEditorState
+    if (editorState == null) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Task is too large to edit here") },
+            text = { Text("This task exceeds the native editor's saved-draft limit. Its original content is unchanged.") },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        )
+        return
+    }
+    var draftLimitReached by remember(editorKey) { mutableStateOf(false) }
+    fun updateEditorState(candidate: GroupwareTaskEditorState) {
+        val accepted = acceptGroupwareTaskEditorChange(candidate)
+        draftLimitReached = accepted == null
+        if (accepted != null) savedEditorState = accepted
+    }
+    val calendar = selectedGroupwareTaskCalendar(calendars, editorState.calendarHref)
+    val dateValid = editorState.dueDate.isBlank() ||
+        editorState.dueDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) &&
+        isValidGroupwareTaskDueDate(editorState.dueDate.replace("-", ""))
+    AlertDialog(
+        onDismissRequest = { if (!mutationInProgress) onDismiss() },
+        title = { Text(if (task == null) "New task" else "Edit task") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                if (draftLimitReached) item {
+                    Text(
+                        "This change exceeds the saved-draft limit. Your previous input is unchanged.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        editorState.title,
+                        { updateEditorState(editorState.copy(title = it)) },
+                        label = { Text("Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        editorState.dueDate,
+                        { updateEditorState(editorState.copy(dueDate = it)) },
+                        label = { Text("Due date") },
+                        placeholder = { Text("YYYY-MM-DD") },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = !dateValid,
+                        enabled = !mutationInProgress,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        editorState.description,
+                        { updateEditorState(editorState.copy(description = it)) },
+                        label = { Text("Description") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
+                    )
+                }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = editorState.completed,
+                            onCheckedChange = { updateEditorState(editorState.copy(completed = it)) },
+                            enabled = !mutationInProgress,
+                        )
+                        Text("Completed")
+                    }
+                }
+                if (calendars.size > 1 || calendar == null) item {
+                    Text("Task list", style = MaterialTheme.typography.labelLarge)
+                    if (editorState.calendarHref != null && calendar == null) {
+                        Text(
+                            "The previously selected task list is unavailable. Choose another list to continue.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        calendars.forEach { candidate ->
+                            FilterChip(
+                                selected = candidate.href == calendar?.href,
+                                onClick = { updateEditorState(editorState.copy(calendarHref = candidate.href)) },
+                                label = { Text(candidate.displayName) },
+                                enabled = !mutationInProgress,
+                            )
+                        }
+                    }
+                }
+                error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !mutationInProgress, onClick = onDismiss) { Text("Cancel") }
+        },
+        confirmButton = {
+            Button(
+                enabled = !mutationInProgress && editorState.title.isNotBlank() && dateValid && calendar != null,
+                onClick = {
+                    onSave(
+                        TaskDraft(
+                            editorState.title,
+                            editorState.dueDate,
+                            editorState.description,
+                            editorState.completed,
+                        ),
+                        requireNotNull(calendar),
+                        editorState.editStartEtag,
+                    )
+                },
+            ) { Text("Save") }
+        },
+    )
+}
+
+internal fun selectedGroupwareTaskCalendar(
+    calendars: List<GroupwareCalendar>,
+    selectedHref: String?,
+): GroupwareCalendar? = calendars.firstOrNull { calendar -> calendar.href == selectedHref }

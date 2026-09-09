@@ -369,6 +369,35 @@ class DashboardStatusTest {
     }
 
     @Test
+    fun `unsupported optional dashboard icons do not discard otherwise valid items`() {
+        val widgets = listOf(widget("calendar", setOf(2)))
+        val payload = parseDashboardItemsV2(
+            response(
+                """
+                {"calendar":{
+                  "items":[
+                    {
+                      "title":"Compatibility review","subtitle":"in 5 days",
+                      "link":"https://cloud.example.test/apps/calendar/?objectId=event",
+                      "iconUrl":"data:image/svg+xml,%3Csvg%2F%3E","overlayIconUrl":"javascript:alert(1)",
+                      "sinceId":"1788256800"
+                    }
+                  ],
+                  "emptyContentMessage":"","halfEmptyContentMessage":"No more events today"
+                }}
+                """.trimIndent(),
+            ),
+            widgets,
+        )
+
+        val item = payload.itemsByWidget.getValue("calendar").single()
+        assertEquals("Compatibility review", item.title)
+        assertEquals("https://cloud.example.test/apps/calendar/?objectId=event", item.link)
+        assertNull(item.iconUrl)
+        assertNull(item.overlayIconUrl)
+    }
+
+    @Test
     fun `mixed dashboard item failures preserve cached sections without hiding successful widgets`() {
         val calendar = widget("calendar", setOf(2))
         val activity = widget("activity", setOf(1))

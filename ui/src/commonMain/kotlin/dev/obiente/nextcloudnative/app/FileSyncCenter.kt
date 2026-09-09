@@ -244,6 +244,12 @@ sealed interface FileSyncCenterActionResult {
         }
     }
 
+    data class Stopped(val message: String) : FileSyncCenterActionResult {
+        init {
+            require(message.isSafeFileSyncCenterText(1_024))
+        }
+    }
+
     data class Rejected(
         val reason: String,
         val scope: FileSyncRejectionScope = FileSyncRejectionScope.Items,
@@ -291,10 +297,11 @@ fun FileSyncPair.toCenterSummary(
         configuration = configuration,
         readyCount = readyCount,
         runningCount = runningCount,
-        conflicts = workItems.mapNotNull { work ->
-            work.decision
-                ?.takeIf { work.state == FileSyncExecutionState.AwaitingDecision }
-                ?.let { decision ->
+        conflicts = workItems.asSequence()
+            .mapNotNull { work ->
+                work.decision
+                    ?.takeIf { work.state == FileSyncExecutionState.AwaitingDecision }
+                    ?.let { decision ->
                     FileSyncConflictSummary(
                         workId = work.id,
                         relativePath = work.relativePath,
@@ -315,8 +322,10 @@ fun FileSyncPair.toCenterSummary(
                             )
                         },
                     )
-                }
-        },
+                    }
+            }
+            .take(MAX_PRESENTED_FILE_SYNC_CONFLICTS)
+            .toList(),
         conflictCount = conflictCount,
         failedCount = failedCount,
         skippedCount = skippedCount,
@@ -327,6 +336,8 @@ fun FileSyncPair.toCenterSummary(
         runState = runState,
         networkState = networkState,
     )
+
+const val MAX_PRESENTED_FILE_SYNC_CONFLICTS = 5
 
 fun liveFileSyncNetworkState(
     networkAvailable: Boolean?,

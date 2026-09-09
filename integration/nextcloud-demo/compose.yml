@@ -1,0 +1,81 @@
+name: nc-native-demo
+
+services:
+  database:
+    image: docker.io/library/postgres:17.6-alpine3.22
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${NC_DEMO_DATABASE_NAME:-nextcloud}
+      - POSTGRES_USER=${NC_DEMO_DATABASE_USER:-nextcloud}
+      - POSTGRES_PASSWORD
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - database:/var/lib/postgresql/data
+
+  redis:
+    image: docker.io/library/redis:8.2.1-alpine3.22
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redis:/data
+
+  nextcloud:
+    image: docker.io/library/nextcloud:34.0.3-apache
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - POSTGRES_HOST=database
+      - POSTGRES_DB=${NC_DEMO_DATABASE_NAME:-nextcloud}
+      - POSTGRES_USER=${NC_DEMO_DATABASE_USER:-nextcloud}
+      - POSTGRES_PASSWORD
+      - REDIS_HOST=redis
+      - NEXTCLOUD_ADMIN_USER=${NC_DEMO_ADMIN_USER:-nc-native-admin}
+      - NEXTCLOUD_ADMIN_PASSWORD
+      - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DEMO_TRUSTED_DOMAINS:-localhost 127.0.0.1 10.0.2.2}
+      - PHP_MEMORY_LIMIT=1G
+      - PHP_UPLOAD_LIMIT=1G
+    ports:
+      - "127.0.0.1:${NC_DEMO_HTTP_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "php occ status --output=json | grep -q '\"installed\":true'"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 60s
+    volumes:
+      - nextcloud:/var/www/html
+      - ../../server-companion/obiente_native_bridge:/opt/obiente_native_bridge:ro,Z
+      # The gateway mounts the parent TLS directory too. Use a shared SELinux label so starting
+      # either container cannot revoke the other container's access to the CA bundle.
+      - ./.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,z
+      - ./hooks/pre-installation/10-volume-permissions.sh:/docker-entrypoint-hooks.d/pre-installation/10-volume-permissions.sh:ro,Z
+
+  gateway:
+    image: docker.io/library/caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    ports:
+      - "${NC_DEMO_BIND_ADDRESS:-0.0.0.0}:${NC_DEMO_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - ./.state/tls:/etc/caddy/tls:ro,z
+
+volumes:
+  database:
+  redis:
+  nextcloud:

@@ -119,7 +119,7 @@ internal fun rememberNativeDurableCollectionReorderState(
         error = null
         recoveryAvailable = false
         scope.launch {
-            runCatching { store.save(pendingKey, stagedValues) }.onFailure { failure ->
+            runCatchingUnlessCancelled { store.save(pendingKey, stagedValues) }.onFailure { failure ->
                 error = failure.message ?: "The new order could not be staged safely."
                 currentOnPendingChanged(activePlan, null, false)
                 orderedRecordIds = authoritativeOrder
@@ -130,7 +130,7 @@ internal fun rememberNativeDurableCollectionReorderState(
             when (val result = currentExecutor.execute(request)) {
                 is NativeActionExecutionResult.Success -> {
                     encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
-                        ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                        ?.let { values -> runCatchingUnlessCancelled { store.save(pendingKey, values) } }
                     currentOnPendingChanged(activePlan, submittedOrder, true)
                     currentOnActionSucceeded?.invoke(activePlan.action)
                 }
@@ -138,11 +138,11 @@ internal fun rememberNativeDurableCollectionReorderState(
                     error = result.message
                     if (result.outcome.requiresMutationReconciliation()) {
                         encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
-                            ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                            ?.let { values -> runCatchingUnlessCancelled { store.save(pendingKey, values) } }
                         currentOnPendingChanged(activePlan, submittedOrder, true)
                         currentOnActionSucceeded?.invoke(activePlan.action)
                     } else {
-                        runCatching { store.clear(pendingKey) }
+                        runCatchingUnlessCancelled { store.clear(pendingKey) }
                         currentOnPendingChanged(activePlan, null, false)
                         orderedRecordIds = authoritativeOrder
                         executing = false
@@ -171,7 +171,7 @@ internal fun rememberNativeDurableCollectionReorderState(
         val validPendingOrder = validPendingNativeCollectionOrder(authoritativeOrder, pendingOrder)
         if (pendingOrder != null && validPendingOrder == null) {
             if (activePlan != null && store != null) {
-                runCatching { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
+                runCatchingUnlessCancelled { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
                     .onFailure { failure ->
                         error = failure.message ?: "The obsolete order marker could not be cleared."
                         executing = true
@@ -186,7 +186,7 @@ internal fun rememberNativeDurableCollectionReorderState(
         } else if (validPendingOrder != null && authoritativeOrder == validPendingOrder) {
             orderedRecordIds = authoritativeOrder
             if (activePlan != null && store != null) {
-                runCatching { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
+                runCatchingUnlessCancelled { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
                     .onFailure { failure ->
                         error = failure.message ?: "The confirmed order marker could not be cleared."
                         executing = true
@@ -209,7 +209,7 @@ internal fun rememberNativeDurableCollectionReorderState(
                     recoveryAvailable = true
                     return@LaunchedEffect
                 }
-                runCatching { store.save(pendingKey, values) }.onFailure { failure ->
+                runCatchingUnlessCancelled { store.save(pendingKey, values) }.onFailure { failure ->
                     error = failure.message ?: "The order recovery marker could not be updated."
                     recoveryAvailable = true
                     return@LaunchedEffect
@@ -244,7 +244,7 @@ internal fun rememberNativeDurableCollectionReorderState(
         recoveryAvailable = false
         executing = true
         scope.launch {
-            runCatching { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
+            runCatchingUnlessCancelled { store.clear(nativePendingCollectionReorderKey(activePlan, resourceId)) }
                 .onSuccess {
                     currentOnPendingChanged(activePlan, null, false)
                     orderedRecordIds = authoritativeOrder

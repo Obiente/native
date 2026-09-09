@@ -10,14 +10,14 @@ import kotlin.test.assertTrue
 
 class DesktopUpdateManifestTest {
     private val tag = "nightly-20260731-1543-run358-02200472"
-    private val releaseRoot = "https://github.com/Obiente/nc-native/releases/download/$tag/"
+    private val releaseRoot = "https://github.com/obiente/native/releases/download/$tag/"
     private val manifest = DesktopUpdateManifest(
         schemaVersion = 1,
         channel = AndroidUpdateChannel.Nightly.manifestChannel,
         versionName = tag,
         versionCode = 20_002_921,
         packageVersion = "1.0.2921",
-        releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        releaseNotesUrl = "https://github.com/obiente/native/releases/tag/$tag",
         assets = listOf(
             DesktopUpdateAsset(
                 platform = "linux",
@@ -71,8 +71,23 @@ class DesktopUpdateManifestTest {
         assertEquals(AndroidUpdateChannel.Nightly, release.updateChannel)
         assertEquals("rpm", release.asset.format)
         assertEquals("windows", manifest.assets.single { it.format == "msi" }.platform)
+        assertTrue(release.changes.isEmpty())
         assertTrue(isNewerAppRelease(manifest.versionCode - 1, release))
         assertFalse(isNewerAppRelease(manifest.versionCode, release))
+
+        val bytesWithUnknownField =
+            bytes.decodeToString().dropLast(1) + ",\"futureField\":true}"
+        assertEquals(
+            release,
+            parseDesktopDirectRelease(
+                bytes = bytesWithUnknownField.encodeToByteArray(),
+                metadataUrl = AndroidUpdateChannel.Nightly.desktopManifestUrl(),
+                expectedChannel = AndroidUpdateChannel.Nightly,
+                platform = "linux",
+                format = "rpm",
+                architecture = "x86_64",
+            ),
+        )
     }
 
     @Test

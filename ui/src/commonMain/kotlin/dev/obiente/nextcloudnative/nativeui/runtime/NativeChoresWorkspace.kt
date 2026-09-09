@@ -17,6 +17,12 @@ internal enum class NativeChoresWorkspaceKind {
     History,
 }
 
+internal fun nativeChoresWorkspaceUsesTeamContext(kind: NativeChoresWorkspaceKind?): Boolean = kind in setOf(
+    NativeChoresWorkspaceKind.Team,
+    NativeChoresWorkspaceKind.Chores,
+    NativeChoresWorkspaceKind.History,
+)
+
 internal data class NativeChoresMetric(val label: String, val value: String)
 
 internal data class NativeChoresItem(

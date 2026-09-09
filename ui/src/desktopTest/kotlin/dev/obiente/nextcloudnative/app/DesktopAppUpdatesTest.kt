@@ -16,24 +16,54 @@ import kotlin.test.assertIs
 
 class DesktopAppUpdatesTest {
     @Test
-    fun linuxUpdatesUseAnAuthorizedPackageServiceWithoutShellParsing() {
-        val packageFile = File("/tmp/update path;still-one-argument.rpm")
-        val packageKit = File("/usr/bin/pkcon")
+    fun linuxUpdatesUseTheFormatSpecificPackageManagerWithoutShellParsing() {
+        val rpmPackage = File("/tmp/update path;still-one-argument.rpm")
+        val debPackage = File("/tmp/update path;still-one-argument.deb")
+        val pkexec = File("/usr/bin/pkexec")
+        val dnf5 = File("/usr/bin/dnf5")
+        val dnf = File("/usr/bin/dnf")
+        val aptGet = File("/usr/bin/apt-get")
 
         assertEquals(
             listOf(
-                packageKit.absolutePath,
-                "--noninteractive",
-                "install-local",
-                packageFile.toPath().toAbsolutePath().normalize().toString(),
+                pkexec.absolutePath,
+                dnf5.absolutePath,
+                "--assumeyes",
+                "install",
+                "--no-allow-downgrade",
+                rpmPackage.toPath().toAbsolutePath().normalize().toString(),
             ),
-            linuxNativePackageInstallerCommand(packageFile) { executable -> executable == packageKit },
+            linuxNativePackageInstallerCommand(rpmPackage) { executable ->
+                executable == pkexec || executable == dnf5 || executable == dnf
+            },
         )
         assertEquals(
-            "install-local",
-            linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.deb")) { true }?.get(2),
+            listOf(
+                pkexec.absolutePath,
+                dnf.absolutePath,
+                "--assumeyes",
+                "install",
+                rpmPackage.toPath().toAbsolutePath().normalize().toString(),
+            ),
+            linuxNativePackageInstallerCommand(rpmPackage) { executable ->
+                executable == pkexec || executable == dnf
+            },
         )
-        assertNull(linuxNativePackageInstallerCommand(packageFile) { false })
+        assertEquals(
+            listOf(
+                pkexec.absolutePath,
+                aptGet.absolutePath,
+                "--yes",
+                "--no-remove",
+                "install",
+                debPackage.toPath().toAbsolutePath().normalize().toString(),
+            ),
+            linuxNativePackageInstallerCommand(debPackage) { executable ->
+                executable == pkexec || executable == aptGet
+            },
+        )
+        assertNull(linuxNativePackageInstallerCommand(rpmPackage) { executable -> executable == dnf5 })
+        assertNull(linuxNativePackageInstallerCommand(debPackage) { executable -> executable == pkexec })
         assertNull(linuxNativePackageInstallerCommand(File("/tmp/nextcloudnative.pkg")) { true })
     }
 
@@ -70,9 +100,33 @@ class DesktopAppUpdatesTest {
     }
 
     @Test
+    fun linuxPackageTransactionsRejectReplacedPackageFiles() {
+        val directory = Files.createTempDirectory("desktop-update-symlink-test").toFile()
+        val target = directory.resolve("outside.rpm").apply { writeText("unverified") }
+        val packageFile = directory.resolve("nextcloudnative.rpm")
+        try {
+            Files.createSymbolicLink(packageFile.toPath(), target.toPath())
+            var commandResolved = false
+            val failure = kotlin.test.assertFailsWith<IllegalStateException> {
+                runLinuxNativePackageInstaller(
+                    packageFile = packageFile,
+                    commandResolver = {
+                        commandResolved = true
+                        listOf("unexpected")
+                    },
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("no longer a regular file"))
+            assertFalse(commandResolved)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun windowsInstallerMetadataPreservesTheInternetTrustBoundary() {
-        val source = "https://github.com/Obiente/nc-native/releases/download/v1/NextcloudNative.msi"
-        val notes = "https://github.com/Obiente/nc-native/releases/tag/v1"
+        val source = "https://github.com/obiente/native/releases/download/v1/NextcloudNative.msi"
+        val notes = "https://github.com/obiente/native/releases/tag/v1"
 
         assertEquals(
             "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$source\r\nReferrerUrl=$notes\r\n",
@@ -485,12 +539,12 @@ class DesktopAppUpdatesTest {
                     platform = "linux",
                     format = "rpm",
                     architecture = "x86_64",
-                    url = "https://github.com/Obiente/nc-native/releases/download/" +
+                    url = "https://github.com/obiente/native/releases/download/" +
                         "v0.1.0-alpha.2/nextcloudnative.rpm",
                     size = 1,
                     sha256 = "a".repeat(64),
                 ),
-                releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.2",
+                releaseNotesUrl = "https://github.com/obiente/native/releases/tag/v0.1.0-alpha.2",
             )
 
             assertEquals(AndroidUpdateChannel.Nightly, updater.updateChannel())
@@ -500,6 +554,7 @@ class DesktopAppUpdatesTest {
             val result = runBlocking { updater.beginUpdate(alphaRelease) }
             val rejected = assertIs<AppUpdateInstallResult.Rejected>(result)
             assertTrue(rejected.message.contains("channel changed", ignoreCase = true))
+            assertEquals("desktop-channel-changed", rejected.diagnosticCode)
         } finally {
             node.removeNode()
             directory.deleteRecursively()

@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -119,7 +122,6 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffo
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
@@ -128,14 +130,12 @@ import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.accountAvatarContentDescription
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudTypography
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
-import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
@@ -161,6 +161,8 @@ import dev.obiente.nextcloudnative.nativeui.model.resolveDynamicRecordReadParame
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
 import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeInlineEditorNavigation
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeInlineEditorNavigation
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
@@ -187,6 +189,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceUsesTeamContext
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
@@ -231,322 +234,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeSource
-
-internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
-
-@Serializable
-internal sealed interface Screen {
-    @Serializable
-    data object Root : Screen
-    @Serializable
-    data object Search : Screen
-    @Serializable
-    data class Files(val path: String) : Screen
-    @Serializable
-    data object Media : Screen
-    @Serializable
-    data class PersonMedia(val person: NextcloudPerson) : Screen
-    @Serializable
-    data object Talk : Screen
-    @Serializable
-    data object Notes : Screen
-    @Serializable
-    data object Dashboard : Screen
-    @Serializable
-    data object UserStatus : Screen
-    @Serializable
-    data object Calendar : Screen
-    @Serializable
-    data object Contacts : Screen
-    @Serializable
-    data object Deck : Screen
-    @Serializable
-    data object AdminApps : Screen
-    @Serializable
-    data object OfflineCenter : Screen
-    @Serializable
-    data object Transfers : Screen
-    @Serializable
-    data object ProjectNews : Screen
-    @Serializable
-    data class ProjectNewsArticleView(val article: ProjectNewsArticle) : Screen
-    @Serializable
-    data class Chat(val room: TalkRoom) : Screen
-    @Serializable
-    data class NoteEditor(val note: NextcloudNote) : Screen
-    @Serializable
-    data class AppInfo(
-        val app: NextcloudAppEntry,
-        val navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
-        val lastKnownServerVersion: String? = null,
-        val lastKnownInstalledAppVersion: String? = null,
-    ) : Screen
-    @Serializable
-    data class MediaViewer(
-        val navigationKey: String,
-        val selectedIndex: Int,
-        val selectedSourceIndex: Int,
-        val returnTo: Screen,
-    ) : Screen
-    @Serializable
-    data class FileInfo(
-        val file: NextcloudFile,
-        val parentPath: String,
-        val showVersions: Boolean = false,
-    ) : Screen
-    @Serializable
-    data class DocumentPreview(val file: NextcloudFile, val parentPath: String) : Screen
-    @Serializable
-    data class TextEditor(val file: NextcloudFile, val parentPath: String) : Screen
-}
-
-/** Top-level destinations retain global navigation; focused editors and detail views stay immersive. */
-internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
-    Screen.Root,
-    Screen.Search,
-    is Screen.Files,
-    Screen.Media,
-    Screen.Talk,
-    Screen.Notes,
-    Screen.Dashboard,
-    Screen.UserStatus,
-    Screen.Calendar,
-    Screen.Contacts,
-    Screen.Deck,
-    Screen.AdminApps,
-    Screen.OfflineCenter,
-    Screen.Transfers,
-    Screen.ProjectNews,
-    is Screen.AppInfo,
-    -> true
-
-    is Screen.PersonMedia,
-    is Screen.ProjectNewsArticleView,
-    is Screen.Chat,
-    is Screen.NoteEditor,
-    is Screen.MediaViewer,
-    is Screen.FileInfo,
-    is Screen.DocumentPreview,
-    is Screen.TextEditor,
-    -> false
-}
-
-internal fun Screen.requiresPendingNavigationGuard(groupwareMutationInProgress: Boolean): Boolean =
-    groupwareMutationInProgress ||
-        this is Screen.NoteEditor ||
-        this is Screen.TextEditor ||
-        this is Screen.MediaViewer ||
-        this is Screen.Calendar ||
-        this is Screen.Contacts
-
-internal fun mutationOrLinkCommitBlocksInteraction(
-    mutationInProgress: Boolean,
-    navigationCommitInProgress: Boolean,
-): Boolean = mutationInProgress || navigationCommitInProgress
-
-internal enum class RootDestinationContent {
-    HomeWorkspace,
-    FolderSync,
-    Apps,
-    Activity,
-    Settings,
-}
-
-internal fun rootDestinationContent(
-    destination: NextcloudDestination,
-): RootDestinationContent = when (destination) {
-    NextcloudDestination.Home -> RootDestinationContent.HomeWorkspace
-    NextcloudDestination.FolderSync -> RootDestinationContent.FolderSync
-    NextcloudDestination.Apps -> RootDestinationContent.Apps
-    NextcloudDestination.Activity -> RootDestinationContent.Activity
-    NextcloudDestination.Settings -> RootDestinationContent.Settings
-}
-
-private val navigationStateJson = Json {
-    ignoreUnknownKeys = true
-    encodeDefaults = true
-}
-
-@Serializable
-internal data class SavedScreen(
-    val kind: String,
-    val path: String? = null,
-    val appId: String? = null,
-    val appName: String? = null,
-    val appNavigation: SavedDynamicAppNavigationState? = null,
-    val serverVersion: String? = null,
-    val installedAppVersion: String? = null,
-    val conversationToken: String? = null,
-    val routeLabel: String? = null,
-    val noteId: Long? = null,
-)
-
-@Serializable
-internal data class SavedDynamicAppNavigationState(
-    val selectedViewId: String? = null,
-    val selectedRecordId: String? = null,
-    val selectedRecordResourceId: String? = null,
-    val pathParameterValues: Map<String, String> = emptyMap(),
-    val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
-)
-
-internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
-    Screen.Root -> SavedScreen("root")
-    Screen.Search -> SavedScreen("search")
-    is Screen.Files -> SavedScreen("files", path = path.take(MAX_SAVED_FILE_PATH_CHARS))
-    Screen.Media, is Screen.PersonMedia, is Screen.MediaViewer -> SavedScreen("media")
-    Screen.Talk -> SavedScreen("talk")
-    is Screen.Chat -> SavedScreen(
-        kind = "chat",
-        conversationToken = room.token.takeIf { token ->
-            token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS)
-        },
-        routeLabel = room.displayName.filterNot(Char::isISOControl)
-            .take(MAX_SAVED_ROUTE_LABEL_CHARS)
-            .takeIf(String::isNotBlank),
-    )
-    Screen.Notes -> SavedScreen("notes")
-    is Screen.NoteEditor -> SavedScreen(
-        kind = "note-editor",
-        noteId = note.id.takeIf { it >= 0L },
-    )
-    Screen.Dashboard -> SavedScreen("dashboard")
-    Screen.UserStatus -> SavedScreen("user-status")
-    Screen.Calendar -> SavedScreen("calendar")
-    Screen.Contacts -> SavedScreen("contacts")
-    Screen.Deck -> SavedScreen("deck")
-    Screen.AdminApps -> SavedScreen("admin-apps")
-    Screen.OfflineCenter -> SavedScreen("offline-center")
-    Screen.Transfers -> SavedScreen("transfers")
-    Screen.ProjectNews, is Screen.ProjectNewsArticleView -> SavedScreen("project-news")
-    is Screen.AppInfo -> SavedScreen(
-        kind = "app-info",
-        appId = app.id.take(MAX_SAVED_APP_ID_CHARS),
-        appName = app.name.take(MAX_SAVED_APP_NAME_CHARS),
-        appNavigation = navigation.toSavedDynamicAppNavigationState(),
-        serverVersion = lastKnownServerVersion?.take(MAX_SAVED_VERSION_CHARS),
-        installedAppVersion = lastKnownInstalledAppVersion?.take(MAX_SAVED_VERSION_CHARS),
-    )
-    is Screen.FileInfo -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-    is Screen.DocumentPreview -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-    is Screen.TextEditor -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-}
-
-internal fun SavedScreen.toScreen(): Screen = when (kind) {
-    "root" -> Screen.Root
-    "search" -> Screen.Search
-    "files" -> Screen.Files(path.orEmpty().take(MAX_SAVED_FILE_PATH_CHARS))
-    "media" -> Screen.Media
-    "talk" -> Screen.Talk
-    "chat" -> conversationToken
-        ?.takeIf { token -> token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS) }
-        ?.let { token ->
-            Screen.Chat(
-                TalkRoom(
-                    token = token,
-                    displayName = routeLabel?.filterNot(Char::isISOControl)
-                        ?.take(MAX_SAVED_ROUTE_LABEL_CHARS)
-                        ?.takeIf(String::isNotBlank)
-                        ?: "Conversation",
-                    lastMessage = null,
-                    unreadMessages = 0,
-                ),
-            )
-        }
-        ?: Screen.Talk
-    "notes" -> Screen.Notes
-    "note-editor" -> noteId?.takeIf { it >= 0L }?.let { restoredId ->
-        Screen.NoteEditor(
-            NextcloudNote(
-                id = restoredId,
-                title = "",
-                modified = 0L,
-                category = "",
-                favorite = false,
-                readOnly = true,
-                content = null,
-                etag = null,
-            ),
-        )
-    } ?: Screen.Notes
-    "dashboard" -> Screen.Dashboard
-    "user-status" -> Screen.UserStatus
-    "calendar" -> Screen.Calendar
-    "contacts" -> Screen.Contacts
-    "deck" -> Screen.Deck
-    "admin-apps" -> Screen.AdminApps
-    "offline-center" -> Screen.OfflineCenter
-    "transfers" -> Screen.Transfers
-    "project-news" -> Screen.ProjectNews
-    "app-info" -> {
-        val restoredAppId = appId?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) }
-        if (restoredAppId == null) {
-            Screen.Root
-        } else {
-            Screen.AppInfo(
-                app = NextcloudAppEntry(
-                    id = restoredAppId,
-                    name = appName?.filterNot(Char::isISOControl)?.take(MAX_SAVED_APP_NAME_CHARS)
-                        ?.takeIf(String::isNotBlank) ?: restoredAppId,
-                    href = null,
-                ),
-                navigation = appNavigation?.toDynamicAppNavigationState() ?: DynamicAppNavigationState(),
-                lastKnownServerVersion = serverVersion?.take(MAX_SAVED_VERSION_CHARS),
-                lastKnownInstalledAppVersion = installedAppVersion?.take(MAX_SAVED_VERSION_CHARS),
-            )
-        }
-    }
-    else -> Screen.Root
-}
-
-private val screenSaver = Saver<Screen, String>(
-    save = { screen -> navigationStateJson.encodeToString(screen.toSavedScreen()) },
-    restore = { encoded ->
-        runCatching { navigationStateJson.decodeFromString<SavedScreen>(encoded).toScreen() }
-            .getOrDefault(Screen.Root)
-    },
-)
-
-@Serializable
-private data class SavedAppWorkspaceNavigation(
-    val activeAppId: String? = null,
-    val lastScreenByApp: Map<String, SavedScreen> = emptyMap(),
-)
-
-private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Screen>, String>(
-    save = { memory ->
-        navigationStateJson.encodeToString(
-            SavedAppWorkspaceNavigation(
-                activeAppId = memory.activeAppId,
-                lastScreenByApp = memory.lastStateByApp.mapValues { (_, screen) -> screen.toSavedScreen() },
-            ),
-        )
-    },
-    restore = { encoded ->
-        runCatching {
-            navigationStateJson.decodeFromString<SavedAppWorkspaceNavigation>(encoded)
-        }.map { saved ->
-            AppWorkspaceNavigationMemory(
-                activeAppId = saved.activeAppId
-                    ?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) },
-                lastStateByApp = saved.lastScreenByApp.entries
-                    .filter { (appId, _) ->
-                        appId.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS)
-                    }
-                    .toList()
-                    .takeLast(MAX_REMEMBERED_APP_WORKSPACES)
-                    .associate { (appId, savedScreen) -> appId to savedScreen.toScreen() },
-            )
-        }.getOrDefault(AppWorkspaceNavigationMemory())
-    },
-)
-
-private const val MAX_SAVED_FILE_PATH_CHARS = 2_048
-private const val MAX_SAVED_APP_ID_CHARS = 128
-private const val MAX_SAVED_APP_NAME_CHARS = 256
-private const val MAX_SAVED_VERSION_CHARS = 128
-private const val MAX_SAVED_TALK_TOKEN_CHARS = 256
-private const val MAX_SAVED_ROUTE_LABEL_CHARS = 256
 
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,
@@ -615,275 +302,6 @@ internal fun NativeAppSchema.forDynamicContractVersion(
     )
 }
 
-internal data class DynamicFormRelationCacheKey(
-    val resourceId: String,
-    val actionId: String,
-    val bindingValues: Map<String, String>,
-)
-
-internal data class DynamicFormRelationLoadRequest(
-    val plan: DynamicFormRelationLoadPlan,
-    val cacheKey: DynamicFormRelationCacheKey,
-)
-
-internal data class DynamicFormRelationContinuation(
-    val spec: DynamicPaginationSpec,
-    val nextPageNumber: Int,
-    val nextRequestValue: String,
-    val loadedRecordCount: Int,
-)
-
-internal fun shouldOfferInitialDynamicRelationRetry(
-    hasContinuation: Boolean,
-    loading: Boolean,
-    error: String?,
-    discardedRecordCount: Int,
-): Boolean = error != null && !hasContinuation && !loading && discardedRecordCount == 0
-
-private data class DynamicFormRelationLoadResult(
-    val records: List<NativeRecord>,
-    val pagination: DynamicPaginationSpec?,
-    val partialFailureMessage: String? = null,
-)
-
-internal data class DynamicFormRelationCacheState(
-    val recordsByKey: Map<DynamicFormRelationCacheKey, List<NativeRecord>> = emptyMap(),
-    val continuationsByKey: Map<DynamicFormRelationCacheKey, DynamicFormRelationContinuation> = emptyMap(),
-    val discardedRecordCountsByKey: Map<DynamicFormRelationCacheKey, Int> = emptyMap(),
-    val failedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
-) {
-    fun pendingRequests(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
-        request.cacheKey !in recordsByKey && request.cacheKey !in failedKeys
-    }
-
-    fun relatedRecords(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): Map<String, List<NativeRecord>> = requests.mapNotNull { request ->
-        recordsByKey[request.cacheKey]?.let { records -> request.plan.resourceId to records }
-    }.toMap()
-
-    fun datasetRelatedRecords(
-        genericRecords: Map<String, List<NativeRecord>>,
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): Map<String, List<NativeRecord>> {
-        val scopedResourceIds = requests.mapTo(hashSetOf()) { request -> request.plan.resourceId }
-        return genericRecords.filterKeys { resourceId -> resourceId !in scopedResourceIds } +
-            relatedRecords(requests)
-    }
-
-    fun failedRequests(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
-        request.cacheKey in failedKeys
-    }
-
-    fun loadSucceeded(
-        request: DynamicFormRelationLoadRequest,
-        records: List<NativeRecord>,
-        pagination: DynamicPaginationSpec? = null,
-    ): DynamicFormRelationCacheState {
-        val distinctRecords = records.distinctBy(NativeRecord::id)
-        val discardedRecordCount =
-            (distinctRecords.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
-        val boundedRecords = distinctRecords.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
-        val continuation = pagination?.nextDynamicFormRelationContinuation(
-            lastPage = records,
-            loadedRecordCount = records.size,
-        )
-        return copy(
-            recordsByKey = recordsByKey.putBounded(request.cacheKey, boundedRecords),
-            continuationsByKey = if (continuation == null) {
-                continuationsByKey - request.cacheKey
-            } else {
-                continuationsByKey.putBounded(request.cacheKey, continuation)
-            },
-            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
-                discardedRecordCountsByKey - request.cacheKey
-            } else {
-                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
-            },
-            failedKeys = failedKeys - request.cacheKey,
-        )
-    }
-
-    fun appendPageSucceeded(
-        request: DynamicFormRelationLoadRequest,
-        page: List<NativeRecord>,
-    ): DynamicFormRelationCacheState {
-        val current = recordsByKey[request.cacheKey].orEmpty()
-        val activeContinuation = continuationsByKey[request.cacheKey] ?: return this
-        val currentIds = current.mapTo(hashSetOf(), NativeRecord::id)
-        val novelRecords = page.distinctBy(NativeRecord::id)
-            .filterNot { record -> record.id in currentIds }
-        val unboundedWindow = current + novelRecords
-        val discardedFromWindow =
-            (unboundedWindow.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
-        val merged = unboundedWindow.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
-        val nextContinuation = activeContinuation.spec.nextDynamicFormRelationContinuation(
-            lastPage = page,
-            loadedRecordCount = activeContinuation.loadedRecordCount + page.size,
-            novelRecordCount = novelRecords.size,
-            nextPageNumber = activeContinuation.nextPageNumber + 1,
-        )
-        val discardedRecordCount =
-            ((discardedRecordCountsByKey[request.cacheKey] ?: 0).toLong() + discardedFromWindow)
-                .coerceAtMost(Int.MAX_VALUE.toLong())
-                .toInt()
-        return copy(
-            recordsByKey = recordsByKey.putBounded(request.cacheKey, merged),
-            continuationsByKey = if (nextContinuation == null) {
-                continuationsByKey - request.cacheKey
-            } else {
-                continuationsByKey.putBounded(request.cacheKey, nextContinuation)
-            },
-            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
-                discardedRecordCountsByKey - request.cacheKey
-            } else {
-                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
-            },
-        )
-    }
-
-    fun continuation(
-        request: DynamicFormRelationLoadRequest,
-    ): DynamicFormRelationContinuation? = continuationsByKey[request.cacheKey]
-
-    fun discardedRecordCount(request: DynamicFormRelationLoadRequest): Int =
-        discardedRecordCountsByKey[request.cacheKey] ?: 0
-
-    fun loadFailed(
-        request: DynamicFormRelationLoadRequest,
-    ): DynamicFormRelationCacheState = copy(
-        recordsByKey = recordsByKey - request.cacheKey,
-        continuationsByKey = continuationsByKey - request.cacheKey,
-        discardedRecordCountsByKey = discardedRecordCountsByKey - request.cacheKey,
-        failedKeys = (failedKeys + request.cacheKey)
-            .toList()
-            .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-            .toSet(),
-    )
-
-    fun retry(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): DynamicFormRelationCacheState {
-        val retryKeys = requests.mapTo(hashSetOf(), DynamicFormRelationLoadRequest::cacheKey)
-        return copy(failedKeys = failedKeys - retryKeys)
-    }
-}
-
-private fun DynamicPaginationSpec.nextDynamicFormRelationContinuation(
-    lastPage: List<NativeRecord>,
-    loadedRecordCount: Int,
-    novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int? = null,
-): DynamicFormRelationContinuation? {
-    if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
-    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicFormRelationContinuation(this, continuationPageNumber, nextValue, loadedRecordCount)
-}
-
-private suspend fun loadInitialDynamicFormRelationRecords(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    descriptor: DynamicAppDescriptor,
-    request: DynamicFormRelationLoadRequest,
-    values: Map<String, String>,
-    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
-): DynamicFormRelationLoadResult {
-    val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
-        ?: error("This relation has no declared load action.")
-    val boundValues = dynamicFormRelationRuntimeValues(request, values)
-    val outcome = loadDynamicRecordsWithOutcome(
-        services = services,
-        session = session,
-        descriptor = descriptor,
-        actionId = action.id,
-        values = boundValues,
-        runtimeContext = boundValues,
-        cachePolicy = cachePolicy,
-    )
-    return DynamicFormRelationLoadResult(
-        records = outcome.records,
-        pagination = descriptor.resolvedDynamicPaginationSpec(action.id, boundValues)
-            .takeIf { outcome.partialFailureMessage == null },
-        partialFailureMessage = outcome.partialFailureMessage,
-    )
-}
-
-internal fun dynamicFormRelationRuntimeValues(
-    request: DynamicFormRelationLoadRequest,
-    availableValues: Map<String, String>,
-    additionalValues: Map<String, String> = emptyMap(),
-): Map<String, String> =
-    availableValues + request.cacheKey.bindingValues + additionalValues
-
-internal fun dynamicFormRelationLoadRequests(
-    schema: NativeAppSchema,
-    formView: ViewSpec,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
-    schema = schema,
-    plans = dynamicFormRelationLoadPlans(
-        schema = schema,
-        formView = formView,
-        availableValues = availableValues,
-    ),
-    availableValues = availableValues,
-)
-
-internal fun dynamicCollectionBatchRelationLoadRequests(
-    schema: NativeAppSchema,
-    childResourceId: String,
-    relatedFieldIds: Set<String>,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
-    schema = schema,
-    plans = dynamicRelationLoadPlans(
-        schema = schema,
-        childResourceId = childResourceId,
-        editableFieldIds = relatedFieldIds,
-        availableValues = availableValues,
-    ),
-    availableValues = availableValues,
-)
-
-private fun dynamicRelationLoadRequests(
-    schema: NativeAppSchema,
-    plans: List<DynamicFormRelationLoadPlan>,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = plans.mapNotNull { plan ->
-    val action = schema.action(plan.actionId) ?: return@mapNotNull null
-    val bindingNames = (
-        action.binding.pathParameterNames +
-            action.binding.requiredPathParameterNames +
-            action.binding.queryParameterNames +
-            action.binding.requiredQueryParameterNames
-        ).distinct()
-    if (bindingNames.size > MAX_DYNAMIC_FORM_RELATION_BINDINGS) return@mapNotNull null
-    val bindingValues = dynamicFormRelationBindingValues(action, availableValues)
-    DynamicFormRelationLoadRequest(
-        plan = plan,
-        cacheKey = DynamicFormRelationCacheKey(
-            resourceId = plan.resourceId,
-            actionId = plan.actionId,
-            bindingValues = bindingValues,
-        ),
-    )
-}
-
-private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
-    ((this - key) + (key to value))
-        .entries
-        .toList()
-        .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-        .associate(Map.Entry<K, V>::toPair)
-
-private const val MAX_DYNAMIC_FORM_RELATION_BINDINGS = 32
-private const val MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES = 16
-internal const val MAX_DYNAMIC_FORM_RELATION_RECORDS = 500
 private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
 private class PhotoTimelineUiState {
@@ -984,7 +402,7 @@ private class PhotoFolderViewportUiState(
     var browseState by mutableStateOf(initialBrowseState)
 }
 
-private val nativeAppIds = setOf(
+internal val nativeAppIds = setOf(
     "files",
     "photos",
     "memories",
@@ -1116,15 +534,42 @@ fun NextcloudNativeApp(
 
     NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
-            var session by remember { mutableStateOf(services.loadSession()) }
-            if (session == null) {
+            var sessionLoadAttempt by remember { mutableStateOf(0) }
+            val sessionLoad = remember(services, sessionLoadAttempt) {
+                loadNextcloudSessionSafely(services::loadSession)
+            }
+            var session by remember(services, sessionLoadAttempt) {
+                mutableStateOf((sessionLoad as? NextcloudSessionLoadState.Loaded)?.session)
+            }
+            val signInAgain = {
+                scope.launch {
+                    try {
+                        services.clearSession()
+                        sessionLoadAttempt += 1
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (_: NextcloudSessionStorageUnavailableException) {
+                        // Keep the recoverable storage screen visible when cleanup could not be queued safely.
+                    }
+                }
+                Unit
+            }
+            if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
+                SecureSessionStorageUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
+                LegacySessionMigrationUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
                         services = services,
                         platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                        onContinueToSignIn = {
-                            handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest
-                        },
+                        onContinueToSignIn = { handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest },
                     )
                 } else {
                     LoginScreen(
@@ -1219,6 +664,13 @@ fun NextcloudNativeMarketingCapture(
                 ),
             ) {
                 when (scenario) {
+                    MarketingCaptureScenario.SharedControlsDesktop,
+                    MarketingCaptureScenario.SharedControlsMobile,
+                    -> MarketingSharedControlsScenario(scenario)
+                    MarketingCaptureScenario.ShellCompactDesktop,
+                    MarketingCaptureScenario.ShellAppSwitcherMobile,
+                    MarketingCaptureScenario.ShellTablet,
+                    -> MarketingShellCaptureScenario(scenario, assets)
                     MarketingCaptureScenario.HomepageOverviewDesktopDark,
                     MarketingCaptureScenario.HomepageOverviewDesktopLight,
                     MarketingCaptureScenario.HomepageOverviewMobileDark,
@@ -1298,6 +750,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TablesViewsMobile,
                     MarketingCaptureScenario.TablesSharesMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.InlineRecordEditDesktop,
+                    MarketingCaptureScenario.InlineRecordEditMobile,
+                    -> MarketingInlineRecordEditShell(scenario, fixture, assets)
                     MarketingCaptureScenario.AppsWorkspaceDesktopDark,
                     MarketingCaptureScenario.AppsWorkspaceDesktopLight,
                     -> MarketingAppsWorkspaceScenario(fixture, assets)
@@ -1306,6 +761,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.CalendarWorkspaceMobileDark,
                     MarketingCaptureScenario.CalendarWorkspaceMobileLight,
                     MarketingCaptureScenario.CalendarMonthMobile,
+                    MarketingCaptureScenario.CalendarWeekMobile,
+                    MarketingCaptureScenario.CalendarWeekDesktop,
                     MarketingCaptureScenario.CalendarEventEditorMobile,
                     MarketingCaptureScenario.CalendarEventEditorDesktop,
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
@@ -1409,7 +866,7 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.DeckBoardMobile,
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
                     MarketingCaptureScenario.HomepagePlanningDesktopLight,
-                    -> MarketingDeckBoardScenario()
+                    -> MarketingDeckBoardScenario(scenario)
                     MarketingCaptureScenario.GuideAndroidGettingStartedHome,
                     MarketingCaptureScenario.GuideAndroidGettingStartedFiles,
                     MarketingCaptureScenario.GuideAndroidGettingStartedCalendar,
@@ -1472,6 +929,8 @@ private fun MarketingDesktopConversationsScenario(
         selected = NextcloudDestination.Apps,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
+        activeAppId = "spreed",
+        desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
     ) {
         NextcloudDesktopMasterDetail(
             masterWidthDp = 340,
@@ -1507,8 +966,7 @@ private fun MarketingDesktopStartupSettingsScenario(
         selected = NextcloudDestination.Settings,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
-    ) {
-        DesktopSettingsWorkspace(
+    ) { DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = fixture.displayName,
                 cloudName = fixture.cloudName,
@@ -1518,15 +976,14 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.DesktopApp,
+            visibleSections = visibleSettingsSections(true, false, true),
+            selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
         ) { section ->
             when (section) {
                 SettingsWorkspaceSection.DesktopApp -> {
-                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = true,
-                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
-                        onEnabledChanged = {},
+                    SettingsDesktopAppSectionContent(
+                        preferences = settingsDesktopPreferences(true, true),
+                        onPreferenceChanged = { _, _ -> },
                     )
                 }
                 else -> SettingsActionCard(
@@ -1554,8 +1011,8 @@ private fun LoginScreen(
     var trustingCertificate by remember { mutableStateOf(false) }
     var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
     val scope = rememberCoroutineScope()
-
     fun startLogin(
         transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
         certificateJustApproved: String? = null,
@@ -1583,6 +1040,7 @@ private fun LoginScreen(
                     services.finishLoginPolling(challenge)
                 }
                 onLoggedIn(authenticated)
+                supportDrafts.clearDrafts()
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Throwable) {
@@ -1637,62 +1095,29 @@ private fun LoginScreen(
     }
 
     certificateReview?.let { review ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!trustingCertificate) certificateReview = null
-            },
-            title = { Text("Unverified server certificate") },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    Text(
-                        "Android cannot verify the identity of ${review.serverDisplayName}. " +
-                            "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
-                    )
-                    Text("Subject", style = MaterialTheme.typography.labelLarge)
-                    Text(review.subject, style = MaterialTheme.typography.bodySmall)
-                    Text("Issuer", style = MaterialTheme.typography.labelLarge)
-                    Text(review.issuer, style = MaterialTheme.typography.bodySmall)
-                    Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
-                    Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
-                    Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !trustingCertificate,
-                    onClick = { certificateReview = null },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !trustingCertificate,
-                    onClick = {
-                        trustingCertificate = true
-                        scope.launch {
-                            runCatching { services.trustServerCertificate(review) }
-                                .onSuccess {
-                                    trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                    startLogin(certificateJustApproved = review.sha256Fingerprint)
-                                }
-                                .onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    error = failure.message ?: "The certificate could not be trusted."
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                }
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = null,
+            confirmLabel = "Trust and connect",
+            onDismiss = { certificateReview = null },
+            onConfirm = {
+                trustingCertificate = true
+                scope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
+                            certificateReview = null
+                            trustingCertificate = false
+                            startLogin(certificateJustApproved = review.sha256Fingerprint)
                         }
-                    },
-                ) { Text(if (trustingCertificate) "Checking..." else "Trust and connect") }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            error = failure.message ?: "The certificate could not be trusted."
+                            certificateReview = null
+                            trustingCertificate = false
+                        }
+                }
             },
         )
     }
@@ -1708,7 +1133,7 @@ private fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services)
+                    SupportDiagnosticsSettingsCard(services, supportDrafts)
                 }
             },
             confirmButton = {
@@ -1726,16 +1151,13 @@ private fun LoginScreen(
                 color = NextcloudTheme.colors.appIconContainer,
                 shape = RoundedCornerShape(NextcloudRadii.Medium),
             ) {
-                Icon(
-                    NextcloudIcons.Cloud,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(14.dp).size(34.dp),
+                dev.obiente.nextcloudnative.app.design.NativeBrandMark(
+                    modifier = Modifier.size(64.dp),
                 )
             }
-            Text("Nextcloud Native", style = MaterialTheme.typography.headlineLarge)
+            Text("nati.ve", style = MaterialTheme.typography.headlineLarge)
             Text(
-                "Your cloud, in one native app.",
+                "Your cloud, natively.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1834,13 +1256,48 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
+    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
+    val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
+    val loadedAppPins = remember(appPinsAccountScope) {
+        appPinsRepository.loadWithProvenance(appPinsAccountScope)
+    }
+    var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
+    var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
+        mutableStateOf(loadedAppPins.storageAuthoritative)
+    }
+    var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
+    val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
+        if (!appPinsStorageAuthoritative) {
+            return@togglePinnedApp "Pinned apps cannot be changed because their saved settings could not be read. Restart the app and try again."
+        }
+        val updated = runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }
+            .getOrElse {
+                return@togglePinnedApp "You can pin up to $MAX_APP_WORKSPACE_PINS installed apps. Unpin one first."
+            }
+        if (appPinsRepository.save(appPinsAccountScope, updated)) {
+            pinnedAppIds = updated
+            appPinsStorageAuthoritative = true
+            appPinsPersistenceError = null
+            null
+        } else {
+            "Pinned apps could not be saved on this device. Try again."
+        }
+    }
     var memoriesLivePhotoCapability by remember(session) {
         mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
     }
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
+    var certificateReview by remember(session) { mutableStateOf<ServerCertificateReview?>(null) }
+    var certificateReviewFailure by remember(session) { mutableStateOf<String?>(null) }
+    var certificateTrustError by remember(session) { mutableStateOf<String?>(null) }
+    var trustingCertificate by remember(session) { mutableStateOf(false) }
+    var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
+    val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
+    val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1881,6 +1338,21 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
+    val supportSubmissionState by remember(services) {
+        services.supportDiagnosticsSubmissionStates()
+    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
+    val submittedSupportReports = (supportSubmissionState as? SupportDiagnosticsSubmissionState.Submitted)
+        ?.reports
+        .orEmpty()
+    val submittedSupportReportCodes = submittedSupportReports.map { report -> report.supportCode }
+    DeckCardDraftRecoveryPreparationEffect(services, session)
+    LaunchedEffect(services, submittedSupportReportCodes) {
+        if (submittedSupportReportCodes.isEmpty()) return@LaunchedEffect
+        while (currentCoroutineContext().isActive) {
+            services.refreshSubmittedSupportDiagnosticsReports()
+            delay(SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS)
+        }
+    }
     val pendingEditorNavigationRequests = remember(session) {
         mutableStateListOf<NextcloudPendingNavigationRequest>()
     }
@@ -1910,6 +1382,13 @@ private fun AuthenticatedApp(
     }
 
     fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { applyNavigationRequest(request) },
+                cancel = {
+                    onNavigationRequestHandled(request.sequence)
+                    pendingEditorNavigationRequests.removeAll { it.identity == NextcloudPendingNavigationRequest.Native(request).identity }
+                },
+            )) return
         if (groupwareMutationInProgress) {
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
             return
@@ -1952,10 +1431,12 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(appUpdateReviewRequest, groupwareMutationInProgress) {
         if (appUpdateReviewRequest > 0 && !groupwareMutationInProgress) {
-            leaveAppWorkspace()
-            screen = Screen.Root
-            destination = NextcloudDestination.Settings
-            onAppUpdateReviewHandled(appUpdateReviewRequest)
+            inlineEditorNavigation.navigate {
+                leaveAppWorkspace()
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+                onAppUpdateReviewHandled(appUpdateReviewRequest)
+            }
         }
     }
 
@@ -1972,7 +1453,8 @@ private fun AuthenticatedApp(
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
             screen is Screen.Calendar ||
-            screen is Screen.Contacts
+            screen is Screen.Contacts ||
+            screen is Screen.Tasks
         ) {
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
         } else {
@@ -1982,9 +1464,77 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(session, discoveryAttempt) {
         discoveryError = null
-        runCatching { services.loadServerInfo(session) }
-            .onSuccess { serverInfo = it }
-            .onFailure { discoveryError = it.message ?: "Could not load server details." }
+        val discoveryResult = runCatching { services.loadServerInfo(session) }
+        val discovered = discoveryResult.getOrNull()
+        if (discovered != null) {
+            serverInfo = discovered
+            val reconciled = reconciledAppWorkspacePinsForDiscovery(
+                appIds = pinnedAppIds,
+                installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                appsAuthoritative = discovered.appsAuthoritative,
+            )
+            if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
+                pinnedAppIds = reconciled
+                appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                    null
+                } else {
+                    "Unavailable pins were removed for this session, but the change could not be saved on this device."
+                }
+            }
+            return@LaunchedEffect
+        }
+        val failure = requireNotNull(discoveryResult.exceptionOrNull())
+        if (failure is CancellationException) throw failure
+        val reviewResult = runCatching {
+            services.inspectServerCertificateFailure(session.serverUrl, failure)
+        }
+        reviewResult.exceptionOrNull()?.let { inspectionFailure ->
+            if (inspectionFailure is CancellationException) throw inspectionFailure
+        }
+        val review = reviewResult.getOrNull()
+        if (review != null) {
+            certificateReview = review
+            certificateReviewFailure = failure.message ?: "Could not load server details."
+            certificateTrustError = null
+        } else {
+            discoveryError = reviewResult.exceptionOrNull()?.message
+                ?: failure.message
+                ?: "Could not load server details."
+        }
+    }
+
+    certificateReview?.let { review ->
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = certificateTrustError,
+            confirmLabel = "Trust and retry",
+            onDismiss = {
+                certificateReview = null
+                discoveryError = certificateReviewFailure ?: "Could not load server details."
+                certificateReviewFailure = null
+                certificateTrustError = null
+            },
+            onConfirm = {
+                trustingCertificate = true
+                certificateTrustError = null
+                certificateScope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            certificateReview = null
+                            certificateReviewFailure = null
+                            trustingCertificate = false
+                            certificateRecoveryAttempt += 1
+                            discoveryAttempt += 1
+                        }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            certificateTrustError = failure.message ?: "The certificate could not be trusted."
+                            trustingCertificate = false
+                        }
+                }
+            },
+        )
     }
 
     LaunchedEffect(session, serverInfo?.apps) {
@@ -2007,6 +1557,7 @@ private fun AuthenticatedApp(
         from: NextcloudDestination,
         restoreRememberedState: Boolean = true,
     ) {
+        if (inlineEditorNavigation.intercept({ openApp(app, from, restoreRememberedState) })) return
         if (groupwareMutationInProgress) return
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
@@ -2023,6 +1574,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
@@ -2050,6 +1602,7 @@ private fun AuthenticatedApp(
     }
 
     fun openSearch() {
+        if (inlineEditorNavigation.intercept(::openSearch)) return
         if (groupwareMutationInProgress) return
         returnDestination = destination
         leaveAppWorkspace()
@@ -2288,6 +1841,10 @@ private fun AuthenticatedApp(
         onFinished: () -> Unit = {},
         onCancelled: () -> Unit = {},
     ) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { launchNextcloudLinkNavigation(rawLink, source, incomingRequestSequence, onFinished, onCancelled) },
+                cancel = onCancelled,
+            )) return
         val originScreen = screen
         val originDestination = destination
         val generation = linkNavigationGeneration + 1L
@@ -2301,7 +1858,7 @@ private fun AuthenticatedApp(
                     linkNavigationGeneration == generation &&
                         screen == originScreen &&
                         destination == originDestination &&
-                        !groupwareMutationInProgress
+                        !groupwareMutationInProgress && !inlineEditorNavigation.active
                 }
                 when (result) {
                     NextcloudLinkNavigationResult.Completed -> onFinished()
@@ -2399,6 +1956,7 @@ private fun AuthenticatedApp(
     }
 
     fun navigateBack() {
+        if (inlineEditorNavigation.intercept(::navigateBack)) return
         if (groupwareMutationInProgress) return
         when (val current = screen) {
             Screen.Root -> destination = NextcloudDestination.Home
@@ -2419,6 +1977,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Tasks,
             Screen.Deck,
             is Screen.AppInfo,
             -> {
@@ -2543,22 +2102,18 @@ private fun AuthenticatedApp(
     }
 
     val desktopIdentity = serverInfo?.let { info ->
-        val shortcutAppIds = listOf(
-            listOf("files"),
-            listOf("photos", "memories"),
-            listOf("talk", "spreed"),
-            listOf("calendar"),
-        )
         NextcloudDesktopIdentity(
+            accountScopeKey = remember(session) { previewCacheDigest(session) },
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
             connectionLabel = "Connected",
             serverVersion = info.version,
-            shortcuts = shortcutAppIds.mapNotNull { candidateIds ->
-                info.apps.firstOrNull { app -> app.id in candidateIds }?.let { app ->
+            availableApps = info.apps.map { NextcloudDesktopSidebarApp(it.id, it.name) },
+            shortcuts = pinnedAppIds.mapNotNull { pinnedId ->
+                info.apps.firstOrNull { app -> canonicalAppWorkspaceId(app.id) == pinnedId }?.let { app ->
                     NextcloudDesktopSidebarApp(id = app.id, label = app.name)
                 }
-            },
+            }.take(4),
             recentApp = info.apps.firstOrNull { app -> app.id == lastOpenedAppId }
                 ?.let { app -> NextcloudDesktopSidebarApp(app.id, app.name) },
             syncSummary = if (services.supportsRecursiveFileOfflineStorage) {
@@ -2574,7 +2129,9 @@ private fun AuthenticatedApp(
                 RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
                     services = services,
                     session = session,
+                    recoveryAttempt = certificateRecoveryAttempt,
                     installedApps = serverInfo?.apps.orEmpty(),
+                    pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
@@ -2599,6 +2156,9 @@ private fun AuthenticatedApp(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     lastOpenedAppId = lastOpenedAppId,
+                    pinnedAppIds = pinnedAppIds,
+                    pinnedAppsError = appPinsPersistenceError,
+                    onTogglePinnedApp = togglePinnedApp,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
                     onSearch = ::openSearch,
@@ -2711,6 +2271,7 @@ private fun AuthenticatedApp(
                     FileMenuAction.EditText -> if (file.isEditableText()) {
                         screen = Screen.TextEditor(file, current.path)
                     }
+                    FileMenuAction.EditWith -> screen = Screen.DocumentPreview(file, current.path)
                     else -> Unit
                 }
             },
@@ -2743,7 +2304,9 @@ private fun AuthenticatedApp(
         Screen.Dashboard -> NativeDashboardScreen(
             services = services,
             session = session,
+            recoveryAttempt = certificateRecoveryAttempt,
             installedApps = serverInfo?.apps.orEmpty(),
+            pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
             onOpenLink = { link ->
                 launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
@@ -2782,6 +2345,11 @@ private fun AuthenticatedApp(
             navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
+        Screen.Tasks -> NativeGroupwareTasksScreen(
+            services, session, serverInfo?.userId ?: session.loginName, ::navigateBack,
+            pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
+            ::cancelPendingNavigationRequest, linkNavigationJob != null,
+        ) { groupwareMutationInProgress = it }
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -3000,11 +2568,30 @@ private fun AuthenticatedApp(
         )
         }
     }
+    CompositionLocalProvider(LocalNativeInlineEditorNavigation provides inlineEditorNavigation) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
     ) {
+        val supportUpdates = submittedSupportReports.filter { report ->
+            report.statusChanged || report.unreadMaintainerMessages > 0
+        }
+        if (supportUpdates.isNotEmpty() && (screen != Screen.Root || destination != NextcloudDestination.Settings)) {
+            SupportUpdateAvailableBanner(
+                reports = supportUpdates,
+                enabled = !groupwareMutationInProgress,
+                onReview = {
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
+                    }
+                },
+            )
+        }
         val availableUpdate = (appUpdateResult as? AppUpdateCheckResult.Available)
             ?.takeIf { screen != Screen.Root || destination != NextcloudDestination.Settings }
         availableUpdate?.let { update ->
@@ -3012,10 +2599,12 @@ private fun AuthenticatedApp(
                 release = update.release,
                 enabled = !groupwareMutationInProgress,
                 onReview = {
-                    if (!groupwareMutationInProgress) {
-                        leaveAppWorkspace()
-                        screen = Screen.Root
-                        destination = NextcloudDestination.Settings
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
                     }
                 },
             )
@@ -3031,11 +2620,13 @@ private fun AuthenticatedApp(
                         NextcloudDesktopWorkspaceKind.AppWorkspace
                     },
                     navigationEnabled = !groupwareMutationInProgress,
-                    onSelected = {
-                        if (!groupwareMutationInProgress) {
-                            leaveAppWorkspace()
-                            destination = it
-                            screen = Screen.Root
+                    onSelected = { selected ->
+                        inlineEditorNavigation.navigate {
+                            if (!groupwareMutationInProgress) {
+                                leaveAppWorkspace()
+                                destination = selected
+                                screen = Screen.Root
+                            }
                         }
                     },
                     identity = desktopIdentity,
@@ -3071,40 +2662,10 @@ private fun AuthenticatedApp(
         }
     }
 }
-
-@Composable
-private fun AppUpdateAvailableBanner(
-    release: AppUpdateRelease,
-    enabled: Boolean = true,
-    onReview: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    if (release is AndroidDirectRelease) {
-                        "Review the certificate-verified APK before installing."
-                    } else {
-                        "Review the downloaded package before opening the system installer."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onReview, enabled = enabled) { Text("Review update") }
-        }
-    }
 }
 
 @Composable
-private fun RootShell(
+internal fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
@@ -3128,44 +2689,15 @@ private fun RootShell(
                 content = content,
             )
         } else {
-            val layout = resolveNextcloudRootShellLayout(
-                presentation = presentation,
-                availableWidthDp = maxWidth.value.toInt(),
-                destination = selected,
+            dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell(
+                selected = selected,
+                onSelected = onSelected,
+                identity = identity,
+                activeAppId = activeAppId,
+                onOpenApp = onOpenApp,
+                navigationEnabled = navigationEnabled,
+                content = content,
             )
-            when (layout.navigationStyle) {
-                NextcloudNavigationStyle.BottomBar -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-                        NextcloudBottomNavigation(
-                            selected = selected,
-                            onSelected = onSelected,
-                            enabled = navigationEnabled,
-                        )
-                    }
-                }
-
-                NextcloudNavigationStyle.CompactRail,
-                NextcloudNavigationStyle.ExpandedSidebar,
-                -> {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        NextcloudNavigationRail(
-                            selected = selected,
-                            onSelected = onSelected,
-                            enabled = navigationEnabled,
-                        )
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.TopCenter,
-                        ) {
-                            val maxContentWidth = requireNotNull(layout.contentMaximumWidthDp).dp
-                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = maxContentWidth)) {
-                                content()
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -3175,6 +2707,9 @@ private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String>,
+    pinnedAppsError: String?,
+    onTogglePinnedApp: (String) -> String?,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
@@ -3184,6 +2719,9 @@ private fun AppsScreen(
         serverInfo = serverInfo,
         error = error,
         lastOpenedAppId = lastOpenedAppId,
+        pinnedAppIds = pinnedAppIds,
+        pinnedAppsError = pinnedAppsError,
+        onTogglePinnedApp = onTogglePinnedApp,
         onRetry = onRetry,
         onSettings = onSettings,
         onSearch = onSearch,
@@ -3327,6 +2865,16 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
+    if (isOfficeWorkspaceAppId(app.id)) {
+        OfficeWorkspaceScreen(
+            services = services,
+            session = session,
+            userId = currentUserId,
+            onExit = onBack,
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
@@ -3507,6 +3055,7 @@ private fun DynamicDiscoveredAppScreen(
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     val descriptor = discovery.descriptor
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
@@ -4729,7 +4278,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         if (
             retainedChoresTeamContext == null ||
-            nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team
+            !nativeChoresWorkspaceUsesTeamContext(nativeChoresWorkspaceKind(schema, selectedView))
         ) {
             emptyMap()
         } else {
@@ -4748,6 +4297,20 @@ private fun DynamicDiscoveredAppScreen(
     }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
+    }
+    val formActionContext = remember(
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        retainedChoresFormActionContext(
+            workspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+            retainedTeamContext = retainedChoresTeamContext,
+            currentRecordContext = recordContext,
+        )
+    }
+    val formActionNavigationPlan = remember(descriptor, formActionContext) {
+        descriptor.planDynamicNavigation(formActionContext)
     }
     val mailCollectionSummaryDestinations = remember(
         recordContext,
@@ -5013,21 +4576,32 @@ private fun DynamicDiscoveredAppScreen(
     }
     val actionViews = remember(
         descriptor,
-        navigationPlan,
+        formActionNavigationPlan,
+        formActionContext,
         schema,
         selectedRecord,
         selectedView.resourceId,
         selectedCollectionState,
     ) {
         val planned = buildList {
-            addAll(if (selectedRecord == null) {
-                navigationPlan.rootFormActions.filter { action ->
-                    action.resourceId == selectedView.resourceId &&
-                        selectedCollectionState == null
+            addAll(if (formActionContext == null) {
+                formActionNavigationPlan.rootFormActions.filter { action ->
+                    val spec = schema.action(action.actionId)
+                        ?: return@filter false
+                    val formView = schema.views.singleOrNull { candidate ->
+                        candidate.id == action.formId
+                    } ?: return@filter false
+                    dynamicRootFormTargetsActiveSurface(
+                        action = spec,
+                        formView = formView,
+                        activeView = selectedView,
+                        activeReadAction = schema.action(selectedView.sourceActionId),
+                        selectedCollectionState = selectedCollectionState,
+                    )
                 }
             } else {
-                val currentResourceId = selectedRecordResourceId.orEmpty()
-                navigationPlan.contextualFormActions.filter { action ->
+                val currentResourceId = formActionContext.resourceId
+                formActionNavigationPlan.contextualFormActions.filter { action ->
                     val spec = schema.action(action.actionId)
                         ?: return@filter false
                     val formView = schema.views.singleOrNull { candidate ->
@@ -5084,14 +4658,10 @@ private fun DynamicDiscoveredAppScreen(
             "$label|$route"
         }
     }
-    val primaryCreateAction = remember(actionViews, schema) {
-        actionViews
-            .filter { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
-            .minByOrNull { (action, _) -> dynamicQuickActionPriority(schema.action(action.actionId)) }
+    val collectionCreateControl = remember(session, schema, selectedView.id, selectedRecord, selectedPathParameterValues) {
+        dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl()
     }
-    val overflowActionViews = remember(actionViews, primaryCreateAction) {
-        actionViews.filterNot { candidate -> candidate == primaryCreateAction }
-    }
+    val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
@@ -5279,6 +4849,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun selectDynamicRecord(record: NativeRecord) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicRecord(record) }) == true) return
         rememberCurrentLocation()
         val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
         val inheritedParameters = inheritDynamicParentParameters(
@@ -5441,6 +5012,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun navigateWithinDynamicApp() {
+        if (inlineEditorNavigation?.intercept(::navigateWithinDynamicApp) == true) return
         val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
             selectedRecordResourceId.orEmpty(),
         )
@@ -5509,8 +5081,10 @@ private fun DynamicDiscoveredAppScreen(
         action: dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicAction(action, view) }) == true) return
         actionMenuExpanded = false
         val actionSpec = schema.action(action.actionId)
+        if (actionSpec?.intent == ActionIntent.create) return
         val editableFieldCount = actionSpec?.let { spec ->
             schema.resource(spec.resourceId)?.let { resource ->
                 editableNativeFields(resource, spec).size
@@ -5562,6 +5136,7 @@ private fun DynamicDiscoveredAppScreen(
         destination: DynamicNavigationDestination,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectCollectionDestination(destination, view) }) == true) return
         actionMenuExpanded = false
         contextualMenuOpen = false
         val selection = planDynamicCollectionDestinationSelection(
@@ -5581,6 +5156,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun selectChoresDestination(viewId: String) {
+        if (inlineEditorNavigation?.intercept({ selectChoresDestination(viewId) }) == true) return
         val (destination, view) = choresNavigationDestinations
             .firstOrNull { (_, candidate) -> candidate.id == viewId }
             ?: return
@@ -5745,7 +5321,8 @@ private fun DynamicDiscoveredAppScreen(
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
-        val hasHeaderActions = overflowActionViews.isNotEmpty() ||
+        val hasHeaderActions = collectionCreateControl.action != null ||
+            overflowActionViews.isNotEmpty() ||
             secondaryNavigationDestinations.isNotEmpty()
 
         NextcloudCollectionWorkspaceScaffold(
@@ -5779,64 +5356,17 @@ private fun DynamicDiscoveredAppScreen(
             },
             headerActions = {
                 if (!showContextDestinationMenu && hasHeaderActions) {
-                    Box {
-                        IconButton(onClick = { actionMenuExpanded = true }) {
-                            Icon(NextcloudIcons.More, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = actionMenuExpanded,
-                            onDismissRequest = { actionMenuExpanded = false },
-                        ) {
-                            overflowActionViews.forEach { (action, view) ->
-                                val actionSpec = schema.action(action.actionId)
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            actionSpec?.let { spec ->
-                                                dynamicHeaderActionLabel(
-                                                    spec,
-                                                    view.dynamicActionLabel(),
-                                                )
-                                            } ?: view.dynamicActionLabel(),
-                                        )
-                                    },
-                                    onClick = { selectDynamicAction(action, view) },
-                                )
-                            }
-                            if (
-                                overflowActionViews.isNotEmpty() &&
-                                secondaryNavigationDestinations.isNotEmpty()
-                            ) {
-                                HorizontalDivider()
-                            }
-                            secondaryNavigationDestinations.forEach { (destination, view) ->
-                                val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
-                                val duplicate = secondaryNavigationDestinations.count {
-                                        (candidate, _) ->
-                                    candidate.label.dynamicUiLabel(descriptor.app.name)
-                                        .equals(baseLabel, ignoreCase = true)
-                                } > 1
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            dynamicSecondaryDestinationLabel(
-                                                destinationLabel = baseLabel,
-                                                resourceLabel = schema.resource(view.resourceId)?.name
-                                                    ?: view.resourceId,
-                                                duplicate = duplicate,
-                                            ),
-                                        )
-                                    },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Open $baseLabel"
-                                    },
-                                    onClick = {
-                                        selectCollectionDestination(destination, view)
-                                    },
-                                )
-                            }
-                        }
-                    }
+                    DynamicCollectionHeaderActions(
+                        schema = schema,
+                        appName = descriptor.app.name,
+                        createControl = collectionCreateControl,
+                        overflowActions = overflowActionViews,
+                        secondaryDestinations = secondaryNavigationDestinations,
+                        menuExpanded = actionMenuExpanded,
+                        onMenuExpandedChange = { actionMenuExpanded = it },
+                        onActionSelected = ::selectDynamicAction,
+                        onDestinationSelected = ::selectCollectionDestination,
+                    )
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -5982,6 +5512,7 @@ private fun DynamicDiscoveredAppScreen(
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
                     pendingMutationStore = pendingMutationStore,
+                    collectionCreateControl = collectionCreateControl,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,
@@ -6005,7 +5536,10 @@ private fun DynamicDiscoveredAppScreen(
                             leaveMutatedSurface = false,
                         )
                     },
-                    showCollectionCreateAction = selectedCollectionState == null,
+                    showCollectionCreateAction = showDynamicCollectionCreateAction(
+                        collectionState = selectedCollectionState,
+                        choresWorkspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+                    ),
                     onOpenLink = services::openExternalUrl,
                     imageLoader = imageLoader,
                     audioPlayer = audioSourceCapability?.let {
@@ -6042,16 +5576,19 @@ private fun DynamicDiscoveredAppScreen(
                     NativeMusicAdaptiveNavigationLayout(
                         intent = musicWorkspaceIntent,
                         onDestinationSelected = { destination ->
-                            val selection = selectNativeMusicRoot(destination)
-                            navigationHistory = emptyList()
-                            selectedRecord = selection.selectedRecord
-                            selectedRecordResourceId = selection.selectedRecordResourceId
-                            selectedPathParameterValues = selection.pathParameterValues
-                            selectedViewId = selection.viewId
-                            contextualMenuOpen = false
-                            paginationState = null
-                            loadingMore = false
-                            loadMoreError = null
+                            val navigate = {
+                                val selection = selectNativeMusicRoot(destination)
+                                navigationHistory = emptyList()
+                                selectedRecord = selection.selectedRecord
+                                selectedRecordResourceId = selection.selectedRecordResourceId
+                                selectedPathParameterValues = selection.pathParameterValues
+                                selectedViewId = selection.viewId
+                                contextualMenuOpen = false
+                                paginationState = null
+                                loadingMore = false
+                                loadMoreError = null
+                            }
+                            if (inlineEditorNavigation == null) navigate() else inlineEditorNavigation.navigate(navigate)
                         },
                         modifier = Modifier.fillMaxSize(),
                         content = dynamicScreenContent,
@@ -6081,7 +5618,9 @@ private fun DynamicDiscoveredAppScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                            TextButton(onClick = {
+                                inlineEditorNavigation?.refresh { loadAttempt += 1 } ?: run { loadAttempt += 1 }
+                            }) { Text("Retry") }
                         }
                     }
                 }
@@ -6273,23 +5812,24 @@ internal fun DynamicAppChromeHeader(
     onContractInfo: () -> Unit,
     trailingContent: @Composable () -> Unit = {},
 ) {
+    var moreExpanded by remember { mutableStateOf(false) }
     ScreenHeader(
         title = title,
         subtitle = subtitle,
         onBack = onBack,
         compact = compact,
-        trailingContent = trailingContent,
-    )
-    if (!compact) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onContractInfo) {
-                Text("Contract info")
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                trailingContent()
+                NextcloudCardOverflow(
+                    itemLabel = title,
+                    actions = listOf(NextcloudCardAction(label = "App compatibility details", onClick = onContractInfo)),
+                    expanded = moreExpanded,
+                    onExpandedChange = { moreExpanded = it },
+                )
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -6510,13 +6050,17 @@ internal fun NativeAudioMiniPlayer(
                 }
             }
             engineState.error?.let { error ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     error,
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (engineState.status == NativeAudioEngineStatus.Error) TextButton(onClick = onTogglePlayback) { Text("Retry playback") }
+                }
             }
         }
     }
@@ -6690,11 +6234,6 @@ internal data class DynamicAppNavigationState(
 internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
     selectedViewId != null || selectedRecord != null || history.isNotEmpty()
 
-internal fun retainedChoresNavigationContext(
-    retainedTeamContext: DynamicResourceRecordContext?,
-    currentRecordContext: DynamicResourceRecordContext?,
-): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
-
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
     val savedRecordId = selectedRecord?.id?.takeIf { value ->
@@ -6813,7 +6352,7 @@ private fun Map<String, String>.toSavedDynamicNavigationParameters(): Map<String
     return toMap()
 }
 
-private fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
+internal fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
     isNotBlank() && length <= maximumChars && none(Char::isISOControl)
 
 internal const val MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY = 16
@@ -6971,15 +6510,6 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
     val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
     return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
-}
-
-private fun String.dynamicUiLabel(appName: String): String {
-    val cleaned = removePrefix("API ").removePrefix("Api ").removePrefix("api ").trim()
-    return when {
-        cleaned.equals("general", ignoreCase = true) -> appName
-        cleaned.equals("prefs", ignoreCase = true) -> "Preferences"
-        else -> cleaned
-    }
 }
 
 private fun String.dynamicResourceWords(): Set<String> = lowercase()
@@ -7480,11 +7010,6 @@ private fun ViewSpec.dynamicNavigationLabel(appName: String): String {
         .trim()
     return if (cleaned.equals("general", ignoreCase = true)) appName else cleaned
 }
-
-private fun ViewSpec.dynamicActionLabel(): String = title
-    .replace(Regex("^\\[api\\s+v?[0-9.]+]\\s*", RegexOption.IGNORE_CASE), "")
-    .trim()
-    .replaceFirstChar { character -> character.titlecase() }
 
 private fun ViewSpec.dynamicActionMenuKey(): String = dynamicActionLabel()
     .lowercase()
@@ -8204,7 +7729,7 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled -> handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -8237,7 +7762,8 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled ->
+                                handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -9191,119 +8717,12 @@ private fun FileGridTile(
     }
 }
 
-@Composable
-internal fun FileActionMenu(
-    file: NextcloudFile,
-    offlineAvailability: FileOfflineAvailability,
-    offlineStorageSupported: Boolean,
-    fileSharing: NextcloudFileSharingCapabilities,
-    externalHandoffCapability: ExternalFileHandoffCapability?,
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onAction: (FileMenuAction) -> Unit,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        planFilesScreenActions(
-            file = file,
-            support = FileActionSupport(
-                sharing = fileSharing.apiEnabled,
-                externalSharing = ExternalFileHandoffAction.Share in
-                    externalHandoffCapability?.supportedActions.orEmpty(),
-                offlineStorage = offlineStorageSupported,
-                platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumExternalFileBytes = externalHandoffCapability?.maximumFileBytes,
-                seekableExternalFileStreaming =
-                    externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
-            ),
-            offlineState = offlineAvailability.toFileActionOfflineState(),
-        ).actions.forEach { action ->
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(action.label)
-                        action.disabledReason?.let { reason ->
-                            Text(
-                                reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = fileActionIcon(action.action),
-                        contentDescription = null,
-                        tint = if (action.tone == FileActionTone.Destructive) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                },
-                enabled = action.enabled,
-                onClick = {
-                    onDismiss()
-                    onAction(action.action)
-                },
-            )
-        }
-    }
-}
-
-private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) {
-    FileMenuAction.Open -> NextcloudIcons.FolderOpen
-    FileMenuAction.Preview -> NextcloudIcons.Image
-    FileMenuAction.OpenWith -> NextcloudIcons.File
-    FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.Rename -> NextcloudIcons.Edit
-    FileMenuAction.AddFavorite -> NextcloudIcons.FavoriteBorder
-    FileMenuAction.RemoveFavorite -> NextcloudIcons.Favorite
-    FileMenuAction.Details -> NextcloudIcons.Info
-    FileMenuAction.VersionHistory -> NextcloudIcons.Refresh
-    FileMenuAction.Download -> NextcloudIcons.Cloud
-    FileMenuAction.Move -> NextcloudIcons.FolderOpen
-    FileMenuAction.Copy -> NextcloudIcons.File
-    FileMenuAction.Share -> NextcloudIcons.People
-    FileMenuAction.SendCopy -> NextcloudIcons.Cloud
-    FileMenuAction.MakeAvailableOffline, FileMenuAction.RemoveOffline -> NextcloudIcons.CheckCircle
-    FileMenuAction.Delete -> NextcloudIcons.Error
-}
-
 private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18
 private const val PHOTO_FOLDER_INITIAL_BACKUP_STATUS_ITEMS = 24
 
 @Composable
-internal fun PhotoTimelineFailureNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-    actionLabel: String = "Retry",
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text(actionLabel)
-            }
-        }
-    }
+internal fun PhotoTimelineFailureNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier, actionLabel: String = "Retry") {
+    RetainedContentNotice(message, onRetry, modifier, actionLabel)
 }
 
 @Composable
@@ -9358,35 +8777,8 @@ private fun PhotoTimelineViewModeControl(
 }
 
 @Composable
-private fun PhotoFolderStaleNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = "Could not refresh photo folders. Showing saved folder content. $message",
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text("Retry")
-            }
-        }
-    }
+private fun PhotoFolderStaleNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice("Could not refresh photo folders. Showing saved folder content. $message", onRetry, modifier)
 }
 
 @Composable
@@ -12496,7 +11888,7 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
-private object TalkWorkspaceMemoryCache {
+internal object TalkWorkspaceMemoryCache {
     private val rooms = linkedMapOf<String, List<TalkRoom>>()
     private val messages = linkedMapOf<String, List<TalkMessage>>()
 
@@ -12613,179 +12005,6 @@ private fun TalkScreen(
     }
 }
 
-@Composable
-private fun ChatScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    userId: String,
-    room: TalkRoom,
-    onBack: () -> Unit,
-    onOpenAttachment: (NextcloudFile) -> Unit,
-) {
-    var messages by remember(session, room.token) {
-        mutableStateOf(TalkWorkspaceMemoryCache.messages(session, room.token))
-    }
-    var olderCursor by remember(room.token) { mutableStateOf<Long?>(null) }
-    var hasMoreHistory by remember(room.token) { mutableStateOf(false) }
-    var loadingEarlier by remember(room.token) { mutableStateOf(false) }
-    var historyError by remember(room.token) { mutableStateOf<String?>(null) }
-    var draft by rememberSaveable(session.serverUrl, session.loginName, room.token) { mutableStateOf("") }
-    var error by remember(room.token) { mutableStateOf<String?>(null) }
-    var refreshing by remember(room.token) { mutableStateOf(false) }
-    var sending by remember { mutableStateOf(false) }
-    var loadAttempt by remember(room.token) { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-    val messageListState = rememberLazyListState()
-    val orderedMessages = remember(messages) { messages?.sortedBy(TalkMessage::id) }
-
-    suspend fun refresh() {
-        val page = services.listTalkMessagePage(session, room.token)
-        messages = page.messages
-        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages)
-        olderCursor = page.olderCursor
-        hasMoreHistory = page.hasMoreHistory
-    }
-    LaunchedEffect(room.token, loadAttempt) {
-        refreshing = messages != null
-        error = null
-        runCatching { refresh() }.onFailure { error = it.message ?: "Could not load messages." }
-        refreshing = false
-    }
-    LaunchedEffect(orderedMessages?.lastOrNull()?.id) {
-        val lastIndex = orderedMessages?.lastIndex ?: return@LaunchedEffect
-        messageListState.scrollToItem(lastIndex)
-    }
-
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(room.displayName, "Talk", onBack)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                error != null && messages == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-                messages == null -> LoadingMessage("Loading messages...")
-                messages?.isEmpty() == true -> EmptyMessage("No messages in this conversation yet.")
-                else -> LazyColumn(
-                    state = messageListState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    if ((hasMoreHistory && olderCursor != null) || historyError != null) {
-                        item(key = "talk-load-earlier") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                historyError?.let { message ->
-                                    Text(
-                                        message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                }
-                                if (hasMoreHistory && olderCursor != null) {
-                                    TextButton(
-                                        enabled = !loadingEarlier,
-                                        onClick = {
-                                            val cursor = olderCursor ?: return@TextButton
-                                            loadingEarlier = true
-                                            historyError = null
-                                            scope.launch {
-                                                runCatching {
-                                                    services.listTalkMessagePage(
-                                                        session = session,
-                                                        token = room.token,
-                                                        olderCursor = cursor,
-                                                    )
-                                                }.onSuccess { page ->
-                                                    messages = mergeTalkMessageHistory(
-                                                        messages.orEmpty(),
-                                                        page.messages,
-                                                    )
-                                                    TalkWorkspaceMemoryCache.storeMessages(
-                                                        session,
-                                                        room.token,
-                                                        messages.orEmpty(),
-                                                    )
-                                                    olderCursor = page.olderCursor
-                                                    hasMoreHistory = page.hasMoreHistory
-                                                }.onFailure { failure ->
-                                                    historyError =
-                                                        failure.message ?: "Could not load earlier messages."
-                                                }
-                                                loadingEarlier = false
-                                            }
-                                        },
-                                    ) {
-                                        if (loadingEarlier) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Text("Load earlier messages")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    listItems(requireNotNull(orderedMessages), key = TalkMessage::id) { message ->
-                        TalkMessageCard(
-                            services = services,
-                            session = session,
-                            message = message,
-                            mine = message.actorId == userId,
-                            onOpenAttachment = { attachment ->
-                                onOpenAttachment(attachment.asNextcloudFile())
-                            },
-                        )
-                    }
-                }
-            }
-            if (refreshing) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                )
-            }
-            if (error != null && messages != null) {
-                RetainedRefreshError(
-                    message = requireNotNull(error),
-                    onRetry = { loadAttempt += 1 },
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                enabled = !sending,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            )
-            IconButton(
-                enabled = draft.isNotBlank() && !sending,
-                onClick = {
-                    val message = draft.trim()
-                    sending = true
-                    scope.launch {
-                        runCatching {
-                            services.sendTalkMessage(session, room.token, message)
-                            draft = ""
-                            refresh()
-                        }.onFailure { error = it.message ?: "Could not send message." }
-                        sending = false
-                    }
-                },
-            ) { Icon(NextcloudIcons.Send, contentDescription = "Send message") }
-        }
-    }
-}
 
 @Composable
 private fun ProjectNewsScreen(
@@ -12943,1272 +12162,6 @@ private fun ProjectNewsArticleScreen(
     }
 }
 
-@Composable
-private fun LoggedOutAppUpdateReviewScreen(
-    services: NextcloudPlatformServices,
-    platformCapabilityRefreshRequest: Long,
-    onContinueToSignIn: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ProductHeader(title = "App update", showSettings = false)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            item {
-                Text(
-                    "Review this app update without connecting a Nextcloud account.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item {
-                AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-            }
-            item {
-                OutlinedButton(onClick = onContinueToSignIn) {
-                    Text("Continue to sign in")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AppUpdateSettingsCard(
-    services: NextcloudPlatformServices,
-    platformCapabilityRefreshRequest: Long,
-) {
-    val scope = rememberCoroutineScope()
-    val support = remember(services) { services.appUpdateSupport() }
-    var updateChannel by remember(services) {
-        mutableStateOf(services.loadAppUpdateChannel())
-    }
-    val channelPresentation = remember(support, updateChannel) {
-        appUpdateChannelPresentation(support, updateChannel)
-    }
-    val updateState by remember(services) {
-        services.observeAppUpdateInstallState()
-    }.collectAsState(AppUpdateInstallState.Idle)
-    val observedCheckResult by remember(services) {
-        services.observeAppUpdateCheckResult()
-    }.collectAsState(null)
-    var updatePreferences by remember(services) {
-        mutableStateOf(services.loadAppUpdatePreferences())
-    }
-    val notificationCapability = remember(services, platformCapabilityRefreshRequest) {
-        services.platformCapabilities().firstOrNull { status ->
-            status.capability == PlatformCapability.Notifications
-        }
-    }
-    val appUpdateNotificationDeliveryAllowed = remember(services, platformCapabilityRefreshRequest) {
-        services.appUpdateNotificationDeliveryAllowed()
-    }
-    var notificationEnablePending by remember(services) { mutableStateOf(false) }
-    var checking by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
-    var pendingInstallConfirmation by remember { mutableStateOf<AppUpdateRelease?>(null) }
-    var installMessage by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(
-        appUpdateNotificationDeliveryAllowed,
-        notificationCapability?.state,
-        notificationEnablePending,
-        platformCapabilityRefreshRequest,
-    ) {
-        if (notificationEnablePending && appUpdateNotificationDeliveryAllowed) {
-            val updated = updatePreferences.copy(notifications = true)
-            if (services.saveAppUpdatePreferences(updated)) {
-                updatePreferences = updated
-            }
-            notificationEnablePending = false
-            installMessage = null
-        } else if (
-            notificationEnablePending &&
-            notificationCapability?.state in setOf(
-                PlatformCapabilityState.Blocked,
-                PlatformCapabilityState.Unsupported,
-            )
-        ) {
-            notificationEnablePending = false
-        }
-    }
-    fun beginInstall(release: AppUpdateRelease) {
-        installing = true
-        installMessage = null
-        scope.launch {
-            installMessage = when (val install = services.beginAppUpdate(release)) {
-                AppUpdateInstallResult.ConfirmationOpened ->
-                    "The system installer opened the update confirmation."
-                AppUpdateInstallResult.Installed ->
-                    "The update was installed. Restart Nextcloud Native to use the new version."
-                is AppUpdateInstallResult.Cancelled ->
-                    if (install.canResume) {
-                        "Download paused. You can resume it without starting over."
-                    } else {
-                        "Download stopped. The next attempt will start from the beginning."
-                    }
-                is AppUpdateInstallResult.PermissionRequired -> install.message
-                is AppUpdateInstallResult.Rejected -> install.message
-            }
-            installing = false
-        }
-    }
-    fun requestInstall(release: AppUpdateRelease) {
-        if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
-            pendingInstallConfirmation = release
-        } else {
-            beginInstall(release)
-        }
-    }
-    pendingInstallConfirmation?.let { release ->
-        AlertDialog(
-            onDismissRequest = { pendingInstallConfirmation = null },
-            title = { Text("Install app update?") },
-            text = {
-                Text(
-                    "Nextcloud Native will download and verify version ${release.versionName}, then ask " +
-                        "the system package service to install it. Restart the app after installation.",
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        pendingInstallConfirmation = null
-                        beginInstall(release)
-                    },
-                ) {
-                    Text("Install update")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingInstallConfirmation = null }) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Small),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Cloud,
-                        contentDescription = null,
-                        modifier = Modifier.padding(12.dp).size(26.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("App updates", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (channelPresentation.selectorVisible) {
-                            "Version ${support.currentVersionName} - ${updateChannel.name} channel"
-                        } else {
-                            "Version ${support.currentVersionName} - ${support.channel.name}"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (support.canCheckDirectUpdates) {
-                    TextButton(
-                        enabled = !checking && updateChannel.available,
-                        onClick = {
-                            checking = true
-                            installMessage = null
-                            scope.launch {
-                                services.checkForAppUpdate(updateChannel)
-                                checking = false
-                            }
-                        },
-                    ) {
-                        if (checking) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("Check")
-                        }
-                    }
-                }
-            }
-            Text(
-                support.explanation,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (channelPresentation.selectorVisible) {
-                Text(
-                    "Update channel",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Column(modifier = Modifier.selectableGroup()) {
-                    channelPresentation.options.forEach { option ->
-                        val enabled = option.enabled && !checking && !installing
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = option.selected,
-                                    enabled = enabled,
-                                    role = Role.RadioButton,
-                                    onClick = {
-                                        if (services.saveAppUpdateChannel(option.channel)) {
-                                            updateChannel = option.channel
-                                            installMessage = null
-                                        }
-                                    },
-                                )
-                                .padding(vertical = NextcloudSpacing.Small),
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = option.selected,
-                                enabled = enabled,
-                                onClick = null,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
-                                    option.availabilityLabel?.let { label ->
-                                        Text(
-                                            label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                                Text(
-                                    option.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            if (channelPresentation.selectorVisible) {
-                UpdatePreferenceRow(
-                    label = "Check automatically",
-                    description = if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
-                        "Check the selected channel periodically while Nextcloud Native is running."
-                    } else {
-                        "Check the selected channel in the background without downloading packages."
-                    },
-                    checked = updatePreferences.automaticChecks,
-                    onCheckedChange = { enabled ->
-                        val updated = updatePreferences.copy(automaticChecks = enabled)
-                        if (services.saveAppUpdatePreferences(updated)) {
-                            updatePreferences = updated
-                            if (enabled) {
-                                scope.launch { services.checkForAppUpdate(automatic = true) }
-                            }
-                        }
-                    },
-                )
-                if (support.channel == AppDistributionChannel.DirectApk) {
-                    UpdatePreferenceRow(
-                        label = "Use unmetered networks only",
-                        description = "Automatic Android checks wait for an unmetered connection.",
-                        checked = updatePreferences.unmeteredNetworkOnly,
-                        enabled = updatePreferences.automaticChecks,
-                        onCheckedChange = { enabled ->
-                            val updated = updatePreferences.copy(unmeteredNetworkOnly = enabled)
-                            if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                        },
-                    )
-                    UpdatePreferenceRow(
-                        label = "Notify when available",
-                        description = when {
-                            notificationCapability?.state == PlatformCapabilityState.Granted &&
-                                appUpdateNotificationDeliveryAllowed ->
-                                "Post one Android notification for each newly discovered version."
-                            notificationCapability?.state == PlatformCapabilityState.Granted ->
-                                "The App updates notification channel is blocked. Turn it on in Android settings."
-                            notificationCapability?.state == PlatformCapabilityState.NeedsPermission ->
-                                "Allow Android notifications to be notified about newly discovered versions."
-                            notificationCapability?.state == PlatformCapabilityState.Blocked ->
-                                "Notifications are blocked. Turn them on in Android app settings to use this option."
-                            notificationCapability?.state == PlatformCapabilityState.Unsupported ->
-                                "Android notifications are unavailable on this device."
-                            else ->
-                                "Android notification permission status is unavailable."
-                        },
-                        checked = updatePreferences.notifications && appUpdateNotificationDeliveryAllowed,
-                        enabled = updatePreferences.automaticChecks,
-                        onCheckedChange = { enabled ->
-                            if (!enabled) {
-                                notificationEnablePending = false
-                                val updated = updatePreferences.copy(notifications = false)
-                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (appUpdateNotificationDeliveryAllowed) {
-                                val updated = updatePreferences.copy(notifications = true)
-                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (services.requestAppUpdateNotificationDelivery()) {
-                                notificationEnablePending = true
-                                installMessage = "Allow notifications in Android to finish enabling update alerts."
-                            } else {
-                                installMessage = "Android could not open notification permission settings."
-                            }
-                        },
-                    )
-                }
-            }
-            when (val checked = observedCheckResult) {
-                is AppUpdateCheckResult.Available -> {
-                    val release = checked.release
-                    val releaseState = updateState.takeIf { state ->
-                        when (state) {
-                            is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Verifying -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Installing -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.PermissionRequired -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Cancelled -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Failed -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.ConfirmationOpened -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Installed -> state.versionCode == release.versionCode
-                            AppUpdateInstallState.Idle -> false
-                        }
-                    } ?: AppUpdateInstallState.Idle
-                    Text(
-                        "Version ${release.versionName} is available.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    TextButton(onClick = { services.openExternalUrl(release.releaseNotesUrl) }) {
-                        Text("Read release notes")
-                    }
-                    when (releaseState) {
-                        is AppUpdateInstallState.Downloading -> {
-                            val progress =
-                                (releaseState.downloadedBytes.toDouble() / releaseState.totalBytes.toDouble())
-                                    .coerceIn(0.0, 1.0)
-                                    .toFloat()
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.fillMaxWidth().height(6.dp),
-                            )
-                            Text(
-                                buildString {
-                                    append(formatBytes(releaseState.downloadedBytes))
-                                    append(" of ")
-                                    append(formatBytes(releaseState.totalBytes))
-                                    if (releaseState.resumedFromBytes > 0) append(" - resumed")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            OutlinedButton(onClick = { services.cancelAppUpdate() }) {
-                                Text(appUpdateDownloadCancellationLabel(support.channel))
-                            }
-                        }
-                        is AppUpdateInstallState.Verifying -> {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            Text(
-                                if (release is AndroidDirectRelease) {
-                                    "Download complete. Verifying package and signing certificate..."
-                                } else {
-                                    "Download complete. Checking the package checksum..."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        is AppUpdateInstallState.Installing -> {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            Text(
-                                "Waiting for the system package service to finish installation...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        is AppUpdateInstallState.Cancelled -> {
-                            Text(
-                                if (releaseState.canResume) {
-                                    "${formatBytes(releaseState.downloadedBytes)} saved for resume."
-                                } else {
-                                    "The download was paused before any data was saved."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Button(
-                                onClick = { requestInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
-                            }
-                        }
-                        is AppUpdateInstallState.Failed -> {
-                            Text(
-                                releaseState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            Button(
-                                onClick = { requestInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
-                            }
-                        }
-                        is AppUpdateInstallState.PermissionRequired -> {
-                            Text(
-                                releaseState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Button(
-                                onClick = { beginInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text("Continue update")
-                            }
-                        }
-                        is AppUpdateInstallState.ConfirmationOpened -> {
-                            Text(
-                                "The system installer opened the update confirmation. If you closed it, open it again without downloading the APK again.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Button(
-                                onClick = { requestInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text("Open installer again")
-                            }
-                        }
-                        is AppUpdateInstallState.Installed -> Text(
-                            "The update was installed. Restart Nextcloud Native to use the new version.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NextcloudTheme.colors.success,
-                        )
-                        AppUpdateInstallState.Idle -> Button(
-                            onClick = { requestInstall(release) },
-                            enabled = !installing,
-                        ) {
-                            if (installing) {
-                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else {
-                                Text("Download, verify, and install")
-                            }
-                        }
-                    }
-                }
-                is AppUpdateCheckResult.Current -> Text(
-                    "This installation is up to date.",
-                    color = NextcloudTheme.colors.success,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                is AppUpdateCheckResult.Failed -> Text(
-                    checked.message,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                is AppUpdateCheckResult.Unavailable, null -> Unit
-            }
-            installMessage?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpdatePreferenceRow(
-    label: String,
-    description: String,
-    checked: Boolean,
-    enabled: Boolean = true,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(
-                value = checked,
-                enabled = enabled,
-                role = Role.Switch,
-                onValueChange = onCheckedChange,
-            )
-            .semantics(mergeDescendants = true) {}
-            .padding(vertical = NextcloudSpacing.Small),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.titleSmall)
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(
-            checked = checked,
-            enabled = enabled,
-            onCheckedChange = null,
-        )
-    }
-}
-
-@Composable
-private fun SettingsScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    serverInfo: NextcloudServerInfo?,
-    themePreference: ThemePreference,
-    platformCapabilityRefreshRequest: Long,
-    onThemePreferenceChanged: (ThemePreference) -> Unit,
-    onAdminApps: () -> Unit,
-    onOfflineCenter: () -> Unit,
-    onTransfers: () -> Unit,
-    onProjectNews: () -> Unit,
-    onLoggedOut: suspend () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var loggingOut by remember { mutableStateOf(false) }
-    var logoutError by remember { mutableStateOf<String?>(null) }
-    var capabilityRefresh by remember { mutableStateOf(0) }
-    var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
-    var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
-    var keepRunningInBackground by remember(services) {
-        mutableStateOf(services.loadKeepRunningInBackgroundPreference())
-    }
-    var trustedCertificate by remember(services, session.serverUrl) {
-        mutableStateOf(services.trustedServerCertificate(session.serverUrl))
-    }
-    var trustRemovalError by remember { mutableStateOf<String?>(null) }
-    val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
-        services.platformCapabilities()
-    }
-    if (LocalNextcloudWorkspaceCapabilities.current.isDesktop) {
-        DesktopSettingsWorkspace(
-            summary = SettingsWorkspaceSummary(
-                displayName = serverInfo?.displayName ?: session.loginName,
-                cloudName = serverInfo?.themeName ?: "Nextcloud",
-                serverUrl = session.serverUrl,
-                serverVersion = serverInfo?.version,
-                installedApps = serverInfo?.apps?.count { it.id != "dashboard" } ?: 0,
-                syncLabel = if (services.supportsRecursiveFileOfflineStorage) {
-                    "Folder sync available"
-                } else {
-                    "Offline files available"
-                },
-            ),
-        ) { section ->
-            when (section) {
-                SettingsWorkspaceSection.Account -> {
-                    SettingsActionCard(
-                        title = serverInfo?.displayName ?: session.loginName,
-                        description = "${session.serverUrl} · ${serverInfo?.version?.let { "Nextcloud $it" } ?: "Connected"}",
-                        icon = NextcloudIcons.Profile,
-                        onClick = {},
-                        trailing = "Primary account",
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Text("Security", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "This device uses an app password. Signing out revokes its access without changing other sessions.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            trustedCertificate?.let { certificate ->
-                                TrustedCertificateSettings(
-                                    certificate = certificate,
-                                    error = trustRemovalError,
-                                    onRemove = {
-                                        trustRemovalError = null
-                                        if (services.removeTrustedServerCertificate(session.serverUrl)) {
-                                            trustedCertificate = null
-                                        } else {
-                                            trustRemovalError = "The certificate trust could not be removed."
-                                        }
-                                    },
-                                )
-                            }
-                            OutlinedButton(
-                                enabled = !loggingOut,
-                                onClick = {
-                                    loggingOut = true
-                                    logoutError = null
-                                    scope.launch {
-                                        runCatching { services.revokeSession(session) }
-                                        runCatching { onLoggedOut() }
-                                            .onFailure { failure ->
-                                                logoutError = logoutCleanupFailureMessage(failure)
-                                                loggingOut = false
-                                            }
-                                    }
-                                },
-                            ) {
-                                Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.size(8.dp))
-                                Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
-                            }
-                            logoutError?.let { message ->
-                                Text(
-                                    message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.Appearance -> {
-                    Text("Color theme", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                        ThemePreference.entries.forEach { preference ->
-                            FilterChip(
-                                selected = themePreference == preference,
-                                onClick = { onThemePreferenceChanged(preference) },
-                                label = { Text(preference.name) },
-                                leadingIcon = {
-                                    Icon(
-                                        when (preference) {
-                                            ThemePreference.System -> NextcloudIcons.SystemMode
-                                            ThemePreference.Light -> NextcloudIcons.LightMode
-                                            ThemePreference.Dark -> NextcloudIcons.DarkMode
-                                        },
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                            )
-                        }
-                    }
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("Designed for this screen", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "Desktop workspaces use persistent navigation, dense controls, and detail panes. Compact windows adapt automatically.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.SyncAndStorage -> {
-                    SettingsActionCard(
-                        title = "Folder sync workspace",
-                        description = if (services.supportsRecursiveFileOfflineStorage) {
-                            "Manage sync pairs, rules, conflicts, virtual files, and storage"
-                        } else {
-                            "Manage pinned files, downloads, conflicts, and device storage"
-                        },
-                        icon = NextcloudIcons.Cloud,
-                        onClick = onOfflineCenter,
-                        trailing = if (services.supportsRecursiveFileOfflineStorage) "Ready" else null,
-                    )
-                    if (services.supportsMediaTransferCenter) {
-                        SettingsActionCard(
-                            title = "Media transfers",
-                            description = "Review pending, active, failed, and completed uploads",
-                            icon = NextcloudIcons.Refresh,
-                            onClick = onTransfers,
-                        )
-                    }
-                    SettingsActionCard(
-                        title = "Offline availability",
-                        description = "Choose what stays available when this device is offline",
-                        icon = NextcloudIcons.FolderOpen,
-                        onClick = onOfflineCenter,
-                    )
-                }
-
-                SettingsWorkspaceSection.NotificationsAndDevice -> {
-                    if (platformCapabilities.isEmpty()) {
-                        Text("No device permissions are required on this platform.")
-                    } else {
-                        platformCapabilities.forEach { status ->
-                            SettingsActionCard(
-                                title = status.label,
-                                description = status.description,
-                                icon = NextcloudIcons.Settings,
-                                trailing = when (status.state) {
-                                    PlatformCapabilityState.Granted -> "Enabled"
-                                    PlatformCapabilityState.AvailableWithoutPermission -> "Available"
-                                    PlatformCapabilityState.NeedsPermission -> "Enable"
-                                    PlatformCapabilityState.Blocked -> "Open settings"
-                                    PlatformCapabilityState.Unsupported -> "Unavailable"
-                                },
-                                onClick = {
-                                    if (status.state == PlatformCapabilityState.NeedsPermission ||
-                                        status.state == PlatformCapabilityState.Blocked
-                                    ) {
-                                        services.requestPlatformCapability(status.capability)
-                                        capabilityRefresh += 1
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.DesktopApp -> {
-                    if (services.supportsKeepRunningInBackground) {
-                        DesktopBackgroundSettingsCard(
-                            enabled = keepRunningInBackground,
-                            onEnabledChanged = { enabled ->
-                                services.saveKeepRunningInBackgroundPreference(enabled)
-                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
-                            },
-                        )
-                    }
-                    if (services.supportsStartOnLogin) {
-                        DesktopStartOnLoginSettingsCard(
-                            enabled = startOnLogin,
-                            message = startOnLoginMessage,
-                            onEnabledChanged = { enabled ->
-                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                                startOnLogin = services.loadStartOnLoginPreference()
-                            },
-                        )
-                    }
-                }
-
-                SettingsWorkspaceSection.Updates -> AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-
-                SettingsWorkspaceSection.Diagnostics -> SupportDiagnosticsSettingsCard(services)
-
-                SettingsWorkspaceSection.HelpAndGuides -> {
-                    SettingsActionCard(
-                        title = "Guides",
-                        description = "Follow illustrated setup, sync, offline, photo, Calendar, and app workflows",
-                        icon = NextcloudIcons.Info,
-                        onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
-                        trailing = "6 guides",
-                    )
-                    SettingsActionCard(
-                        title = "Project news",
-                        description = "Read release notes and development updates in a cached native view",
-                        icon = NextcloudIcons.Activity,
-                        onClick = onProjectNews,
-                    )
-                }
-
-                SettingsWorkspaceSection.Administration -> {
-                    SettingsActionCard(
-                        title = "Server apps",
-                        description = "Install, update, enable, or disable apps as an administrator",
-                        icon = NextcloudIcons.Apps,
-                        onClick = onAdminApps,
-                        trailing = serverInfo?.apps?.size?.let { "$it active" },
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("Installed workspaces", style = MaterialTheme.typography.titleSmall)
-                            serverInfo?.apps.orEmpty().filterNot { it.id == "dashboard" }.take(8).forEach { app ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    Icon(NextcloudIcons.app(app.id), contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Text(app.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    Text(
-                                        if (app.id in nativeAppIds) "Native" else "Adaptive",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-    Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Settings", showSettings = false)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
-        ) {
-            item {
-                SectionTitle("Appearance")
-                Row(
-                    modifier = Modifier.padding(top = NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    ThemePreference.entries.forEach { preference ->
-                        FilterChip(
-                            selected = themePreference == preference,
-                            onClick = { onThemePreferenceChanged(preference) },
-                            label = { Text(preference.name) },
-                            leadingIcon = {
-                                Icon(
-                                    when (preference) {
-                                        ThemePreference.System -> NextcloudIcons.SystemMode
-                                        ThemePreference.Light -> NextcloudIcons.LightMode
-                                        ThemePreference.Dark -> NextcloudIcons.DarkMode
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-            if (services.supportsStartOnLogin || services.supportsKeepRunningInBackground) {
-                item {
-                    SectionTitle("Desktop")
-                    if (services.supportsKeepRunningInBackground) {
-                        DesktopBackgroundSettingsCard(
-                            enabled = keepRunningInBackground,
-                            onEnabledChanged = { enabled ->
-                                services.saveKeepRunningInBackgroundPreference(enabled)
-                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
-                            },
-                        )
-                    }
-                    if (services.supportsStartOnLogin) {
-                        DesktopStartOnLoginSettingsCard(
-                            enabled = startOnLogin,
-                            message = startOnLoginMessage,
-                            onEnabledChanged = { enabled ->
-                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                                startOnLogin = services.loadStartOnLoginPreference()
-                            },
-                        )
-                    }
-                }
-            }
-            item {
-                SectionTitle("Account")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Profile,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(serverInfo?.displayName ?: session.loginName, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                session.serverUrl,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            serverInfo?.version?.let {
-                                Text(
-                                    "Nextcloud $it",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            trustedCertificate?.let { certificate ->
-                item {
-                    TrustedCertificateSettings(
-                        certificate = certificate,
-                        error = trustRemovalError,
-                        onRemove = {
-                            trustRemovalError = null
-                            if (services.removeTrustedServerCertificate(session.serverUrl)) {
-                                trustedCertificate = null
-                            } else {
-                                trustRemovalError = "The certificate trust could not be removed."
-                            }
-                        },
-                    )
-                }
-            }
-            item {
-                SectionTitle("Files")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onOfflineCenter,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Cloud,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Sync & offline", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                if (services.supportsFileOfflineStorage) {
-                                    if (services.supportsRecursiveFileOfflineStorage) {
-                                        "Folder sync, offline files, conflicts, and storage"
-                                    } else {
-                                        "Pinned files, downloads, conflicts, and device storage"
-                                    }
-                                } else {
-                                    "Review this platform's offline file support and limitations"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open Sync & offline",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-            }
-            if (services.supportsMediaTransferCenter) {
-                item {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = onTransfers,
-                        color = NextcloudTheme.colors.appTile,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                                Icon(
-                                    NextcloudIcons.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.padding(12.dp).size(26.dp),
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Media transfers", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "Pending, active, failed, and completed uploads",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Icon(
-                                NextcloudIcons.ChevronRight,
-                                contentDescription = "Open media transfers",
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
-            }
-            if (platformCapabilities.isNotEmpty()) {
-                item {
-                    SectionTitle("Device features")
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        platformCapabilities.forEach { status ->
-                            Surface(
-                                color = NextcloudTheme.colors.appTile,
-                                shape = RoundedCornerShape(NextcloudRadii.Card),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        NextcloudIcons.Settings,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(status.label, style = MaterialTheme.typography.titleSmall)
-                                        Text(
-                                            status.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    when (status.state) {
-                                        PlatformCapabilityState.NeedsPermission,
-                                        PlatformCapabilityState.Blocked,
-                                        -> TextButton(
-                                            onClick = {
-                                                services.requestPlatformCapability(status.capability)
-                                                capabilityRefresh += 1
-                                            },
-                                        ) {
-                                            Text(if (status.state == PlatformCapabilityState.Blocked) "Settings" else "Enable")
-                                        }
-                                        PlatformCapabilityState.Granted -> Text("Enabled", color = NextcloudTheme.colors.success)
-                                        PlatformCapabilityState.AvailableWithoutPermission -> Text("Available")
-                                        PlatformCapabilityState.Unsupported -> Text("Unavailable")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                SectionTitle("Nextcloud Native")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Info,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Help & guides", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Illustrated setup, sync, offline, photo, Calendar, and app workflows",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open Nextcloud Native guides",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onProjectNews,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Activity,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Project news", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Read development notes in a native, cached view",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open project news",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-                Spacer(Modifier.height(NextcloudSpacing.Medium))
-                SupportDiagnosticsSettingsCard(services)
-            }
-            item {
-                SectionTitle("Administration")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onAdminApps,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Apps,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Server apps", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Install, update, enable, or disable apps as an administrator",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open server app management",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-            }
-            item {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    OutlinedButton(
-                        enabled = !loggingOut,
-                        onClick = {
-                            loggingOut = true
-                            logoutError = null
-                            scope.launch {
-                                runCatching { services.revokeSession(session) }
-                                runCatching { onLoggedOut() }
-                                    .onFailure { failure ->
-                                        logoutError = logoutCleanupFailureMessage(failure)
-                                        loggingOut = false
-                                    }
-                            }
-                        },
-                    ) {
-                        Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
-                    }
-                    logoutError?.let { message ->
-                        Text(
-                            message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TrustedCertificateSettings(
-    certificate: TrustedServerCertificate,
-    error: String?,
-    onRemove: () -> Unit,
-) {
-    var confirmRemoval by remember { mutableStateOf(false) }
-    if (confirmRemoval) {
-        AlertDialog(
-            onDismissRequest = { confirmRemoval = false },
-            title = { Text("Stop trusting this certificate?") },
-            text = {
-                Text(
-                    "Nextcloud Native will return to Android's normal certificate checks. " +
-                        "The account may stop connecting until the server uses a trusted certificate.",
-                )
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemoval = false }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmRemoval = false
-                        onRemove()
-                    },
-                ) { Text("Stop trusting") }
-            },
-        )
-    }
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text("Explicitly trusted server certificate", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Android could not verify this server through its certificate authorities. " +
-                    "Nextcloud Native accepts only the exact SHA-256 fingerprint below for this server address.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(certificate.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = { confirmRemoval = true }) { Text("Stop trusting") }
-            error?.let { message ->
-                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-        }
-    }
-}
-
 internal fun logoutCleanupFailureMessage(failure: Throwable): String {
     val detail = failure.message.orEmpty()
         .filterNot(Char::isISOControl)
@@ -14218,557 +12171,6 @@ internal fun logoutCleanupFailureMessage(failure: Throwable): String {
         ?: "Local desktop cleanup did not complete."
     return "Could not finish signing out. $detail You can retry safely."
 }
-
-@Composable
-private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
-    val scope = rememberCoroutineScope()
-    var refresh by remember { mutableStateOf(0) }
-    val diagnosticsRevision by remember(services) {
-        services.supportDiagnosticsRevisions()
-    }.collectAsState(0L)
-    var summary by remember(services) {
-        mutableStateOf(
-            SupportDiagnosticsSummary(
-                available = false,
-                eventCount = 0,
-                warningCount = 0,
-                errorCount = 0,
-                oldestEventAtEpochMillis = null,
-                newestEventAtEpochMillis = null,
-                components = emptySet(),
-                storedBytes = 0L,
-                includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
-                explanation = "Loading private diagnostic history...",
-            ),
-        )
-    }
-    LaunchedEffect(services, diagnosticsRevision, refresh) {
-        summary = services.loadSupportDiagnosticsSummary()
-    }
-    var reproductionSteps by rememberSaveable { mutableStateOf("") }
-    var exporting by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var confirmSend by rememberSaveable { mutableStateOf(false) }
-    var confirmDiscard by rememberSaveable { mutableStateOf(false) }
-    var showPreview by rememberSaveable { mutableStateOf(false) }
-    var reportPageIndex by rememberSaveable { mutableStateOf(0) }
-    var reportDeletionTarget by remember { mutableStateOf<SupportDiagnosticsSubmissionState.SubmittedReport?>(null) }
-    val submissionState by remember(services) {
-        services.supportDiagnosticsSubmissionStates()
-    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
-    val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
-        submissionState is SupportDiagnosticsSubmissionState.Packaging ||
-        submissionState is SupportDiagnosticsSubmissionState.Cancelling ||
-        submissionState is SupportDiagnosticsSubmissionState.DeletingSubmittedReport ||
-        submissionState is SupportDiagnosticsSubmissionState.Uploading
-    val submissionCancellable = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
-        submissionState is SupportDiagnosticsSubmissionState.Uploading
-    val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
-        submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
-    val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported ||
-        submissionState is SupportDiagnosticsSubmissionState.AccountRequired
-
-    LaunchedEffect(submissionBusy, submissionPending, submissionUnavailable) {
-        if (submissionBusy || submissionPending || submissionUnavailable) {
-            confirmClear = false
-            confirmSend = false
-        }
-    }
-
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Clear diagnostic history?") },
-            text = {
-                Text(
-                    "This permanently removes the recorded diagnostic events on this device. " +
-                        "It does not remove reports you already exported.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !submissionBusy && !submissionPending,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        confirmClear = false
-                        scope.launch {
-                            status = if (services.clearSupportDiagnostics()) {
-                                refresh += 1
-                                "Diagnostic history cleared."
-                            } else {
-                                "Diagnostic history could not be cleared."
-                            }
-                        }
-                    },
-                ) { Text("Clear history") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
-            },
-        )
-    }
-
-    if (confirmSend) {
-        AlertDialog(
-            onDismissRequest = { if (!submissionBusy) confirmSend = false },
-            title = { Text("Send this private report?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Text(
-                        "The sanitized report, the description you reviewed, and app release details will be sent to Obiente Support.",
-                    )
-                    Text(
-                        "It does not include account credentials, raw account identifiers, server URLs, filenames, or file contents. Reports can include a stable pseudonymous account scope, allowing Obiente Support to correlate reports from the same account on this installation. Private report data is retained for 30 days unless you delete it first.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !submissionBusy && !submissionUnavailable,
-                    onClick = {
-                        confirmSend = false
-                        scope.launch { services.submitSupportDiagnostics(reproductionSteps) }
-                    },
-                ) { Text("Send privately") }
-            },
-            dismissButton = {
-                TextButton(enabled = !submissionBusy, onClick = { confirmSend = false }) { Text("Cancel") }
-            },
-        )
-    }
-
-    if (confirmDiscard) {
-        AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard this pending report?") },
-            text = {
-                Text(
-                    "This permanently removes the report prepared on this device. If its upload result is uncertain, the app will first reconcile it and request deletion from Obiente Support.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        confirmDiscard = false
-                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
-                    },
-                ) { Text("Discard report") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDiscard = false }) { Text("Keep report") }
-            },
-        )
-    }
-
-    reportDeletionTarget?.let { report ->
-        AlertDialog(
-            onDismissRequest = { if (!submissionBusy) reportDeletionTarget = null },
-            title = { Text("Delete this submitted report?") },
-            text = {
-                Text(
-                    "This permanently deletes report ${report.supportCode} from Obiente Support and removes its private receipt from this device.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !submissionBusy,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        reportDeletionTarget = null
-                        scope.launch {
-                            status = when (
-                                val result = services.deleteSubmittedSupportDiagnosticsReport(report.deletionUrl)
-                            ) {
-                                SupportDiagnosticsDeletionResult.Deleted -> "Submitted support report deleted."
-                                is SupportDiagnosticsDeletionResult.Failed -> result.message
-                                is SupportDiagnosticsDeletionResult.Unsupported -> result.reason
-                            }
-                        }
-                    },
-                ) { Text("Delete report") }
-            },
-            dismissButton = {
-                TextButton(enabled = !submissionBusy, onClick = { reportDeletionTarget = null }) {
-                    Text("Keep report")
-                }
-            },
-        )
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Activity,
-                        contentDescription = null,
-                        modifier = Modifier.padding(12.dp).size(26.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Anonymized support report", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Export bounded app events and failure context when you choose. Nothing is uploaded automatically.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (summary.available) {
-                Text(
-                    "${summary.eventCount} events · ${summary.errorCount} errors · " +
-                        "${summary.warningCount} warnings · ${formatVirtualFileBytes(summary.storedBytes)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    summary.components
-                        .sortedBy { component -> component.name }
-                        .joinToString(prefix = "Areas: ", separator = ", ") { it.name }
-                        .takeIf { summary.components.isNotEmpty() }
-                        ?: "No diagnostic events have been recorded yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Text(
-                    summary.explanation ?: "Diagnostic storage is unavailable on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
-            OutlinedTextField(
-                value = reproductionSteps,
-                onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = summary.available && !exporting && !submissionBusy && !submissionPending,
-                label = { Text("What happened? (optional)") },
-                placeholder = { Text("Describe what you did, what you expected, and what happened.") },
-                supportingText = {
-                    Text(
-                        "Recognizable credentials, account details, URLs, and paths are anonymized. " +
-                            "Review your description before sharing.",
-                    )
-                },
-                minLines = 3,
-                maxLines = 7,
-            )
-
-            Text(
-                "Includes: ${summary.includedFiles.joinToString()}. " +
-                    "Does not include file contents, request bodies, credentials, cookies, or the private alias key.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (summary.recentEvents.isNotEmpty()) {
-                OutlinedButton(
-                    onClick = {
-                        refresh += 1
-                        showPreview = !showPreview
-                    },
-                ) {
-                    Text(if (showPreview) "Hide event preview" else "Preview recent events")
-                }
-                if (showPreview) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Small),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                "Latest ${summary.recentEvents.size} sanitized events",
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            summary.recentEvents.asReversed().forEach { event ->
-                                Text(
-                                    buildString {
-                                        append(event.severity.name)
-                                        append(" · ")
-                                        append(event.component.name)
-                                        append(" · ")
-                                        append(event.operation)
-                                        append(" · ")
-                                        append(event.outcome)
-                                        event.code?.let { append(" · ").append(it) }
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                Button(
-                    enabled = summary.available && !exporting && !submissionBusy && !submissionPending &&
-                        !submissionUnavailable,
-                    onClick = { confirmSend = true },
-                ) {
-                    Text("Send to support")
-                }
-                OutlinedButton(
-                    enabled = summary.available && !exporting && !submissionBusy,
-                    onClick = {
-                        exporting = true
-                        status = null
-                        refresh += 1
-                        scope.launch {
-                            try {
-                                status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
-                                    is SupportDiagnosticsExportResult.Exported ->
-                                        "Report prepared: ${result.destination}"
-                                    SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
-                                    is SupportDiagnosticsExportResult.Failed -> result.message
-                                    is SupportDiagnosticsExportResult.Unsupported -> result.reason
-                                }
-                            } catch (cancellation: CancellationException) {
-                                throw cancellation
-                            } catch (_: Throwable) {
-                                status = "The anonymized support report could not be saved."
-                            } finally {
-                                exporting = false
-                                refresh += 1
-                            }
-                        }
-                    },
-                ) {
-                    if (exporting) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (exporting) "Preparing..." else "Save a copy")
-                }
-                if (submissionCancellable) {
-                    OutlinedButton(onClick = {
-                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
-                    }) {
-                        Text("Cancel sending")
-                    }
-                }
-                if (summary.eventCount > 0) {
-                    OutlinedButton(
-                        enabled = !exporting && !submissionBusy && !submissionPending,
-                        onClick = { confirmClear = true },
-                    ) { Text("Clear history") }
-                }
-            }
-            Column(
-                modifier = Modifier.fillMaxWidth().semantics {
-                    liveRegion = LiveRegionMode.Polite
-                },
-            ) {
-                when (val current = submissionState) {
-                    SupportDiagnosticsSubmissionState.Initializing -> {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Text("Restoring any pending private report...", style = MaterialTheme.typography.bodySmall)
-                    }
-                    SupportDiagnosticsSubmissionState.AccountRequired -> Text(
-                        "Sign in before sending a private support report.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    SupportDiagnosticsSubmissionState.Idle -> Unit
-                    is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(
-                        current.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    SupportDiagnosticsSubmissionState.Packaging -> {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
-                    }
-                    SupportDiagnosticsSubmissionState.Cancelling -> {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Text("Finishing private report cancellation...", style = MaterialTheme.typography.bodySmall)
-                    }
-                    SupportDiagnosticsSubmissionState.DeletingSubmittedReport -> {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Text("Deleting the submitted support report...", style = MaterialTheme.typography.bodySmall)
-                    }
-                    is SupportDiagnosticsSubmissionState.Uploading -> {
-                        if (current.progress == null) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        } else {
-                            LinearProgressIndicator(
-                                progress = { current.progress },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        Text("Sending the private report to Obiente Support...", style = MaterialTheme.typography.bodySmall)
-                    }
-                    is SupportDiagnosticsSubmissionState.RetryableFailure -> {
-                        Text(
-                            current.message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        ) {
-                            OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
-                                Text("Retry safely")
-                            }
-                            TextButton(onClick = { confirmDiscard = true }) {
-                                Text("Discard pending report")
-                            }
-                        }
-                    }
-                    is SupportDiagnosticsSubmissionState.Rejected -> Text(
-                        current.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    SupportDiagnosticsSubmissionState.Cancelled -> Text(
-                        "Private report submission cancelled.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    is SupportDiagnosticsSubmissionState.Submitted -> {
-                        val reportPage = supportReportPage(current.reports, reportPageIndex)
-                        LaunchedEffect(reportPageIndex, reportPage.pageIndex, current.reports.size) {
-                            if (reportPageIndex != reportPage.pageIndex) {
-                                reportPageIndex = reportPage.pageIndex
-                            }
-                        }
-                        Text(
-                            if (current.reports.size == 1) {
-                                "Sent privately. Your report remains available until its retention period ends."
-                            } else {
-                                "${current.reports.size} private reports remain available until their retention periods end."
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        reportPage.items.forEach { report ->
-                            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                                Text(
-                                    "Support code: ${report.supportCode}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            status = if (
-                                                services.copyTextToClipboard(
-                                                    "Obiente support code",
-                                                    report.supportCode,
-                                                )
-                                            ) {
-                                                "Support code copied."
-                                            } else {
-                                                "The support code could not be copied."
-                                            }
-                                        },
-                                    ) { Text("Copy support code") }
-                                    TextButton(onClick = { services.openExternalUrl(report.statusUrl) }) {
-                                        Text("Open private status")
-                                    }
-                                    TextButton(
-                                        colors = ButtonDefaults.textButtonColors(
-                                            contentColor = MaterialTheme.colorScheme.error,
-                                        ),
-                                        onClick = { reportDeletionTarget = report },
-                                    ) {
-                                        Text("Delete report")
-                                    }
-                                }
-                            }
-                        }
-                        if (reportPage.pageCount > 1) {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            ) {
-                                OutlinedButton(
-                                    enabled = reportPage.pageIndex > 0,
-                                    onClick = { reportPageIndex = reportPage.pageIndex - 1 },
-                                ) { Text("Previous reports") }
-                                Text(
-                                    "Page ${reportPage.pageIndex + 1} of ${reportPage.pageCount}",
-                                    modifier = Modifier.padding(vertical = 12.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                OutlinedButton(
-                                    enabled = reportPage.pageIndex + 1 < reportPage.pageCount,
-                                    onClick = { reportPageIndex = reportPage.pageIndex + 1 },
-                                ) { Text("Next reports") }
-                            }
-                        }
-                    }
-                    is SupportDiagnosticsSubmissionState.Unsupported -> Text(
-                        current.reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            status?.let { message ->
-                Text(
-                    message,
-                    modifier = Modifier.semantics {
-                        contentDescription = message
-                        liveRegion = LiveRegionMode.Polite
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-internal data class SupportReportPage<T>(
-    val items: List<T>,
-    val pageIndex: Int,
-    val pageCount: Int,
-)
-
-internal fun <T> supportReportPage(
-    reports: List<T>,
-    requestedPageIndex: Int,
-    pageSize: Int = SUPPORT_REPORT_PAGE_SIZE,
-): SupportReportPage<T> {
-    require(pageSize > 0)
-    val pageCount = if (reports.isEmpty()) 1 else ((reports.size - 1) / pageSize) + 1
-    val pageIndex = requestedPageIndex.coerceIn(0, pageCount - 1)
-    val firstIndex = pageIndex * pageSize
-    return SupportReportPage(
-        items = reports.subList(firstIndex, minOf(firstIndex + pageSize, reports.size)),
-        pageIndex = pageIndex,
-        pageCount = pageCount,
-    )
-}
-
-private const val SUPPORT_REPORT_PAGE_SIZE = 5
 
 @Composable
 internal fun DesktopStartOnLoginSettingsCard(
@@ -14860,7 +12262,7 @@ internal fun DesktopBackgroundSettingsCard(
 }
 
 @Composable
-private fun ProductHeader(
+internal fun ProductHeader(
     title: String,
     onSettings: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
@@ -14985,79 +12387,19 @@ internal fun ScreenHeader(
 }
 
 @Composable
-private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier = modifier, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
 }
 
 @Composable
-private fun LoadingMessage(message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        CircularProgressIndicator()
-        Text(message, modifier = Modifier.padding(top = NextcloudSpacing.Large))
-    }
-}
-
-@Composable
-internal fun EmptyMessage(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.XLarge), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
-    Column(modifier = Modifier.padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-        Text(message, color = MaterialTheme.colorScheme.error)
-        onRetry?.let { retry -> OutlinedButton(onClick = retry) { Text("Try again") } }
-    }
-}
-
-@Composable
-private fun RetainedRefreshError(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.padding(
-            horizontal = NextcloudSpacing.Large,
-            vertical = NextcloudSpacing.Small,
-        ),
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = onRetry) { Text("Retry") }
-        }
-    }
+private fun RetainedRefreshError(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice(message, onRetry, modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small))
 }
 
 private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeSubtitle(appId: String): String = when (appId) {
-    "files" -> "Browse your server files"
-    "photos", "memories" -> "Photos, videos and RAW previews"
-    "spreed", "talk" -> "Continue your conversations"
-    "activity" -> "See recent changes across your cloud"
-    "notes" -> "Write and organize Markdown notes"
-    "dashboard" -> "See your cloud at a glance"
-    "user_status" -> "Manage your presence and status message"
-    else -> "Open native experience"
 }
 
 private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
@@ -15076,7 +12418,7 @@ private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
     else -> "adaptive collection"
 }
 
-private fun formatBytes(bytes: Long?): String = when {
+internal fun formatBytes(bytes: Long?): String = when {
     bytes == null -> "File"
     bytes < 1_024 -> "$bytes B"
     bytes < 1_048_576 -> "${bytes / 1_024} KB"

@@ -19,14 +19,14 @@ internal class DesktopSupportBundleExporter(
         featureState: List<SupportDiagnosticFieldDraft>,
     ): SupportDiagnosticsExportResult = withContext(Dispatchers.IO) {
         val fileName = "nextcloud-native-support-${System.currentTimeMillis().coerceAtLeast(0L)}.zip"
-        val destination = runCatching { chooseDestination(fileName) }
+        val destination = runCatchingPreservingCancellation { chooseDestination(fileName) }
             .getOrElse { failure ->
                 return@withContext SupportDiagnosticsExportResult.Failed(
                     failure.message ?: "The system save dialog could not be opened.",
                 )
             }
             ?: return@withContext SupportDiagnosticsExportResult.Cancelled
-        runCatching {
+        runCatchingPreservingCancellation {
             val normalized = destination.absoluteFile.normalizeSupportBundleDestination()
             diagnostics.writeBundle(normalized, reproductionSteps, featureState)
             normalized
@@ -79,13 +79,19 @@ internal fun createDesktopSupportDiagnostics(
     workerName = "nextcloud-support-diagnostics",
 )
 
-internal fun desktopSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
-    SupportDiagnosticsEnvironment(
-        appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
-        packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
-        platform = desktopSupportPlatformName(),
-        operatingSystemVersion = System.getProperty("os.version", "Unknown"),
-        architecture = System.getProperty("os.arch", "Unknown"),
+internal fun desktopSupportDiagnosticsEnvironment(
+    appVersion: String = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
+    packageVersion: String = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
+    platform: String = desktopSupportPlatformName(),
+    operatingSystemVersion: String = System.getProperty("os.version", "Unknown"),
+    architecture: String = System.getProperty("os.arch", "Unknown"),
+): SupportDiagnosticsEnvironment =
+    boundedSupportDiagnosticsEnvironment(
+        appVersion = appVersion,
+        packageVersion = packageVersion,
+        platform = platform,
+        operatingSystemVersion = operatingSystemVersion,
+        architecture = architecture,
     )
 
 internal fun installDesktopUncaughtDiagnosticHandler(diagnostics: AsyncJvmSupportDiagnostics) {

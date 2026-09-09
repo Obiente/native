@@ -94,10 +94,11 @@ internal fun FileOfflineCenterScreen(
     var actionMessage by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
     var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
+    val incomingShareRecoveryPager = rememberIncomingShareRecoveryPager(services, session, userId, refreshAttempt)
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
-    var syncBusyPairId by remember(session, userId) { mutableStateOf<String?>(null) }
+    var syncBusyPairIds by remember(session, userId) { mutableStateOf<Set<String>>(emptySet()) }
     var pendingLocalRootJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
         mutableStateOf<String?>(null)
     }
@@ -173,8 +174,8 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun runSyncAction(pairId: String, remove: Boolean) {
-        if (syncBusyPairId != null) return
-        syncBusyPairId = pairId
+        if (pairId in syncBusyPairIds) return
+        syncBusyPairIds += pairId
         actionMessage = null
         scope.launch {
             runCatching {
@@ -189,32 +190,36 @@ internal fun FileOfflineCenterScreen(
             }.onFailure { failure ->
                 actionMessage = failure.message ?: "Could not update this folder sync pair."
             }
-            syncBusyPairId = null
+            syncBusyPairIds -= pairId
         }
     }
 
     fun beginAddFolderSync() {
-        if (syncBusyPairId != null) return
+        if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return
+        syncBusyPairIds += ADD_PAIR_BUSY_ID
         scope.launch {
-            runCatching { services.chooseFileSyncLocalRoot() }
-                .onSuccess { selected ->
-                    pendingMediaSuggestionJson = null
-                    pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
-                    pendingRemotePath = selected?.let { "" }
-                    pendingSyncConfigurationJson = selected
-                        ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
-                        ?.let { fileSyncSetupJson.encodeToString(it) }
-                    remoteFolderPickerVisible = false
-                    syncSelectionPickerVisible = false
-                }
-                .onFailure { failure ->
-                    actionMessage = failure.message ?: "Could not select a local folder."
-                }
+            try {
+                runCatching { services.chooseFileSyncLocalRoot() }
+                    .onSuccess { selected ->
+                        pendingMediaSuggestionJson = null
+                        pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
+                        pendingRemotePath = selected?.let { "" }
+                        pendingSyncConfigurationJson = selected
+                            ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
+                            ?.let { fileSyncSetupJson.encodeToString(it) }
+                        remoteFolderPickerVisible = false
+                        syncSelectionPickerVisible = false
+                    }
+                    .onFailure { failure ->
+                        actionMessage = failure.message ?: "Could not select a local folder."
+                    }
+            } finally {
+                syncBusyPairIds -= ADD_PAIR_BUSY_ID
+            }
         }
     }
 
     fun openMediaSuggestion(suggestion: MediaSyncFolderSuggestion) {
-        if (syncBusyPairId != null) return
         pendingMediaPreview = null
         mediaPreviewError = null
         pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
@@ -228,17 +233,18 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun resolveSyncConflict(target: PendingFileSyncDecision) {
-        if (syncBusyPairId != null) return
-        syncBusyPairId = target.pair.id
+        if (target.pair.id in syncBusyPairIds) return
+        syncBusyPairIds += target.pair.id
         actionMessage = null
         scope.launch {
             runCatching {
-                services.resolveFileSyncConflict(
+                services.resolveFileSyncConflicts(
                     session,
                     userId,
                     target.pair.id,
-                    target.conflict.workId,
-                    target.choice,
+                    target.conflicts.map { conflict ->
+                        FileSyncConflictResolution(conflict.workId, target.choice)
+                    },
                 )
             }.onSuccess { result ->
                 actionMessage = result.fileSyncCenterMessage()
@@ -246,7 +252,7 @@ internal fun FileOfflineCenterScreen(
             }.onFailure { failure ->
                 actionMessage = failure.message ?: "Could not apply this conflict decision."
             }
-            syncBusyPairId = null
+            syncBusyPairIds -= target.pair.id
         }
     }
 
@@ -539,6 +545,13 @@ internal fun FileOfflineCenterScreen(
                 actionMessage?.let { message ->
                     OfflineCenterMessageCard(message, errorTone = false)
                 }
+                IncomingShareRecoveryCard(
+                    page = incomingShareRecoveryPager.page,
+                    pageNumber = incomingShareRecoveryPager.pageNumber,
+                    onOpen = services::openIncomingShareRecovery,
+                    onPreviousPage = incomingShareRecoveryPager::previous,
+                    onNextPage = incomingShareRecoveryPager::next,
+                )
                 when (selectedWorkspaceSection) {
                     FileOfflineWorkspaceSection.FolderSync -> {
                         if (services.supportsBidirectionalFileSync) {
@@ -547,7 +560,8 @@ internal fun FileOfflineCenterScreen(
                                 loading = syncLoading,
                                 mediaDiscovery = mediaFolderDiscovery,
                                 mediaDiscoveryLoading = mediaDiscoveryLoading,
-                                busyPairId = syncBusyPairId,
+                                busyPairId = syncBusyPairIds.firstOrNull(),
+                                busyPairIds = syncBusyPairIds,
                                 onAdd = ::beginAddFolderSync,
                                 onOpenMediaSuggestion = ::openMediaSuggestion,
                                 onRequestMediaPermission = {
@@ -559,7 +573,10 @@ internal fun FileOfflineCenterScreen(
                                 onRun = { pair -> runSyncAction(pair.id, remove = false) },
                                 onRemove = { pair -> removeSyncPair = pair },
                                 onResolve = { pair, conflict, choice ->
-                                    pendingSyncDecision = PendingFileSyncDecision(pair, conflict, choice)
+                                    pendingSyncDecision = PendingFileSyncDecision(pair, listOf(conflict), choice)
+                                },
+                                onResolveBatch = { pair, conflicts, choice ->
+                                    pendingSyncDecision = PendingFileSyncDecision(pair, conflicts, choice)
                                 },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                 fillAvailableHeight = true,
@@ -685,6 +702,17 @@ internal fun FileOfflineCenterScreen(
                     actionMessage?.let { message ->
                         item { OfflineCenterMessageCard(message, errorTone = false) }
                     }
+                    if (incomingShareRecoveryPager.isVisible) {
+                        item {
+                            IncomingShareRecoveryCard(
+                                page = incomingShareRecoveryPager.page,
+                                pageNumber = incomingShareRecoveryPager.pageNumber,
+                                onOpen = services::openIncomingShareRecovery,
+                                onPreviousPage = incomingShareRecoveryPager::previous,
+                                onNextPage = incomingShareRecoveryPager::next,
+                            )
+                        }
+                    }
                     when (selectedWorkspaceSection) {
                         FileOfflineWorkspaceSection.FolderSync -> {
                             if (services.supportsBidirectionalFileSync) {
@@ -694,7 +722,8 @@ internal fun FileOfflineCenterScreen(
                                         loading = syncLoading,
                                         mediaDiscovery = mediaFolderDiscovery,
                                         mediaDiscoveryLoading = mediaDiscoveryLoading,
-                                        busyPairId = syncBusyPairId,
+                                        busyPairId = syncBusyPairIds.firstOrNull(),
+                                        busyPairIds = syncBusyPairIds,
                                         onAdd = ::beginAddFolderSync,
                                         onOpenMediaSuggestion = ::openMediaSuggestion,
                                         onRequestMediaPermission = {
@@ -706,7 +735,10 @@ internal fun FileOfflineCenterScreen(
                                         onRun = { pair -> runSyncAction(pair.id, remove = false) },
                                         onRemove = { pair -> removeSyncPair = pair },
                                         onResolve = { pair, conflict, choice ->
-                                            pendingSyncDecision = PendingFileSyncDecision(pair, conflict, choice)
+                                            pendingSyncDecision = PendingFileSyncDecision(pair, listOf(conflict), choice)
+                                        },
+                                        onResolveBatch = { pair, conflicts, choice ->
+                                            pendingSyncDecision = PendingFileSyncDecision(pair, conflicts, choice)
                                         },
                                     )
                                 }
@@ -1029,9 +1061,9 @@ internal fun FileOfflineCenterScreen(
             mediaPreview = pendingMediaPreview,
             mediaPreviewLoading = mediaPreviewLoading,
             mediaPreviewError = mediaPreviewError,
-            busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
+            busy = ADD_PAIR_BUSY_ID in syncBusyPairIds,
             onDismiss = {
-                if (syncBusyPairId == null) {
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) {
                     pendingLocalRootJson = null
                     pendingMediaSuggestionJson = null
                     pendingRemotePath = null
@@ -1041,15 +1073,15 @@ internal fun FileOfflineCenterScreen(
                 }
             },
             onChooseDestination = {
-                if (syncBusyPairId == null) remoteFolderPickerVisible = true
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) remoteFolderPickerVisible = true
             },
             onChooseSelectedPaths = {
-                if (syncBusyPairId == null) syncSelectionPickerVisible = true
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) syncSelectionPickerVisible = true
             },
             onConfigurationChanged = { pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(it) },
             onAdd = {
-                if (syncBusyPairId != null) return@AddFolderSyncDialog
-                syncBusyPairId = ADD_PAIR_BUSY_ID
+                if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return@AddFolderSyncDialog
+                syncBusyPairIds += ADD_PAIR_BUSY_ID
                 actionMessage = null
                 scope.launch {
                     runCatching {
@@ -1076,7 +1108,7 @@ internal fun FileOfflineCenterScreen(
                     }.onFailure { failure ->
                         actionMessage = failure.message ?: "Could not add this folder sync pair."
                     }
-                    syncBusyPairId = null
+                    syncBusyPairIds -= ADD_PAIR_BUSY_ID
                 }
             },
         )
@@ -1084,7 +1116,7 @@ internal fun FileOfflineCenterScreen(
 
     removeSyncPair?.let { pair ->
         AlertDialog(
-            onDismissRequest = { if (syncBusyPairId == null) removeSyncPair = null },
+            onDismissRequest = { if (pair.id !in syncBusyPairIds) removeSyncPair = null },
             title = { Text("Remove folder sync?") },
             text = {
                 Text(
@@ -1095,7 +1127,7 @@ internal fun FileOfflineCenterScreen(
             },
             confirmButton = {
                 Button(
-                    enabled = syncBusyPairId == null,
+                    enabled = pair.id !in syncBusyPairIds,
                     onClick = {
                         removeSyncPair = null
                         runSyncAction(pair.id, remove = true)
@@ -1104,7 +1136,7 @@ internal fun FileOfflineCenterScreen(
             },
             dismissButton = {
                 TextButton(
-                    enabled = syncBusyPairId == null,
+                    enabled = pair.id !in syncBusyPairIds,
                     onClick = { removeSyncPair = null },
                 ) { Text("Cancel") }
             },
@@ -1113,19 +1145,32 @@ internal fun FileOfflineCenterScreen(
 
     pendingSyncDecision?.let { target ->
         AlertDialog(
-            onDismissRequest = { if (syncBusyPairId == null) pendingSyncDecision = null },
+            onDismissRequest = { if (target.pair.id !in syncBusyPairIds) pendingSyncDecision = null },
             title = { Text("Resolve sync conflict?") },
             text = {
                 Text(
-                    target.choice.confirmationText(
-                        target.conflict.relativePath,
-                        target.conflict.reason,
-                    ),
+                    if (target.conflicts.size == 1) {
+                        val conflict = target.conflicts.single()
+                        target.choice.confirmationText(conflict.relativePath, conflict.reason)
+                    } else {
+                        "Apply ${target.choice.readableDecision().lowercase()} to all " +
+                            "${target.conflicts.size} reviewed conflicts? Every item is checked again before " +
+                            "the batch is saved. A destination change rejects the batch; a newer chosen " +
+                            "source may be used only while its destination stays unchanged."
+                    },
                 )
             },
             confirmButton = {
                 Button(
-                    enabled = syncBusyPairId == null,
+                    enabled = target.pair.id !in syncBusyPairIds,
+                    colors = if (target.choice.isDestructiveSyncDecision()) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
                     onClick = {
                         pendingSyncDecision = null
                         resolveSyncConflict(target)
@@ -1134,33 +1179,13 @@ internal fun FileOfflineCenterScreen(
             },
             dismissButton = {
                 TextButton(
-                    enabled = syncBusyPairId == null,
+                    enabled = target.pair.id !in syncBusyPairIds,
                     onClick = { pendingSyncDecision = null },
                 ) { Text("Cancel") }
             },
         )
     }
 }
-
-internal fun virtualStorageHydrationPollDelay(
-    statuses: List<VirtualFolderHydrationStatus>,
-    nowEpochMillis: Long,
-): Long? {
-    require(nowEpochMillis >= 0L)
-    if (statuses.any { status ->
-            status.phase == VirtualFolderHydrationPhase.Queued ||
-                status.phase == VirtualFolderHydrationPhase.Downloading ||
-                status.refreshing
-        }
-    ) return VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS
-    val retryAt = statuses.mapNotNull(VirtualFolderHydrationStatus::refreshRetryAtEpochMillis).minOrNull()
-        ?: return null
-    if (retryAt <= nowEpochMillis) return VIRTUAL_STORAGE_RETRY_POLL_MILLIS
-    return (retryAt - nowEpochMillis).coerceAtMost(VIRTUAL_STORAGE_RETRY_POLL_MILLIS)
-}
-
-private const val VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS = 750L
-private const val VIRTUAL_STORAGE_RETRY_POLL_MILLIS = 10_000L
 
 @Composable
 internal fun FileOfflineWorkspaceNavigation(
@@ -1294,12 +1319,15 @@ internal fun FolderSyncSection(
     mediaDiscovery: MediaSyncFolderDiscovery?,
     mediaDiscoveryLoading: Boolean,
     busyPairId: String?,
+    busyPairIds: Set<String> = busyPairId?.let(::setOf).orEmpty(),
     onAdd: () -> Unit,
     onOpenMediaSuggestion: (MediaSyncFolderSuggestion) -> Unit,
     onRequestMediaPermission: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit =
+        { _, _, _ -> },
     modifier: Modifier = Modifier,
     fillAvailableHeight: Boolean = false,
 ) {
@@ -1310,7 +1338,7 @@ internal fun FolderSyncSection(
         MediaFolderSuggestions(
             discovery = mediaDiscovery,
             loading = mediaDiscoveryLoading,
-            enabled = busyPairId == null,
+            enabled = ADD_PAIR_BUSY_ID !in busyPairIds,
             onOpen = onOpenMediaSuggestion,
             onRequestPermission = onRequestMediaPermission,
         )
@@ -1318,10 +1346,13 @@ internal fun FolderSyncSection(
             snapshot = snapshot,
             loading = loading,
             busyPairId = busyPairId,
+            busyPairIds = busyPairIds,
+            addEnabled = ADD_PAIR_BUSY_ID !in busyPairIds,
             onAdd = onAdd,
             onRun = onRun,
             onRemove = onRemove,
             onResolve = onResolve,
+            onResolveBatch = onResolveBatch,
             modifier = if (fillAvailableHeight) {
                 Modifier.weight(1f).fillMaxWidth()
             } else {
@@ -1331,6 +1362,7 @@ internal fun FolderSyncSection(
         )
     }
 }
+
 
 @Composable
 private fun MediaFolderSuggestions(
@@ -1793,352 +1825,6 @@ internal fun isMediaFolderPreviewReady(
         )
 
 @Composable
-internal fun VirtualFileStorageCard(
-    snapshot: VirtualFileStorageSnapshot?,
-    loading: Boolean,
-    busy: Boolean,
-    onManage: () -> Unit,
-    onFreeUp: () -> Unit,
-    onActivateProvider: () -> Unit,
-    onDeactivateProvider: () -> Unit,
-    onAcknowledgeRecovery: () -> Unit,
-    onChangeLocation: () -> Unit,
-    onChangeCacheTiers: () -> Unit,
-    onChoosePinnedFolder: () -> Unit,
-    onReleaseFolder: (String) -> Unit,
-    onRetryFolder: (String) -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Virtual files", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        when (snapshot?.integration) {
-                            VirtualFilePlatformIntegration.AndroidDocumentsProvider ->
-                                "Browse everything in System Files. Content downloads only when opened."
-                            VirtualFilePlatformIntegration.LinuxFilesystemMount ->
-                                "Browse placeholders in your Linux file manager. Content downloads when opened."
-                            VirtualFilePlatformIntegration.InAppOnDemandCache ->
-                                "Files opened in Nextcloud Native are kept in a managed on-demand cache."
-                            VirtualFilePlatformIntegration.WindowsCloudFiles ->
-                                "Browse everything in File Explorer. Files download when opened and local edits sync back."
-                            VirtualFilePlatformIntegration.AppleFileProvider ->
-                                "Files hydrate through the system File Provider."
-                            null -> "Loading on-demand storage status..."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (loading || busy) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(999.dp),
-                    ) {
-                        Text(
-                            when (snapshot?.support) {
-                                VirtualFileStorageSupport.Available -> "System integrated"
-                                VirtualFileStorageSupport.CacheOnly -> "App cache"
-                                VirtualFileStorageSupport.Unsupported -> "Unavailable"
-                                null -> "Checking"
-                            },
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                    }
-                }
-            }
-
-            if (snapshot != null) {
-                val maximum = snapshot.policy.maximumCacheBytes
-                if (maximum != null) {
-                    val automaticBytes = managedAutomaticCacheBytesForProgress(snapshot)
-                    LinearProgressIndicator(
-                        progress = {
-                            (automaticBytes.toDouble() / maximum.toDouble())
-                                .coerceIn(0.0, 1.0)
-                                .toFloat()
-                        },
-                        modifier = Modifier.fillMaxWidth().height(6.dp),
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    VirtualFileStorageMetric(
-                        label = "Cached",
-                        value = formatVirtualFileBytes(snapshot.cachedBytes),
-                        modifier = Modifier.weight(1f),
-                    )
-                    VirtualFileStorageMetric(
-                        label = "Pinned",
-                        value = formatVirtualFileBytes(snapshot.pinnedBytes),
-                        modifier = Modifier.weight(1f),
-                    )
-                    VirtualFileStorageMetric(
-                        label = "Free",
-                        value = snapshot.availableFreeBytes?.let(::formatVirtualFileBytes) ?: "Unknown",
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Text(
-                    if (snapshot.policy.automaticCleanup) {
-                        buildString {
-                            append("Auto cleanup keeps at least ")
-                            append(formatVirtualFileBytes(snapshot.policy.minimumFreeSpaceBytes))
-                            append(" free")
-                            snapshot.policy.unusedFileAgeMillis?.let { age ->
-                                append(
-                                    if (snapshot.cacheTiers?.overflowPath != null) {
-                                        " and moves unused cached files to overflow after "
-                                    } else {
-                                        " and removes unused cached files after "
-                                    },
-                                )
-                                append(formatVirtualFileAge(age))
-                            }
-                            append(". Pins and active work are always kept.")
-                        }
-                    } else {
-                        "Automatic cleanup is off. Pins and active work are always kept."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                snapshot.cacheTiers?.let {
-                    VirtualFileCacheTierRow("Fast cache", snapshot.primaryCache)
-                    if (it.overflowPath != null) {
-                        VirtualFileCacheTierRow("Overflow", snapshot.overflowCache)
-                    } else {
-                        Text(
-                            "Overflow storage is off. Cold automatic content is removed when the fast cache needs space.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    OutlinedButton(
-                        enabled = !busy && !snapshot.providerActive,
-                        onClick = onChangeCacheTiers,
-                    ) {
-                        Text("Change cache drives")
-                    }
-                }
-                if (snapshot.providerState != VirtualFileProviderState.NotApplicable) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(NextcloudRadii.Small),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                when (snapshot.providerState) {
-                                    VirtualFileProviderState.Active -> "Available in your file manager"
-                                    VirtualFileProviderState.Inactive -> "File-manager integration is off"
-                                    VirtualFileProviderState.Starting -> "Starting file-manager integration"
-                                    VirtualFileProviderState.NeedsAttention -> "File-manager integration needs attention"
-                                    VirtualFileProviderState.NotApplicable -> ""
-                                },
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            snapshot.providerLocation?.let { location ->
-                                Text(
-                                    location,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            snapshot.providerRecoveryNotice?.let { notice ->
-                                Text(
-                                    notice,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                                TextButton(enabled = !busy, onClick = onAcknowledgeRecovery) {
-                                    Text("I've reviewed the preserved folder")
-                                }
-                            }
-                            if (snapshot.pendingWritebackCount > 0) {
-                                Text(
-                                    "${snapshot.pendingWritebackCount} local edit(s) are retained for recovery.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            snapshot.limitations.forEach { limitation ->
-                                Text(
-                                    limitation,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (snapshot.providerLocationCanChange) {
-                                TextButton(enabled = !busy, onClick = onChangeLocation) {
-                                    Text("Change drive or folder")
-                                }
-                            }
-                        }
-                    }
-                    if (snapshot.providerActive) {
-                        OutlinedButton(enabled = !busy, onClick = onDeactivateProvider) {
-                            Text("Disconnect from file manager")
-                        }
-                    } else {
-                        Button(enabled = !busy, onClick = onActivateProvider) {
-                            Text("Connect to file manager")
-                        }
-                    }
-                }
-                if (snapshot.integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
-                    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                        Text("Folders kept on this device", style = MaterialTheme.typography.titleSmall)
-                        val pinnedFolders = snapshot.folderRetentionRules.filter { rule ->
-                            rule.retention == VirtualFolderRetention.KeepOnDevice
-                        }
-                        if (pinnedFolders.isEmpty()) {
-                            Text(
-                                "Everything stays visible. Choose only the albums or folders that should also work offline.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            val hydrationByPath = snapshot.folderHydrationStatuses.associateBy(
-                                VirtualFolderHydrationStatus::relativePath,
-                            )
-                            LazyColumn(
-                                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
-                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            ) {
-                                items(
-                                    items = pinnedFolders,
-                                    key = VirtualFolderRetentionRule::relativePath,
-                                ) { rule ->
-                                    val status = hydrationByPath[rule.relativePath]
-                                    var menuExpanded by remember(rule.relativePath) { mutableStateOf(false) }
-                                    val menuActions = buildList {
-                                        if (
-                                            status?.phase == VirtualFolderHydrationPhase.Failed ||
-                                            status?.refreshFailure != null
-                                        ) {
-                                            add(
-                                                NextcloudCardAction(
-                                                    label = "Retry",
-                                                    enabled = !busy,
-                                                    onClick = { onRetryFolder(rule.relativePath) },
-                                                ),
-                                            )
-                                        }
-                                        add(
-                                            NextcloudCardAction(
-                                                label = "Make online-only",
-                                                destructive = true,
-                                                enabled = !busy,
-                                                onClick = { onReleaseFolder(rule.relativePath) },
-                                            ),
-                                        )
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
-                                            onOpen = null,
-                                            onShowActions = { menuExpanded = true },
-                                            actionsLabel = "Show actions for ${rule.relativePath}",
-                                        ),
-                                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                rule.relativePath,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                            Text(
-                                                when (status?.phase) {
-                                                    VirtualFolderHydrationPhase.Queued -> "Waiting to download"
-                                                    VirtualFolderHydrationPhase.Downloading -> "Downloading for offline use"
-                                                    VirtualFolderHydrationPhase.AvailableOffline -> when {
-                                                        status.refreshing -> "Available offline. Checking for updates"
-                                                        status.refreshFailure != null -> status.refreshFailure.let { failure ->
-                                                            "Available offline. Latest refresh needs attention: $failure"
-                                                        }
-                                                        else -> "Available offline"
-                                                    }
-                                                    VirtualFolderHydrationPhase.Failed ->
-                                                        status.detail ?: "Download needs attention"
-                                                    null -> "Waiting to check offline content"
-                                                },
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = if (status?.phase == VirtualFolderHydrationPhase.Failed) {
-                                                    MaterialTheme.colorScheme.error
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                                },
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                        NextcloudCardOverflow(
-                                            itemLabel = rule.relativePath,
-                                            actions = menuActions,
-                                            expanded = menuExpanded,
-                                            onExpandedChange = { menuExpanded = it },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        OutlinedButton(enabled = !busy, onClick = onChoosePinnedFolder) {
-                            Text("Keep a folder on this device")
-                        }
-                    }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(enabled = !busy, onClick = onManage) { Text("Manage storage") }
-                    OutlinedButton(
-                        enabled = !busy && snapshot.reclaimableBytes > 0L,
-                        onClick = onFreeUp,
-                    ) {
-                        Text(
-                            if (snapshot.reclaimableBytes > 0L) {
-                                "Free up ${formatVirtualFileBytes(snapshot.reclaimableBytes)}"
-                            } else {
-                                "Nothing to free"
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-internal fun managedAutomaticCacheBytesForProgress(snapshot: VirtualFileStorageSnapshot): Long =
-    snapshot.primaryCache?.managedAutomaticBytes
-        ?: (snapshot.cachedBytes - snapshot.pinnedBytes).coerceAtLeast(0L)
-
-@Composable
 private fun VirtualFileProviderLocationDialog(
     services: NextcloudPlatformServices,
     initial: VirtualFileProviderLocation,
@@ -2334,67 +2020,6 @@ private fun VirtualFileCacheTiersDialog(
 }
 
 @Composable
-private fun VirtualFileCacheTierRow(label: String, tier: VirtualFileCacheTierSnapshot?) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(label, style = MaterialTheme.typography.labelLarge)
-                Text(
-                    if (tier?.available == true) formatVirtualFileBytes(tier.cachedBytes) else "Unavailable",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (tier?.available == true) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-            }
-            tier?.let {
-                Text(
-                    it.path,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "Pinned ${formatVirtualFileBytes(it.pinnedBytes)} - Free ${it.availableFreeBytes?.let(::formatVirtualFileBytes) ?: "unknown"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun VirtualFileStorageMetric(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-@Composable
 internal fun VirtualFileStoragePolicyDialog(
     snapshot: VirtualFileStorageSnapshot,
     busy: Boolean,
@@ -2444,7 +2069,7 @@ internal fun VirtualFileStoragePolicyEditor(
     ) {
         item {
             Text(
-                "Opened files hydrate into the local cache. Pinned offline files, open files, " +
+                "Opened files download to the local cache. Files kept offline, open files, " +
                     "uploads, edits, and conflicts are never removed automatically.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2476,7 +2101,7 @@ internal fun VirtualFileStoragePolicyEditor(
         item {
             VirtualFilePolicyChoice(
                 title = if (snapshot.cacheTiers != null) "Fast cache limit" else "Cache limit",
-                subtitle = "Automatic hot content can use up to this much space.",
+                subtitle = "Automatically cached files can use up to this much space.",
                 options = VIRTUAL_CACHE_SIZE_OPTIONS,
                 selected = policy.maximumCacheBytes,
                 enabled = !busy,
@@ -2600,7 +2225,7 @@ private fun <T> VirtualFilePolicyChoice(
     }
 }
 
-private fun formatVirtualFileAge(ageMillis: Long): String {
+internal fun formatVirtualFileAge(ageMillis: Long): String {
     val days = ageMillis / (24L * 60L * 60L * 1_000L)
     return when {
         days == 30L -> "1 month"
@@ -2655,7 +2280,7 @@ private fun OfflineCenterSummaryCard(
                         when (snapshot?.support) {
                             FileOfflineCenterSupport.Available ->
                                 "${snapshot.items.count { it.availability == FileOfflineAvailability.Available }} available | " +
-                                    "${snapshot.items.size} tracked"
+                                    "${snapshot.items.size} in offline list"
                             FileOfflineCenterSupport.InventoryUnavailable ->
                                 if (
                                     snapshot.folderAvailability ==
@@ -2810,7 +2435,7 @@ internal fun MarketingOfflineFileTransferScenario() {
                 displayName = "Hotel-confirmation.pdf",
                 sizeBytes = 943_104,
                 availability = FileOfflineAvailability.Failed,
-                detail = "The remote generation changed before download completed.",
+                detail = "The file changed in Nextcloud during download. Download the updated version.",
                 canRetry = true,
                 canRemove = true,
             ),
@@ -2895,9 +2520,9 @@ private fun FileOfflineCenterActionResult.offlineCenterActionMessage(): String =
     is FileOfflineCenterActionResult.Rejected -> reason
     is FileOfflineCenterActionResult.Unsupported -> reason
 }
-
 private fun FileSyncCenterActionResult.fileSyncCenterMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message
+    is FileSyncCenterActionResult.Stopped -> message
     is FileSyncCenterActionResult.Rejected -> reason
     is FileSyncCenterActionResult.Unsupported -> reason
 }
@@ -2958,47 +2583,6 @@ private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
     FileSyncPowerPolicy.Charging -> "Only while charging"
 }
 
-private fun FileSyncDecisionReason.readableDecisionReason(): String = when (this) {
-    FileSyncDecisionReason.FirstSyncCollision -> "Both folders already contain this path."
-    FileSyncDecisionReason.SimultaneousEdit -> "Both copies changed since the last completed sync."
-    FileSyncDecisionReason.LocalDeletion -> "The device copy was deleted."
-    FileSyncDecisionReason.RemoteDeletion -> "The Nextcloud copy was deleted."
-    FileSyncDecisionReason.TypeChanged -> "One side is a file and the other is a folder."
-}
-
-private fun FileSyncDecisionChoice.readableDecision(): String = when (this) {
-    FileSyncDecisionChoice.UseLocal -> "Use device copy"
-    FileSyncDecisionChoice.UseRemote -> "Use Nextcloud copy"
-    FileSyncDecisionChoice.KeepBoth -> "Keep both"
-    FileSyncDecisionChoice.PropagateDeletion -> "Delete other copy"
-    FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
-    FileSyncDecisionChoice.Skip -> "Skip this version"
-}
-
-private fun FileSyncDecisionChoice.confirmationText(
-    path: String,
-    reason: FileSyncDecisionReason,
-): String = when (this) {
-    FileSyncDecisionChoice.UseLocal ->
-        "Use the latest device version of $path. The current Nextcloud version will be replaced " +
-            "only if it has not changed since this conflict was shown."
-    FileSyncDecisionChoice.UseRemote ->
-        "Use the latest Nextcloud version of $path. The current device version will be replaced " +
-            "only if it has not changed since this conflict was shown."
-    FileSyncDecisionChoice.KeepBoth ->
-        "Preserve both versions of $path as named conflict copies and keep the Nextcloud version " +
-            "at the original path. Review again if either side changes before this starts."
-    FileSyncDecisionChoice.PropagateDeletion ->
-        "Apply the deletion for $path to the other location. This permanently removes the other copy " +
-            "only if its observed revision is unchanged."
-    FileSyncDecisionChoice.RestoreMissing ->
-        "Restore the missing copy of $path from the latest surviving version, only if the missing " +
-            "side is still empty."
-    FileSyncDecisionChoice.Skip ->
-        "Skip $path for this exact observed conflict (${reason.readableDecisionReason()}). " +
-            "It will be reconsidered if either side changes."
-}
-
 private fun formatOfflineBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
     bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
@@ -3014,8 +2598,3 @@ internal fun fileOfflineRefreshEnabled(
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
 private const val MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS = 6
-private data class PendingFileSyncDecision(
-    val pair: FileSyncPairSummary,
-    val conflict: FileSyncConflictSummary,
-    val choice: FileSyncDecisionChoice,
-)

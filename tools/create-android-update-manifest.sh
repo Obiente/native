@@ -15,9 +15,10 @@ apk_name="$6"
 apk_size="$7"
 apk_sha256="$8"
 signer_digests_json="$9"
-repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
+repository="${GITHUB_REPOSITORY:-Obiente/native}"
+max_android_apk_bytes=268435456
 
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 case "$channel" in
     prerelease-v1)
         [[ "$version" =~ ^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
@@ -35,6 +36,10 @@ esac
 [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
 [[ "$apk_name" == "nextcloud-native-${version}-android.apk" ]]
 [[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
+jq -en \
+  --argjson apk_size "$apk_size" \
+  --argjson maximum "$max_android_apk_bytes" \
+  '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
 [[ "$apk_sha256" =~ ^[a-f0-9]{64}$ ]]
 jq -e '
   type == "array" and
@@ -43,7 +48,6 @@ jq -e '
   length == (unique | length) and
   all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
 ' <<<"$signer_digests_json" >/dev/null
-
 mkdir -p "$(dirname "$output")"
 jq -n \
   --argjson schemaVersion 1 \
@@ -52,11 +56,11 @@ jq -n \
   --argjson versionCode "$version_code" \
   --arg packageName "dev.obiente.nextcloudnative" \
   --argjson minimumAndroidSdk 26 \
-  --arg apkUrl "https://github.com/${repository}/releases/download/${tag}/${apk_name}" \
+  --arg apkUrl "https://github.com/${release_url_repository}/releases/download/${tag}/${apk_name}" \
   --argjson apkSize "$apk_size" \
   --arg apkSha256 "$apk_sha256" \
   --argjson signingCertificateSha256Digests "$signer_digests_json" \
-  --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
+  --arg releaseNotesUrl "https://github.com/${release_url_repository}/releases/tag/${tag}" \
   '{
     schemaVersion: $schemaVersion,
     channel: $channel,

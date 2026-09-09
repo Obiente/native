@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="112" viewBox="0 0 128 112" role="img" aria-labelledby="title">
+  <title id="title">nati.ve</title>
+  <path id="arch" fill="#F5F7F8" d="M8 96V44a36 36 0 0 1 72 0v52H58V44a14 14 0 0 0-28 0v52Z"/>
+  <circle id="signal-dot" cx="108" cy="84" r="12" fill="#36C69C"/>
+</svg>

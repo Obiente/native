@@ -59,6 +59,12 @@ class LocalFileUploadTest {
         assertFailsWith<IllegalArgumentException> {
             requireSafeUploadPickerRequest(listOf("*/json"), 1024L)
         }
+
+        NextcloudMultipartUploadRequest(
+            method = NextcloudApiMethod.POST,
+            relativePath = "/index.php/apps/example/api/upload",
+            file = fixtureFile(sizeBytes = 12L * 1024L * 1024L * 1024L),
+        ).requireSafe()
     }
 
     @Test

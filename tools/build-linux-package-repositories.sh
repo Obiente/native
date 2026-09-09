@@ -144,7 +144,7 @@ for architecture in "${apt_architecture_names[@]}"; do
         dpkg-deb --extract "$package" "$package_root"
         metadata="$package_root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
         if [[ ! -f "$metadata" ]]; then
-            printf 'DEB package is missing Nextcloud Native AppStream metadata: %s\n' \
+            printf 'DEB package is missing nati.ve AppStream metadata: %s\n' \
                 "$package" >&2
             exit 1
         fi
@@ -152,7 +152,7 @@ for architecture in "${apt_architecture_names[@]}"; do
         package_index=$((package_index + 1))
     done
     if [[ "${#catalog_arguments[@]}" -eq 0 ]]; then
-        printf 'No Nextcloud Native DEB package is available for %s.\n' "$architecture" >&2
+        printf 'No nati.ve DEB package is available for %s.\n' "$architecture" >&2
         exit 1
     fi
     catalog_xml="$temporary/apt-$architecture.xml"
@@ -265,7 +265,7 @@ for architecture in "${rpm_architecture_names[@]}"; do
                 ./usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml \
                 >"$metadata"
         if [[ ! -s "$metadata" ]]; then
-            printf 'RPM package is missing Nextcloud Native AppStream metadata: %s\n' \
+            printf 'RPM package is missing nati.ve AppStream metadata: %s\n' \
                 "$package" >&2
             exit 1
         fi
@@ -273,7 +273,7 @@ for architecture in "${rpm_architecture_names[@]}"; do
         package_index=$((package_index + 1))
     done
     if [[ "${#catalog_arguments[@]}" -eq 0 ]]; then
-        printf 'No Nextcloud Native RPM package is available for %s.\n' "$architecture" >&2
+        printf 'No nati.ve RPM package is available for %s.\n' "$architecture" >&2
         exit 1
     fi
     catalog_xml="$temporary/rpm-$architecture.xml"
@@ -292,7 +292,7 @@ done
 
 cat >"$output_directory/nextcloud-native.repo" <<EOF
 [nextcloud-native-$channel]
-name=Nextcloud Native ($channel)
+name=nati.ve ($channel)
 baseurl=$repository_url/rpm/$channel/\$basearch
 enabled=1
 gpgcheck=1

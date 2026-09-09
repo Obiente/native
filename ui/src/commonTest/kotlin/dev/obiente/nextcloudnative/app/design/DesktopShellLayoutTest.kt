@@ -76,6 +76,62 @@ class DesktopShellLayoutTest {
     }
 
     @Test
+    fun `desktop can collapse without changing the workspace layout contract`() {
+        val collapsed = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+            desktopSidebarExpanded = false,
+        )
+        val expanded = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+            desktopSidebarExpanded = true,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, collapsed.navigationStyle)
+        assertEquals(76, collapsed.navigationWidthDp)
+        assertEquals(NextcloudNavigationStyle.ExpandedSidebar, expanded.navigationStyle)
+        assertEquals(252, expanded.navigationWidthDp)
+        assertNull(collapsed.contentMaximumWidthDp)
+        assertTrue(collapsed.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `expanded preference cannot crowd a narrow desktop window`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 640,
+            destination = NextcloudDestination.Home,
+            desktopSidebarExpanded = true,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
+        assertEquals(76, layout.navigationWidthDp)
+        assertFalse(layout.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `desktop sidebar preference does not affect adaptive presentation`() {
+        val defaultLayout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Adaptive,
+            availableWidthDp = 840,
+            destination = NextcloudDestination.Apps,
+        )
+        val desktopPreference = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Adaptive,
+            availableWidthDp = 840,
+            destination = NextcloudDestination.Apps,
+            desktopSidebarExpanded = false,
+        )
+
+        assertEquals(defaultLayout, desktopPreference)
+    }
+
+    @Test
     fun `desktop app workspace keeps the useful expanded global sidebar`() {
         val layout = resolveNextcloudRootShellLayout(
             presentation = NextcloudPresentation.Desktop,

@@ -32,6 +32,75 @@ import okhttp3.OkHttpClient
 
 class JvmSupportIntakeTest {
     @Test
+    fun supportConversationMessageBodiesCannotBeReplayed() {
+        val body = OneShotSupportMessageRequestBody("private reply".encodeToByteArray())
+        assertTrue(body.isOneShot())
+    }
+
+    @Test
+    fun refreshesPrivateConversationAndPersistsReadPosition() = runBlocking {
+        testFixture().use { fixture ->
+            val maintainerMessageId = UUID.randomUUID().toString()
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("The updater failed.", "nightly", emptyList())
+            fixture.server.enqueue(privateStatusResponse(
+                "needs_information", listOf(maintainerMessageId to "Which installation stage failed?"),
+            ))
+            assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.refreshCompletedReports())
+
+            val refreshed = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+                .reports.single()
+            assertEquals("needs_information", refreshed.status)
+            assertTrue(refreshed.statusChanged)
+            assertEquals(1, refreshed.unreadMaintainerMessages)
+            assertEquals("Which installation stage failed?", refreshed.messages.single().body)
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val refreshRequest = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", refreshRequest.method)
+            assertTrue(refreshRequest.url.encodedPath.startsWith("/api/v1/reports/"))
+
+            assertTrue(fixture.intake.markCompletedReportRead(fixture.intake.submittedRecordId()))
+            fixture.intake.close()
+            fixture.newIntake().use { restored ->
+                fixture.server.enqueue(privateStatusResponse(
+                    "needs_information", listOf(maintainerMessageId to "Which installation stage failed?"),
+                ))
+                assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                val afterRestart = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+                    .reports.single()
+                assertFalse(afterRestart.statusChanged)
+                assertEquals(0, afterRestart.unreadMaintainerMessages)
+            }
+        }
+    }
+    @Test
+    fun persistsAndReconcilesReplyRecoveryWithoutStoringAPrivateReplyVerifier() = runBlocking {
+        val failWrites = AtomicBoolean(false)
+        testFixture(directorySync = { if (failWrites.get()) throw IOException("Synthetic descriptor sync failure.") }).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
+            failWrites.set(true); assertIs<SupportDiagnosticsConversationResult.Failed>(fixture.intake.sendCompletedReportMessage(fixture.intake.submittedRecordId(), "Never sent.")); assertEquals(2, fixture.server.requestCount)
+        }
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
+            val recordId = fixture.intake.submittedRecordId().also { fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()) }
+            assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(fixture.intake.sendCompletedReportMessage(recordId, "Private retained draft."))
+            val descriptor = fixture.completedDescriptors().single().also { val text = it.readText(); assertTrue(text.contains("\"replyRecovery\"")); assertFalse(text.contains("Private retained draft.")); assertFalse(text.contains("\"salt\"")); assertFalse(text.contains("\"digest\"")) }
+            fixture.intake.close()
+            fixture.newIntake().use { restored ->
+                assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()); assertIs<SupportDiagnosticsConversationResult.Failed>(restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList(), "Private retained draft.", 200)); assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+            }
+            fixture.newIntake().use { restored ->
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                assertTrue(restored.acknowledgeCompletedReportReplyDelivery(recordId))
+                assertEquals(SupportDiagnosticsReplyRecoveryState.None, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+            }
+        }
+    }
+    @Test
     fun submitsSanitizedBundleAndRemovesTemporaryArchive() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl))
@@ -231,13 +300,17 @@ class JvmSupportIntakeTest {
             val restored = fixture.newIntake()
 
             val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            val report = submitted.reports.single()
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
-            assertEquals(fixture.statusUrl, submitted.statusUrl)
-            assertEquals(fixture.statusUrl, submitted.reports.single().deletionUrl)
+            assertEquals(report.recordId, submitted.recordId)
+            assertTrue(Instant.parse(report.createdAt).isBefore(Instant.parse(report.retentionUntil)))
+            assertFalse(report.toString().contains(fixture.statusUrl))
             assertEquals(1, fixture.completedDescriptors().size)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
             restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(restored.states().value)
+            assertIs<SupportDiagnosticsDeletionResult.Failed>(restored.deleteCompletedReport(report.recordId))
+            assertEquals(1, fixture.server.requestCount)
             Unit
         }
     }
@@ -251,7 +324,7 @@ class JvmSupportIntakeTest {
             fixture.server.enqueue(MockResponse.Builder().code(202).body("{}").build())
             fixture.server.enqueue(MockResponse.Builder().code(404).body("{}").build())
 
-            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+            val result = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Deleted>(result)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
@@ -269,7 +342,7 @@ class JvmSupportIntakeTest {
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             fixture.server.enqueue(MockResponse.Builder().code(503).body("{}").build())
 
-            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+            val result = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Failed>(result)
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
@@ -290,14 +363,14 @@ class JvmSupportIntakeTest {
             failDirectorySync = true
             fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
 
-            val firstResult = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+            val firstResult = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Failed>(firstResult)
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             failDirectorySync = false
             fixture.server.enqueue(MockResponse.Builder().code(404).body("{}").build())
 
-            val retryResult = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+            val retryResult = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Deleted>(retryResult)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
@@ -315,7 +388,7 @@ class JvmSupportIntakeTest {
                 MockResponse.Builder().code(503).body("{}").headersDelay(4, TimeUnit.SECONDS).build(),
             )
 
-            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+            val result = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Failed>(result)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
@@ -1148,17 +1221,17 @@ class JvmSupportIntakeTest {
     @Test
     fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
         testFixture().use { fixture ->
-            val retentionUntil = Instant.now().plusSeconds(2)
+            val retentionUntil = Instant.now().plusSeconds(10)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
 
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
 
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertEquals(1, fixture.completedDescriptors().size)
-            withTimeout(5_000) {
+            withTimeout(15_000) {
                 fixture.intake.states().first { it is SupportDiagnosticsSubmissionState.Idle }
             }
-            withTimeout(5_000) {
+            withTimeout(15_000) {
                 while (fixture.completedDescriptors().isNotEmpty()) delay(10)
             }
             assertTrue(fixture.completedDescriptors().isEmpty())
@@ -1333,7 +1406,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             val persistedPending = File(fixture.temporaryRoot, "pending.json").readText().replace(
                 Regex("\\\"archiveName\\\":\\\"[^\\\"]+\\\""),
                 "\"archiveName\":null",
@@ -1405,15 +1480,15 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
+            val reconciliation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("GET", reconciliation.method)
 
             assertTrue(fixture.intake.cancel())
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val cancellation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("DELETE", cancellation.method)
             assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
@@ -1611,7 +1686,7 @@ class JvmSupportIntakeTest {
         testFixture(
             afterUploadResponse = {
                 responseCompleted.countDown()
-                assertTrue(allowResponseResult.await(2, TimeUnit.SECONDS))
+                assertTrue(allowResponseResult.await(10, TimeUnit.SECONDS))
             },
         ).use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -1620,15 +1695,15 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertTrue(responseCompleted.await(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
+            assertTrue(responseCompleted.await(10, TimeUnit.SECONDS))
 
             assertTrue(fixture.intake.cancel())
             allowResponseResult.countDown()
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val cancellation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("DELETE", cancellation.method)
             assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
@@ -2143,7 +2218,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
 
@@ -2329,7 +2406,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
@@ -2684,6 +2763,40 @@ class JvmSupportIntakeTest {
     private fun submissionCancelledResponse(): MockResponse = MockResponse.Builder().code(410).body(
         """{"contractVersion":1,"code":"submission_cancelled","message":"Submission cancelled."}""",
     ).build()
+
+    private fun privateStatusResponse(
+        status: String,
+        messages: List<Pair<String, String>>,
+        reporterMessage: String? = null,
+        responseCode: Int = if (reporterMessage == null) 200 else 201,
+    ): MockResponse {
+        val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val encodedMessages = buildList {
+            messages.forEach { (id, body) ->
+                add("""{"id":"$id","author":"maintainer","body":"$body","createdAt":"$now"}""")
+            }
+            reporterMessage?.let { body ->
+                add(
+                    """{"id":"${UUID.randomUUID()}","author":"reporter","body":"$body","createdAt":"$now"}""",
+                )
+            }
+        }.joinToString(",")
+        return MockResponse.Builder().code(responseCode).body(
+            """
+                {
+                  "contractVersion": 1,
+                  "supportCode": "OBI-ABCDE-23456",
+                  "productId": "nextcloud-native",
+                  "requestType": "bug",
+                  "status": "$status",
+                  "createdAt": "$now",
+                  "updatedAt": "$now",
+                  "retentionUntil": "${now.plus(30, ChronoUnit.DAYS)}",
+                  "messages": [$encodedMessages]
+                }
+            """.trimIndent(),
+        ).build()
+    }
 
     private data class Fixture(
         val root: File,

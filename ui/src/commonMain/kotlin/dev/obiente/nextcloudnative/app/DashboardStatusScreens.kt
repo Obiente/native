@@ -91,11 +91,6 @@ internal sealed interface DashboardSurfaceState {
     data class Failed(val message: String) : DashboardSurfaceState
 }
 
-private data class DashboardWidgetsLoad(
-    val widgets: List<NativeDashboardWidget>,
-    val authoritative: Boolean,
-)
-
 private data class DashboardLoadResult(
     val snapshot: NativeDashboardSnapshot,
     val status: NativeUserStatus?,
@@ -216,7 +211,9 @@ private suspend fun executeDashboardItemsPlan(
 internal fun NativeDashboardScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    recoveryAttempt: Int = 0,
     installedApps: List<NextcloudAppEntry>,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenLink: (String) -> Unit,
     onOpenStatus: (() -> Unit)?,
@@ -229,6 +226,7 @@ internal fun NativeDashboardScreen(
         services = services,
         session = session,
         refreshAttempt = refreshAttempt,
+        recoveryAttempt = recoveryAttempt,
     )
     val formFactor = rememberHomeFormFactor()
     val workspaceStorage = rememberHomeWorkspaceLayoutStorage()
@@ -248,6 +246,7 @@ internal fun NativeDashboardScreen(
     NativeDashboardPresentation(
         state = state,
         installedApps = installedApps,
+        pinnedAppIds = pinnedAppIds,
         workspaceLayout = workspaceLayout,
         onWorkspaceLayoutChanged = { updated ->
             workspaceLayout = updated
@@ -273,6 +272,7 @@ internal fun NativeDashboardScreen(
 internal fun NativeDashboardPresentation(
     state: DashboardSurfaceState,
     installedApps: List<NextcloudAppEntry>,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     workspaceLayout: HomeWorkspaceLayout,
     onWorkspaceLayoutChanged: (HomeWorkspaceLayout) -> Boolean,
     onOpenApp: (NextcloudAppEntry) -> Unit,
@@ -404,6 +404,7 @@ internal fun NativeDashboardPresentation(
                     when (section.id) {
                         HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
                             installedApps = installedApps,
+                            pinnedAppIds = pinnedAppIds,
                             onOpenApp = onOpenApp,
                         )
 
@@ -434,17 +435,18 @@ internal fun rememberNativeDashboardState(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     refreshAttempt: Int,
+    recoveryAttempt: Int = 0,
 ): DashboardSurfaceState {
     var state by remember(session) {
         mutableStateOf<DashboardSurfaceState>(DashboardSurfaceState.Loading)
     }
-    LaunchedEffect(session, refreshAttempt) {
+    LaunchedEffect(session, refreshAttempt, recoveryAttempt) {
         val now = currentDashboardEpochSeconds()
         val displayed = state as? DashboardSurfaceState.Available
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
         val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
         val previousStatus = cached?.status ?: displayed?.status
-        val cachePolicy = if (refreshAttempt > 0) {
+        val cachePolicy = if (refreshAttempt > 0 || recoveryAttempt > 0) {
             NextcloudApiCachePolicy.RefreshNetwork
         } else {
             NextcloudApiCachePolicy.PreferCache
@@ -459,28 +461,13 @@ internal fun rememberNativeDashboardState(
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
-                    runCatching {
-                        val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
-                        if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(response) }) {
-                            DashboardWidgetsLoad(emptyList(), authoritative = false)
-                        } else {
-                            DashboardWidgetsLoad(
-                                withContext(Dispatchers.Default) { parseDashboardWidgets(response) },
-                                authoritative = true,
-                            )
-                        }
-                    }.getOrElse { failure ->
-                        if (failure is CancellationException) throw failure
-                        services.recordSupportDiagnostic(
-                            dashboardLoadFailureDiagnostic(
-                                stage = "widgets",
-                                code = "DASHBOARD_WIDGETS_FAILED",
-                                cachedAvailable = previousSnapshot != null,
-                                severity = SupportDiagnosticSeverity.Error,
-                            ),
-                        )
-                        throw failure
-                    }
+                    acquireDashboardWidgets(
+                        cachedAvailable = previousSnapshot != null,
+                        executeResponse = {
+                            services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
+                        },
+                        onDiagnostic = services::recordSupportDiagnostic,
+                    )
                 }
                 val statusDeferred = async {
                     runCatching {
@@ -492,7 +479,7 @@ internal fun rememberNativeDashboardState(
                 }
                 val widgetsLoad = widgetsDeferred.await()
                 if (!widgetsLoad.authoritative) {
-                    val snapshot = previousSnapshot ?: NativeDashboardSnapshot(emptyList(), emptyMap())
+                    val snapshot = dashboardSnapshotForUnavailableWidgets(previousSnapshot)
                     state = DashboardSurfaceState.Available(
                         snapshot,
                         previousStatus,
@@ -660,60 +647,6 @@ internal fun rememberNativeDashboardState(
 }
 
 @Composable
-private fun DashboardHeader(
-    title: String,
-    subtitle: String,
-    onBack: (() -> Unit)?,
-    onRefresh: () -> Unit,
-    onCustomize: (() -> Unit)? = null,
-    onSearch: (() -> Unit)? = null,
-    onSettings: (() -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(
-            horizontal = NextcloudSpacing.Medium,
-            vertical = NextcloudSpacing.Small,
-        ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(NextcloudIcons.Back, contentDescription = "Back")
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (onCustomize != null) {
-            IconButton(onClick = onCustomize) {
-                Icon(NextcloudIcons.Edit, contentDescription = "Customize home")
-            }
-        }
-        if (onSearch != null) {
-            IconButton(onClick = onSearch) {
-                Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
-            }
-        }
-        IconButton(onClick = onRefresh) {
-            Icon(NextcloudIcons.Refresh, contentDescription = dashboardRefreshDescription(title))
-        }
-        if (onSettings != null) {
-            IconButton(onClick = onSettings) {
-                Icon(NextcloudIcons.Settings, contentDescription = "Settings")
-            }
-        }
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
-
-@Composable
 private fun DashboardUnavailableNotice(
     showingSavedContent: Boolean,
     onRetry: () -> Unit,
@@ -754,16 +687,15 @@ private fun CurrentStatusStrip(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                start = NextcloudSpacing.XLarge,
-                top = NextcloudSpacing.Large,
-                end = NextcloudSpacing.XLarge,
+                horizontal = NextcloudSpacing.Medium,
+                vertical = NextcloudSpacing.XSmall,
             )
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
@@ -777,14 +709,10 @@ private fun CurrentStatusStrip(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    "Status · ${status.presence.displayLabel()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (status.message != null) Text(status.presence.displayLabel(), style = MaterialTheme.typography.labelSmall)
             }
             if (onClick != null) {
-                Icon(NextcloudIcons.Edit, contentDescription = "Edit status")
+                Text("Edit status", style = MaterialTheme.typography.labelMedium)
             }
         }
     }
@@ -803,61 +731,6 @@ internal fun homeDashboardWidgetBindings(
         val sectionId = widget.availableHomeSectionId(occupied)
         occupied += sectionId
         HomeDashboardWidgetBinding(sectionId = sectionId, widget = widget)
-    }
-}
-
-@Composable
-private fun DashboardQuickActionsCard(
-    installedApps: List<NextcloudAppEntry>,
-    onOpenApp: (NextcloudAppEntry) -> Unit,
-) {
-    val quickApps = remember(installedApps) {
-        installedApps
-            .filter { it.id in DASHBOARD_QUICK_ACTION_APP_IDS }
-            .sortedBy { DASHBOARD_QUICK_ACTION_APP_IDS.indexOf(it.id) }
-            .take(MAX_DASHBOARD_QUICK_ACTIONS)
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
-        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large)) {
-            Text(
-                "Quick actions",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (quickApps.isEmpty()) {
-                Text(
-                    "Your shortcuts will appear as native apps become available.",
-                    modifier = Modifier.padding(top = NextcloudSpacing.Medium),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    quickApps.forEach { app ->
-                        FilterChip(
-                            selected = false,
-                            onClick = { onOpenApp(app) },
-                            label = { Text(app.name, maxLines = 1) },
-                            leadingIcon = {
-                                Icon(
-                                    NextcloudIcons.app(app.id),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1963,16 +1836,6 @@ private fun StatusExpiryChoice.expiryEpochSeconds(): Long? =
 
 private fun currentDashboardEpochSeconds(): Long = Clock.System.now().epochSeconds
 
-private val DASHBOARD_QUICK_ACTION_APP_IDS = listOf(
-    "files",
-    "photos",
-    "memories",
-    "notes",
-    "calendar",
-    "spreed",
-    "talk",
-)
-private const val MAX_DASHBOARD_QUICK_ACTIONS = 6
 private const val MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH = 48
 private const val FNV_OFFSET_BASIS: UInt = 2_166_136_261u
 private const val FNV_PRIME: UInt = 16_777_619u

@@ -156,7 +156,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
     pendingMutationStore: NativePendingMutationStore,
 ): NativeActionExecutionResult {
     val key = plan.pendingKey
-    var staged = runCatching { pendingMutationStore.load(key) }.getOrElse { failure ->
+    var staged = runCatchingUnlessCancelled { pendingMutationStore.load(key) }.getOrElse { failure ->
         return NativeActionExecutionResult.Failure(
             failure.message ?: "The saved invitation recovery marker could not be read.",
             NativeActionFailureOutcome.Unknown,
@@ -168,7 +168,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
                 "The saved invitation recovery marker is invalid.",
                 NativeActionFailureOutcome.Unknown,
             )
-        if (runCatching { pendingMutationStore.postconditionSatisfied(key, staged) }.getOrDefault(false)) {
+        if (runCatchingUnlessCancelled { pendingMutationStore.postconditionSatisfied(key, staged) }.getOrDefault(false)) {
             return clearConfirmedInvitationAccept(pendingMutationStore, key)
         }
         if (pending.phase == NativeCreateMutationPhase.TransportMayHaveObserved) {
@@ -181,7 +181,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
             pending.teamId != request.values["teamId"] ||
             pending.confirmed != request.confirmed || request.values.size != 1
         ) {
-            runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
+            runCatchingUnlessCancelled { pendingMutationStore.clear(key) }.getOrElse { failure ->
                 return NativeActionExecutionResult.Failure(
                     failure.message ?: "The superseded invitation acceptance could not be cleared.",
                     NativeActionFailureOutcome.Rejected,
@@ -196,7 +196,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
                 "This invitation acceptance could not be staged safely.",
                 NativeActionFailureOutcome.Rejected,
             )
-        runCatching { pendingMutationStore.save(key, staged) }.getOrElse { failure ->
+        runCatchingUnlessCancelled { pendingMutationStore.save(key, staged) }.getOrElse { failure ->
             return NativeActionExecutionResult.Failure(
                 failure.message ?: "This invitation acceptance could not be staged safely.",
                 NativeActionFailureOutcome.Rejected,
@@ -205,7 +205,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
     }
     val transport = staged +
         (ACCEPT_MARKER_PHASE_KEY to NativeCreateMutationPhase.TransportMayHaveObserved.name)
-    runCatching { pendingMutationStore.save(key, transport) }.getOrElse { failure ->
+    runCatchingUnlessCancelled { pendingMutationStore.save(key, transport) }.getOrElse { failure ->
         return NativeActionExecutionResult.Failure(
             failure.message ?: "This invitation acceptance could not enter its durable send phase.",
             NativeActionFailureOutcome.Rejected,
@@ -213,7 +213,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
     }
     val result = actionExecutor.execute(request)
     if ((result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected) {
-        return runCatching {
+        return runCatchingUnlessCancelled {
             pendingMutationStore.save(key, staged)
             pendingMutationStore.clear(key)
         }.fold(
@@ -226,7 +226,10 @@ internal suspend fun executeNativeChoresInvitationAccept(
             },
         )
     }
-    if (runCatching { pendingMutationStore.postconditionSatisfied(key, transport) }.getOrDefault(false)) {
+    if (runCatchingUnlessCancelled {
+            pendingMutationStore.postconditionSatisfied(key, transport)
+        }.getOrDefault(false)
+    ) {
         return clearConfirmedInvitationAccept(pendingMutationStore, key)
     }
     return when (result) {
@@ -241,7 +244,7 @@ internal suspend fun executeNativeChoresInvitationAccept(
 private suspend fun clearConfirmedInvitationAccept(
     store: NativePendingMutationStore,
     key: NativePendingMutationKey,
-): NativeActionExecutionResult = runCatching { store.clear(key) }.fold(
+): NativeActionExecutionResult = runCatchingUnlessCancelled { store.clear(key) }.fold(
     onSuccess = { NativeActionExecutionResult.Success("The invitation acceptance is confirmed by the server.") },
     onFailure = { failure ->
         NativeActionExecutionResult.Failure(
