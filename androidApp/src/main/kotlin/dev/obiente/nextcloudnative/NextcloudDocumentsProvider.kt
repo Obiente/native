@@ -466,7 +466,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         withAndroidDocumentMutation(requireSession(), services::loadSession) { session ->
             val parent = requireReference(parentDocumentId, session)
             val account = resolveAccount(session)
-            requireDirectory(session, account, parent)
+            requireAndroidDocumentDirectory(parent) { findDocument(session, account, it, accountLeaseHeld = true) }
             val path = childPath(parent.path, requireSafeDisplayName(displayName))
             withNoBlockingAndroidDocumentWriteback(context, session, path) {
                 mutationCall {
@@ -487,7 +487,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             val reference = requireReference(documentId, session)
             if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be renamed.")
             val account = resolveAccount(session)
-            val file = findDocument(session, account, reference.path)
+            val file = findDocument(session, account, reference.path, accountLeaseHeld = true)
             val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
             if (destination == reference.path) return@withAndroidDocumentMutation documentId
             val etag = requireMutationEtag(file)
@@ -503,7 +503,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             val reference = requireReference(documentId, session)
             if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be deleted.")
             val account = resolveAccount(session)
-            val file = findDocument(session, account, reference.path)
+            val file = findDocument(session, account, reference.path, accountLeaseHeld = true)
             withNoBlockingAndroidDocumentWriteback(context, session, reference.path) {
                 mutationCall {
                     webDav.delete(
@@ -532,8 +532,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 "The supplied source parent does not contain this document."
             }
             val account = resolveAccount(session)
-            requireDirectory(session, account, targetParent)
-            val file = findDocument(session, account, source.path)
+            requireAndroidDocumentDirectory(targetParent) { findDocument(session, account, it, accountLeaseHeld = true) }
+            val file = findDocument(session, account, source.path, accountLeaseHeld = true)
             val destination = childPath(targetParent.path, file.name)
             if (destination == source.path) return@withAndroidDocumentMutation sourceDocumentId
             withNoBlockingAndroidDocumentWriteback(context, session, source.path, destination) {
@@ -727,16 +727,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         )
     }
 
-    private fun requireDirectory(
-        session: NextcloudSession,
-        account: ResolvedAccount,
-        reference: NextcloudDocumentReference,
-    ) {
-        if (reference.isRoot) return
-        val parent = findDocument(session, account, reference.path)
-        require(parent.isDirectory) { "The selected parent is not a folder." }
-    }
-
     private fun requireMutationEtag(file: NextcloudFile): String = file.etag?.takeIf(String::isNotBlank)
         ?: throw IllegalStateException("Nextcloud did not provide an ETag, so this document cannot be changed safely.")
 
@@ -869,14 +859,20 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         }
     }
 
-    private fun findDocument(session: NextcloudSession, account: ResolvedAccount, path: String): NextcloudFile =
+    private fun findDocument(
+        session: NextcloudSession,
+        account: ResolvedAccount,
+        path: String,
+        accountLeaseHeld: Boolean = false,
+    ): NextcloudFile =
         providerCall(
             message = "The requested Nextcloud document was not found.",
             accountIdentity = account.accountKey,
         ) {
             val parent = NextcloudDocumentIds.parentPath(path)
             runBlocking(Dispatchers.IO) {
-                services.listFiles(session, account.userId, parent)
+                if (accountLeaseHeld) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent)
+                else services.listFiles(session, account.userId, parent)
             }.firstOrNull { it.path == path }
                 ?: throw FileNotFoundException("The requested Nextcloud document was not found.")
         }
