@@ -30,7 +30,9 @@ import kotlin.coroutines.resume
 internal class AndroidLocalUploadPicker(context: Context) {
     private val appContext = context.applicationContext
     private val resolver = context.applicationContext.contentResolver
-    private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val preferences = AndroidLocalUploadCapabilityPreferences(
+        appContext, PREFERENCES, PREFERENCE_PREFIX, MAX_CAPABILITY_PREFERENCE_FILE_BYTES,
+    )
     private val cipher = SessionCipher()
     private val selections = PROCESS_SELECTIONS
     private var launcher: ActivityResultLauncher<Array<String>>? = null
@@ -110,6 +112,9 @@ internal class AndroidLocalUploadPicker(context: Context) {
                     ) {
                         "The selected file already has an active picker capability."
                     }
+                    check(!snapshot.malformedCapabilityOwnsPermission(token, uri.toString())) {
+                        "The selected file already has a quarantined picker capability."
+                    }
                     val grantPreExisting = !exactReadPermissionIsAbsent(uri)
                     val acquiring = source.copy(
                         phase = CapabilityPhase.Acquiring,
@@ -184,9 +189,12 @@ internal class AndroidLocalUploadPicker(context: Context) {
 
     fun release(file: LocalUploadFile, onQuarantined: () -> Unit = {}): Boolean = synchronized(CAPABILITY_LOCK) {
         val source = try {
+            preferences.requireBoundedStorage()
             selections[file.selectionId] ?: load(file.selectionId)
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: DurableUploadCapabilityOverflowException) {
+            return@synchronized quarantineCapabilityCleanup(file.selectionId, onQuarantined)
         } catch (malformed: AndroidLocalUploadCapabilityMalformedException) {
             return@synchronized releaseMalformedCapability(file.selectionId, malformed, onQuarantined)
         } catch (_: Exception) {
@@ -283,6 +291,8 @@ internal class AndroidLocalUploadPicker(context: Context) {
             loadCapabilityRecoverySnapshot()
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: DurableUploadCapabilityOverflowException) {
+            return@synchronized true
         } catch (_: Exception) {
             return@synchronized false
         }
@@ -426,14 +436,10 @@ internal class AndroidLocalUploadPicker(context: Context) {
             .put("grantPreExisting", source.grantPreExisting)
         source.processGeneration?.let { generation -> payload.put("processGeneration", generation) }
         val encrypted = cipher.encrypt(payload.toString())
-        return preferences.edit()
-            .putString(preferenceKey(source.file.selectionId), encrypted)
-            .commit()
+        return preferences.putString(preferenceKey(source.file.selectionId), encrypted)
     }
 
-    private fun removeMetadata(selectionId: String): Boolean = preferences.edit()
-        .remove(preferenceKey(selectionId))
-        .commit()
+    private fun removeMetadata(selectionId: String): Boolean = preferences.remove(preferenceKey(selectionId))
         .also { removed -> if (removed) PENDING_CLEANUP_SELECTIONS.remove(selectionId) }
 
     private fun retainCapabilityCleanup(selectionId: String): Boolean {
@@ -480,12 +486,8 @@ internal class AndroidLocalUploadPicker(context: Context) {
             loadStoredCapability = ::load,
         )
 
-    private fun storedCapabilitySelectionIds(maximumRows: Int? = null): List<String> {
-        val selectionIds = preferences.all.keys.asSequence()
-            .filter { key -> key.startsWith(PREFERENCE_PREFIX) }
-            .map { key -> key.removePrefix(PREFERENCE_PREFIX) }
-        return maximumRows?.let { limit -> selectionIds.take(limit + 1).toList() } ?: selectionIds.toList()
-    }
+    private fun storedCapabilitySelectionIds(maximumRows: Int? = null): List<String> =
+        preferences.selectionIds(maximumRows)
 
     private fun releaseMalformedCapability(
         selectionId: String,
@@ -656,7 +658,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
 
     private fun load(selectionId: String): SelectedSource? {
         val encrypted = readAndroidLocalUploadCapabilityPreference {
-            preferences.getString(preferenceKey(selectionId), null)
+            preferences.getString(preferenceKey(selectionId))
         } ?: return null
         val decrypted = decryptAndroidLocalUploadCapability { cipher.decrypt(encrypted) }
         val payload = try {
@@ -737,6 +739,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         const val MAX_TRACKED_CAPABILITIES = 64
         const val MAX_RECOVERABLE_CAPABILITIES = 1_024
         const val MAX_RECOVERY_ROWS_PER_PASS = 1_024
+        const val MAX_CAPABILITY_PREFERENCE_FILE_BYTES = 8L * 1024L * 1024L
         val PROCESS_GENERATION = UUID.randomUUID().toString()
         val PROCESS_SELECTIONS = ConcurrentHashMap<String, SelectedSource>()
         val PENDING_CLEANUP_SELECTIONS = ConcurrentHashMap.newKeySet<String>()

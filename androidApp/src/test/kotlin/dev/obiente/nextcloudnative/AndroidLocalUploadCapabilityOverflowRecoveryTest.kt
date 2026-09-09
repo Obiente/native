@@ -9,6 +9,48 @@ import kotlin.test.assertTrue
 
 class AndroidLocalUploadCapabilityOverflowRecoveryTest {
     @Test
+    fun `preference storage is bounded before capability values are enumerated`() {
+        val maximumBytes = 8L * 1024L * 1024L
+        var valuesEnumerated = false
+
+        assertFalse(
+            durableUploadCapabilityPreferenceStorageIsOversized(
+                primaryFileBytes = maximumBytes,
+                backupFileBytes = 0L,
+                maximumFileBytes = maximumBytes,
+            ),
+        )
+        assertTrue(
+            durableUploadCapabilityPreferenceStorageIsOversized(
+                primaryFileBytes = maximumBytes + 1L,
+                backupFileBytes = 0L,
+                maximumFileBytes = maximumBytes,
+            ),
+        )
+        assertTrue(
+            durableUploadCapabilityPreferenceStorageIsOversized(
+                primaryFileBytes = 0L,
+                backupFileBytes = maximumBytes + 1L,
+                maximumFileBytes = maximumBytes,
+            ),
+        )
+        assertFailsWith<DurableUploadCapabilityOverflowException> {
+            boundedDurableUploadCapabilitySelectionIds(
+                primaryFileBytes = maximumBytes + 1L,
+                backupFileBytes = 0L,
+                maximumFileBytes = maximumBytes,
+                maximumRows = 1_024,
+                preferencePrefix = "upload_",
+                preferenceKeys = {
+                    valuesEnumerated = true
+                    setOf("upload_selection")
+                },
+            )
+        }
+        assertFalse(valuesEnumerated)
+    }
+
+    @Test
     fun `over admission limit capability state remains recoverable`() {
         val storedIds = (1..65).map { index -> "selection-$index" }
 

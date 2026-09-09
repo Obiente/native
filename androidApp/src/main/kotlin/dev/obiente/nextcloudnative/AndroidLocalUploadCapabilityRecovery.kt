@@ -356,6 +356,59 @@ internal fun <Capability, Permission> durableUploadCapabilityPermissionOwnedByAn
     selectionId != targetSelectionId && samePermission(targetPermission, permissionOf(capability))
 }
 
+internal fun <Permission> malformedDurableUploadCapabilityPermissionOwnedByAnother(
+    capabilities: Map<String, MalformedDurableUploadCapability>,
+    targetSelectionId: String,
+    targetPermission: Permission,
+    permissionOf: (MalformedDurableUploadCapability) -> Permission?,
+    samePermission: (Permission, Permission) -> Boolean,
+): Boolean = capabilities.any { (selectionId, capability) ->
+    val permission = permissionOf(capability)
+    selectionId != targetSelectionId && permission != null && samePermission(targetPermission, permission)
+}
+
+internal fun DurableUploadCapabilitySnapshot<*>.malformedCapabilityOwnsPermission(
+    targetSelectionId: String,
+    targetPermission: String,
+): Boolean = malformedDurableUploadCapabilityPermissionOwnedByAnother(
+    capabilities = malformedCapabilities,
+    targetSelectionId = targetSelectionId,
+    targetPermission = targetPermission,
+    permissionOf = MalformedDurableUploadCapability::cleanupPermissionIdentity,
+    samePermission = String::equals,
+)
+
+internal fun durableUploadCapabilityPreferenceStorageIsOversized(
+    primaryFileBytes: Long,
+    backupFileBytes: Long,
+    maximumFileBytes: Long,
+): Boolean {
+    require(primaryFileBytes >= 0L && backupFileBytes >= 0L && maximumFileBytes > 0L)
+    return primaryFileBytes > maximumFileBytes || backupFileBytes > maximumFileBytes
+}
+
+internal fun boundedDurableUploadCapabilitySelectionIds(
+    primaryFileBytes: Long,
+    backupFileBytes: Long,
+    maximumFileBytes: Long,
+    maximumRows: Int?,
+    preferencePrefix: String,
+    preferenceKeys: () -> Set<String>,
+): List<String> {
+    require(maximumRows == null || maximumRows >= 0)
+    if (
+        durableUploadCapabilityPreferenceStorageIsOversized(
+            primaryFileBytes,
+            backupFileBytes,
+            maximumFileBytes,
+        )
+    ) throw DurableUploadCapabilityOverflowException()
+    val selectionIds = preferenceKeys().asSequence()
+        .filter { key -> key.startsWith(preferencePrefix) }
+        .map { key -> key.removePrefix(preferencePrefix) }
+    return maximumRows?.let { limit -> selectionIds.take(limit + 1).toList() } ?: selectionIds.toList()
+}
+
 internal fun shouldReleaseDurableUploadPermission(
     grantPreExisting: Boolean,
     ownedByAnotherCapability: Boolean,

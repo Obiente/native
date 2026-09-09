@@ -14,6 +14,29 @@ import kotlin.test.assertTrue
 
 class AndroidDurableUploadSourcePreflightTest {
     @Test
+    fun `oversized capability storage terminally fails without opening the provider`() = runBlocking {
+        var providerOpened = false
+        var transientRetries = 0
+
+        val result = processQueuedDurableUploadSource(
+            requireCapability = {
+                readAndroidLocalUploadCapability { throw DurableUploadCapabilityOverflowException() }
+            },
+            openSource = { providerOpened = true },
+            onCapabilityUnavailable = { "failed" },
+            onProviderUnavailable = {
+                transientRetries += 1
+                "retried"
+            },
+            onReady = { "started" },
+        )
+
+        assertEquals("failed", result)
+        assertFalse(providerOpened)
+        assertEquals(0, transientRetries)
+    }
+
+    @Test
     fun `missing or mismatched private metadata terminally fails and releases`() = runBlocking {
         listOf("missing", "mismatched").forEach { reason ->
             var providerOpened = false
