@@ -67,6 +67,57 @@ class AndroidSafDownloadOwnershipIndexTest {
     }
 
     @Test
+    fun `selected tree ignores only legacy ownership proven to belong elsewhere`() {
+        val unrelated = AndroidSafOwnedDownloadTransaction(
+            "Elsewhere.txt",
+            FIRST_TOKEN,
+            stageDocumentIdentity = "document:other-tree",
+        )
+        val unclassified = AndroidSafOwnedDownloadTransaction("Unknown.txt", SECOND_TOKEN)
+
+        assertFalse(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unclassified),
+                identityBelongsToTree = { null },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = true,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+    }
+
+    @Test
+    fun `selected tree reads legacy and tree scoped ownership separately`() {
+        val base = Files.createTempDirectory("saf-download-selected-tree-").toFile()
+        try {
+            val legacy = AndroidSafDownloadOwnershipStore(base)
+            val selected = androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/selected")
+            val legacyTransaction = AndroidSafOwnedDownloadTransaction("Legacy.txt", FIRST_TOKEN)
+            val selectedTransaction = AndroidSafOwnedDownloadTransaction("Selected.txt", SECOND_TOKEN)
+            legacy.forDirectory("content://provider/tree/other/document/parent").add(legacyTransaction)
+            selected.forDirectory("content://provider/tree/selected/document/parent").add(selectedTransaction)
+
+            assertEquals(listOf(legacyTransaction), selected.legacyPendingTransactions())
+            assertEquals(listOf(selectedTransaction, legacyTransaction), selected.pendingTransactions())
+            assertTrue(selected.hasTreeScopedPendingTransactions())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `tree-wide recovery indexing is skipped without pending ownership`() {
         val root = Files.createTempDirectory("saf-download-empty-index-").toFile()
         try {
@@ -206,10 +257,42 @@ class AndroidSafDownloadOwnershipIndexTest {
             index.observeRecoveryNames(relocatedScope, setOf(relocatedName))
 
             assertEquals(emptyList(), index.forDirectory(originalScope).transactions())
+            assertEquals(setOf(relocatedScope), index.observedPendingDirectoryIdentities())
             assertEquals(
                 listOf(transaction),
                 index.forDirectory(relocatedScope).transactions(setOf(relocatedName)),
             )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `indexed directory membership does not relist ownership rows`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-membership-").toFile()
+        try {
+            val pendingScope = "content://provider/tree/root/document/pending"
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory(pendingScope).add(authenticatedRelocationTransaction())
+            var listingCount = 0
+            val indexed = AndroidSafDownloadOwnershipStore(
+                directory = root,
+                listFiles = {
+                    listingCount += 1
+                    root.listFiles()
+                },
+            ).indexed()
+
+            repeat(20_000) { candidate ->
+                assertEquals(
+                    candidate == 17,
+                    indexed.hasPendingTransactionsForDirectory(
+                        if (candidate == 17) pendingScope else "content://provider/tree/root/document/$candidate",
+                    ),
+                )
+            }
+
+            assertEquals(1, listingCount)
         } finally {
             root.deleteRecursively()
         }
