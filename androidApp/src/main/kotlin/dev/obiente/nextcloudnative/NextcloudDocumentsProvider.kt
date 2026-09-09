@@ -787,7 +787,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         accountResolver.requireRoot(rootId)
     }
 
-    private inline fun <Result> withDocumentRead(
+    private fun <Result> withDocumentRead(
         documentId: String,
         action: (NextcloudSession, NextcloudDocumentReference) -> Result,
     ): Result {
@@ -797,7 +797,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             { services.loadSession(resolved.session.accountId) }, documentIncarnations::activeIncarnation,
         ) { session -> action(session, resolved.reference) }
     }
-    private inline fun <Result> withRootRead(
+    private fun <Result> withRootRead(
         rootId: String,
         action: (NextcloudSession, NextcloudDocumentIncarnation) -> Result,
     ): Result {
