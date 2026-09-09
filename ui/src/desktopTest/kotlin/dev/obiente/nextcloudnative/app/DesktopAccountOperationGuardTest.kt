@@ -1064,28 +1064,38 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
-    fun cleanupWithoutStorageKeyBlocksCanonicalEquivalentActivationUntilRecovery() {
+    fun pendingLegacyCleanupAllowsUnrelatedDesktopSessionToLoad() {
         val original = NextcloudSession("https://cloud.example.test", "alice", "password")
-        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val unrelated = original.copy(loginName = "bob")
         val originalProviderId = desktopFileCacheAccountId(original)
-        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
-        assertNotEquals(originalProviderId, equivalentProviderId)
 
-        listOf("prepared", "v2|prepared|$MUTATION_SCOPE").forEach { encoded ->
+        listOf("prepared", "committed", "v2|prepared|$MUTATION_SCOPE", "v2|committed|$MUTATION_SCOPE").forEach { encoded ->
             val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
             try {
                 preferences.put("fsac.$originalProviderId", encoded)
                 val journal = DesktopAccountSyncPairCleanupJournal(preferences)
 
-                assertTrue(
-                    journal.blocksAccountActivation(
-                        equivalentProviderId,
-                        equivalent.accountId.storageKey,
+                var originalLoaded = false
+                var originalPublished = false
+                assertFailsWith<IllegalStateException> {
+                    loadDesktopSessionAfterCleanupGate(
+                        original.accountRecord(), journal,
+                        load = { originalLoaded = true; original },
+                        publish = { originalPublished = true },
+                    )
+                }
+                assertFalse(originalLoaded)
+                assertFalse(originalPublished)
+                val publications = mutableListOf<NextcloudSession>()
+                assertEquals(
+                    unrelated,
+                    loadDesktopSessionAfterCleanupGate(
+                        unrelated.accountRecord(), journal,
+                        load = { unrelated }, publish = { publications += it },
                     ),
                 )
-                assertFailsWith<IllegalStateException> {
-                    journal.requireAccountActivationAllowed(equivalent.accountRecord())
-                }
+                assertEquals(listOf(unrelated), publications)
+                assertEquals(encoded, preferences.get("fsac.$originalProviderId", null))
             } finally {
                 preferences.removeNode()
             }

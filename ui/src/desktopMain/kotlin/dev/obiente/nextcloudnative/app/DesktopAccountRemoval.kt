@@ -145,8 +145,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
                     malformedEntryFound = true
                 } else if (
                     cleanup.phase != DesktopAccountSyncPairCleanupPhase.Unknown &&
-                    (cleanup.accountStorageKey == null ||
-                        cleanup.accountId == accountId ||
+                    (cleanup.accountId == accountId ||
                         accountStorageKey != null && cleanup.accountStorageKey == accountStorageKey)
                 ) {
                     matchingEntryFound = true

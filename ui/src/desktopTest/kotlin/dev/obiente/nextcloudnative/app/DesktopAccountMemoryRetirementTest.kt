@@ -182,23 +182,28 @@ class DesktopAccountMemoryRetirementTest {
     }
 
     @Test
-    fun cleanupWithoutStorageKeyBlocksCanonicalEquivalentActivationUntilRecovery() {
+    fun legacyCleanupBlocksOnlyItsKnownAccountIdentity() {
         val original = NextcloudSession("https://cloud.example.test", "alice", "password")
-        val equivalent = original.copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val unrelated = original.copy(loginName = "bob")
         val originalProviderId = desktopFileCacheAccountId(original)
-        val equivalentProviderId = desktopFileCacheAccountId(equivalent)
-        assertNotEquals(originalProviderId, equivalentProviderId)
+        val unrelatedProviderId = desktopFileCacheAccountId(unrelated)
+        assertNotEquals(originalProviderId, unrelatedProviderId)
 
-        listOf("prepared", "v2|prepared|$MUTATION_SCOPE").forEach { encoded ->
+        listOf("prepared", "committed", "v2|prepared|$MUTATION_SCOPE", "v2|committed|$MUTATION_SCOPE").forEach { encoded ->
             val preferences = Preferences.userRoot().node("desktop-memory-cleanup-test-${UUID.randomUUID()}")
             try {
                 preferences.put("fsac.$originalProviderId", encoded)
                 val journal = DesktopAccountSyncPairCleanupJournal(preferences)
 
-                assertTrue(journal.blocksAccountActivation(equivalentProviderId, equivalent.accountId.storageKey))
+                assertTrue(journal.blocksAccountActivation(originalProviderId))
+                assertTrue(journal.blocksAccountActivation(originalProviderId, original.accountId.storageKey))
+                assertFalse(journal.blocksAccountActivation(unrelatedProviderId))
+                assertFalse(journal.blocksAccountActivation(unrelatedProviderId, unrelated.accountId.storageKey))
                 assertFailsWith<IllegalStateException> {
-                    journal.requireAccountActivationAllowed(equivalent.accountRecord())
+                    journal.requireAccountActivationAllowed(original.accountRecord())
                 }
+                journal.requireAccountActivationAllowed(unrelated.accountRecord())
+                assertEquals(encoded, preferences.get("fsac.$originalProviderId", null))
             } finally {
                 preferences.removeNode()
             }
