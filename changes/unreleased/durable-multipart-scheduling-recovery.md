@@ -4,4 +4,4 @@ pull: 439
 platforms: android
 user-facing: yes
 
-Restore every durably queued attachment upload at Android startup when background scheduling is interrupted.
+Restore queued attachment uploads after interrupted Android scheduling. Quarantine malformed grant ownership without repeated cleanup polling, allowing terminal uploads to finish and be dismissed while preserving retained grants.

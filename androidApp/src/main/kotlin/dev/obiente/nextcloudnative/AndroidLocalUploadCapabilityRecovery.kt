@@ -239,18 +239,6 @@ internal fun <Permission> durableUploadPermissionPeerProtection(
     }
 }
 
-internal fun <Permission> malformedDurableUploadPeerBlocksDirectCleanup(
-    malformedPeers: Iterable<DurableUploadPermissionPeer<Permission>>,
-    targetSelectionId: String,
-    targetPermission: Permission,
-    samePermission: (Permission, Permission) -> Boolean,
-): Boolean = durableUploadPermissionPeerProtection(
-    peers = malformedPeers,
-    targetSelectionId = targetSelectionId,
-    targetPermission = targetPermission,
-    samePermission = samePermission,
-) != DurableUploadPermissionPeerProtection.None
-
 internal enum class DurableUploadMalformedPeerCleanupDisposition {
     Proceed,
     Retry,
@@ -262,22 +250,17 @@ internal fun <Permission> durableUploadMalformedPeerCleanupDisposition(
     targetSelectionId: String,
     targetPermission: Permission,
     samePermission: (Permission, Permission) -> Boolean,
+    targetGrantPreExisting: Boolean = false,
 ): DurableUploadMalformedPeerCleanupDisposition {
+    if (targetGrantPreExisting) return DurableUploadMalformedPeerCleanupDisposition.Proceed
     val peers = malformedPeers.toList()
     if (peers.any { peer -> peer.selectionId != targetSelectionId && peer.permission == null }) {
         return DurableUploadMalformedPeerCleanupDisposition.Quarantine
     }
-    return if (
-        malformedDurableUploadPeerBlocksDirectCleanup(
-            peers,
-            targetSelectionId,
-            targetPermission,
-            samePermission,
-        )
-    ) {
-        DurableUploadMalformedPeerCleanupDisposition.Retry
-    } else {
-        DurableUploadMalformedPeerCleanupDisposition.Proceed
+    return when (durableUploadPermissionPeerProtection(peers, targetSelectionId, targetPermission, samePermission)) {
+        DurableUploadPermissionPeerProtection.Ambiguous -> DurableUploadMalformedPeerCleanupDisposition.Quarantine
+        DurableUploadPermissionPeerProtection.RetainedAppOwnedGrant -> DurableUploadMalformedPeerCleanupDisposition.Retry
+        DurableUploadPermissionPeerProtection.None -> DurableUploadMalformedPeerCleanupDisposition.Proceed
     }
 }
 
