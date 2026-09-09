@@ -43,30 +43,50 @@ class NextcloudNativeApplication : Application() {
             runAndroidDurableUploadStartupRecovery(
                 recover = {
                     var uploads: AndroidDurableMultipartUploads? = null
+                    var recoveryFailureReported = false
                     monitorQueuedDurableUploadScheduling(
                         recover = {
-                            keepRetryingQueuedDurableUploadScheduling(
-                                reconcile = {
-                                    constructAndReconcileQueuedDurableUploads {
-                                        val accountPreferences = getSharedPreferences(
-                                            ANDROID_ACCOUNT_PREFERENCES_NAME,
-                                            Context.MODE_PRIVATE,
-                                        )
-                                        val accountResolutionAvailable =
-                                            accountPreferences.durableUploadAccountResolutionAvailable()
-                                        val available = uploads ?: AndroidDurableMultipartUploads(
-                                            this@NextcloudNativeApplication,
-                                        ).also { uploads = it }
-                                        suspend {
-                                            available.reconcileQueuedUploads(
-                                                allowQueuedScheduling = accountResolutionAvailable,
+                            val recovered = try {
+                                retryQueuedDurableUploadScheduling(
+                                    reconcile = {
+                                        constructAndReconcileQueuedDurableUploads {
+                                            val accountPreferences = getSharedPreferences(
+                                                ANDROID_ACCOUNT_PREFERENCES_NAME,
+                                                Context.MODE_PRIVATE,
                                             )
+                                            val accountResolutionAvailable =
+                                                accountPreferences.durableUploadAccountResolutionAvailable()
+                                            val available = uploads ?: AndroidDurableMultipartUploads(
+                                                this@NextcloudNativeApplication,
+                                            ).also { uploads = it }
+                                            suspend {
+                                                available.reconcileQueuedUploads(
+                                                    allowQueuedScheduling = accountResolutionAvailable,
+                                                )
+                                            }
                                         }
+                                    },
+                                    wait = { delayMillis -> delay(delayMillis) },
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: AndroidDurableMultipartUploadRecoveryException) {
+                                if (failure.disposition == DurableUploadQueueRecoveryDisposition.Quarantine) {
+                                    if (!recoveryFailureReported) {
+                                        runCatching(recordRecoveryFailure)
+                                        recoveryFailureReported = true
                                     }
-                                },
-                                wait = { delayMillis -> delay(delayMillis) },
-                                recordRecoveryFailure = recordRecoveryFailure,
-                            )
+                                    return@monitorQueuedDurableUploadScheduling true
+                                }
+                                false
+                            }
+                            if (recovered) {
+                                recoveryFailureReported = false
+                            } else if (!recoveryFailureReported) {
+                                runCatching(recordRecoveryFailure)
+                                recoveryFailureReported = true
+                            }
+                            recovered
                         },
                         awaitWorkStopsRunning = { workId ->
                             awaitDurableUploadWorkToStopRunning(
