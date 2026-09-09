@@ -3,7 +3,6 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.FileOfflineKey
 import dev.obiente.nextcloudnative.app.FileOfflineDescriptor
 import dev.obiente.nextcloudnative.app.FileOfflineRequest
-import dev.obiente.nextcloudnative.app.MAX_OFFLINE_FILE_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.planFileOfflineRequest
 import java.util.ArrayDeque
@@ -11,7 +10,7 @@ import java.util.ArrayDeque
 internal data class AndroidOfflineFolderLimits(
     val maximumDepth: Int = 16,
     val maximumEntries: Int = 5_000,
-    val maximumTotalBytes: Long = 1024L * 1024L * 1024L,
+    val maximumTotalBytes: Long = Long.MAX_VALUE,
 ) {
     init {
         require(maximumDepth in 1..64)
@@ -93,8 +92,8 @@ internal data class AndroidOfflineFolderState(
  *
  * The caller supplies depth-one listings. Every returned path must be an immediate child of the
  * requested folder, which prevents a malformed DAV response from escaping or silently widening the
- * selected root. Files without a size or ETag are rejected because they cannot participate in the
- * byte budget or conflict-safe download queue.
+ * selected root. Files without a size or ETag are rejected because they cannot participate in a
+ * conflict-safe download queue.
  */
 internal fun planAndroidOfflineFolder(
     root: NextcloudFile,
@@ -137,16 +136,14 @@ internal fun planAndroidOfflineFolder(
                 val size = child.size ?: error(
                     "Refresh ${child.name} before storing this folder because its size is unknown.",
                 )
-                require(size <= MAX_OFFLINE_FILE_BYTES) {
-                    "${child.name} is larger than the ${MAX_OFFLINE_FILE_BYTES / (1024 * 1024)} MiB per-file limit."
-                }
+                require(size >= 0L) { "${child.name} has an invalid size." }
                 require(!child.etag.isNullOrBlank()) {
                     "Refresh ${child.name} before storing this folder because its version is unknown."
                 }
                 require(totalBytes <= limits.maximumTotalBytes - size) {
                     "This folder exceeds the ${limits.maximumTotalBytes / (1024 * 1024)} MiB offline budget."
                 }
-                totalBytes += size
+                totalBytes = Math.addExact(totalBytes, size)
                 files += child
             }
         }

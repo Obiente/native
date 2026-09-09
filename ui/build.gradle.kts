@@ -1,4 +1,8 @@
+import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.Base64
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
@@ -6,10 +10,15 @@ val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion"
 val ncMacosPackageVersion = providers.gradleProperty("ncMacosPackageVersion").get()
 val ncVersionName = providers.gradleProperty("ncVersionName").get()
 val ncVersionCode = providers.gradleProperty("ncVersionCode").get()
+val ncAppStreamReleaseDate = providers.gradleProperty("ncAppStreamReleaseDate")
+    .orElse(LocalDate.now(ZoneOffset.UTC).toString())
+    .get()
 val ncDesktopReleaseBuild = providers.gradleProperty("ncDesktopReleaseBuild").orElse("false").get()
 val ncDirectDesktopPackageUpdates = providers.gradleProperty("ncDirectDesktopPackageUpdates").orElse("false").get()
 val linuxAppStreamMetadata = rootProject.layout.projectDirectory
     .file("release/linux/dev.obiente.nextcloudnative.metainfo.xml")
+val generatedLinuxAppStreamMetadata = layout.buildDirectory
+    .file("generated/linux-appstream/dev.obiente.nextcloudnative.metainfo.xml")
 val linuxJpackageTemplates = rootProject.layout.projectDirectory.dir("release/linux/jpackage")
 val generatedJpackageResources = layout.buildDirectory.dir("generated/jpackage-resources")
 val debPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/deb")
@@ -17,9 +26,78 @@ val rpmPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/rpm")
 val msiPackageDirectory = layout.buildDirectory.dir("compose/binaries/main/msi")
 val debPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageDeb.succeeded")
 val rpmPackageSucceededMarker = layout.buildDirectory.file("compose/tmp/packageRpm.succeeded")
+val windowsShellRegistrar = rootProject.layout.projectDirectory.file(
+    "target/x86_64-pc-windows-msvc/release/nextcloud-native-shell-registrar.exe",
+)
+val windowsShellIcon = project.layout.projectDirectory.file("src/desktopMain/resources/nextcloud-native.ico")
+
+val buildWindowsShellRegistrar by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the supported Windows Explorer sync-root registration helper."
+    inputs.file(rootProject.file("Cargo.toml"))
+    inputs.file(rootProject.file("Cargo.lock"))
+    inputs.file(rootProject.file("src/bin/nextcloud-native-shell-registrar.rs"))
+    outputs.file(windowsShellRegistrar)
+    onlyIf { System.getProperty("os.name").startsWith("Windows", ignoreCase = true) }
+    workingDir(rootProject.projectDir)
+    environment("RUSTFLAGS", "-Ctarget-feature=+crt-static")
+    commandLine(
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--bin",
+        "nextcloud-native-shell-registrar",
+    )
+}
+
+val stageWindowsShellAssets by tasks.registering {
+    group = "distribution"
+    description = "Adds the supported Windows Explorer integration to the desktop application image."
+    dependsOn(buildWindowsShellRegistrar)
+    inputs.file(windowsShellRegistrar)
+    inputs.file(windowsShellIcon)
+    val appImage = layout.buildDirectory.dir("compose/binaries/main/app/NextcloudNative")
+    val packagedRegistrar = appImage.map { it.file("NextcloudNativeShellRegistrar.exe") }
+    val packagedIcon = appImage.map { it.file("NextcloudNative.ico") }
+    outputs.files(packagedRegistrar, packagedIcon)
+    onlyIf { System.getProperty("os.name").startsWith("Windows", ignoreCase = true) }
+    doLast {
+        val image = appImage.get().asFile
+        check(image.resolve("NextcloudNative.exe").isFile) {
+            "The Windows application image is unavailable for shell asset staging."
+        }
+        windowsShellRegistrar.asFile.copyTo(packagedRegistrar.get().asFile, overwrite = true)
+        windowsShellIcon.asFile.copyTo(packagedIcon.get().asFile, overwrite = true)
+        check(packagedRegistrar.get().asFile.isFile && packagedIcon.get().asFile.isFile) {
+            "The Windows shell registration helper or icon was not added to the application image."
+        }
+    }
+}
+
+val prepareLinuxAppStreamMetadata by tasks.registering(Exec::class) {
+    inputs.file(linuxAppStreamMetadata)
+    inputs.file(rootProject.file("tools/render-linux-appstream-metadata.py"))
+    inputs.property("packageVersion", ncDesktopPackageVersion)
+    inputs.property("releaseName", ncVersionName)
+    inputs.property("releaseDate", ncAppStreamReleaseDate)
+    outputs.file(generatedLinuxAppStreamMetadata)
+    commandLine(
+        "python3",
+        rootProject.file("tools/render-linux-appstream-metadata.py"),
+        linuxAppStreamMetadata.asFile,
+        generatedLinuxAppStreamMetadata.get().asFile,
+        ncDesktopPackageVersion,
+        ncVersionName,
+        ncAppStreamReleaseDate,
+    )
+}
 
 val prepareLinuxJpackageResources by tasks.registering {
-    inputs.file(linuxAppStreamMetadata)
+    dependsOn(prepareLinuxAppStreamMetadata)
+    inputs.file(generatedLinuxAppStreamMetadata)
     inputs.dir(linuxJpackageTemplates)
     outputs.dir(generatedJpackageResources)
     doLast {
@@ -27,7 +105,7 @@ val prepareLinuxJpackageResources by tasks.registering {
         output.deleteRecursively()
         val linuxOutput = output.resolve("linux").apply { mkdirs() }
         val metadataBase64 = Base64.getEncoder()
-            .encodeToString(linuxAppStreamMetadata.asFile.readBytes())
+            .encodeToString(generatedLinuxAppStreamMetadata.get().asFile.readBytes())
         linuxJpackageTemplates.asFile.listFiles().orEmpty().forEach { template ->
             val content = template.readText().replace("APPSTREAM_XML_BASE64", metadataBase64)
             linuxOutput.resolve(template.name).writeText(content)
@@ -80,6 +158,13 @@ tasks.configureEach {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = TestExceptionFormat.FULL
+    }
+}
+
 kotlin {
     androidTarget()
     jvm("desktop")
@@ -106,7 +191,9 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
-        val androidMain by getting
+        val androidMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
@@ -118,7 +205,9 @@ kotlin {
             implementation(libs.videolan.libvlc)
             implementation(libs.okhttp)
         }
-        val desktopMain by getting
+        val desktopMain by getting {
+            kotlin.srcDir("src/jvmMain/kotlin")
+        }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(project(":contractAcquisition"))
@@ -133,8 +222,14 @@ kotlin {
             implementation(libs.jse.spi.mp3)
             implementation(libs.jse.spi.aac)
             implementation("com.github.serceman:jnr-fuse:0.5.8")
+            implementation("com.github.hypfvieh:dbus-java-core:5.2.0")
+            implementation("com.github.hypfvieh:dbus-java-transport-native-unixsocket:5.2.0")
             implementation("net.java.dev.jna:jna:5.19.1")
             implementation("net.java.dev.jna:jna-platform:5.19.1")
+        }
+        val desktopTest by getting
+        desktopTest.dependencies {
+            implementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
         }
     }
 }
@@ -160,10 +255,17 @@ compose.desktop {
         )
 
         nativeDistributions {
+            modules("jdk.security.auth")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
-            packageName = "NextcloudNative"
+            // Preserve Windows/Linux launcher paths used by existing integrations.
+            packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
             packageVersion = ncDesktopPackageVersion
-            description = "One native client for your complete Nextcloud account"
+            // Windows uses the launcher description as its friendly process name.
+            description = if (System.getProperty("os.name").startsWith("Windows")) {
+                "nati.ve"
+            } else {
+                "One native client for your complete Nextcloud account"
+            }
             vendor = "Obiente"
             copyright = "Copyright 2026 Obiente"
             licenseFile.set(rootProject.file("LICENSE"))
@@ -176,12 +278,14 @@ compose.desktop {
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
                 menu = true
-                menuGroup = "Nextcloud Native"
+                menuGroup = "nati.ve"
                 shortcut = true
                 perUserInstall = true
                 upgradeUuid = "81237d85-c511-47a7-b8dc-c87a5f5c5823"
             }
             macOS {
+                packageName = "nati.ve"
+                dockName = "nati.ve"
                 packageVersion = ncMacosPackageVersion
             }
         }
@@ -189,14 +293,15 @@ compose.desktop {
 }
 
 val enrichDebAppStream by tasks.registering(Exec::class) {
-    inputs.file(linuxAppStreamMetadata)
+    dependsOn(prepareLinuxAppStreamMetadata)
+    inputs.file(generatedLinuxAppStreamMetadata)
     doNotTrackState("Post-processes the packageDeb artifact in place.")
     onlyIf { debPackageSucceededMarker.get().asFile.isFile }
     commandLine(
         "bash",
         rootProject.file("tools/enrich-deb-appstream.sh"),
         debPackageDirectory.get().asFile,
-        linuxAppStreamMetadata.asFile,
+        generatedLinuxAppStreamMetadata.get().asFile,
         rootProject.file("LICENSE"),
         project.file("src/desktopMain/resources/nextcloud-native.png"),
     )
@@ -221,7 +326,9 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
 }
 
 val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
+    dependsOn(stageWindowsShellAssets)
     inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
+    inputs.file(rootProject.file("tools/set-windows-package-display-name.ps1"))
     doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
     onlyIf {
         System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
@@ -263,8 +370,12 @@ tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.config
 }
 
 tasks.matching { task -> task.name == "packageMsi" }.configureEach {
-    dependsOn("createDistributable")
+    dependsOn("createDistributable", stageWindowsShellAssets)
     finalizedBy(repackageMsiWithUninstallCleanup)
+}
+
+tasks.matching { task -> task.name == "createDistributable" }.configureEach {
+    finalizedBy(stageWindowsShellAssets)
 }
 
 val desktopCaptureCompilation = kotlin.targets
@@ -296,6 +407,62 @@ tasks.register<JavaExec>("captureFileSyncTrayVisualQa") {
     )
     mainClass.set(
         "dev.obiente.nextcloudnative.nativeui.preview.FileSyncTrayVisualQaMainKt",
+    )
+    environment(
+        "NEXTCLOUD_NATIVE_TRAY_QA_OUTPUT",
+        layout.buildDirectory.file("visual-qa/tray.png").get().asFile.absolutePath,
+    )
+    workingDir(rootProject.projectDir)
+}
+
+fun registerFileSyncWorkspaceVisualQa(name: String, width: Int, height: Int, fileName: String) =
+    tasks.register<JavaExec>(name) {
+        group = "verification"
+        description = "Captures the responsive folder-sync workspace with isolated conflicts."
+        dependsOn(desktopCaptureCompilation.compileTaskProvider)
+        classpath(
+            desktopCaptureCompilation.output.allOutputs,
+            desktopCaptureCompilation.runtimeDependencyFiles,
+        )
+        mainClass.set(
+            "dev.obiente.nextcloudnative.nativeui.preview.FileSyncWorkspaceVisualQaMainKt",
+        )
+        environment(
+            "NEXTCLOUD_NATIVE_FILESYNC_QA_OUTPUT",
+            layout.buildDirectory.file("visual-qa/$fileName").get().asFile.absolutePath,
+        )
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_WIDTH", width.toString())
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_HEIGHT", height.toString())
+        workingDir(rootProject.projectDir)
+    }
+
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspaceDesktopVisualQa",
+    width = 1_180,
+    height = 800,
+    fileName = "filesync-workspace-desktop.png",
+)
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspacePhoneVisualQa",
+    width = 420,
+    height = 860,
+    fileName = "filesync-workspace-phone.png",
+)
+
+tasks.register<JavaExec>("captureDesktopBackgroundSettingsVisualQa") {
+    group = "verification"
+    description = "Captures desktop background and startup settings with isolated synthetic state."
+    dependsOn(desktopCaptureCompilation.compileTaskProvider)
+    classpath(
+        desktopCaptureCompilation.output.allOutputs,
+        desktopCaptureCompilation.runtimeDependencyFiles,
+    )
+    mainClass.set(
+        "dev.obiente.nextcloudnative.nativeui.preview.DesktopBackgroundSettingsVisualQaMainKt",
+    )
+    environment(
+        "NEXTCLOUD_NATIVE_BACKGROUND_SETTINGS_QA_OUTPUT",
+        layout.buildDirectory.file("visual-qa/background-settings.png").get().asFile.absolutePath,
     )
     workingDir(rootProject.projectDir)
 }

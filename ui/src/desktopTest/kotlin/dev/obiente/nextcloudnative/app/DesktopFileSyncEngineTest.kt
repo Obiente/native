@@ -5,9 +5,235 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
+    @Test
+    fun `resolved conflict guard rejects a replacement operation`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Notes",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        var state = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val resolvedWorkId = state.pairs.single().workItems.single().id
+        state = resolveFileSyncDecision(
+            state,
+            pair.id,
+            resolvedWorkId,
+            FileSyncDecisionChoice.UseLocal,
+        )
+        assertTrue(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+
+        state = scanFileSyncPair(
+            state,
+            pair.id,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 20L,
+        )
+
+        assertFalse(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+        assertIs<FileSyncOperation.Download>(state.pairs.single().workItems.single().operation)
+    }
+
+    @Test
+    fun `resolved conflict guard accepts a retained skip decision`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Notes",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        var state = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val resolvedWorkId = state.pairs.single().workItems.single().id
+        state = resolveFileSyncDecision(
+            state,
+            pair.id,
+            resolvedWorkId,
+            FileSyncDecisionChoice.Skip,
+        )
+        state = scanFileSyncPair(
+            state,
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 20L,
+        )
+
+        assertTrue(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+        assertEquals(FileSyncExecutionState.Skipped, state.pairs.single().workItems.single().state)
+    }
+
+    @Test
+    fun `baseline capacity is checked before executing expanding operations`() {
+        val baselines = setOf("existing.jpg", "second.jpg")
+
+        requireDesktopFileSyncBaselineCapacity(
+            FileSyncOperation.Upload("existing.jpg", expectedRemoteEtag = null),
+            baselines,
+            maximumEntries = 2,
+        )
+        assertFails {
+            requireDesktopFileSyncBaselineCapacity(
+                FileSyncOperation.Upload("new.jpg", expectedRemoteEtag = null),
+                baselines,
+                maximumEntries = 2,
+            )
+        }
+        assertFails {
+            requireDesktopFileSyncBaselineCapacity(
+                FileSyncOperation.KeepBoth(
+                    "existing.jpg",
+                    "existing (Workstation).jpg",
+                    "existing (server).jpg",
+                ),
+                baselines,
+                maximumEntries = 3,
+            )
+        }
+    }
+
+    @Test
+    fun `desktop execution preparation respects automatic backoff and explicit recovery`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(
+                LocalSyncEntry("first.jpg", SyncEntryKind.File, "local-first"),
+                LocalSyncEntry("second.jpg", SyncEntryKind.File, "local-second"),
+            ),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        ).pairs.single()
+        val retryable = planned.workItems[0].copy(
+            state = FileSyncExecutionState.Failed,
+            attemptCount = 1,
+            lastAttemptEpochMillis = 1_000L,
+            failureMessage = "Temporary failure",
+        )
+        val exhausted = planned.workItems[1].copy(
+            state = FileSyncExecutionState.Failed,
+            attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+            lastAttemptEpochMillis = 1_000L,
+            failureMessage = "Repeated failure",
+        )
+        val failed = planned.copy(workItems = listOf(retryable, exhausted))
+
+        val waiting = failed.prepareForDesktopExecution(resetExhaustedFailures = false, nowEpochMillis = 120_999L)
+        assertTrue(waiting.workItems.all { it.state == FileSyncExecutionState.Failed })
+        val automatic = failed.prepareForDesktopExecution(resetExhaustedFailures = false, nowEpochMillis = 121_000L)
+        assertEquals(FileSyncExecutionState.Ready, automatic.workItems[0].state)
+        assertEquals(FileSyncExecutionState.Failed, automatic.workItems[1].state)
+
+        val explicit = failed.prepareForDesktopExecution(resetExhaustedFailures = true)
+        assertTrue(explicit.workItems.all { it.state == FileSyncExecutionState.Ready })
+        assertEquals(0, explicit.workItems[1].attemptCount)
+    }
+
+    @Test
+    fun `desktop pause releases its attempt while retaining replacement stage ownership`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("cover.jpg", SyncEntryKind.File, "local-1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val claim = claimNextFileSyncOperation(planned, pair.id, nowEpochMillis = 20L)
+        val workId = requireNotNull(claim.command).workId
+        val cleanup = FileSyncPendingUploadCleanup(
+            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            relativePath = "cover.jpg",
+            assembledStageEtag = "stage-1",
+        )
+        val owned = retainFileSyncUploadCleanup(claim.state, pair.id, cleanup)
+
+        val released = releaseCancelledFileSyncOperation(owned, pair.id, workId)
+        val releasedPair = released.pairs.single()
+        val releasedWork = releasedPair.workItems.single()
+
+        assertEquals(FileSyncExecutionState.Ready, releasedWork.state)
+        assertEquals(0, releasedWork.attemptCount)
+        assertEquals(cleanup, releasedPair.pendingUploadCleanups.single())
+    }
+
+    @Test
+    fun `desktop execution stops after a failed operation retains upload cleanup`() {
+        val cleanup = FileSyncPendingUploadCleanup(
+            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            relativePath = "cover.jpg",
+            assembledStageEtag = "stage-1",
+        )
+        val state = DesktopFileSyncPersistedState(
+            coordinator = FileSyncCoordinatorState(
+                listOf(
+                    FileSyncPair(
+                        id = "pair",
+                        accountId = "account",
+                        localRootId = "root",
+                        remoteRootPath = "Pictures",
+                        configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                        pendingUploadCleanups = listOf(cleanup),
+                    ),
+                ),
+            ),
+            roots = listOf(DesktopFileSyncRootRecord("root", "/files", "Files")),
+        )
+
+        assertTrue(state.hasPendingDesktopUploadCleanup())
+        assertFalse(
+            state.copy(
+                coordinator = FileSyncCoordinatorState(
+                    listOf(state.coordinator.pairs.single().copy(pendingUploadCleanups = emptyList())),
+                ),
+            ).hasPendingDesktopUploadCleanup(),
+        )
+    }
+
+    @Test
+    fun `remote mutation paths include the configured pair root`() {
+        assertEquals(
+            "Photography/Albums/2026/cover.jpg",
+            desktopFileSyncRemoteMutationPath(
+                remoteRootPath = "/Photography/Albums/",
+                relativePath = "/2026/cover.jpg/",
+            ),
+        )
+        assertEquals("cover.jpg", desktopFileSyncRemoteMutationPath("", "cover.jpg"))
+    }
+
     @Test
     fun `stale owned stages are reclaimed without touching lookalikes`() {
         val root = Files.createTempDirectory("desktop-sync-stage-recovery-").toFile()

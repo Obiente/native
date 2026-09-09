@@ -21,8 +21,14 @@ import dev.obiente.nextcloudnative.app.MultipartTextField
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
+import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
+import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
+import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -135,6 +141,12 @@ internal class DeckAttachmentUploadWorker(
                 message = "The app restarted while this upload was in progress. Check the card before uploading again.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "process-recovery",
+                accountId = initial.accountId,
+                jobId = jobId,
+            )
             return@withContext Result.success()
         }
         if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
@@ -148,6 +160,12 @@ internal class DeckAttachmentUploadWorker(
                 message = "The account used for this upload is no longer active.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "account-unavailable",
+                accountId = initial.accountId,
+                jobId = jobId,
+            )
             return@withContext Result.failure()
         }
         val capabilityReady = runCatching {
@@ -162,6 +180,12 @@ internal class DeckAttachmentUploadWorker(
                 message = "The selected file is no longer available. Select it again to retry.",
             )
             picker.release(initial.request.file)
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Warning,
+                outcome = "source-unavailable",
+                accountId = initial.accountId,
+                jobId = jobId,
+            )
             return@withContext Result.failure()
         }
         val started = store.transition(
@@ -193,8 +217,24 @@ internal class DeckAttachmentUploadWorker(
                 target = state,
                 message = message,
             )
+            if (state != DurableUploadState.Completed) {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = when (state) {
+                        DurableUploadState.Failed -> "rejected"
+                        DurableUploadState.OutcomeUnknown -> "outcome-unknown"
+                        DurableUploadState.Completed,
+                        DurableUploadState.Queued,
+                        DurableUploadState.Uploading,
+                        -> error("Only failed upload states are diagnosed here.")
+                    },
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                    code = "HTTP:${response.status}",
+                )
+            }
             picker.release(started.request.file)
-        }.onFailure {
+        }.onFailure { failure ->
             // Once the request body starts, a transport exception cannot prove whether the server
             // created the attachment. Never replay it automatically and risk a duplicate.
             store.transition(
@@ -203,9 +243,40 @@ internal class DeckAttachmentUploadWorker(
                 target = DurableUploadState.OutcomeUnknown,
                 message = "The upload result is unknown. Check the card before uploading again.",
             )
+            recordUploadDiagnostic(
+                severity = SupportDiagnosticSeverity.Error,
+                outcome = "outcome-unknown",
+                accountId = initial.accountId,
+                jobId = jobId,
+                failure = failure,
+            )
             picker.release(started.request.file)
         }
         Result.success()
+    }
+
+    private fun recordUploadDiagnostic(
+        severity: SupportDiagnosticSeverity,
+        outcome: String,
+        accountId: String,
+        jobId: String,
+        code: String? = null,
+        failure: Throwable? = null,
+    ) {
+        AndroidSupportDiagnostics.get(applicationContext).recordForAccountIdentity(
+            accountId,
+            SupportDiagnosticEventDraft(
+                severity = severity,
+                component = SupportDiagnosticComponent.Media,
+                operation = "media.durable-upload",
+                outcome = outcome,
+                code = code,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("job", jobId, SupportDiagnosticValuePrivacy.Identifier),
+                ),
+                exception = failure?.toSupportDiagnosticExceptionDraft(),
+            ),
+        )
     }
 
     internal companion object {
@@ -270,11 +341,16 @@ internal data class AndroidDurableUploadResource(
 }
 
 internal class AndroidDurableMultipartUploadStore(
-    context: Context,
-    preferenceName: String = PREFERENCES,
+    private val storage: AndroidDurableMultipartUploadEncryptedStorage,
+    private val cipher: AndroidDurableMultipartUploadCipher,
 ) {
-    private val preferences = context.applicationContext.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
-    private val cipher = SessionCipher()
+    constructor(
+        context: Context,
+        preferenceName: String = PREFERENCES,
+    ) : this(
+        storage = SharedPreferencesDurableMultipartUploadStorage(context, preferenceName),
+        cipher = SessionDurableMultipartUploadCipher(),
+    )
 
     fun add(job: AndroidDurableMultipartUploadJob) = synchronized(LOCK) {
         val current = readAll().toMutableList()
@@ -328,27 +404,44 @@ internal class AndroidDurableMultipartUploadStore(
     }
 
     private fun readAll(): List<AndroidDurableMultipartUploadJob> {
-        val encrypted = preferences.getString(KEY_JOBS, null) ?: return emptyList()
-        return runCatching {
+        val encrypted = try {
+            storage.read()
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(failure)
+        } ?: return emptyList()
+        return try {
             val array = JSONArray(cipher.decrypt(encrypted))
-            buildList {
-                repeat(array.length().coerceAtMost(MAX_STORED_UPLOADS)) { index ->
-                    runCatching { array.getJSONObject(index).toJob() }
-                        .getOrNull()
-                        ?.let(::add)
+            check(array.length() <= MAX_STORED_UPLOADS) {
+                "The durable upload queue contains too many rows."
+            }
+            val jobs = buildList {
+                repeat(array.length()) { index ->
+                    add(array.getJSONObject(index).toJob())
                 }
-            }.distinctBy(AndroidDurableMultipartUploadJob::id)
-        }.getOrElse { emptyList() }
+            }
+            check(jobs.distinctBy(AndroidDurableMultipartUploadJob::id).size == jobs.size) {
+                "The durable upload queue contains duplicate rows."
+            }
+            jobs
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(failure)
+        }
     }
 
     private fun writeAll(jobs: List<AndroidDurableMultipartUploadJob>) {
         val array = JSONArray()
         jobs.forEach { array.put(it.toJson()) }
-        check(
-            preferences.edit()
-                .putString(KEY_JOBS, cipher.encrypt(array.toString()))
-                .commit(),
-        ) { "The durable upload queue could not be saved." }
+        val encrypted = try {
+            cipher.encrypt(array.toString())
+        } catch (failure: Exception) {
+            throw IllegalStateException("The durable upload queue could not be saved.", failure)
+        }
+        val saved = try {
+            storage.write(encrypted)
+        } catch (failure: Exception) {
+            throw IllegalStateException("The durable upload queue could not be saved.", failure)
+        }
+        check(saved) { "The durable upload queue could not be saved." }
     }
 
     internal companion object {
@@ -360,6 +453,44 @@ internal class AndroidDurableMultipartUploadStore(
         const val MAX_ACTIVE_UPLOADS_PER_RESOURCE = 4
         const val MAX_STORED_UPLOADS = 64
     }
+}
+
+internal interface AndroidDurableMultipartUploadEncryptedStorage {
+    fun read(): String?
+    fun write(value: String): Boolean
+}
+
+internal interface AndroidDurableMultipartUploadCipher {
+    fun encrypt(value: String): String
+    fun decrypt(value: String): String
+}
+
+internal class AndroidDurableMultipartUploadRecoveryException(
+    cause: Exception,
+) : IllegalStateException(
+    "The saved background upload queue is unavailable. Its recovery data was left unchanged.",
+    cause,
+)
+
+private class SharedPreferencesDurableMultipartUploadStorage(
+    context: Context,
+    preferenceName: String,
+) : AndroidDurableMultipartUploadEncryptedStorage {
+    private val preferences = context.applicationContext.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+
+    override fun read(): String? = preferences.getString(AndroidDurableMultipartUploadStore.KEY_JOBS, null)
+
+    override fun write(value: String): Boolean = preferences.edit()
+        .putString(AndroidDurableMultipartUploadStore.KEY_JOBS, value)
+        .commit()
+}
+
+private class SessionDurableMultipartUploadCipher : AndroidDurableMultipartUploadCipher {
+    private val cipher = SessionCipher()
+
+    override fun encrypt(value: String): String = cipher.encrypt(value)
+
+    override fun decrypt(value: String): String = cipher.decrypt(value)
 }
 
 internal fun requireCanAddDurableUpload(

@@ -8,12 +8,12 @@ import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
-import java.awt.Desktop
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
@@ -21,29 +21,44 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
+import javax.swing.JFileChooser
+import javax.swing.SwingUtilities
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl
+import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -52,36 +67,6 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-
-internal fun talkMessageHistoryPath(
-    token: String,
-    olderCursor: Long?,
-    limit: Int,
-): String {
-    require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-        "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-    }
-    require(olderCursor == null || olderCursor >= 0L) {
-        "Talk history cursor must not be negative."
-    }
-    val encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8).replace("+", "%20")
-    return "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-        "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-        "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1"
-}
-
-internal const val NOTES_LIST_RELATIVE_PATH = "/index.php/apps/notes/api/v1/notes?exclude=content"
-
-internal fun notesDetailRelativePath(noteId: Long): String {
-    require(noteId >= 0L) { "The note ID is invalid." }
-    return "/index.php/apps/notes/api/v1/notes/$noteId"
-}
-
-internal fun notesConditionalHeaders(expectedEtag: String?): Map<String, String> =
-    expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-
-internal fun resolvedNoteEtag(responseEtag: String?, documentEtag: String?): String? =
-    responseEtag?.takeIf(String::isNotBlank) ?: documentEtag?.takeIf(String::isNotBlank)
 
 internal const val DIRECT_EDITING_INFO_RELATIVE_PATH =
     "/ocs/v2.php/apps/files/api/v1/directEditing?format=json"
@@ -135,20 +120,434 @@ private enum class DesktopFileSyncRunSource {
 private const val MAX_DOCUMENT_TEMPLATE_ID_LENGTH = 256
 private const val MAX_DOCUMENT_TEMPLATE_NAME_LENGTH = 512
 private const val MAX_DOCUMENT_TEMPLATE_EXTENSION_LENGTH = 32
+private const val VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES = 1024 * 1024
+private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 100_000
+private const val MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS = 3
+private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_000L
+private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
 private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
+private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
+private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
+private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
+private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
+private const val KEY_VIRTUAL_FILE_ROOT_PREFIX = "vfp-root."
+private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
+private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
+private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
+private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
+private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
 
-private fun desktopLinuxVirtualFileMountPoint(): File =
-    File(System.getProperty("user.home"), "Nextcloud Native")
+private fun desktopVirtualFileProviderLocation(
+    preferences: Preferences,
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): VirtualFileProviderLocation {
+    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
+        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
+    val parent = stored?.parentFile
+    return if (folderName != null && parent != null) {
+        VirtualFileProviderLocation(parent.absolutePath, folderName)
+    } else {
+        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
+    }
+}
+
+private fun desktopLinuxVirtualFileMountPoint(
+    preferences: Preferences,
+    accountId: String,
+): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
+    File(location.parentPath, location.folderName).absoluteFile.normalize()
+}
+
+private fun virtualFileProviderRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_VIRTUAL_FILE_ROOT_PREFIX$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
+}
+
+private fun virtualFileCachePreferenceKey(prefix: String, accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$prefix$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }
+}
+
+private data class DesktopVirtualFileCacheTiers(
+    val configuration: VirtualFileCacheTierConfiguration,
+    val primaryIdentity: String?,
+    val primaryIdentityRequired: Boolean,
+    val overflowIdentity: String?,
+)
+
+private fun encodeDesktopVirtualFilePrimaryPreference(path: String, identity: String): String {
+    require(identity.isValidDesktopVirtualCacheRootIdentity())
+    return "$VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION:$identity:$path".also { encoded ->
+        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) { "The selected primary cache path is too long." }
+    }
+}
+
+private fun decodeDesktopVirtualFilePrimaryPreference(value: String): Pair<String, String?>? {
+    val prefix = "$VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION:"
+    if (!value.startsWith(prefix)) return value to null
+    val identityEnd = value.indexOf(':', prefix.length)
+    if (identityEnd < 0) return null
+    val identity = value.substring(prefix.length, identityEnd)
+    val path = value.substring(identityEnd + 1)
+    return if (identity.isValidDesktopVirtualCacheRootIdentity() && path.isNotBlank()) {
+        path to identity
+    } else {
+        null
+    }
+}
+
+private fun encodeDesktopVirtualFileOverflowPreference(path: String, identity: String): String {
+    require(identity.isValidDesktopVirtualCacheRootIdentity())
+    return "$VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION:$identity:$path".also { encoded ->
+        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) { "The selected overflow cache path is too long." }
+    }
+}
+
+private fun decodeDesktopVirtualFileOverflowPreference(value: String): Pair<String, String?>? {
+    val prefix = "$VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION:"
+    if (!value.startsWith(prefix)) return value to null
+    val identityEnd = value.indexOf(':', prefix.length)
+    if (identityEnd < 0) return null
+    val identity = value.substring(prefix.length, identityEnd)
+    val path = value.substring(identityEnd + 1)
+    return if (identity.isValidDesktopVirtualCacheRootIdentity() && path.isNotBlank()) {
+        path to identity
+    } else {
+        null
+    }
+}
+
+private fun desktopVirtualFileCacheTiers(
+    preferences: Preferences,
+    accountId: String,
+): DesktopVirtualFileCacheTiers {
+    val providerLocation = desktopVirtualFileProviderLocation(preferences, accountId)
+    val defaultPrimary = File(providerLocation.parentPath, INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+        .absoluteFile.normalize().path
+    fun normalizedStoredPath(value: String?): String? = value
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+        ?.path
+    val storedPrimaryPreference = preferences
+        .get(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId), null)
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::decodeDesktopVirtualFilePrimaryPreference)
+    val storedPrimary = normalizedStoredPath(storedPrimaryPreference?.first)
+    var primaryIdentity = storedPrimaryPreference?.second
+    if (storedPrimary != null && primaryIdentity == null) {
+        primaryIdentity = DesktopVirtualRangeCache.adoptPrimaryRootIdentity(File(storedPrimary))
+        if (primaryIdentity != null) {
+            preferences.put(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                encodeDesktopVirtualFilePrimaryPreference(storedPrimary, primaryIdentity),
+            )
+            preferences.flush()
+        }
+    }
+    val storedOverflow = preferences
+        .get(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId), null)
+        ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::decodeDesktopVirtualFileOverflowPreference)
+    val overflowPath = normalizedStoredPath(storedOverflow?.first)
+    var overflowIdentity = storedOverflow?.second
+    if (overflowPath != null && overflowIdentity == null) {
+        overflowIdentity = DesktopVirtualRangeCache.adoptOverflowRootIdentity(File(overflowPath))
+        if (overflowIdentity != null) {
+            preferences.put(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId),
+                encodeDesktopVirtualFileOverflowPreference(overflowPath, overflowIdentity),
+            )
+            preferences.flush()
+        }
+    }
+    return DesktopVirtualFileCacheTiers(
+        configuration = VirtualFileCacheTierConfiguration(
+            primaryPath = storedPrimary ?: defaultPrimary,
+            overflowPath = overflowPath,
+        ),
+        primaryIdentity = primaryIdentity,
+        primaryIdentityRequired = storedPrimary != null,
+        overflowIdentity = overflowIdentity,
+    )
+}
+
+internal fun validateDesktopVirtualFileCacheTierPath(path: String): Path {
+    require(path.isValidVirtualFileCachePath()) { "Choose a valid local cache folder." }
+    val target = File(path).toPath().toAbsolutePath().normalize()
+    require(target.toString().length <= Preferences.MAX_VALUE_LENGTH) { "The selected cache path is too long." }
+    val parent = target.parent ?: error("Choose a cache folder below a local drive root.")
+    require(Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(parent)) {
+        "Choose a cache folder on an available local drive, not a symbolic link."
+    }
+    require(Files.isWritable(parent)) { "The selected cache drive is not writable." }
+    if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        require(Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) {
+            "The selected cache location is not a regular directory."
+        }
+        require(Files.isWritable(target)) { "The selected cache location is not writable." }
+    }
+    return target
+}
+
+internal fun desktopVirtualFileCacheTierPathsOverlap(first: Path, second: Path): Boolean {
+    fun filesystemPath(path: Path): Path = if (Files.exists(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        path.toRealPath()
+    } else {
+        requireNotNull(path.parent).toRealPath().resolve(path.fileName).normalize()
+    }
+    fun sameExistingDirectoryOrAncestor(ancestor: Path, candidate: Path): Boolean {
+        if (!Files.exists(ancestor) || !Files.exists(candidate)) return false
+        var current: Path? = candidate
+        while (current != null) {
+            if (runCatching { Files.isSameFile(ancestor, current) }.getOrDefault(false)) return true
+            current = current.parent
+        }
+        return false
+    }
+    val resolvedFirst = filesystemPath(first)
+    val resolvedSecond = filesystemPath(second)
+    return resolvedFirst == resolvedSecond ||
+        resolvedFirst.startsWith(resolvedSecond) ||
+        resolvedSecond.startsWith(resolvedFirst) ||
+        sameExistingDirectoryOrAncestor(first, second) ||
+        sameExistingDirectoryOrAncestor(second, first)
+}
+
+internal fun validateDesktopVirtualFileProviderLocation(location: VirtualFileProviderLocation): Path {
+    val parent = File(location.parentPath).toPath().toAbsolutePath().normalize()
+    require(Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(parent)) {
+        "Choose an existing local drive or folder, not a symbolic link."
+    }
+    require(Files.isWritable(parent)) { "The selected location is not writable." }
+    val target = parent.resolve(location.folderName).normalize()
+    require(target.parent == parent) { "The virtual file folder must stay inside the selected location." }
+    require(target.toString().length <= Preferences.MAX_VALUE_LENGTH) { "The selected location path is too long." }
+    requireValidDesktopVirtualFileCacheRoot(parent)
+    if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        require(Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(target)) {
+            "The selected virtual file folder is not a regular directory."
+        }
+        require(Files.list(target).use { entries -> !entries.findAny().isPresent }) {
+            "The selected virtual file folder must be empty before it can be connected."
+        }
+    }
+    return target
+}
+
+internal fun desktopVirtualFileCacheRootChanges(
+    current: VirtualFileProviderLocation,
+    target: Path,
+): Boolean = File(current.parentPath).toPath().toAbsolutePath().normalize() != target.parent
+
+internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
+    val cacheRoot = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+    if (Files.notExists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
+    require(
+        Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(cacheRoot),
+    ) { "The selected location contains an invalid nati.ve cache folder." }
+}
+
+internal fun hasInvalidDesktopVirtualFileCacheRoot(parent: Path): Boolean {
+    if (
+        !Files.isDirectory(parent, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+        Files.isSymbolicLink(parent)
+    ) return false
+    val cacheRoot = parent.resolve(INTERNAL_VIRTUAL_FILE_CACHE_FOLDER_NAME)
+    return Files.exists(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+        (
+            !Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                Files.isSymbolicLink(cacheRoot)
+            )
+}
+
+internal fun virtualFileLocationActionMessage(prefix: String, targetPath: String): String {
+    require(prefix.isNotBlank())
+    require(targetPath.isNotBlank())
+    val available = MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH - prefix.length - 1
+    require(available >= 4)
+    val displayedTarget = if (targetPath.length <= available) {
+        targetPath
+    } else {
+        val tailLength = (available - 3).coerceAtLeast(0)
+        "...${targetPath.takeLast(tailLength)}"
+    }
+    return "$prefix$displayedTarget."
+}
 
 internal fun desktopWindowsCloudFilesRoot(
     accountId: String,
     userHome: File = File(System.getProperty("user.home")),
 ): File {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(userHome, "Nextcloud Native"), accountId)
+    return File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
+}
+
+internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
+}
+
+internal fun windowsCloudFilesPreservedRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
+}
+
+internal fun persistWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+    preservedRoot: Path,
+) {
+    val normalized = preservedRoot.toAbsolutePath().normalize()
+    require(
+        normalized.toString().length <= Preferences.MAX_VALUE_LENGTH &&
+            Files.isDirectory(normalized, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(normalized),
+    ) { "The preserved Windows Cloud Files root is not a safe local directory." }
+    val existing = persistedWindowsCloudFilesPreservedRoot(preferences, accountId)
+    require(existing == null || existing == normalized) {
+        "Review and acknowledge the previous preserved Windows Cloud Files folder before retrying recovery."
+    }
+    val key = windowsCloudFilesPreservedRootPreferenceKey(accountId)
+    preferences.put(key, normalized.toString())
+    try {
+        preferences.flush()
+    } catch (failure: Throwable) {
+        preferences.remove(key)
+        runCatching(preferences::flush)
+        throw failure
+    }
+}
+
+internal fun persistedWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+): Path? = preferences.get(windowsCloudFilesPreservedRootPreferenceKey(accountId), null)
+    ?.takeIf { value ->
+        value.isNotBlank() && value.length <= Preferences.MAX_VALUE_LENGTH && value.none(Char::isISOControl)
+    }
+    ?.let { value -> runCatching { File(value).toPath().normalize() }.getOrNull() }
+    ?.takeIf(Path::isAbsolute)
+
+internal fun acknowledgeWindowsCloudFilesPreservedRoot(
+    preferences: Preferences,
+    accountId: String,
+) {
+    preferences.remove(windowsCloudFilesPreservedRootPreferenceKey(accountId))
+    preferences.flush()
+}
+
+internal fun windowsCloudFilesRecoveryNoticeMessage(preservedRoot: Path): String = virtualFileLocationActionMessage(
+    prefix = "Windows found unreadable Cloud Files metadata and preserved existing local data at ",
+    targetPath = preservedRoot.toAbsolutePath().normalize().toString(),
+)
+
+internal fun persistedWindowsCloudFilesRecoveryNotice(
+    preferences: Preferences,
+    accountId: String,
+): String? = persistedWindowsCloudFilesPreservedRoot(preferences, accountId)
+    ?.let(::windowsCloudFilesRecoveryNoticeMessage)
+
+internal fun persistedWindowsCloudFilesRecoveryRoots(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+): Map<String, Path> = preferences.keys()
+    .asSequence()
+    .filter { key -> key.startsWith(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX) }
+    .mapNotNull { key ->
+        val accountId = key.removePrefix(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX)
+        if (accountId.length != 64 || accountId.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+            return@mapNotNull null
+        }
+        val value = preferences.get(key, null)
+            ?.takeIf { it.length <= Preferences.MAX_VALUE_LENGTH }
+            ?: return@mapNotNull null
+        val path = runCatching { File(value).toPath().normalize() }.getOrNull()
+            ?.takeIf(Path::isAbsolute)
+            ?: return@mapNotNull null
+        if (
+            !Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            Files.isSymbolicLink(path)
+        ) {
+            return@mapNotNull null
+        }
+        accountId to path
+    }
+    .toMap()
+
+internal fun pageWindowsCloudFilesRecoveryRoots(
+    roots: Map<String, Path>,
+    startAfterAccountId: String?,
+    limit: Int = MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT,
+): Map<String, Path> {
+    require(limit > 0)
+    if (roots.isEmpty()) return emptyMap()
+    val ordered = roots.entries.sortedBy(Map.Entry<String, Path>::key)
+    val startIndex = startAfterAccountId
+        ?.let { cursor -> ordered.indexOfFirst { it.key > cursor } }
+        ?.takeIf { it >= 0 }
+        ?: 0
+    return (0 until minOf(limit, ordered.size))
+        .map { offset -> ordered[(startIndex + offset) % ordered.size] }
+        .associate(Map.Entry<String, Path>::toPair)
+}
+
+internal fun pagedPersistedWindowsCloudFilesRecoveryRoots(
+    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
+): Map<String, Path> {
+    val page = pageWindowsCloudFilesRecoveryRoots(
+        roots = persistedWindowsCloudFilesRecoveryRoots(preferences),
+        startAfterAccountId = preferences.get(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, null),
+    )
+    if (page.isEmpty()) {
+        preferences.remove(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR)
+    } else {
+        preferences.put(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, page.keys.last())
+    }
+    return page
+}
+
+private fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
+    File(File(userHome, "Nextcloud Native"), accountId)
+
+internal fun unregisterSupersededWindowsCloudFilesRoot(
+    preferences: Preferences,
+    accountId: String,
+    userHome: File,
+    api: WindowsCloudFilesApi,
+) {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    val legacyRoot = validatedWindowsCloudFilesRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome), userHome)
+    api.unregisterSyncRoot(legacyRoot)
+    clearWindowsCloudFilesRootPreferences(preferences, accountId, legacyRoot)
+}
+
+private fun clearWindowsCloudFilesRootPreferences(
+    preferences: Preferences,
+    accountId: String,
+    removedRoot: Path,
+) {
+    listOf(KEY_WINDOWS_CLOUD_FILES_ROOT, windowsCloudFilesRootPreferenceKey(accountId)).forEach { key ->
+        val savedRoot = preferences.get(key, null)
+            ?.let(::File)
+            ?.toPath()
+            ?.toAbsolutePath()
+            ?.normalize()
+        if (savedRoot == removedRoot) preferences.remove(key)
+    }
 }
 
 internal fun unregisterWindowsCloudFilesRootForUninstall(
@@ -156,31 +555,68 @@ internal fun unregisterWindowsCloudFilesRootForUninstall(
     userHome: File = File(System.getProperty("user.home")),
     apiFactory: () -> WindowsCloudFilesApi = ::JnaWindowsCloudFilesApi,
 ) {
-    val savedRoot = preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File)
-    val sessionRoot = preferences.get("server", null)?.let { server ->
+    val rootsByPreference = linkedMapOf<Path, MutableSet<String>>()
+    fun addRoot(root: File?, preferenceKey: String? = null) {
+        if (root == null) return
+        val validated = validatedWindowsCloudFilesRoot(root, userHome)
+        rootsByPreference.getOrPut(validated) { linkedSetOf() }
+            .apply { preferenceKey?.let(::add) }
+    }
+    addRoot(
+        preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File),
+        KEY_WINDOWS_CLOUD_FILES_ROOT,
+    )
+    preferences.keys().filter { it.startsWith(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX) }.forEach { key ->
+        addRoot(preferences.get(key, null)?.let(::File), key)
+    }
+    val sessionAccountId = preferences.get("server", null)?.let { server ->
         preferences.get("login", null)?.let { login ->
-            val accountId = desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
-            desktopWindowsCloudFilesRoot(accountId, userHome)
+            desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
         }
     }
-    val root = savedRoot ?: sessionRoot ?: return
-    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
-    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
-    check(normalizedRoot.parent == expectedParent && normalizedRoot.fileName.toString().let { name ->
-        name.length == 64 && name.all { it in '0'..'9' || it in 'a'..'f' }
-    }) { "The stored Windows Cloud Files root is invalid." }
+    sessionAccountId?.let { accountId ->
+        addRoot(
+            desktopWindowsCloudFilesRoot(accountId, userHome),
+            windowsCloudFilesRootPreferenceKey(accountId),
+        )
+        addRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome))
+    }
+    if (rootsByPreference.isEmpty()) return
     val api = apiFactory()
+    var firstFailure: Throwable? = null
     try {
-        api.unregisterSyncRoot(normalizedRoot)
-        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+        rootsByPreference.entries
+            .sortedByDescending { (root) -> root.fileName.toString().endsWith(WINDOWS_CLOUD_FILES_ROOT_SUFFIX) }
+            .forEach { (root, preferenceKeys) ->
+                runCatching { api.unregisterSyncRoot(root) }
+                    .onSuccess { preferenceKeys.forEach(preferences::remove) }
+                    .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
+            }
     } finally {
         api.close()
     }
+    firstFailure?.let { throw it }
 }
 
-private fun virtualFileProviderPreferenceKey(accountId: String): String {
-    require(accountId.isNotBlank() && accountId.length <= 128)
-    return "virtual-file-provider-active.$accountId"
+private fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
+    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
+    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
+    val name = normalizedRoot.fileName.toString()
+    val accountId = name.removeSuffix(WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
+    check(
+        normalizedRoot.parent == expectedParent &&
+            accountId.length == 64 &&
+            accountId.all { it in '0'..'9' || it in 'a'..'f' } &&
+            (name == accountId || name == accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX),
+    ) { "The stored Windows Cloud Files root is invalid." }
+    return normalizedRoot
+}
+
+internal fun virtualFileProviderPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "vfp-active.$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
 }
 
 internal fun documentTemplatesRelativePath(editorId: String, creatorId: String): String {
@@ -288,8 +724,8 @@ internal fun parseDesktopDocumentTemplates(
 internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
     require(request.path.isSafeDocumentLookupPath()) { "The document path is unsafe." }
     require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
+    require(request.editorId.isSafeDocumentCapabilityId()) {
+        "The document editor ID is invalid."
     }
     require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
     return listOf(
@@ -301,11 +737,6 @@ internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest)
             URLEncoder.encode(value, StandardCharsets.UTF_8)
     }
 }
-
-private val TRUSTED_DIRECT_EDITING_EDITOR_IDS = setOf(
-    OFFICE_DIRECT_EDITOR_ID,
-    WHITEBOARD_DIRECT_EDITOR_ID,
-)
 
 internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: String): String {
     require(candidate.isNotBlank() && candidate.none(Char::isISOControl)) {
@@ -326,17 +757,16 @@ internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: Stri
     ) {
         "Nextcloud returned a cross-origin direct-editing handoff."
     }
-    val routePrefix = server.rawPath.trimEnd('/') + "/index.php/apps/files/directEditing/"
+    val basePath = server.rawPath.trimEnd('/')
+    val routePrefix = listOf(
+        "$basePath/apps/files/directEditing/",
+        "$basePath/index.php/apps/files/directEditing/",
+    ).firstOrNull { prefix -> resolved.rawPath.startsWith(prefix) }.orEmpty()
     val rawPath = resolved.rawPath
     val token = rawPath.removePrefix(routePrefix)
     require(
-        rawPath.startsWith(routePrefix) &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
+        routePrefix.isNotEmpty() &&
+            isValidOfficeDirectEditingToken(token),
     ) {
         "Nextcloud returned an unexpected direct-editing handoff route."
     }
@@ -357,12 +787,33 @@ private fun JSONArray?.toStringSet(): Set<String> = buildSet {
 }
 
 private fun desktopContractCacheDirectory(name: String): File {
-    require(name.matches(Regex("[a-z]+"))) { "The contract cache name is invalid." }
+    require(name.matches(Regex("[a-z][a-z0-9-]{0,63}"))) { "The contract cache name is invalid." }
     val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
     val cacheRoot = xdgCache?.let(::File)
         ?: File(System.getProperty("user.home"), ".cache")
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
+
+internal fun desktopPendingDynamicMutationDirectory(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    environment: Map<String, String> = System.getenv(),
+    userHome: File = File(System.getProperty("user.home")),
+): File = when {
+    osName.startsWith("Windows", ignoreCase = true) -> {
+        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, "AppData/Local")
+        File(localAppData, "Nextcloud Native/State/Pending Mutations")
+    }
+    osName.startsWith("Mac", ignoreCase = true) ->
+        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
+    else -> {
+        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, ".local/state")
+        File(stateRoot, "nextcloud-native/pending-mutations-v1")
+    }
+}.absoluteFile
 
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
@@ -398,6 +849,80 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
     }
 }
 
+private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+    PosixFilePermission.OWNER_EXECUTE,
+)
+private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+)
+
+internal fun ensurePrivatePendingMutationDirectory(directory: File) {
+    Files.createDirectories(directory.toPath())
+    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
+}
+
+internal fun setPrivatePendingMutationFilePermissions(file: File) {
+    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
+}
+
+private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
+    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+        Files.setPosixFilePermissions(path, permissions)
+    }
+}
+
+private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
+    val directoryPath = directory.toPath()
+    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
+        Files.createTempFile(
+            directoryPath,
+            "$targetName-",
+            ".part",
+            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
+        )
+    } else {
+        Files.createTempFile(directoryPath, "$targetName-", ".part")
+    }
+}
+
+internal fun writePrivatePendingMutationFile(
+    directory: File,
+    target: File,
+    bytes: ByteArray,
+) {
+    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
+        "The pending mutation target must be inside its private directory."
+    }
+    ensurePrivatePendingMutationDirectory(directory)
+    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
+    try {
+        FileOutputStream(temporary.toFile()).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        try {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        setPrivatePendingMutationFilePermissions(target)
+    } finally {
+        Files.deleteIfExists(temporary)
+    }
+}
+
 internal suspend fun executeDesktopDynamicApiGet(
     accountId: String,
     requestIdentity: String,
@@ -408,16 +933,18 @@ internal suspend fun executeDesktopDynamicApiGet(
     executeNetwork: suspend () -> NextcloudApiResponse,
     commit: (NextcloudApiResponse) -> Unit,
 ): NextcloudApiResponse {
-    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
-        loadCached()?.let { return it }
-    } else {
-        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    when (cachePolicy) {
+        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
+        NextcloudApiCachePolicy.RefreshNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity) {}
+        NextcloudApiCachePolicy.ForceNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
     }
     return coalescer.execute(
         accountId = accountId,
         requestIdentity = requestIdentity,
         load = {
-            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
                 executeNetwork()
             } else {
                 loadCached() ?: executeNetwork()
@@ -447,30 +974,97 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
+internal class DesktopSessionPublicationGuard {
+    private val monitor = Any()
+
+    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
+}
+
+internal fun closeVirtualFileProviderForReplacement(
+    provider: AutoCloseable?,
+    detach: () -> Unit,
+): Throwable? = runCatching { provider?.close() }
+    .onSuccess { detach() }
+    .exceptionOrNull()
+
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
+    private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
+    private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
+    supportDiagnosticsRoot: File? = null,
+    providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
+    mutationRecoveryRoot: File = defaultDesktopDurableMutationRecoveryRoot(),
+    supportIntakeRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
+    private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
+    private val resolvedSupportDiagnosticsRoot = supportDiagnosticsRoot ?: if (providedSupportDiagnostics == null) {
+        Files.createTempDirectory("nextcloud-native-test-diagnostics").toFile()
+    } else {
+        null
+    }
+    private val supportDiagnostics = providedSupportDiagnostics ?: createDesktopSupportDiagnostics(
+        requireNotNull(resolvedSupportDiagnosticsRoot),
+    )
+    private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
+    private val durableMutationRecovery = DesktopDurableMutationRecoveryStore(mutationRecoveryRoot)
+    private val ownsTemporarySupportIntakeRoot = supportIntakeRoot == null && resolvedSupportDiagnosticsRoot == null
+    private val resolvedSupportIntakeRoot = supportIntakeRoot
+        ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
+        ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
-    private val appUpdater = DesktopAppUpdater(preferences.node("app-updates-v1"))
-    private val httpClient = OkHttpClient()
+    private val sessionPublicationGuard = DesktopSessionPublicationGuard()
+    private val appUpdater = DesktopAppUpdater(
+        preferences = preferences.node("app-updates-v1"),
+        onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
+    )
+    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val supportIntake = JvmSupportIntake(
+        diagnostics = supportDiagnostics,
+        temporaryRoot = resolvedSupportIntakeRoot,
+        environment = desktopSupportDiagnosticsEnvironment(),
+        client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
+    )
+    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
+    private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
+    private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
+    private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
+    private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
+    private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
     private val fileReadCache = defaultDesktopFileReadCache()
-    private val virtualRangeCache = defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
+    private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
+    private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
+    private val virtualFolderHydrationMutex = Mutex()
+    private val virtualFolderRetentionMutex = Mutex()
+    private val virtualFolderMutationLock = Any()
+    private val virtualFolderMutationGenerationsByJob = mutableMapOf<String, Long>()
+    private val virtualFolderCompletedGenerations = mutableMapOf<String, Long>()
+    private val virtualFolderRetryAtEpochMillis = mutableMapOf<String, Long>()
+    private val activeFileRangeSessions = mutableSetOf<NextcloudFileRangeSession>()
+    private val fileRangeSessionLock = Any()
+    @Volatile
+    private var sessionClearing = false
     private val virtualFileProviderLock = Any()
+    private val virtualFileCacheTierMutations = mutableSetOf<String>()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
+    private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
+    @Volatile
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
+    @Volatile
     private var windowsCloudFilesIdentity: String? = null
+    @Volatile
     private var windowsCloudFilesFailure: String? = null
     private val dynamicApiReadCache = DynamicApiResponseCache(
         desktopContractCacheDirectory("responses"),
@@ -481,10 +1075,574 @@ class DesktopNextcloudServices(
         executeNextcloudApi(session, request)
     }
     private val externalFileHandoff = DesktopExternalFileHandoff()
+    private val externalUrlLauncher = DesktopExternalUrlLauncher()
+
+    init {
+        require(providedSupportDiagnostics == null || supportDiagnosticsRoot == null)
+        supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
+    }
+
+    private fun virtualRangeCache(accountId: String): DesktopVirtualRangeCache {
+        val cache = synchronized(virtualRangeCaches) {
+            virtualRangeCaches.getOrPut(accountId) {
+                if (isLinuxDesktop()) {
+                    val tiers = desktopVirtualFileCacheTiers(preferences, accountId)
+                    DesktopVirtualRangeCache(
+                        root = File(tiers.configuration.primaryPath),
+                        overflowRoot = tiers.configuration.overflowPath?.let(::File),
+                        expectedPrimaryIdentity = tiers.primaryIdentity,
+                        requirePrimaryIdentity = tiers.primaryIdentityRequired,
+                        expectedOverflowIdentity = tiers.overflowIdentity,
+                        policy = fileReadCache::loadPolicy,
+                        createParentDirectories = false,
+                    )
+                } else {
+                    defaultDesktopVirtualRangeCache(fileReadCache::loadPolicy)
+                }
+            }
+        }
+        if (isLinuxDesktop()) cache.requireAvailable()
+        return cache
+    }
+
+    private fun scheduleVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        accountId: String,
+        cache: DesktopVirtualRangeCache,
+    ) {
+        if (sessionClearing) return
+        if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
+        if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
+        val jobKey = "$accountId\u0000$relativePath"
+        synchronized(virtualFolderHydrationJobs) {
+            if (sessionClearing) return
+            if (virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()) return
+        }
+        val now = System.currentTimeMillis().coerceAtLeast(0L)
+        val generationState = synchronized(virtualFolderMutationLock) {
+            val retryAt = virtualFolderRetryAtEpochMillis[jobKey]
+            if (retryAt != null && now < retryAt) return
+            val generation = virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L)
+            generation to (generation > virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L))
+        }
+        val (generation, mutationRefreshPending) = generationState
+        val persistedStatus = cache.loadFolderHydrationStatus(accountId, relativePath)
+        if (!mutationRefreshPending && !shouldScheduleVirtualFolderHydration(persistedStatus, now)) return
+        val currentStatus = cache.loadValidatedFolderHydrationStatus(accountId, relativePath)
+        if (!mutationRefreshPending && !shouldScheduleVirtualFolderHydration(currentStatus, now)) return
+        if (currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline) {
+            cache.setFolderHydrationStatus(
+                accountId,
+                currentStatus.copy(
+                    refreshFailure = null,
+                    refreshing = true,
+                    refreshRetryAtEpochMillis = null,
+                ),
+            )
+        } else {
+            cache.setFolderHydrationStatus(
+                accountId,
+                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
+            )
+        }
+        val wasAvailableOffline = currentStatus?.phase == VirtualFolderHydrationPhase.AvailableOffline
+        lateinit var job: Job
+        job = serviceScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                try {
+                    virtualFolderHydrationMutex.withLock {
+                        check(!cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) {
+                            "Reconnect the overflow cache drive before refreshing kept folders."
+                        }
+                        if (!wasAvailableOffline) {
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Downloading),
+                            )
+                        }
+                        val tree = DesktopFileSyncRemoteTree(session, userId, "")
+                        val writebacks = defaultDesktopLinuxWritebackStore(session)
+                        val metadataStore = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId)
+                        var stableListings: LinkedHashMap<String, List<DesktopRemoteSyncDocument>>? = null
+                        var stableRetention: VirtualFolderRetentionState? = null
+                        var stableMissingRetainedRoots: Set<String>? = null
+                        var attempt = 0
+                        while (stableListings == null && attempt < MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS) {
+                            attempt += 1
+                            val retentionSnapshot = cache.loadFolderRetention(accountId)
+                            if (
+                                retentionSnapshot.rules.none { rule ->
+                                    rule.relativePath == relativePath &&
+                                        rule.retention == VirtualFolderRetention.KeepOnDevice
+                                }
+                            ) return@withLock
+                            val backend = DesktopNextcloudVirtualFileBackend(
+                                session = session,
+                                userId = userId,
+                                services = this@DesktopNextcloudServices,
+                                rangeCache = cache,
+                                writebacks = writebacks,
+                                tree = tree,
+                                requireDurableCacheWrites = true,
+                                retentionSnapshot = retentionSnapshot,
+                            )
+                            val listings = linkedMapOf<String, List<DesktopRemoteSyncDocument>>()
+                            val ancestorTargets = linkedMapOf<String, Set<String>>()
+                            val missingRetainedRoots = linkedSetOf<String>()
+                            val survivingRetainedListings = cache.retainedListingCountSurvivingPublication(
+                                accountId,
+                                relativePath,
+                                (retainedFolderAncestorListings(relativePath) + relativePath).toSet(),
+                            )
+                            var retainedMetadataEntries = 0
+                            fun loadListing(parent: String): List<DesktopRemoteSyncDocument> {
+                                check(parent !in listings) {
+                                    "The selected virtual folder contains a repeated directory path."
+                                }
+                                requireVirtualFolderListingCapacity(survivingRetainedListings + listings.size)
+                                val documents = tree.list(parent)
+                                retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
+                                    retainedMetadataEntries,
+                                    documents.size,
+                                )
+                                listings[parent] = documents
+                                return documents
+                            }
+
+                            val ancestors = retainedFolderAncestorListings(relativePath)
+                            val retainedRoots = retentionSnapshot.rules.asSequence()
+                                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                                .map(VirtualFolderRetentionRule::relativePath)
+                                .toList()
+                            ancestors.forEachIndexed { index, parent ->
+                                val currentTarget = ancestors.getOrNull(index + 1) ?: relativePath
+                                val targets = retainedRoots.mapNotNullTo(linkedSetOf()) { retainedRoot ->
+                                    retainedFolderNavigationChild(parent, retainedRoot)
+                                }
+                                check(currentTarget in targets)
+                                requireVirtualFolderListingCapacity(survivingRetainedListings + listings.size)
+                                val targetDocuments = tree.list(parent).filter { document ->
+                                    document.entry.relativePath in targets && document.isDirectory
+                                }
+                                val availableTargets = retainedFolderAvailableNavigationTargets(
+                                    currentTarget,
+                                    targetDocuments,
+                                )
+                                missingRetainedRoots += retainedRootsMissingNavigationTarget(
+                                    parent,
+                                    retainedRoots,
+                                    availableTargets,
+                                )
+                                retainedMetadataEntries = nextVirtualFolderRetainedMetadataCount(
+                                    retainedMetadataEntries,
+                                    targetDocuments.size,
+                                )
+                                ancestorTargets[parent] = targets
+                                listings[parent] = targetDocuments
+                            }
+                            val pending = ArrayDeque<String>().apply { add(relativePath) }
+                            while (pending.isNotEmpty()) {
+                                currentCoroutineContext().ensureActive()
+                                val parent = pending.removeFirst()
+                                if (
+                                    retentionSnapshot.retentionFor(parent) !=
+                                    VirtualFolderRetention.KeepOnDevice
+                                ) continue
+                                loadListing(parent).forEach { document ->
+                                    val fullPath = document.entry.relativePath
+                                    if (
+                                        retentionSnapshot.retentionFor(fullPath) !=
+                                        VirtualFolderRetention.KeepOnDevice
+                                    ) return@forEach
+                                    if (document.isDirectory) {
+                                        pending.add(fullPath)
+                                        return@forEach
+                                    }
+                                    requireNotNull(document.entry.size) {
+                                        "The server did not provide a size for $fullPath."
+                                    }
+                                }
+                            }
+                            val retainedFiles = listings.values.asSequence().flatten()
+                                .filterNot(DesktopRemoteSyncDocument::isDirectory)
+                                .filter { document ->
+                                    retentionSnapshot.retentionFor(document.entry.relativePath) ==
+                                        VirtualFolderRetention.KeepOnDevice
+                                }
+                                .toList()
+                            val expectedRevisions = retainedFiles.mapNotNull { document ->
+                                val size = requireNotNull(document.entry.size)
+                                if (size == 0L) null else VirtualRangeRevision(
+                                    document.entry.relativePath,
+                                    document.entry.etag,
+                                    size,
+                                )
+                            }
+                            val completeRevisions = cache.completeRevisions(accountId, expectedRevisions)
+                            cache.requireRevisionsCapacity(
+                                accountId = accountId,
+                                revisions = expectedRevisions,
+                                blockBytes = VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
+                                retention = retentionSnapshot,
+                                pendingRevisions = expectedRevisions.filterNot(completeRevisions::contains),
+                            )
+                            retainedFiles.forEach { document ->
+                                val fullPath = document.entry.relativePath
+                                val size = requireNotNull(document.entry.size)
+                                val revision = if (size == 0L) null else VirtualRangeRevision(
+                                    fullPath,
+                                    document.entry.etag,
+                                    size,
+                                )
+                                if (revision == null || revision in completeRevisions) return@forEach
+                                check(!cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) {
+                                    "Reconnect the overflow cache drive before refreshing kept folders."
+                                }
+                                cache.requireRevisionCapacity(
+                                    accountId,
+                                    fullPath,
+                                    size,
+                                    VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES,
+                                    retentionSnapshot,
+                                )
+                                cache.freeUp(accountId, requestedBytes = 0L)
+                                check(cache.hasRetainedRevisionStorageCapacity(accountId, fullPath, size)) {
+                                    "There is not enough free space to finish keeping $relativePath offline."
+                                }
+                                val node = document.toLinuxVirtualFileNode()
+                                backend.open(node).use { handle ->
+                                    var offset = 0L
+                                    while (offset < size) {
+                                        currentCoroutineContext().ensureActive()
+                                        val length = minOf(
+                                            VIRTUAL_FOLDER_HYDRATION_CHUNK_BYTES.toLong(),
+                                            size - offset,
+                                        ).toInt()
+                                        handle.read(offset, length)
+                                        offset += length
+                                    }
+                                }
+                                cache.freeUp(accountId, requestedBytes = 0L)
+                            }
+                            val stable = listings.all { (parent, documents) ->
+                                currentCoroutineContext().ensureActive()
+                                val refreshed = tree.list(parent)
+                                val targets = ancestorTargets[parent]
+                                val comparable = if (targets == null) {
+                                    refreshed
+                                } else {
+                                    refreshed.filter { document -> document.entry.relativePath in targets }
+                                }
+                                comparable.hydrationGeneration() == documents.hydrationGeneration()
+                            }
+                            if (stable) {
+                                stableListings = listings
+                                stableRetention = retentionSnapshot
+                                stableMissingRetainedRoots = missingRetainedRoots
+                            }
+                        }
+                        val verifiedListings = checkNotNull(stableListings) {
+                            "The selected folder kept changing while it was prepared for offline use. Try again shortly."
+                        }
+                        val verifiedRetention = checkNotNull(stableRetention)
+                        val missingRetainedRoots = checkNotNull(stableMissingRetainedRoots)
+                        val expectedPublishedRevisions = verifiedListings.values.asSequence().flatten()
+                            .filterNot(DesktopRemoteSyncDocument::isDirectory)
+                            .filter { document ->
+                                verifiedRetention.retentionFor(document.entry.relativePath) ==
+                                    VirtualFolderRetention.KeepOnDevice
+                            }
+                            .mapNotNull { document ->
+                                val size = requireNotNull(document.entry.size)
+                                if (size == 0L) null else VirtualRangeRevision(
+                                    document.entry.relativePath,
+                                    document.entry.etag,
+                                    size,
+                                )
+                            }.toList()
+                        check(
+                            cache.completeRevisions(accountId, expectedPublishedRevisions).size ==
+                                expectedPublishedRevisions.distinct().size
+                        ) { "Offline file validation failed before the folder could be published." }
+                        val publishedAt = System.currentTimeMillis()
+                        val snapshots = verifiedListings.mapValues { (parent, documents) ->
+                            LinuxVirtualDirectorySnapshot(
+                                nodes = documents.map(DesktopRemoteSyncDocument::toLinuxVirtualFileNode),
+                                fetchedAtEpochMillis = publishedAt,
+                                complete = isCompleteRetainedTreeListing(parent, relativePath),
+                            )
+                        }
+                        synchronized(virtualFolderMutationLock) {
+                            if (
+                                virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L) != generation ||
+                                cache.loadFolderRetention(accountId) != verifiedRetention
+                            ) {
+                                throw VirtualFolderRefreshSupersededException()
+                            }
+                            cache.publishRetainedListings(accountId, relativePath, snapshots)
+                            cache.publishRetainedRevisions(
+                                accountId,
+                                relativePath,
+                                expectedPublishedRevisions,
+                                verifiedRetention,
+                            )
+                            publishDesktopLinuxFallbackMetadataBestEffort(metadataStore, snapshots)
+                            val protectedPaths = writebacks.pendingWritebacks()
+                                .mapTo(hashSetOf(), DesktopLinuxPendingWriteback::path)
+                            verifiedListings.forEach { (parent, documents) ->
+                                if (isCompleteRetainedTreeListing(parent, relativePath)) {
+                                    reconcileVirtualRangeChildren(cache, accountId, parent, documents, protectedPaths)
+                                }
+                            }
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(
+                                    relativePath,
+                                    VirtualFolderHydrationPhase.AvailableOffline,
+                                    verifiedAtEpochMillis = publishedAt,
+                                ),
+                            )
+                            missingRetainedRoots.forEach { missingRoot ->
+                                val previous = cache.loadFolderHydrationStatus(accountId, missingRoot)
+                                val stillAvailable = runCatching {
+                                    cache.hasCompleteRetainedFolder(accountId, missingRoot)
+                                }.getOrDefault(false)
+                                cache.setFolderHydrationStatus(
+                                    accountId,
+                                    if (stillAvailable) {
+                                        VirtualFolderHydrationStatus(
+                                            missingRoot,
+                                            VirtualFolderHydrationPhase.AvailableOffline,
+                                            refreshFailure =
+                                                "The retained folder is no longer available at its saved path.",
+                                            verifiedAtEpochMillis = previous?.verifiedAtEpochMillis,
+                                        )
+                                    } else {
+                                        VirtualFolderHydrationStatus(
+                                            missingRoot,
+                                            VirtualFolderHydrationPhase.Failed,
+                                            "The retained folder is no longer available at its saved path.",
+                                        )
+                                    },
+                                )
+                            }
+                            virtualFolderCompletedGenerations[jobKey] = generation
+                            virtualFolderRetryAtEpochMillis.remove(jobKey)
+                        }
+                    }
+                } catch (cancellation: CancellationException) {
+                    restoreVirtualFolderStatusAfterCancellation(
+                        cache,
+                        accountId,
+                        relativePath,
+                        wasAvailableOffline,
+                        currentStatus,
+                    )
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    if (!currentCoroutineContext().isActive) {
+                        restoreVirtualFolderStatusAfterCancellation(
+                            cache,
+                            accountId,
+                            relativePath,
+                            wasAvailableOffline,
+                            currentStatus,
+                        )
+                        throw CancellationException("Virtual folder hydration was canceled.").also { cancellation ->
+                            cancellation.initCause(failure)
+                        }
+                    }
+                    if (failure is VirtualFolderRefreshSupersededException) {
+                        runCatching {
+                            cache.setFolderHydrationStatus(
+                                accountId,
+                                VirtualFolderHydrationStatus(relativePath, VirtualFolderHydrationPhase.Queued),
+                            )
+                        }
+                        return@launch
+                    }
+                    val retryAt = virtualFolderRefreshRetryAt(System.currentTimeMillis().coerceAtLeast(0L))
+                    synchronized(virtualFolderMutationLock) {
+                        virtualFolderRetryAtEpochMillis[jobKey] = retryAt
+                    }
+                    val safeFailure = failure.message?.filterNot(Char::isISOControl)?.take(256)
+                        ?.takeIf(String::isNotBlank) ?: "Offline download failed and can be retried."
+                    val stillAvailableOffline = wasAvailableOffline && runCatching {
+                        cache.hasCompleteRetainedFolder(accountId, relativePath)
+                    }.getOrDefault(false)
+                    if (stillAvailableOffline) runCatching {
+                        cache.setFolderHydrationStatus(
+                            accountId,
+                            VirtualFolderHydrationStatus(
+                                relativePath,
+                                VirtualFolderHydrationPhase.AvailableOffline,
+                                refreshFailure = safeFailure,
+                                verifiedAtEpochMillis = currentStatus.verifiedAtEpochMillis,
+                                refreshRetryAtEpochMillis = retryAt,
+                            ),
+                        )
+                    } else runCatching {
+                        cache.setFolderHydrationStatus(
+                            accountId,
+                            VirtualFolderHydrationStatus(
+                                relativePath,
+                                VirtualFolderHydrationPhase.Failed,
+                                safeFailure,
+                            ),
+                        )
+                    }
+                } finally {
+                    val removedOwnedJob = synchronized(virtualFolderHydrationJobs) {
+                        removeVirtualFolderHydrationJobIfOwned(virtualFolderHydrationJobs, jobKey, job)
+                    }
+                    val rerun = synchronized(virtualFolderMutationLock) {
+                        virtualFolderMutationGenerationsByJob.getOrDefault(jobKey, 0L) >
+                            virtualFolderCompletedGenerations.getOrDefault(jobKey, 0L) &&
+                            System.currentTimeMillis().coerceAtLeast(0L) >=
+                            virtualFolderRetryAtEpochMillis.getOrDefault(jobKey, 0L)
+                    }
+                    if (removedOwnedJob && rerun && !sessionClearing) {
+                        scheduleVirtualFolderHydration(session, userId, relativePath, accountId, cache)
+                    }
+                }
+        }
+        val accepted = synchronized(virtualFileProviderLock) {
+            synchronized(virtualFolderHydrationJobs) {
+                if (
+                    sessionClearing ||
+                    accountId in virtualFileCacheTierMutations ||
+                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                ) false
+                else true.also { virtualFolderHydrationJobs[jobKey] = job }
+            }
+        }
+        if (accepted) job.start() else job.cancel()
+    }
+
+    private fun restoreVirtualFolderStatusAfterCancellation(
+        cache: DesktopVirtualRangeCache,
+        accountId: String,
+        relativePath: String,
+        wasAvailableOffline: Boolean,
+        previousStatus: VirtualFolderHydrationStatus?,
+    ) {
+        runCatching {
+            if (
+                cache.loadFolderRetention(accountId).rules.none { rule ->
+                    rule.relativePath == relativePath && rule.retention == VirtualFolderRetention.KeepOnDevice
+                }
+            ) return@runCatching
+            cache.setFolderHydrationStatus(
+                accountId,
+                VirtualFolderHydrationStatus(
+                    relativePath,
+                    if (wasAvailableOffline) {
+                        VirtualFolderHydrationPhase.AvailableOffline
+                    } else {
+                        VirtualFolderHydrationPhase.Queued
+                    },
+                    verifiedAtEpochMillis = previousStatus?.verifiedAtEpochMillis,
+                ),
+            )
+        }
+    }
+
+    private fun refreshRetainedFoldersAfterMutation(
+        session: NextcloudSession,
+        userId: String,
+        accountId: String,
+        path: String,
+    ) {
+        synchronized(virtualFileProviderLock) {
+            runCatching { invalidateDesktopFileMetadata(accountId, path) }
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching {
+                cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
+            }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            runCatching { cache.invalidate(accountId, path) }
+            runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
+        }
+    }
+
+    private fun refreshRetainedFoldersAfterRemoteListing(
+        session: NextcloudSession,
+        userId: String,
+        accountId: String,
+        changedPaths: Set<String>,
+    ) {
+        synchronized(virtualFileProviderLock) {
+            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
+            val roots = runCatching { cache.queueRetainedFoldersForListingRefresh(accountId, changedPaths) }
+                .getOrDefault(emptyList())
+            synchronized(virtualFolderMutationLock) {
+                advanceAffectedVirtualFolderGenerations(
+                    virtualFolderMutationGenerationsByJob,
+                    virtualFolderCompletedGenerations,
+                    accountId,
+                    roots,
+                )
+            }
+            roots.forEach { root ->
+                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
+            }
+        }
+    }
+
+    private suspend fun cancelVirtualFolderHydration(accountId: String, relativePath: String) {
+        val exact = "$accountId\u0000$relativePath"
+        val descendants = "$exact/"
+        val jobs = synchronized(virtualFolderHydrationJobs) {
+            virtualFolderHydrationJobs.filterKeys { key -> key == exact || key.startsWith(descendants) }.values.toList()
+        }
+        jobs.forEach { job -> job.cancelAndJoin() }
+    }
+
+    private fun cancelAllVirtualFolderHydration(accountId: String): List<Job> {
+        val prefix = "$accountId\u0000"
+        val jobs = synchronized(virtualFolderHydrationJobs) {
+            virtualFolderHydrationJobs.filterKeys { key -> key.startsWith(prefix) }.values.toList()
+        }
+        jobs.forEach(Job::cancel)
+        return jobs
+    }
+
+    private suspend fun reconcileConfiguredVirtualFolders(session: NextcloudSession?) {
+        if (!isLinuxDesktop()) return
+        session ?: return
+        val accountId = desktopFileCacheAccountId(session)
+        val cache = virtualRangeCache(accountId)
+        val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
+            rule.retention == VirtualFolderRetention.KeepOnDevice
+        }
+        if (kept.isEmpty()) return
+        val userId = loadServerInfo(session).userId
+        kept.forEach { rule -> scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, cache) }
+    }
     private val localUploadPicker = DesktopLocalUploadPicker()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
+        onRemoteMutationCommitted = { session, userId, path ->
+            refreshRetainedFoldersAfterMutation(
+                session,
+                userId,
+                desktopFileCacheAccountId(session),
+                path,
+            )
+        },
     )
     private val startOnLoginController = DesktopStartOnLoginController()
     private val fileSyncRunLock = Mutex()
@@ -519,13 +1677,19 @@ class DesktopNextcloudServices(
         synchronized(this) {
             if (backgroundFileSyncJob?.isActive == true) return
             backgroundFileSyncJob = serviceScope.launch {
-                if (loadStartOnLoginPreference()) {
-                    runCatching { startOnLoginController.configure(enabled = true) }
-                }
+                restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
-                            .onFailure(::publishBackgroundFileSyncFailure)
+                    }
+                    reconcileDesktopBackgroundSession(
+                        ::loadSession, ::reconcileConfiguredVirtualFolders,
+                    ) { session, failure ->
+                        publishFileSyncRunFailure(
+                            session?.let(::desktopFileCacheAccountId),
+                            DesktopFileSyncRunSource.Background,
+                            failure,
+                        )
                     }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
@@ -535,13 +1699,17 @@ class DesktopNextcloudServices(
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
-            supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
-            maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            supportedActions = setOf(
+                ExternalFileHandoffAction.OpenWith,
+                ExternalFileHandoffAction.Share,
+            ),
+            maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
         ),
     )
 
     override val supportsBidirectionalFileSync: Boolean = true
     override val supportsVirtualFileStorage: Boolean = true
+    override val supportsRecursiveFileOfflineStorage: Boolean get() = isLinuxDesktop()
 
     override suspend fun loadVirtualFileStorage(
         session: NextcloudSession,
@@ -553,21 +1721,57 @@ class DesktopNextcloudServices(
             (isLinuxDesktop() || isWindowsDesktop()) &&
             preferences.getBoolean(providerPreferenceKey, false) &&
             synchronized(virtualFileProviderLock) {
-                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId
+                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId && windowsCloudFilesAutomaticActivationAllowed(isWindowsDesktop(), windowsCloudFilesFailure)
             }
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
         }
-        enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy())
+        val windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
+            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
+        } else {
+            null
+        }
+        runCatching { enforceCombinedVirtualFileCachePolicy(accountId, fileReadCache.loadPolicy()) }
         val cache = fileReadCache.virtualFileSummary(accountId)
-        val ranges = virtualRangeCache.summary(accountId)
+        val rangeCacheResult = runCatching {
+            val current = virtualRangeCache(accountId)
+            current.requireAvailable()
+            Triple(current, current.loadFolderRetention(accountId), current.summary(accountId))
+        }
+        val rangeCache = rangeCacheResult.getOrNull()?.first
+        val folderRetention = rangeCacheResult.getOrNull()?.second ?: VirtualFolderRetentionState()
+        val unavailableRetainedRoots = if (rangeCache == null) {
+            emptySet()
+        } else {
+            folderRetention.rules.asSequence()
+                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                .filter { rule -> rangeCache.hasUnavailableRetainedOverflowRecords(accountId, rule.relativePath) }
+                .mapTo(linkedSetOf(), VirtualFolderRetentionRule::relativePath)
+        }
+        unavailableRetainedRoots.forEach { retainedRoot ->
+            cancelVirtualFolderHydration(accountId, retainedRoot)
+        }
+        if (rangeCache != null) {
+            folderRetention.rules.filter { rule ->
+                rule.retention == VirtualFolderRetention.KeepOnDevice
+            }.forEach { rule ->
+                runCatching {
+                    scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, rangeCache)
+                }
+            }
+        }
+        val ranges = rangeCacheResult.getOrNull()?.third
         val linux = isLinuxDesktop()
         val windows = isWindowsDesktop()
+        val cacheTiers = if (linux) desktopVirtualFileCacheTiers(preferences, accountId).configuration else null
+        val overflowUnavailable = ranges != null && ranges.overflowCachedBytes > 0L && !ranges.overflowAvailable
+        val windowsFailure = windowsCloudFilesFailure
         val active = synchronized(virtualFileProviderLock) {
             (linux && linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) ||
-                (windows && windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId)
+                (windows && windowsFailure == null && windowsCloudFilesProvider != null &&
+                    windowsCloudFilesIdentity == accountId)
         }
-        val windowsSummary = windowsVirtualFileSummary(accountId)
+        val windowsSummary = if (windowsFailure == null) windowsVirtualFileSummary(accountId) else null
         val writebacks = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
         VirtualFileStorageSnapshot(
             support = if (linux || windows) VirtualFileStorageSupport.Available else VirtualFileStorageSupport.CacheOnly,
@@ -577,23 +1781,32 @@ class DesktopNextcloudServices(
                 else -> VirtualFilePlatformIntegration.InAppOnDemandCache
             },
             policy = cache.policy,
-            cachedBytes = cache.cachedBytes + ranges.cachedBytes + (windowsSummary?.cachedBytes ?: 0L),
-            reclaimableBytes = cache.reclaimableBytes + ranges.reclaimableBytes +
+            cachedBytes = cache.cachedBytes + (ranges?.cachedBytes ?: 0L) + (windowsSummary?.cachedBytes ?: 0L),
+            reclaimableBytes = cache.reclaimableBytes + (ranges?.reclaimableBytes ?: 0L) +
                 (windowsSummary?.reclaimableBytes ?: 0L),
-            pinnedBytes = windowsSummary?.pinnedBytes ?: 0L,
-            hydratedFileCount = cache.entryCount + ranges.fileCount +
+            pinnedBytes = (ranges?.pinnedBytes ?: 0L) + (windowsSummary?.pinnedBytes ?: 0L),
+            hydratedFileCount = cache.entryCount + (ranges?.fileCount ?: 0) +
                 (windowsSummary?.hydratedFileCount ?: 0),
-            pinnedFileCount = windowsSummary?.pinnedFileCount ?: 0,
+            pinnedFileCount = (ranges?.pinnedFileCount ?: 0) + (windowsSummary?.pinnedFileCount ?: 0),
             availableFreeBytes = listOfNotNull(
                 cache.availableFreeBytes,
-                ranges.availableFreeBytes,
+                ranges?.availableFreeBytes,
                 windowsSummary?.availableFreeBytes,
             ).minOrNull(),
             storageCapacityBytes = null,
             limitations = buildList {
                 add("Range blocks and complete files share the managed automatic-cleanup policy.")
+                rangeCacheResult.exceptionOrNull()?.let { failure ->
+                    add("The selected virtual-file storage drive is unavailable: ${failure.message ?: "unknown error"}")
+                }
+                if (overflowUnavailable) {
+                    add("Reconnect the overflow cache drive to open files stored there.")
+                }
+                ranges?.tierAttention?.let { failure ->
+                    add("Cache tier movement needs attention: $failure")
+                }
                 linuxVirtualFileFailure?.let { add("The last Linux mount attempt failed: $it") }
-                windowsCloudFilesFailure?.let { add("The last Windows Cloud Files activation failed: $it") }
+                windowsFailure?.let { add("The Windows Cloud Files integration needs recovery: $it") }
                 if (windows) {
                     add("Windows can dehydrate in-sync placeholders automatically when space is needed.")
                 }
@@ -608,19 +1821,74 @@ class DesktopNextcloudServices(
                 }
             },
             providerState = when {
-                (windowsSummary?.failedWritebackCount ?: 0) > 0 -> VirtualFileProviderState.NeedsAttention
-                active -> VirtualFileProviderState.Active
-                linuxVirtualFileFailure != null || windowsCloudFilesFailure != null ->
+                (windowsSummary?.failedWritebackCount ?: 0) > 0 || windowsCloudFilesRecoveryNotice != null ->
                     VirtualFileProviderState.NeedsAttention
+                overflowUnavailable || ranges?.tierAttention != null -> VirtualFileProviderState.NeedsAttention
+                rangeCacheResult.isFailure || linuxVirtualFileFailure != null || windowsFailure != null ->
+                    VirtualFileProviderState.NeedsAttention
+                active -> VirtualFileProviderState.Active
                 linux || windows -> VirtualFileProviderState.Inactive
                 else -> VirtualFileProviderState.NotApplicable
             },
+            providerActive = active,
             providerLocation = when {
-                linux -> desktopLinuxVirtualFileMountPoint().absolutePath
-                windows -> desktopWindowsCloudFilesRoot(accountId).absolutePath
+                linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
+                windows -> "nati.ve in File Explorer"
                 else -> null
             },
+            providerLocationConfiguration = if (linux) {
+                desktopVirtualFileProviderLocation(preferences, accountId)
+            } else {
+                null
+            },
+            providerLocationCanChange = linux && !active,
+            providerRecoveryNotice = windowsCloudFilesRecoveryNotice,
+            folderRetentionRules = if (linux) {
+                folderRetention.rules
+            } else {
+                emptyList()
+            },
+            folderHydrationStatuses = if (linux) {
+                rangeCache?.loadFolderHydrationStatuses(accountId).orEmpty().filter { status ->
+                    folderRetention.rules.any { rule ->
+                        rule.relativePath == status.relativePath &&
+                            rule.retention == VirtualFolderRetention.KeepOnDevice
+                    }
+                }.map { status ->
+                    virtualFolderHydrationStatusForStorageAvailability(
+                        status,
+                        status.relativePath in unavailableRetainedRoots,
+                    )
+                }
+            } else {
+                emptyList()
+            },
             pendingWritebackCount = writebacks.size + (windowsSummary?.pendingWritebackCount ?: 0),
+            cacheTiers = cacheTiers,
+            primaryCache = cacheTiers?.let { configured ->
+                VirtualFileCacheTierSnapshot(
+                    path = configured.primaryPath,
+                    cachedBytes = ranges?.primaryCachedBytes ?: 0L,
+                    reclaimableBytes = ranges?.primaryReclaimableBytes ?: 0L,
+                    pinnedBytes = ranges?.primaryPinnedBytes ?: 0L,
+                    managedAutomaticBytes = cache.cachedBytes +
+                        ((ranges?.primaryCachedBytes ?: 0L) - (ranges?.primaryPinnedBytes ?: 0L)),
+                    availableFreeBytes = ranges?.availableFreeBytes,
+                    available = rangeCacheResult.isSuccess,
+                )
+            },
+            overflowCache = cacheTiers?.overflowPath?.let { overflowPath ->
+                VirtualFileCacheTierSnapshot(
+                    path = overflowPath,
+                    cachedBytes = ranges?.overflowCachedBytes ?: 0L,
+                    reclaimableBytes = ranges?.overflowReclaimableBytes ?: 0L,
+                    pinnedBytes = ranges?.overflowPinnedBytes ?: 0L,
+                    managedAutomaticBytes = (ranges?.overflowCachedBytes ?: 0L) -
+                        (ranges?.overflowPinnedBytes ?: 0L),
+                    availableFreeBytes = ranges?.overflowAvailableFreeBytes,
+                    available = ranges?.overflowAvailable == true,
+                )
+            },
         )
     }
 
@@ -642,16 +1910,16 @@ class DesktopNextcloudServices(
         require(requestedBytes >= 0L)
         val accountId = desktopFileCacheAccountId(session)
         val before = fileReadCache.virtualFileSummary(accountId).cachedBytes +
-            virtualRangeCache.summary(accountId).cachedBytes
+            virtualRangeCache(accountId).summary(accountId).cachedBytes
         val windowsFreed = synchronized(virtualFileProviderLock) {
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }
                 ?.freeUpSpace(requestedBytes)
         } ?: 0L
-        val rangePlan = virtualRangeCache.freeUp(accountId, (requestedBytes - windowsFreed).coerceAtLeast(0L))
+        val rangePlan = virtualRangeCache(accountId).freeUp(accountId, (requestedBytes - windowsFreed).coerceAtLeast(0L))
         val remaining = (requestedBytes - windowsFreed - rangePlan.plannedFreedBytes).coerceAtLeast(0L)
         fileReadCache.freeUpVirtualFiles(accountId, remaining)
         val after = fileReadCache.virtualFileSummary(accountId).cachedBytes +
-            virtualRangeCache.summary(accountId).cachedBytes
+            virtualRangeCache(accountId).summary(accountId).cachedBytes
         val freed = windowsFreed + (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
@@ -673,86 +1941,240 @@ class DesktopNextcloudServices(
             )
         }
         val accountId = desktopFileCacheAccountId(session)
+        var windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
+            persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
+        } else {
+            null
+        }
         synchronized(virtualFileProviderLock) {
             if (isWindowsDesktop()) {
-                if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
+                val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
+                    supportDiagnostics.recordForAccountIdentity(accountId, event)
+                }
+                if (
+                    windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId &&
+                    windowsCloudFilesFailure == null && windowsCloudFilesProvider?.runtimeRecoveryFailure() == null
+                ) {
                     return@withContext VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )
                 }
-                windowsCloudFilesProvider?.close()
-                windowsCloudFilesProvider = null
-                windowsCloudFilesIdentity = null
+                val replacedProvider = windowsCloudFilesProvider
+                closeVirtualFileProviderForReplacement(
+                    provider = replacedProvider,
+                    detach = {
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                    },
+                )?.let { failure ->
+                    windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files cleanup failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.failed-provider-cleanup",
+                        accountId = accountId,
+                        root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                        failure = failure,
+                    )
+                    throw failure
+                }
                 val root = desktopWindowsCloudFilesRoot(accountId).toPath()
-                val provider = WindowsCloudFilesProvider(
-                    root = root,
-                    backend = DesktopNextcloudWindowsCloudFilesBackend(
-                        session = session,
-                        userId = userId,
-                        services = this@DesktopNextcloudServices,
-                    ),
-                    api = JnaWindowsCloudFilesApi(),
+                val userHome = File(System.getProperty("user.home"))
+                val backend = DesktopNextcloudWindowsCloudFilesBackend(
+                    session = session,
+                    userId = userId,
+                    services = this@DesktopNextcloudServices,
+                )
+                val legacyRoot = validatedWindowsCloudFilesRoot(
+                    desktopLegacyWindowsCloudFilesRoot(accountId, userHome),
+                    userHome,
                 )
                 try {
+                    if (Files.exists(legacyRoot)) {
+                        val legacyProvider = WindowsCloudFilesProvider(
+                            root = legacyRoot,
+                            backend = backend,
+                            api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic),
+                            recordDiagnostic = recordCloudFilesDiagnostic,
+                            recordPreservedCorruptRoot = { preserved ->
+                                persistWindowsCloudFilesPreservedRoot(preferences, accountId, preserved)
+                                windowsCloudFilesRecoveryNotice = windowsCloudFilesRecoveryNoticeMessage(preserved)
+                            },
+                        )
+                        try {
+                            legacyProvider.start()
+                            legacyProvider.recoverBeforeRootMigration()
+                            legacyProvider.removeSyncRoot()
+                            clearWindowsCloudFilesRootPreferences(preferences, accountId, legacyRoot)
+                        } catch (failure: Throwable) {
+                            runCatching(legacyProvider::close)
+                            throw failure
+                        }
+                    } else {
+                        JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic).use { cleanupApi ->
+                            unregisterSupersededWindowsCloudFilesRoot(
+                                preferences = preferences,
+                                accountId = accountId,
+                                userHome = userHome,
+                                api = cleanupApi,
+                            )
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files migration failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.legacy-cleanup",
+                        accountId = accountId,
+                        root = legacyRoot,
+                        failure = failure,
+                    )
+                    throw failure
+                }
+                val api = JnaWindowsCloudFilesApi(recordDiagnostic = recordCloudFilesDiagnostic)
+                lateinit var provider: WindowsCloudFilesProvider
+                provider = WindowsCloudFilesProvider(
+                    root = root,
+                    backend = backend,
+                    api = api,
+                    recordDiagnostic = recordCloudFilesDiagnostic,
+                    recordPreservedCorruptRoot = { preserved ->
+                        persistWindowsCloudFilesPreservedRoot(preferences, accountId, preserved)
+                        windowsCloudFilesRecoveryNotice = windowsCloudFilesRecoveryNoticeMessage(preserved)
+                    },
+                    onRuntimeFailure = { failure ->
+                        if (windowsCloudFilesProvider === provider) {
+                            windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files recovery failure"
+                        }
+                        recordVirtualFileFailure(
+                            operation = "cloud-files.runtime-recovery",
+                            accountId = accountId,
+                            root = root,
+                            failure = failure,
+                        )
+                    },
+                )
+                windowsCloudFilesProvider = provider
+                windowsCloudFilesIdentity = accountId
+                // Clear an earlier activation error before this provider can report a runtime
+                // failure. Never clear it after startup, where that would race the callback.
+                windowsCloudFilesFailure = null
+                try {
                     provider.start()
-                    windowsCloudFilesProvider = provider
-                    windowsCloudFilesIdentity = accountId
-                    windowsCloudFilesFailure = null
-                    preferences.put(KEY_WINDOWS_CLOUD_FILES_ROOT, root.toAbsolutePath().toString())
+                    provider.recoverAfterStartup()
+                    provider.runtimeRecoveryFailure()?.let { throw it }
+                    preferences.put(
+                        windowsCloudFilesRootPreferenceKey(accountId),
+                        root.toAbsolutePath().toString(),
+                    )
+                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
                     preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
                 } catch (failure: Throwable) {
                     runCatching(provider::close)
+                    if (windowsCloudFilesProvider === provider) {
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                    }
                     windowsCloudFilesFailure = failure.message ?: "Unknown Cloud Files activation failure"
+                    recordVirtualFileFailure(
+                        operation = "cloud-files.activation",
+                        accountId = accountId,
+                        root = root,
+                        failure = failure,
+                    )
                     throw failure
                 }
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
+                    windowsCloudFilesRecoveryNotice
+                        ?: "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
                 return@withContext VirtualFileStorageActionResult.Completed(
-                    "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+                    "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null) {
-                runCatching { linuxVirtualFileSystem?.unmount() }
+                linuxVirtualFileSystem?.unmount()
                 linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
                 linuxVirtualFileMountIdentity = null
             }
-            val mountPoint = desktopLinuxVirtualFileMountPoint().apply {
-                check(isDirectory || mkdirs()) { "Could not create the virtual-files mount folder." }
+            val location = desktopVirtualFileProviderLocation(preferences, accountId)
+            val mountPath = validateDesktopVirtualFileProviderLocation(location)
+            if (Files.notExists(mountPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                try {
+                    Files.createDirectory(mountPath)
+                } catch (_: java.nio.file.FileAlreadyExistsException) {
+                    // A second app process may have created the same validated mount point.
+                }
             }
+            val mountPoint = mountPath.toFile()
             check(!Files.isSymbolicLink(mountPoint.toPath())) { "The virtual-files mount folder cannot be a symlink." }
             check(mountPoint.list().orEmpty().isEmpty()) {
                 "The virtual-files mount folder must be empty before it can be activated."
             }
             val writebackStore = defaultDesktopLinuxWritebackStore(session)
+            val recoveredWritebackPaths = linkedSetOf<String>()
             writebackStore.recoverPending(
                 tree = DesktopFileSyncRemoteTree(session, userId, ""),
-                onCommitted = { path -> virtualRangeCache.invalidate(accountId, path) },
+                onCommitted = { path ->
+                    runCatching { virtualRangeCache(accountId).invalidate(accountId, path) }
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+                    recoveredWritebackPaths += path
+                },
             )
-            val fileSystem = LinuxNextcloudVirtualFileSystem(
-                DesktopNextcloudVirtualFileBackend(
-                    session = session,
-                    userId = userId,
-                    services = this@DesktopNextcloudServices,
-                    rangeCache = virtualRangeCache,
-                    writebacks = writebackStore,
+            var metadataBackendReference: CachingLinuxVirtualFileBackend? = null
+            val virtualBackend = DesktopNextcloudVirtualFileBackend(
+                session = session,
+                userId = userId,
+                services = this@DesktopNextcloudServices,
+                rangeCache = virtualRangeCache(accountId),
+                writebacks = writebackStore,
+                onMutationCommitted = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
+                onAmbiguousMutationResult = { path ->
+                    metadataBackendReference?.invalidateAfterExternalMutation(path)
+                },
+            )
+            val metadataBackend = CachingLinuxVirtualFileBackend(
+                delegate = virtualBackend,
+                store = RetainedLinuxVirtualMetadataStore(
+                    rangeCache = virtualRangeCache(accountId),
+                    accountId = accountId,
+                    fallback = DesktopLinuxVirtualMetadataStore(fileReadCache, accountId),
+                    afterRetainedListingChanged = { changedPaths ->
+                        refreshRetainedFoldersAfterRemoteListing(session, userId, accountId, changedPaths)
+                    },
                 ),
+                afterMutationInvalidated = { path ->
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
+                },
             )
+            metadataBackendReference = metadataBackend
+            recoveredWritebackPaths.forEach(metadataBackend::invalidateAfterExternalMutation)
+            val fileSystem = LinuxNextcloudVirtualFileSystem(metadataBackend)
             try {
                 fileSystem.mountAt(mountPoint.toPath())
                 linuxVirtualFileSystem = fileSystem
+                linuxVirtualMetadataBackend = metadataBackend
                 linuxVirtualFileMountIdentity = accountId
                 linuxVirtualFileFailure = null
                 preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), true)
             } catch (failure: Throwable) {
+                runCatching(fileSystem::unmount).onFailure {
+                    runCatching(metadataBackend::close)
+                }
                 linuxVirtualFileFailure = failure.message ?: "Unknown FUSE mount failure"
+                recordVirtualFileFailure(
+                    operation = "fuse.activation",
+                    accountId = accountId,
+                    root = mountPoint.toPath(),
+                    failure = failure,
+                )
                 throw failure
             }
         }
         VirtualFileStorageActionResult.Completed(
-            "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint().absolutePath}.",
+            "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
         )
     }
 
@@ -763,6 +2185,7 @@ class DesktopNextcloudServices(
         synchronized(virtualFileProviderLock) {
             linuxVirtualFileSystem?.unmount()
             linuxVirtualFileSystem = null
+            linuxVirtualMetadataBackend = null
             linuxVirtualFileMountIdentity = null
             linuxVirtualFileFailure = null
             windowsCloudFilesProvider?.close()
@@ -783,15 +2206,433 @@ class DesktopNextcloudServices(
         )
     }
 
-    override fun close() {
-        serviceScope.cancel()
+    override suspend fun acknowledgeVirtualFileProviderRecovery(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isWindowsDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "A Windows Cloud Files recovery notice is not available on this platform.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        acknowledgeWindowsCloudFilesPreservedRoot(preferences, accountId)
+        VirtualFileStorageActionResult.Completed(
+            "Recovery notice dismissed. The preserved local folder and its files were not deleted.",
+        )
+    }
+
+    override suspend fun chooseVirtualFileProviderParent(initialParentPath: String?): String? =
+        withContext(Dispatchers.IO) {
+            val selectedFile = invokeOnSwingEventThread {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Choose where nati.ve appears"
+                    fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                    isAcceptAllFileFilterUsed = false
+                    initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let {
+                        currentDirectory = it
+                    }
+                }
+                if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                    chooser.selectedFile
+                } else {
+                    null
+                }
+            }
+            val selected = selectedFile?.toPath()?.toAbsolutePath()?.normalize()
+                ?: return@withContext null
+            require(Files.isDirectory(selected, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(selected)) {
+                "Choose a regular local drive or folder, not a symbolic link."
+            }
+            VirtualFileProviderLocation(selected.toString(), "Nextcloud Native").parentPath
+        }
+
+    override suspend fun chooseVirtualFileCacheLocation(initialPath: String?): String? =
+        withContext(Dispatchers.IO) {
+            val selectedFile = invokeOnSwingEventThread {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Choose a virtual-file cache folder"
+                    fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                    isAcceptAllFileFilterUsed = false
+                    initialPath?.let(::File)?.takeIf(File::isDirectory)?.let { currentDirectory = it }
+                }
+                if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+            }
+            val selected = selectedFile?.toPath()?.toAbsolutePath()?.normalize() ?: return@withContext null
+            validateDesktopVirtualFileCacheTierPath(selected.toString()).toString()
+        }
+
+    override suspend fun saveVirtualFileCacheTiers(
+        session: NextcloudSession,
+        userId: String,
+        configuration: VirtualFileCacheTierConfiguration,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Tiered virtual-file cache locations are currently available on Linux.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
         synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
-            linuxVirtualFileSystem = null
-            linuxVirtualFileMountIdentity = null
-            runCatching { windowsCloudFilesProvider?.close() }
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
+            if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Disconnect the file-manager integration before changing cache drives.",
+                )
+            }
+            val primary = validateDesktopVirtualFileCacheTierPath(configuration.primaryPath)
+            val overflow = configuration.overflowPath?.let(::validateDesktopVirtualFileCacheTierPath)
+            if (
+                runCatching {
+                    encodeDesktopVirtualFilePrimaryPreference(
+                        primary.toString(),
+                        "00000000-0000-0000-0000-000000000000",
+                    )
+                }.isFailure
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "The selected primary cache path is too long.",
+                )
+            }
+            if (
+                overflow != null &&
+                runCatching {
+                    encodeDesktopVirtualFileOverflowPreference(
+                        overflow.toString(),
+                        "00000000-0000-0000-0000-000000000000",
+                    )
+                }.isFailure
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "The selected overflow cache path is too long.",
+                )
+            }
+            if (overflow != null && desktopVirtualFileCacheTierPathsOverlap(primary, overflow)) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Choose separate, non-nested folders for the primary and overflow caches.",
+                )
+            }
+            val mountPoint = desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()
+                .toAbsolutePath().normalize()
+            if (
+                desktopVirtualFileCacheTierPathsOverlap(primary, mountPoint) ||
+                overflow != null && desktopVirtualFileCacheTierPathsOverlap(overflow, mountPoint)
+            ) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Cache folders must stay outside the visible virtual-files folder.",
+                )
+            }
+            val currentTiers = desktopVirtualFileCacheTiers(preferences, accountId)
+            val currentConfiguration = currentTiers.configuration
+            val currentCache = virtualRangeCache(accountId)
+            val normalizedOverflow = overflow?.toString()
+            val primaryChanges = primary.toString() != currentConfiguration.primaryPath
+            val overflowChanges = normalizedOverflow != currentConfiguration.overflowPath
+            if (!primaryChanges && !overflowChanges) {
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    "The virtual-file cache already uses these locations.",
+                )
+            }
+            if (!virtualFileCacheTierMutations.add(accountId)) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "A virtual-file cache location change is already in progress.",
+                )
+            }
+            try {
+                val hydrationActive = synchronized(virtualFolderHydrationJobs) {
+                    virtualFolderHydrationJobs.any { (key, job) ->
+                        key.startsWith("$accountId\u0000") && job.occupiesVirtualFolderHydrationSlot()
+                    }
+                }
+                if (hydrationActive) {
+                    return@withContext VirtualFileStorageActionResult.Rejected(
+                        "Wait for kept-folder downloads to finish before changing cache drives.",
+                    )
+                }
+                if (overflowChanges) {
+                    runCatching { currentCache.consolidateOverflow(accountId) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not preserve the current overflow cache.",
+                        )
+                    }
+                }
+                val targetCache = runCatching {
+                    val primaryIdentity = if (!primaryChanges) currentTiers.primaryIdentity else null
+                    val overflowIdentity = overflow?.let { selected ->
+                        if (!overflowChanges) {
+                            currentTiers.overflowIdentity
+                                ?: DesktopVirtualRangeCache.initializeOverflowRootIdentity(selected.toFile())
+                        } else {
+                            DesktopVirtualRangeCache.initializeOverflowRootIdentity(selected.toFile())
+                        }
+                    }
+                    DesktopVirtualRangeCache(
+                        root = primary.toFile(),
+                        overflowRoot = overflow?.toFile(),
+                        initializePrimaryMarker = primaryChanges || primaryIdentity == null,
+                        expectedPrimaryIdentity = primaryIdentity,
+                        requirePrimaryIdentity = true,
+                        expectedOverflowIdentity = overflowIdentity,
+                        policy = fileReadCache::loadPolicy,
+                        createParentDirectories = false,
+                    )
+                }.getOrElse { failure ->
+                    return@withContext VirtualFileStorageActionResult.Rejected(
+                        failure.message ?: "Could not prepare the selected cache folders.",
+                    )
+                }
+                if (primaryChanges) {
+                    runCatching { currentCache.copyPrimaryAccountTo(accountId, targetCache) }.getOrElse { failure ->
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            failure.message ?: "Could not move the primary cache safely.",
+                        )
+                    }
+                }
+                preferences.put(
+                    virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                    encodeDesktopVirtualFilePrimaryPreference(
+                        primary.toString(),
+                        requireNotNull(targetCache.primaryIdentity()),
+                    ),
+                )
+                val overflowKey = virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId)
+                if (overflow == null) {
+                    preferences.remove(overflowKey)
+                } else {
+                    preferences.put(
+                        overflowKey,
+                        encodeDesktopVirtualFileOverflowPreference(
+                            overflow.toString(),
+                            requireNotNull(targetCache.overflowIdentity()),
+                        ),
+                    )
+                }
+                preferences.flush()
+                synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
+                if (primaryChanges) runCatching { currentCache.removeCopiedPrimaryAccount(accountId) }
+                VirtualFileStorageActionResult.Completed(
+                    if (overflow == null) {
+                        "Primary virtual-file cache saved. Overflow storage is off."
+                    } else {
+                        "Primary and overflow virtual-file cache locations saved."
+                    },
+                )
+            } finally {
+                virtualFileCacheTierMutations.remove(accountId)
+            }
+        }
+    }
+
+    override suspend fun saveVirtualFileProviderLocation(
+        session: NextcloudSession,
+        userId: String,
+        location: VirtualFileProviderLocation,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Changing the system virtual-file location is not available on this desktop platform yet.",
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        synchronized(virtualFileProviderLock) {
+            if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    "Disconnect the file-manager integration before changing its location.",
+                )
+            }
+            val target = validateDesktopVirtualFileProviderLocation(location)
+            if (target == desktopLinuxVirtualFileMountPoint(preferences, accountId).toPath()) {
+                return@withContext VirtualFileStorageActionResult.Completed(
+                    virtualFileLocationActionMessage("Virtual files already use ", target.toString()),
+                )
+            }
+            val currentLocation = desktopVirtualFileProviderLocation(preferences, accountId)
+            val primaryCacheIsExplicit = preferences.get(
+                virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId),
+                null,
+            ) != null
+            if (!primaryCacheIsExplicit && desktopVirtualFileCacheRootChanges(currentLocation, target)) {
+                val currentCacheResult = runCatching { virtualRangeCache(accountId) }
+                val currentCache = currentCacheResult.getOrNull()
+                if (currentCache == null) {
+                    val currentParent = File(currentLocation.parentPath).toPath().toAbsolutePath().normalize()
+                    if (!hasInvalidDesktopVirtualFileCacheRoot(currentParent)) currentCacheResult.getOrThrow()
+                } else {
+                    currentCache.requireAvailable()
+                    if (
+                        currentCache.summary(accountId).cachedBytes > 0L ||
+                        currentCache.loadFolderRetention(accountId).rules.isNotEmpty()
+                    ) {
+                        return@withContext VirtualFileStorageActionResult.Rejected(
+                            "Make kept folders online-only and free disposable content before moving the storage drive.",
+                        )
+                    }
+                }
+            }
+            preferences.put(virtualFileProviderRootPreferenceKey(accountId), target.toString())
+            synchronized(virtualRangeCaches) { virtualRangeCaches.remove(accountId) }
+            VirtualFileStorageActionResult.Completed(
+                virtualFileLocationActionMessage("Virtual files will appear at ", target.toString()),
+            )
+        }
+    }
+
+    override suspend fun setVirtualFolderRetention(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+        retention: VirtualFolderRetention,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Selective virtual folders are not available on this desktop platform yet.",
+            )
+        }
+        virtualFolderRetentionMutex.withLock {
+            val normalized = FileOfflineKey("account", relativePath).relativePath
+            if (retention == VirtualFolderRetention.KeepOnDevice) {
+                val selected = DesktopFileSyncRemoteTree(session, userId, "").resolve(normalized)
+                if (selected == null || !selected.isDirectory) {
+                    return@withLock VirtualFileStorageActionResult.Rejected("Choose an existing Nextcloud folder.")
+                }
+            }
+            val accountId = desktopFileCacheAccountId(session)
+            val cache = virtualRangeCache(accountId)
+            val currentRetention = cache.loadFolderRetention(accountId)
+            if (
+                retention == VirtualFolderRetention.KeepOnDevice &&
+                currentRetention.retentionFor(normalized) == VirtualFolderRetention.KeepOnDevice &&
+                currentRetention.rules.none { rule -> rule.relativePath == normalized }
+            ) {
+                return@withLock VirtualFileStorageActionResult.Completed(
+                    "${normalized.substringAfterLast('/')} is already covered by a kept parent folder.",
+                )
+            }
+            cancelAllVirtualFolderHydration(accountId).forEach { job -> job.join() }
+            synchronized(virtualFolderMutationLock) {
+                cache.setFolderRetention(accountId, normalized, retention)
+            }
+            cancelAllVirtualFolderHydration(accountId).forEach { job -> job.join() }
+            val nextRetention = cache.loadFolderRetention(accountId)
+            val retainedJobKeys = nextRetention.rules.asSequence()
+                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                .mapTo(hashSetOf()) { rule -> "$accountId\u0000${rule.relativePath}" }
+            val accountJobPrefix = "$accountId\u0000"
+            synchronized(virtualFolderMutationLock) {
+                virtualFolderMutationGenerationsByJob.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+                virtualFolderCompletedGenerations.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+                virtualFolderRetryAtEpochMillis.keys.removeIf { key ->
+                    key.startsWith(accountJobPrefix) && key !in retainedJobKeys
+                }
+            }
+            val result = if (retention == VirtualFolderRetention.KeepOnDevice) {
+                val retainedRoot = checkNotNull(nextRetention.keepOnDeviceRootFor(normalized)) {
+                    "The selected folder did not resolve to a retained root."
+                }
+                synchronized(virtualFolderMutationLock) {
+                    virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$retainedRoot")
+                }
+                cache.setFolderHydrationStatus(
+                    accountId,
+                    VirtualFolderHydrationStatus(retainedRoot, VirtualFolderHydrationPhase.Queued),
+                )
+                VirtualFileStorageActionResult.Completed(
+                    "${normalized.substringAfterLast('/')} was selected for offline use. " +
+                        "Downloading continues in the background.",
+                )
+            } else {
+                synchronized(virtualFolderMutationLock) {
+                    val key = "$accountId\u0000$normalized"
+                    virtualFolderRetryAtEpochMillis.remove(key)
+                    virtualFolderMutationGenerationsByJob.remove(key)
+                    virtualFolderCompletedGenerations.remove(key)
+                }
+                val protected = defaultDesktopLinuxWritebackStore(session).pendingWritebacks()
+                    .mapTo(hashSetOf()) { writeback -> writeback.path }
+                val freed = cache.dehydrateFolder(accountId, normalized, protected)
+                VirtualFileStorageActionResult.Completed(
+                    "${normalized.substringAfterLast('/')} is online-only. Safe local content was released.",
+                    freedBytes = freed,
+                )
+            }
+            nextRetention.rules.asSequence()
+                .filter { rule -> rule.retention == VirtualFolderRetention.KeepOnDevice }
+                .forEach { rule ->
+                    scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, cache)
+                }
+            result
+        }
+    }
+
+    override suspend fun retryVirtualFolderHydration(
+        session: NextcloudSession,
+        userId: String,
+        relativePath: String,
+    ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        if (!isLinuxDesktop()) {
+            return@withContext VirtualFileStorageActionResult.Unsupported(
+                "Selective virtual folders are not available on this desktop platform yet.",
+            )
+        }
+        val normalized = FileOfflineKey("account", relativePath).relativePath
+        val accountId = desktopFileCacheAccountId(session)
+        val cache = virtualRangeCache(accountId)
+        runCatching { cache.retryFolderHydration(accountId, normalized) }
+            .getOrElse { failure ->
+                return@withContext VirtualFileStorageActionResult.Rejected(
+                    failure.message ?: "This folder is no longer selected for offline use.",
+                )
+            }
+        synchronized(virtualFolderMutationLock) {
+            virtualFolderRetryAtEpochMillis.remove("$accountId\u0000$normalized")
+        }
+        scheduleVirtualFolderHydration(session, userId, normalized, accountId, cache)
+        VirtualFileStorageActionResult.Completed(
+            "${normalized.substringAfterLast('/')} will retry downloading in the background.",
+        )
+    }
+
+    override fun close() {
+        val rangeSessions = synchronized(fileRangeSessionLock) {
+            sessionClearing = true
+            activeFileRangeSessions.toList()
+        }
+        serviceScope.cancel()
+        rangeSessions.forEach { source -> runCatching(source::close) }
+        synchronized(virtualRangeCaches) {
+            virtualRangeCaches.values.forEach { cache -> runCatching(cache::flushAccessTimes) }
+        }
+        val providersToClose = synchronized(virtualFileProviderLock) {
+            (linuxVirtualFileSystem to windowsCloudFilesProvider).also {
+                linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
+                linuxVirtualFileMountIdentity = null
+                windowsCloudFilesProvider = null
+                windowsCloudFilesIdentity = null
+            }
+        }
+        // A retained-metadata persistence callback can briefly enter virtualFileProviderLock.
+        // Closing its backend while holding the same lock reverses that order and deadlocks.
+        runCatching { providersToClose.first?.unmount() }
+        runCatching { providersToClose.second?.close() }
+        supportIntake.close()
+        supportDiagnostics.close()
+        if (ownsTemporarySupportIntakeRoot) resolvedSupportIntakeRoot.deleteRecursively()
+        if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
+    }
+
+    private fun invalidateDesktopFileMetadata(accountId: String, path: String) {
+        synchronized(virtualFileProviderLock) {
+            val mountedBackend = linuxVirtualMetadataBackend
+                ?.takeIf { linuxVirtualFileMountIdentity == accountId }
+            if (mountedBackend != null) {
+                mountedBackend.invalidateAfterExternalMutation(path)
+            } else {
+                fileReadCache.invalidate(accountId, path)
+            }
         }
     }
 
@@ -802,9 +2643,22 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): FileSyncCenterSnapshot = withContext(Dispatchers.IO) {
-        val center = fileSyncEngine.loadCenter(session)
+        val center = loadDesktopFileSyncCenter(session)
         publishFileSyncTraySnapshot(center, fileSyncEngine.loadTrayActivities(session))
         center
+    }
+
+    private suspend fun loadDesktopFileSyncCenter(session: NextcloudSession): FileSyncCenterSnapshot {
+        val runtimeConditions = desktopFileSyncRuntimeConditions()
+        return fileSyncEngine.loadCenter(
+            session = session,
+            runState = if (isFileSyncPaused()) {
+                FileSyncPairRunState.Paused
+            } else {
+                FileSyncPairRunState.Active
+            },
+            networkState = runtimeConditions::networkState,
+        )
     }
 
     override suspend fun addFileSyncPair(
@@ -814,10 +2668,18 @@ class DesktopNextcloudServices(
         remoteRootPath: String,
         configuration: FileSyncConfiguration,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration).also {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("local_root", localRoot.localRootId, SupportDiagnosticValuePrivacy.LocalPath),
+            SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-add", diagnosticFields) {
+            fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.pair-add", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
+                    loadDesktopFileSyncCenter(session),
                     fileSyncEngine.loadTrayActivities(session),
                 )
             }
@@ -829,34 +2691,41 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-            if (isFileSyncPaused()) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                "Desktop syncing is paused. Resume it from the system tray first.",
-                )
-            }
-            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-                phase = DesktopFileSyncTrayPhase.Syncing,
-                message = "Checking folder changes",
-            )
-            try {
-                fileSyncEngine.runPair(
-                    session,
-                    userId,
-                    pairId,
-                    onProgress = ::publishFileSyncProgress,
-                    shouldContinue = { !isFileSyncPaused() },
-                    resetExhaustedFailures = true,
-                )
-            } finally {
-                runCatching {
-                    publishFileSyncTraySnapshot(
-                        fileSyncEngine.loadCenter(session),
-                        fileSyncEngine.loadTrayActivities(session),
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Checking folder changes",
+                )
+                try {
+                    fileSyncEngine.runPair(
+                        session,
+                        userId,
+                        pairId,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        resetExhaustedFailures = true,
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
-        }
+        }.also { result -> recordDesktopFileSyncResult(accountId, "sync.pair-run", diagnosticFields, result) }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -866,34 +2735,95 @@ class DesktopNextcloudServices(
         workId: Long,
         choice: FileSyncDecisionChoice,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-            if (isFileSyncPaused()) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                "Desktop syncing is paused. Resume it from the system tray first.",
-                )
-            }
-            mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-                phase = DesktopFileSyncTrayPhase.Syncing,
-                message = "Resolving sync conflict",
-            )
-            try {
-                fileSyncEngine.resolveConflictAndRun(
-                    session,
-                    userId,
-                    pairId,
-                    workId,
-                    choice,
-                    onProgress = ::publishFileSyncProgress,
-                    shouldContinue = { !isFileSyncPaused() },
-                )
-            } finally {
-                runCatching {
-                    publishFileSyncTraySnapshot(
-                        fileSyncEngine.loadCenter(session),
-                        fileSyncEngine.loadTrayActivities(session),
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft(
+                "work",
+                workId.toString(),
+                SupportDiagnosticValuePrivacy.Identifier,
+            ),
+            SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Resolving sync conflict",
+                )
+                try {
+                    fileSyncEngine.resolveConflictAndRun(
+                        session,
+                        userId,
+                        pairId,
+                        workId,
+                        choice,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve", diagnosticFields, result)
+        }
+    }
+
+    override suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
+                    )
+                }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Resolving ${resolutions.size} sync conflicts",
+                )
+                try {
+                    fileSyncEngine.resolveConflictsAndRun(
+                        session = session,
+                        userId = userId,
+                        pairId = pairId,
+                        resolutions = resolutions,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
+            }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve-batch", diagnosticFields, result)
         }
     }
 
@@ -902,10 +2832,17 @@ class DesktopNextcloudServices(
         userId: String,
         pairId: String,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncEngine.removePair(session, pairId).also {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
+            fileSyncEngine.removePair(session, userId, pairId)
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
                 publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
+                    loadDesktopFileSyncCenter(session),
                     fileSyncEngine.loadTrayActivities(session),
                 )
             }
@@ -916,12 +2853,33 @@ class DesktopNextcloudServices(
 
     override val supportsStartOnLogin: Boolean = true
 
-    override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, true)
+    override fun loadStartOnLoginPreference(): Boolean = preferences.getBoolean(KEY_START_ON_LOGIN, false)
 
     override fun saveStartOnLoginPreference(enabled: Boolean): String? {
-        val result = startOnLoginController.configure(enabled)
-        if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
-        return result.message.takeUnless { result.configured }
+        return runCatching {
+            val result = startOnLoginController.configure(enabled)
+            if (result.configured) preferences.putBoolean(KEY_START_ON_LOGIN, enabled)
+            result.message.takeUnless { result.configured }
+        }.getOrElse { failure ->
+            failure.message ?: "Start on login could not be updated."
+        }
+    }
+
+    override val supportsKeepRunningInBackground: Boolean = true
+
+    override fun loadKeepRunningInBackgroundPreference(): Boolean =
+        preferences.getBoolean(KEY_KEEP_RUNNING_IN_BACKGROUND, true)
+
+    override fun saveKeepRunningInBackgroundPreference(enabled: Boolean) {
+        preferences.putBoolean(KEY_KEEP_RUNNING_IN_BACKGROUND, enabled)
+        onKeepRunningInBackgroundChanged(enabled)
+    }
+
+    private fun restoreConfirmedStartOnLoginRegistration() {
+        val confirmedPreference = preferences.get(KEY_START_ON_LOGIN, null)
+        runCatching {
+            startOnLoginController.configure(confirmedPreference?.toBooleanStrictOrNull() == true)
+        }
     }
 
     fun setFileSyncPaused(paused: Boolean) {
@@ -940,7 +2898,6 @@ class DesktopNextcloudServices(
         if (!paused) {
             serviceScope.launch {
                 runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Resume) }
-                    .onFailure(::publishBackgroundFileSyncFailure)
             }
         }
     }
@@ -948,7 +2905,7 @@ class DesktopNextcloudServices(
     suspend fun refreshFileSyncTraySnapshot() = withContext(Dispatchers.IO) {
         val session = loadSession() ?: return@withContext
         publishFileSyncTraySnapshot(
-            fileSyncEngine.loadCenter(session),
+            loadDesktopFileSyncCenter(session),
             fileSyncEngine.loadTrayActivities(session),
         )
     }
@@ -959,82 +2916,92 @@ class DesktopNextcloudServices(
     private suspend fun syncAllFileSyncPairs(
         source: DesktopFileSyncRunSource,
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
-        fileSyncRunLock.withLock {
-        if (isFileSyncPaused()) {
-            return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
-        }
-        val session = loadSession()
-            ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
-        val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
-            return@withLock FileSyncCenterActionResult.Rejected(
-                failure.message ?: "Could not load the signed-in account.",
-            )
-        }
-        val initial = fileSyncEngine.loadCenter(session)
-        if (initial.pairs.isEmpty()) {
-            publishFileSyncTraySnapshot(initial, emptyList())
-            return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
-        }
-        mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
-            phase = DesktopFileSyncTrayPhase.Syncing,
-            message = if (source == DesktopFileSyncRunSource.Background) {
-                "Checking for changes"
-            } else {
-                "Syncing all folders"
-            },
-            accountLabel = session.loginName,
-        )
+        var diagnosticAccountId: String? = null
         try {
-            var failures = 0
-            var waitingForConditions = 0
-            initial.pairs.forEach { pair ->
-                if (isFileSyncPaused()) return@forEach
-                fun runtimeAllowsPair(): Boolean =
-                    source == DesktopFileSyncRunSource.Tray ||
-                        desktopFileSyncRuntimeConditions().allows(pair.configuration)
-                if (!runtimeAllowsPair()) {
-                    waitingForConditions += 1
-                    return@forEach
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
                 }
-                val result = try {
-                    fileSyncEngine.runPair(
-                        session,
-                        userId,
-                        pair.id,
-                        onProgress = ::publishFileSyncProgress,
-                        shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
-                        resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                val session = loadSession()
+                    ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+                val accountId = desktopFileCacheAccountId(session)
+                diagnosticAccountId = accountId
+                val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        failure.message ?: "Could not load the signed-in account.",
                     )
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (_: Throwable) {
-                    failures += 1
-                    return@forEach
                 }
-                if (result is FileSyncCenterActionResult.Rejected) failures += 1
-                if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
-                    waitingForConditions += 1
+                val initial = loadDesktopFileSyncCenter(session)
+                if (initial.pairs.isEmpty()) {
+                    publishFileSyncTraySnapshot(initial, emptyList())
+                    return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
                 }
-            }
-            if (failures == 0) {
-                FileSyncCenterActionResult.Completed(
-                    if (waitingForConditions == 0) {
-                        "All desktop sync folders were checked."
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = if (source == DesktopFileSyncRunSource.Background) {
+                        "Checking for changes"
                     } else {
-                        "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
+                        "Syncing all folders"
                     },
+                    accountLabel = session.loginName,
                 )
-            } else {
-                FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
+                try {
+                    var failures = 0
+                    var stopped = 0
+                    var waitingForConditions = 0
+                    initial.pairs.forEach { pair ->
+                        if (isFileSyncPaused()) return@forEach
+                        fun runtimeAllowsPair(): Boolean =
+                            source == DesktopFileSyncRunSource.Tray ||
+                                desktopFileSyncRuntimeConditions().allows(pair.configuration)
+                        if (!runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                            return@forEach
+                        }
+                        val result = try {
+                            fileSyncEngine.runPair(
+                                session,
+                                userId,
+                                pair.id,
+                                onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                                onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                                shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
+                                resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
+                            )
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (_: Throwable) {
+                            failures += 1
+                            return@forEach
+                        }
+                        if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                        if (result is FileSyncCenterActionResult.Stopped) stopped += 1
+                        if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
+                            waitingForConditions += 1
+                        }
+                    }
+                    desktopFileSyncBatchResult(
+                        failures,
+                        stopped,
+                        waitingForConditions,
+                        isFileSyncPaused(),
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
             }
-        } finally {
-            runCatching {
-                publishFileSyncTraySnapshot(
-                    fileSyncEngine.loadCenter(session),
-                    fileSyncEngine.loadTrayActivities(session),
-                )
-            }
-        }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            publishFileSyncRunFailure(diagnosticAccountId, source, failure)
+            FileSyncCenterActionResult.Rejected(
+                failure.message ?: "The desktop sync check failed.",
+            )
         }
     }
 
@@ -1043,18 +3010,19 @@ class DesktopNextcloudServices(
         policy: VirtualFileCachePolicy,
     ) {
         fileReadCache.freeUpVirtualFiles(accountId, requestedBytesToFree = 0L)
-        virtualRangeCache.freeUp(accountId, requestedBytes = 0L)
         synchronized(virtualFileProviderLock) {
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.enforcePolicy(policy)
         }
         if (!policy.automaticCleanup) return
+        virtualRangeCache(accountId).freeUp(accountId, 0L)
         val maximumBytes = policy.maximumCacheBytes ?: return
         fun currentExcess(): Long {
             val windows = windowsVirtualFileSummary(accountId)
+            val ranges = virtualRangeCache(accountId).summary(accountId)
             return combinedAutomaticCacheExcess(
                 maximumBytes,
                 fileReadCache.virtualFileSummary(accountId).cachedBytes,
-                virtualRangeCache.summary(accountId).cachedBytes,
+                ranges.primaryCachedBytes - ranges.primaryPinnedBytes,
                 windows?.cachedBytes ?: 0L,
                 windows?.pinnedBytes ?: 0L,
             )
@@ -1065,7 +3033,7 @@ class DesktopNextcloudServices(
             windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }?.freeUpSpace(excess)
         }
         excess = currentExcess()
-        if (excess > 0L) virtualRangeCache.freeUp(accountId, excess)
+        if (excess > 0L) virtualRangeCache(accountId).relievePrimaryPressure(accountId, excess)
         excess = currentExcess()
         if (excess > 0L) fileReadCache.freeUpVirtualFiles(accountId, excess)
     }
@@ -1079,7 +3047,7 @@ class DesktopNextcloudServices(
         center: FileSyncCenterSnapshot,
         durableActivities: List<DesktopFileSyncTrayActivity> = emptyList(),
     ) {
-        val conflicts = center.pairs.sumOf { it.conflicts.size }
+        val conflicts = center.pairs.sumOf(FileSyncPairSummary::conflictCount)
         val failed = center.pairs.sumOf(FileSyncPairSummary::failedCount)
         val paused = isFileSyncPaused()
         val recentCompleted = mutableFileSyncTraySnapshot.value.activities.filter {
@@ -1100,7 +3068,7 @@ class DesktopNextcloudServices(
             failedCount = failed,
             message = when {
                 paused -> "Sync is paused"
-                conflicts + failed > 0 -> "Open Nextcloud Native to review sync problems"
+                conflicts + failed > 0 -> "Open nati.ve to review sync problems"
                 else -> null
             },
             accountLabel = loadSession()?.loginName,
@@ -1110,7 +3078,10 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishFileSyncProgress(event: DesktopFileSyncProgressEvent) {
+    private fun publishFileSyncProgress(accountId: String, event: DesktopFileSyncProgressEvent) {
+        event.toSupportDiagnosticEventDraft()?.let { diagnostic ->
+            supportDiagnostics.recordForAccountIdentity(accountId, diagnostic)
+        }
         val current = mutableFileSyncTraySnapshot.value
         val phase = when (event.stage) {
             DesktopFileSyncProgressStage.Started -> event.operation.toTrayActivityPhase()
@@ -1149,7 +3120,27 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun publishBackgroundFileSyncFailure(failure: Throwable) {
+    private fun publishFileSyncRunDiagnostic(accountId: String, event: DesktopFileSyncRunDiagnosticEvent) {
+        supportDiagnostics.recordForAccountIdentity(accountId, event.toSupportDiagnosticEventDraft())
+    }
+
+    private fun publishFileSyncRunFailure(
+        accountId: String?,
+        source: DesktopFileSyncRunSource,
+        failure: Throwable,
+    ) {
+        val event = SupportDiagnosticEventDraft(
+            severity = SupportDiagnosticSeverity.Error,
+            component = SupportDiagnosticComponent.Sync,
+            operation = "sync.${source.name.lowercase()}-run",
+            outcome = "failed",
+            exception = failure.toSupportDiagnosticExceptionDraft(),
+        )
+        if (accountId == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(accountId, event)
+        }
         val current = mutableFileSyncTraySnapshot.value
         val message = failure.message
             ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
@@ -1160,6 +3151,81 @@ class DesktopNextcloudServices(
             failedCount = current.failedCount + 1,
             message = message,
             overallProgress = null,
+        )
+    }
+
+    private fun recordDesktopFileSyncResult(
+        accountId: String,
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft>,
+        result: FileSyncCenterActionResult,
+    ) {
+        val diagnostic = result.toFileSyncActionDiagnosticSummary()
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
+            SupportDiagnosticEventDraft(
+                severity = diagnostic.severity,
+                component = SupportDiagnosticComponent.Sync,
+                operation = operation,
+                outcome = diagnostic.outcome,
+                message = diagnostic.message,
+                fields = fields,
+            ),
+        )
+    }
+
+    private suspend fun <T> diagnoseDesktopSupportFailure(
+        accountId: String,
+        operation: String,
+        fields: List<SupportDiagnosticFieldDraft>,
+        block: suspend () -> T,
+    ): T {
+        val started = System.nanoTime()
+        return try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            supportDiagnostics.recordForAccountIdentity(
+                accountId,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Sync,
+                    operation = operation,
+                    outcome = "failed",
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = fields,
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
+    }
+
+    private fun recordVirtualFileFailure(
+        operation: String,
+        accountId: String,
+        root: Path,
+        failure: Throwable,
+    ) {
+        supportDiagnostics.recordForAccountIdentity(
+            accountId,
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.VirtualFiles,
+                operation = operation,
+                outcome = "failed",
+                code = windowsCloudFilesDiagnosticCode(failure),
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("account", accountId, SupportDiagnosticValuePrivacy.Identifier),
+                    SupportDiagnosticFieldDraft(
+                        "provider_root",
+                        root.toAbsolutePath().toString(),
+                        SupportDiagnosticValuePrivacy.LocalPath,
+                    ),
+                ),
+                exception = failure.toSupportDiagnosticExceptionDraft(),
+            ),
         )
     }
 
@@ -1218,7 +3284,7 @@ class DesktopNextcloudServices(
                 cached.readBytes().takeIf { publicContentSha256(it) == image.sha256 }
                     ?.let { return@withContext it }
             }
-            projectContentHttpClient.newCall(Request.Builder().url(image.url).get().build())
+            projectContentHttpClient.newCall(Request.Builder().url(canonicalProjectNewsImageRequestUrl(image.url)).get().build())
                 .execute().use { response ->
                     check(response.isSuccessful) {
                         "Project news image request failed (HTTP ${response.code})."
@@ -1262,10 +3328,64 @@ class DesktopNextcloudServices(
         channel: AndroidUpdateChannel,
         automatic: Boolean,
     ): AppUpdateCheckResult = withContext(Dispatchers.IO) {
-        if (automatic && !appUpdater.updatePreferences().automaticChecks) {
-            AppUpdateCheckResult.Unavailable(appUpdater.support())
-        } else {
-            appUpdater.checkForUpdate(channel)
+        val started = System.nanoTime()
+        try {
+            val result = if (automatic && !appUpdater.updatePreferences().automaticChecks) {
+                AppUpdateCheckResult.Unavailable(appUpdater.support())
+            } else {
+                appUpdater.checkForUpdate(channel)
+            }
+            when (result) {
+                is AppUpdateCheckResult.Available -> supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Info,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "available",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("release", result.release.versionName),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Failed -> supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.check",
+                        outcome = "failed",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        message = result.message,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                            SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                            SupportDiagnosticFieldDraft("retryable", result.retryable.toString()),
+                        ),
+                    ),
+                )
+                is AppUpdateCheckResult.Current,
+                is AppUpdateCheckResult.Unavailable,
+                -> Unit
+            }
+            result
+        } catch (failure: Throwable) {
+            supportDiagnostics.record(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Updates,
+                    operation = "updates.check",
+                    outcome = "failed",
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("channel", channel.name.lowercase()),
+                        SupportDiagnosticFieldDraft("automatic", automatic.toString()),
+                    ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
         }
     }
 
@@ -1273,9 +3393,120 @@ class DesktopNextcloudServices(
         appUpdater.observeInstallState()
 
     override suspend fun beginAppUpdate(release: AppUpdateRelease): AppUpdateInstallResult =
-        withContext(Dispatchers.IO) { appUpdater.beginUpdate(release) }
+        withContext(Dispatchers.IO) {
+            val started = System.nanoTime()
+            try {
+                val result = appUpdater.beginUpdate(release)
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = when (result) {
+                            AppUpdateInstallResult.ConfirmationOpened, AppUpdateInstallResult.Restarting,
+                            AppUpdateInstallResult.Installed,
+                            -> SupportDiagnosticSeverity.Info
+                            is AppUpdateInstallResult.Cancelled,
+                            is AppUpdateInstallResult.PermissionRequired,
+                            is AppUpdateInstallResult.Rejected,
+                            -> SupportDiagnosticSeverity.Warning
+                        },
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = result.diagnosticOutcome(),
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        message = when (result) {
+                            is AppUpdateInstallResult.PermissionRequired -> result.message
+                            is AppUpdateInstallResult.Rejected -> result.message
+                            else -> null
+                        },
+                        fields = buildList {
+                            add(SupportDiagnosticFieldDraft("release", release.versionName))
+                            if (result is AppUpdateInstallResult.Rejected) {
+                                add(SupportDiagnosticFieldDraft("reason", result.diagnosticCode))
+                            }
+                        },
+                    ),
+                )
+                result
+            } catch (failure: Throwable) {
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Updates,
+                        operation = "updates.install",
+                        outcome = "failed",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+        }
 
     override fun cancelAppUpdate(): Boolean = appUpdater.cancelUpdate()
+
+    override suspend fun loadSupportDiagnosticsSummary(): SupportDiagnosticsSummary =
+        supportDiagnostics.loadSummary()
+
+    override fun supportDiagnosticsRevisions() = supportDiagnostics.revisions()
+
+    override suspend fun exportSupportDiagnostics(
+        reproductionSteps: String,
+    ): SupportDiagnosticsExportResult = supportBundleExporter.export(
+        reproductionSteps = reproductionSteps,
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override fun supportDiagnosticsSubmissionStates() = supportIntake.states()
+
+    override suspend fun submitSupportDiagnostics(reproductionSteps: String) = supportIntake.submit(
+        reproductionSteps = reproductionSteps,
+        channel = appUpdateSupport().channel.name.lowercase(),
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
+
+    override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    override suspend fun deleteSubmittedSupportDiagnosticsReport(
+        recordId: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(recordId)
+
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        supportIntake.refreshCompletedReports()
+
+    override suspend fun sendSubmittedSupportDiagnosticsMessage(
+        recordId: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(recordId, message)
+    override suspend fun acknowledgeSubmittedSupportDiagnosticsReplyDelivery(recordId: String) = supportIntake.acknowledgeCompletedReportReplyDelivery(recordId)
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean =
+        supportIntake.markCompletedReportRead(recordId)
+
+    private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
+        listOf(
+            SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
+            SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
+            SupportDiagnosticFieldDraft("start_on_login_supported", supportsStartOnLogin.toString()),
+            SupportDiagnosticFieldDraft("virtual_files_supported", supportsVirtualFileStorage.toString()),
+            SupportDiagnosticFieldDraft(
+                "virtual_files_active",
+                (windowsCloudFilesProvider != null || linuxVirtualFileSystem != null).toString(),
+            ),
+            SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
+        )
+
+    override suspend fun clearSupportDiagnostics(): Boolean = withContext(Dispatchers.IO) {
+        supportDiagnostics.clear()
+    }
+
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
+        supportDiagnostics.record(event)
+    }
+
+    override fun registerSupportDiagnosticPrivateValue(value: String?) {
+        supportDiagnostics.registerPrivateValue(value)
+    }
 
     override fun loadLastOpenedAppId(): String = preferences.get(KEY_LAST_OPENED_APP, "files")
 
@@ -1283,62 +3514,356 @@ class DesktopNextcloudServices(
         preferences.put(KEY_LAST_OPENED_APP, appId)
     }
 
-    override fun loadSession(): NextcloudSession? {
-        val server = preferences.get(KEY_SERVER, null) ?: return null
-        val login = preferences.get(KEY_LOGIN, null) ?: return null
-        val password = secretStore.load(desktopSessionSecretReference(server, login))
-            ?.decodeToString()
-            ?.takeIf(String::isNotBlank)
-            ?: return null
-        return NextcloudSession(server, login, password)
+    override suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
+
+    override suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
+
+    override suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMutationRecovery.clear(accountScope, kind, expectedEncoded)
     }
 
-    override fun saveSession(session: NextcloudSession) {
-        secretStore.save(
-            reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-            username = session.loginName,
-            secret = session.appPassword.encodeToByteArray(),
+    override suspend fun loadCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        appId: String,
+    ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
+        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
+        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
+            return@withContext null
+        }
+        runCatching { target.readText() }
+            .getOrNull()
+            ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
+    }
+
+    override suspend fun saveCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        discovery: DynamicDescriptorDiscovery,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
+        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
+        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
+            "Could not create the dynamic contract cache."
+        }
+        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
+        temporary.outputStream().buffered().use { output ->
+            output.write(encoded.encodeToByteArray())
+            output.flush()
+        }
+        try {
+            Files.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        Unit
+    }
+
+    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
+        if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
+        return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
+    }
+
+    override suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = withContext(Dispatchers.IO) {
+        val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
+            ?: return@withContext null
+        if (!target.exists()) return@withContext null
+        if (pendingDynamicMutationDirectory.isDirectory) {
+            ensurePrivatePendingMutationDirectory(pendingDynamicMutationDirectory)
+        }
+        check(
+            Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong(),
+        ) {
+            "The pending mutation marker is unreadable."
+        }
+        setPrivatePendingMutationFilePermissions(target)
+        val encoded = runCatching { target.readText() }.getOrElse { failure ->
+            throw IllegalStateException("The pending mutation marker could not be read.", failure)
+        }
+        requireNotNull(decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)) {
+            "The pending mutation marker is invalid."
+        }
+    }
+
+    override suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = requireNotNull(
+            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+        ) { "The pending dynamic mutation is invalid." }
+        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+            "The pending dynamic mutation identity is invalid."
+        }
+        writePrivatePendingMutationFile(
+            directory = pendingDynamicMutationDirectory,
+            target = target,
+            bytes = encoded.encodeToByteArray(),
         )
-        preferences.put(KEY_SERVER, session.serverUrl)
-        preferences.put(KEY_LOGIN, session.loginName)
+        Unit
+    }
+
+    override suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = withContext(Dispatchers.IO) {
+        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        }
+        Unit
+    }
+
+    private fun pendingDynamicMutationFile(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): File? {
+        if (!appId.isSafePendingMutationId() || !actionId.isSafePendingMutationId()) return null
+        if (!targetRecordId.isSafePendingMutationId()) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$actionId\n$targetRecordId".encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return File(
+            pendingDynamicMutationDirectory,
+            "${desktopFileCacheAccountId(session)}-$appId-$digest.json",
+        )
+    }
+
+    override fun loadSession(): NextcloudSession? {
+        return sessionPublicationGuard.serialize {
+            val server = preferences.get(KEY_SERVER, null)
+            val login = preferences.get(KEY_LOGIN, null)
+            if (server == null || login == null) {
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+                return@serialize null
+            }
+            val password = secretStore.load(desktopSessionSecretReference(server, login))
+                ?.decodeToString()
+                ?.takeIf(String::isNotBlank)
+            if (password == null) {
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+                return@serialize null
+            }
+            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+            NextcloudSession(server, login, password).also { session ->
+                val accountIdentity = desktopFileCacheAccountId(session)
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            }
+        }
+    }
+
+    override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
+        sessionPublicationGuard.serialize {
+            listOf(session.serverUrl, session.loginName, session.appPassword)
+                .forEach(supportDiagnostics::registerPrivateValue)
+            try {
+                secretStore.save(
+                    reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+                    username = session.loginName,
+                    secret = session.appPassword.encodeToByteArray(),
+                )
+            } catch (failure: Throwable) {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "credentials.save",
+                        outcome = "failed",
+                        code = if (failure is DesktopSecretStoreUnavailableException) {
+                            "DESKTOP_SECRET_STORE_UNAVAILABLE"
+                        } else {
+                            "DESKTOP_SECRET_STORE_FAILED"
+                        },
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+            preferences.put(KEY_SERVER, session.serverUrl)
+            preferences.put(KEY_LOGIN, session.loginName)
+            val accountIdentity = desktopFileCacheAccountId(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
+        }
+        synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
 
-    override fun clearSession() {
-        synchronized(this) {
-            backgroundFileSyncJob?.cancel()
-            backgroundFileSyncJob = null
+    override suspend fun clearSession() = withContext(Dispatchers.IO) {
+        val userHome = File(System.getProperty("user.home"))
+        val rangeSessions = synchronized(fileRangeSessionLock) {
+            sessionClearing = true
+            activeFileRangeSessions.toList()
         }
-        synchronized(virtualFileProviderLock) {
-            runCatching { linuxVirtualFileSystem?.unmount() }
-            linuxVirtualFileSystem = null
-            linuxVirtualFileMountIdentity = null
-            linuxVirtualFileFailure = null
-            try {
-                if (windowsCloudFilesProvider != null) {
-                    windowsCloudFilesProvider?.removeSyncRoot()
-                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
-                } else if (isWindowsDesktop()) {
-                    unregisterWindowsCloudFilesRootForUninstall(preferences)
+        var cleared = false
+        try {
+            val accountId = desktopStoredSessionAccountId(preferences)
+            val syncJob = synchronized(this) {
+                val active = backgroundFileSyncJob
+                backgroundFileSyncJob = null
+                active
+            }
+            syncJob?.cancel()
+            val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
+            rangeSessions.forEach { source -> runCatching(source::close) }
+            hydrationJobs.forEach { job -> job.join() }
+            accountId?.let { clearedAccountId ->
+                val prefix = "$clearedAccountId\u0000"
+                synchronized(virtualFolderMutationLock) {
+                    virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
+                    virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
+                    virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
                 }
-                windowsCloudFilesProvider = null
-                windowsCloudFilesIdentity = null
-                windowsCloudFilesFailure = null
-            } catch (failure: Throwable) {
-                windowsCloudFilesFailure = failure.message ?: "Could not remove the Windows Cloud Files root."
-                throw failure
+            }
+            syncJob?.join()
+            synchronized(virtualFileProviderLock) {
+                linuxVirtualFileSystem?.unmount()
+                linuxVirtualFileSystem = null
+                linuxVirtualMetadataBackend = null
+                linuxVirtualFileMountIdentity = null
+                linuxVirtualFileFailure = null
+                val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
+                val provider = windowsCloudFilesProvider
+                try {
+                    if (provider != null) {
+                        provider.removeSyncRoot()
+                    } else if (isWindowsDesktop()) {
+                        unregisterWindowsCloudFilesRootForUninstall(preferences)
+                    }
+                    windowsCloudFilesFailure = null
+                } catch (failure: Throwable) {
+                    windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
+                    supportDiagnostics.record(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Error,
+                            component = SupportDiagnosticComponent.VirtualFiles,
+                            operation = "cloud-files.signout-cleanup",
+                            outcome = "failed",
+                            fields = accountId?.let {
+                                listOf(
+                                    SupportDiagnosticFieldDraft(
+                                        "account",
+                                        it,
+                                        SupportDiagnosticValuePrivacy.Identifier,
+                                    ),
+                                )
+                            }.orEmpty(),
+                            exception = failure.toSupportDiagnosticExceptionDraft(),
+                        ),
+                    )
+                } finally {
+                    runCatching { provider?.close() }
+                    windowsCloudFilesProvider = null
+                    windowsCloudFilesIdentity = null
+                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+                    accountId?.let {
+                        clearWindowsCloudFilesRootPreferences(
+                            preferences,
+                            it,
+                            desktopWindowsCloudFilesRoot(it, userHome).toPath(),
+                        )
+                        clearWindowsCloudFilesRootPreferences(
+                            preferences,
+                            it,
+                            desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
+                        )
+                    }
+                    if (isWindowsDesktop()) {
+                        val uninstallFailure = runCatching {
+                            unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
+                        }.exceptionOrNull()
+                        if (uninstallFailure != null) {
+                            windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
+                                uninstallFailure.message ?: windowsCloudFilesFailureMessage
+                            )
+                            supportDiagnostics.record(
+                                SupportDiagnosticEventDraft(
+                                    severity = SupportDiagnosticSeverity.Error,
+                                    component = SupportDiagnosticComponent.VirtualFiles,
+                                    operation = "cloud-files.signout-cleanup-retry",
+                                    outcome = "failed",
+                                    fields = accountId?.let {
+                                        listOf(
+                                            SupportDiagnosticFieldDraft(
+                                                "account",
+                                                it,
+                                                SupportDiagnosticValuePrivacy.Identifier,
+                                            ),
+                                        )
+                                    }.orEmpty(),
+                                    exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
+                phase = DesktopFileSyncTrayPhase.Idle,
+            )
+            val server = preferences.get(KEY_SERVER, null)
+            val login = preferences.get(KEY_LOGIN, null)
+            runCatching {
+                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
+            }.onFailure { failure ->
+                supportDiagnostics.record(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "credentials.clear",
+                        outcome = "failed",
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
+                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
+            }
+            sessionPublicationGuard.serialize {
+                preferences.remove(KEY_SERVER)
+                preferences.remove(KEY_LOGIN)
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+            }
+            cleared = true
+        } finally {
+            if (!cleared) {
+                synchronized(fileRangeSessionLock) { sessionClearing = false }
+                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
             }
         }
-        mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
-            phase = DesktopFileSyncTrayPhase.Idle,
-        )
-        val server = preferences.get(KEY_SERVER, null)
-        val login = preferences.get(KEY_LOGIN, null)
-        if (server != null && login != null) {
-            secretStore.clear(desktopSessionSecretReference(server, login))
-        }
-        preferences.remove(KEY_SERVER)
-        preferences.remove(KEY_LOGIN)
     }
 
     override suspend fun loadDeckCardDraft(
@@ -1358,12 +3883,38 @@ class DesktopNextcloudServices(
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
+        discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key)
+        deckCardDrafts.clear(session, key, discardUnreadable)
+    }
+    override suspend fun quarantineSubmittedDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.quarantineAfterSubmit(session, key)
+    }
+    override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
+        deckCardDrafts.discardAll()
+    }
+    override fun openExternalUrl(url: String) {
+        serviceScope.launch {
+            runCatching { openExternalUrlNow(url) }
+        }
     }
 
-    override fun openExternalUrl(url: String) {
-        Desktop.getDesktop().browse(URI(url))
+    override suspend fun openLoginUrl(url: String) = withContext(Dispatchers.IO) {
+        openExternalUrlNow(url)
+    }
+
+    private fun openExternalUrlNow(url: String) {
+        try {
+            externalUrlLauncher.open(url)
+        } catch (failure: DesktopExternalUrlLaunchException) {
+            runCatching {
+                recordSupportDiagnostic(desktopExternalUrlFailureDiagnostic(failure))
+            }
+            throw failure
+        }
     }
 
     override suspend fun handoffFileToExternalApp(
@@ -1373,8 +3924,19 @@ class DesktopNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
-            downloadFile(session, userId, file.path, maximumBytes)
+        return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
+            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                limitMessage = "The file exceeds the platform byte representation.",
+                requestHeaders = mapOf("If-Match" to expectedEtag),
+                handoffEtag = expectedEtag,
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -1394,32 +3956,17 @@ class DesktopNextcloudServices(
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val request = Request.Builder()
-                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
-                    .get()
-                    .header("Accept", "*/*")
-                    .header("OCS-APIRequest", "true")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                noRedirectHttpClient.newCall(request).execute().use { response ->
-                    check(response.isSuccessful) {
-                        "Opening the Deck attachment failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment is larger than the external handoff limit."
-                    }
-                    DesktopDetachedDownload(
-                        responseBody.byteStream().copyBoundedTo(output, maximumBytes),
-                    )
-                }
-            }
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                accept = "*/*",
+                requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -1431,30 +3978,76 @@ class DesktopNextcloudServices(
         true
     }.getOrDefault(false)
 
-    override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeServerUrl(serverUrl)
-        val response = request("POST", "$baseUrl/index.php/login/v2")
-        check(response.status in 200..299) { "Nextcloud Login Flow v2 failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        val poll = json.getJSONObject("poll")
-        LoginChallenge(poll.getString("endpoint"), poll.getString("token"), json.getString("login"))
-    }
-
-    override suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession? = withContext(Dispatchers.IO) {
+    override suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity,
+    ): LoginChallenge = withContext(Dispatchers.IO) {
+        val baseUrl = normalizeServerUrl(serverUrl, transportSecurity)
+        val effectiveTransport = loginTransportSecurity(baseUrl)
         val response = request(
             "POST",
-            challenge.pollEndpoint,
-            body = "token=" + encodeForm(challenge.token),
-            contentType = "application/x-www-form-urlencoded",
+            "$baseUrl/index.php/login/v2",
+            maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
         )
-        if (response.status == 404) return@withContext null
-        check(response.status in 200..299) { "Login approval failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        NextcloudSession(
-            normalizeServerUrl(json.getString("server")),
-            json.getString("loginName"),
-            json.getString("appPassword"),
+        val interpretation = interpretLoginChallengeHttpResponse(
+            status = response.status,
+            body = response.text,
+            enteredServerUrl = baseUrl,
+            transportSecurity = effectiveTransport,
         )
+        recordSupportDiagnostic(interpretation.toStartedDiagnostic())
+        interpretation.challenge
+    }
+
+    override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
+        var networkFailure: JvmNetworkFailureDiagnostic? = null
+        val execution = executeLoginPollHttp(
+            challenge = challenge,
+            fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
+            poll = { endpoint ->
+                networkFailure = null
+                request(
+                    "POST",
+                    endpoint,
+                    body = "token=" + encodeForm(challenge.token),
+                    contentType = "application/x-www-form-urlencoded",
+                    client = loginPollHttpClient,
+                    maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
+                    diagnosticIgnoredHttpStatuses = setOf(404),
+                    onNetworkFailure = { networkFailure = it },
+                ).let { LoginPollHttpResponse(it.status, it.text) }
+            },
+            networkFailure = { networkFailure },
+        )
+        execution.selectedFallbackReason?.let { reason ->
+            loginPollFallbackTokens += challenge.token
+            runCatching {
+                recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason, execution.interpretation.result))
+            }
+        }
+        val interpretation = execution.interpretation
+        val result = interpretation.result
+        when (result) {
+            LoginPollResult.Pending -> {
+                if (loginPollPendingTokens.add(challenge.token)) {
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
+                }
+            }
+            is LoginPollResult.Approved -> {
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
+            }
+            else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+        }
+        result
+    }
+
+    override fun finishLoginPolling(challenge: LoginChallenge) {
+        loginPollFallbackTokens -= challenge.token
+        loginPollPendingTokens -= challenge.token
     }
 
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
@@ -1476,6 +4069,7 @@ class DesktopNextcloudServices(
                 theming?.optString("name")?.takeIf(String::isNotBlank),
                 theming?.optString("color")?.takeIf(String::isNotBlank),
                 navigation?.toAppEntries() ?: capabilities.toCapabilityEntries(),
+                navigation != null,
                 discoverRecognizeBridge(capabilities.toString()),
                 parseNextcloudFileSharingCapabilities(capabilities.toString()),
             )
@@ -1493,6 +4087,7 @@ class DesktopNextcloudServices(
         path: String,
     ): NextcloudFileListing = withContext(Dispatchers.IO) {
         val accountId = desktopFileCacheAccountId(session)
+        val requestStartedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         try {
             val response = request(
                 "PROPFIND", buildNextcloudFileUrl(session.serverUrl, userId, path), session, DAV_PROPERTIES,
@@ -1501,7 +4096,14 @@ class DesktopNextcloudServices(
             if (response.status == 207) {
                 val files = parseDavFiles(response.body, userId).drop(1)
                     .sortedWith(compareByDescending<NextcloudFile> { it.isDirectory }.thenBy { it.name.lowercase() })
-                runCatching { fileReadCache.storeListing(accountId, path, files) }
+                runCatching {
+                    fileReadCache.storeListingUnlessNewer(
+                        accountId = accountId,
+                        path = path,
+                        files = files,
+                        fetchedAtEpochMillis = requestStartedAtEpochMillis,
+                    )
+                }
                 NextcloudFileListing(files, NextcloudFileListingSource.Network)
             } else {
                 if (response.status >= 500) {
@@ -1526,6 +4128,89 @@ class DesktopNextcloudServices(
         fileReadCache.cachedListing(desktopFileCacheAccountId(session), path)?.let {
             NextcloudFileListing(it, NextcloudFileListingSource.Cache)
         }
+    }
+
+    override suspend fun searchFiles(
+        session: NextcloudSession,
+        userId: String,
+        query: String,
+        scopePath: String,
+        maximumResults: Int,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val body = buildFileSearchDavRequest(userId, scopePath, query, maximumResults)
+        val response = request(
+            method = "SEARCH",
+            url = session.serverUrl.trimEnd('/') + "/remote.php/dav/",
+            session = session,
+            body = body,
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileSearchHttpException(response.status)
+        parseDavFiles(response.body, userId)
+            .distinctBy(NextcloudFile::path)
+            .take(maximumResults)
+    }
+
+    override suspend fun listFavoriteFiles(
+        session: NextcloudSession,
+        userId: String,
+        scopePath: String,
+    ): List<NextcloudFile> = withContext(Dispatchers.IO) {
+        val response = request(
+            method = "REPORT",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, scopePath),
+            session = session,
+            body = buildFavoriteFilesDavReport(),
+            contentType = "application/xml; charset=utf-8",
+            headers = mapOf("Accept" to "application/xml"),
+        )
+        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        parseDavFiles(response.body, userId).distinctBy(NextcloudFile::path)
+    }
+
+    override suspend fun setFileFavorite(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        favorite: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val safePath = requireSafeFilePath(file.path, allowRoot = false)
+        val expectedEtag = file.etag?.trim().orEmpty()
+        require(expectedEtag.isNotEmpty()) { "Refresh the folder before changing favorites." }
+        val headers = buildMap {
+            put("Accept", "application/xml")
+            putAll(
+                FileWebDavMutationSpec(
+                    method = "PROPPATCH",
+                    sourcePath = safePath,
+                    destinationPath = null,
+                    expectedEtag = expectedEtag,
+                    sourceIsDirectory = file.isDirectory,
+                    overwrite = false,
+                ).conflictConditionHeaders(),
+            )
+        }
+        val accountId = desktopFileCacheAccountId(session)
+        fun refreshMetadata() {
+            runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, safePath) }
+        }
+        val response = request(
+            method = "PROPPATCH",
+            url = buildNextcloudFileUrl(session.serverUrl, userId, safePath),
+            session = session,
+            body = buildFileFavoritePropPatch(favorite),
+            contentType = "application/xml; charset=utf-8",
+            headers = headers,
+            maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::refreshMetadata,
+        )
+        if (response.status !in 200..299) throw fileOperationException(response.status)
+        check(response.status == 200 || response.status == 207 && fileFavoriteUpdateSucceeded(response.body)) {
+            "The server did not confirm the favorite change."
+        }
+        refreshMetadata()
     }
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
@@ -1712,7 +4397,7 @@ class DesktopNextcloudServices(
                 response.status == 304 && cached != null ->
                     NextcloudFileContent(cached.bytes, cached.mimeType, cached.etag)
                 response.status == 404 -> {
-                    runCatching { fileReadCache.invalidate(accountId, path) }
+                    runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, path) }
                     error("The file no longer exists on the server.")
                 }
                 response.status >= 500 && cached != null ->
@@ -1735,33 +4420,108 @@ class DesktopNextcloudServices(
         offset: Long,
         length: Int,
         expectedEtag: String,
-    ): ByteArray = withContext(Dispatchers.IO) {
-        require(offset >= 0L) { "The file range offset must not be negative." }
-        require(length > 0) { "The file range length must be greater than zero." }
+    ): ByteArray = openFileRangeSession(
+        session,
+        userId,
+        path,
+        Math.addExact(offset, length.toLong()),
+        expectedEtag,
+    ).use { source ->
+        source.read(offset, length)
+    }
+
+    override fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession {
+        require(size > 0L)
+        synchronized(fileRangeSessionLock) {
+            check(!sessionClearing) { "The account session is closing." }
+        }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
-        val endInclusive = Math.addExact(offset, length.toLong() - 1L)
-        val response = request(
-            "GET",
-            buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session,
-            headers = mapOf(
-                "Accept" to "application/octet-stream",
-                "Range" to "bytes=$offset-$endInclusive",
-                "If-Match" to safeEtag,
-            ),
-            maxResponseBytes = length.toLong(),
-            client = noRedirectHttpClient,
+        val closed = AtomicBoolean(false)
+        val activeCall = AtomicReference<Call?>(null)
+        lateinit var rangeSession: NextcloudFileRangeSession
+        rangeSession = NextcloudFileRangeSession(
+            size = size,
+            readBlock = { offset, length ->
+                withContext(Dispatchers.IO) {
+                    check(!closed.get()) { "The file range session is closed." }
+                    require(offset >= 0L) { "The file range offset must not be negative." }
+                    require(length > 0) { "The file range length must be greater than zero." }
+                    require(offset <= size && length.toLong() <= size - offset) {
+                        "The requested file range exceeds the file size."
+                    }
+                    val endInclusive = Math.addExact(offset, length.toLong() - 1L)
+                    val builder = Request.Builder()
+                        .url(buildNextcloudFileUrl(session.serverUrl, userId, path))
+                        .get()
+                        .header("Accept", "application/octet-stream")
+                        .header("Range", "bytes=$offset-$endInclusive")
+                        .header("If-Match", safeEtag)
+                        .header("User-Agent", USER_AGENT)
+                    val started = System.nanoTime()
+                    val networkAttempt = JvmNetworkRequestAttempt()
+                    builder.tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
+                    val encoded = Base64.getEncoder()
+                        .encodeToString("${session.loginName}:${session.appPassword}".toByteArray())
+                    builder.header("Authorization", "Basic $encoded")
+                    val call = noRedirectHttpClient.newCall(builder.build())
+                    check(activeCall.compareAndSet(null, call)) { "Only one file range read can run at a time." }
+                    if (closed.get()) call.cancel()
+                    try {
+                        call.execute().use { response ->
+                            check(response.code == 206) {
+                                "The server did not honor the bounded file range request (HTTP ${response.code})."
+                            }
+                            check(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
+                                "The server returned a different file range than requested."
+                            }
+                            val responseBody = response.body
+                            val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
+                            check(contentLength == -1L || contentLength == length.toLong()) {
+                                "The server returned an incomplete file range."
+                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
+                        }
+                    } catch (failure: Throwable) {
+                        recordDesktopStreamingFailure(
+                            session = session,
+                            streamKind = "file_range",
+                            startedNanos = started,
+                            attempt = networkAttempt,
+                            failure = failure,
+                        )
+                        throw failure
+                    } finally {
+                        activeCall.compareAndSet(call, null)
+                    }
+                }
+            },
+            closeBlock = {
+                if (closed.compareAndSet(false, true)) {
+                    activeCall.get()?.cancel()
+                    synchronized(fileRangeSessionLock) {
+                        activeFileRangeSessions.remove(rangeSession)
+                    }
+                }
+            },
         )
-        check(response.status == 206) {
-            "The server did not honor the bounded file range request (HTTP ${response.status})."
+        val registered = synchronized(fileRangeSessionLock) {
+            if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
         }
-        check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
-            "The server returned a different file range than requested."
+        if (!registered) {
+            rangeSession.close()
+            error("The account session is closing.")
         }
-        check(response.body.size == length) {
-            "The server returned an incomplete file range."
-        }
-        response.body
+        return rangeSession
     }
 
     override suspend fun downloadMemoriesFileRange(
@@ -1788,6 +4548,8 @@ class DesktopNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            expectedSuccessResponseBytes = length,
+            expectedSuccessResponseStatus = 206,
             client = noRedirectHttpClient,
         )
         check(response.status == 206) {
@@ -1807,9 +4569,6 @@ class DesktopNextcloudServices(
             check(requireSafeFileRangeEtag(returnedEtag) == safeEtag) {
                 "The Memories stream returned a different file generation."
             }
-        }
-        check(response.body.size == length) {
-            "The Memories stream returned an incomplete file range."
         }
         response.body
     }
@@ -1878,6 +4637,9 @@ class DesktopNextcloudServices(
         version: NextcloudFileVersion,
     ): Unit = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
+        val accountId = desktopFileCacheAccountId(session)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path)
         val response = request(
             method = specification.method,
             url = session.serverUrl + specification.relativePath,
@@ -1888,13 +4650,58 @@ class DesktopNextcloudServices(
             ),
             maxResponseBytes = specification.maximumResponseBytes,
             client = noRedirectHttpClient,
+            mutationExecutor = noRedirectFileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        when (response.status) {
-            in 200..299 -> Unit
-            403 -> error("You do not have permission to restore this file version.")
-            404 -> error("This historical version no longer exists.")
-            409 -> error("The server could not restore this version to the current file.")
-            else -> error("Restoring the file version failed (HTTP ${response.status}).")
+        when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
+            FileVersionRestoreHttpResult.Restored -> {
+                runCatching {
+                    refreshRetainedFoldersAfterMutation(
+                        session,
+                        userId,
+                        accountId,
+                        file.path,
+                    )
+                }
+            }
+            is FileVersionRestoreHttpResult.Rejected -> error(result.message)
+        }
+    }
+
+    override suspend fun handoffFileVersionToExternalApp(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        val fileId = requireMatchingFileVersion(file, version)
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        val historicalCopy = file.copy(
+            name = historicalFileCopyName(file.name, version.id),
+            size = version.sizeBytes,
+            etag = version.etag ?: "version-${version.id}",
+        )
+        val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
+        val specification = fileVersionContentRequest(userId, fileId, version.id)
+        return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (version.etag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                            "The historical version changed while it was being exported."
+                        }
+                    }
+                },
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -1905,40 +4712,34 @@ class DesktopNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        val utf8 = text.toByteArray(StandardCharsets.UTF_8)
-        require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
-            "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        require(expectedEtag.isNotBlank() && expectedEtag.none { it == '\r' || it == '\n' }) {
-            "A valid file version is required before saving."
-        }
-        val headers = buildMap {
-            put("Accept", "*/*")
-            put("If-Match", expectedEtag)
-        }
+        val specification = textFileDavSaveRequest(text, expectedEtag)
+        val accountId = desktopFileCacheAccountId(session)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
             session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = headers,
+            rawBody = specification.body,
+            contentType = specification.contentType,
+            headers = specification.headers,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
-        check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
-        val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
-        val accountId = desktopFileCacheAccountId(session)
+        val confirmation = confirmTextFileDavSave(response.status)
+        val etag = response.etag ?:
+            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
         runCatching {
-            fileReadCache.invalidate(accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
                     path,
-                    NextcloudFileContent(utf8, "text/plain; charset=utf-8", it),
+                    NextcloudFileContent(specification.body, specification.contentType, it),
                 )
             }
         }
-        SavedTextFile(etag, response.status == 201)
+        SavedTextFile(etag, confirmation.created)
     }
 
     override suspend fun createTextFileIfAbsent(
@@ -1951,6 +4752,9 @@ class DesktopNextcloudServices(
         require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
             "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -1958,13 +4762,14 @@ class DesktopNextcloudServices(
             rawBody = utf8,
             contentType = "text/plain; charset=utf-8",
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
         check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
         check(response.status == 201) { "The server did not confirm that a new text file was created." }
         runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             response.etag?.let {
                 fileReadCache.storeContent(
                     accountId,
@@ -1981,18 +4786,23 @@ class DesktopNextcloudServices(
         userId: String,
         path: String,
     ): Boolean = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        fun queueAffectedMetadataRefresh() =
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         val response = request(
             method = "MKCOL",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
             session = session,
             headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
         if (response.status in setOf(405, 412)) return@withContext false
         if (response.status !in 200..299) throw fileOperationException(response.status)
         check(response.status == 201) { "The server did not confirm that a new folder was created." }
         runCatching {
-            fileReadCache.invalidate(desktopFileCacheAccountId(session), path)
+            refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
         }
         true
     }
@@ -2011,19 +4821,26 @@ class DesktopNextcloudServices(
                 put("Overwrite", if (spec.overwrite) "T" else "F")
             }
         }
+        val accountId = desktopFileCacheAccountId(session)
+        fun invalidateAffectedMetadata() {
+            runCatching {
+                refreshRetainedFoldersAfterMutation(session, userId, accountId, spec.sourcePath)
+                spec.destinationPath?.let { destination ->
+                    refreshRetainedFoldersAfterMutation(session, userId, accountId, destination)
+                }
+            }
+        }
         val response = request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
             headers = headers,
             maxResponseBytes = 64 * 1024,
+            mutationExecutor = fileMutationHttpExecutor,
+            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
         if (response.status !in 200..299) throw fileOperationException(response.status)
-        runCatching {
-            val accountId = desktopFileCacheAccountId(session)
-            fileReadCache.invalidate(accountId, spec.sourcePath)
-            spec.destinationPath?.let { fileReadCache.invalidate(accountId, it) }
-        }
+        invalidateAffectedMetadata()
         NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
 
@@ -2046,16 +4863,26 @@ class DesktopNextcloudServices(
             }
         }
         suspend fun executeNetworkRequest(): NextcloudApiResponse {
-            val response = request(
-                method = safeRequest.method.name,
-                url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
-                session = session,
-                contentType = safeRequest.contentType,
-                rawBody = safeRequest.body,
-                ocsRequest = safeRequest.ocsApiRequest,
-                maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
-            )
+            var responseBodyMayHaveStarted = false
+            val response = try {
+                request(
+                    method = safeRequest.method.name,
+                    url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
+                    session = session,
+                    contentType = safeRequest.contentType,
+                    rawBody = safeRequest.body,
+                    ocsRequest = safeRequest.ocsApiRequest,
+                    maxResponseBytes = safeRequest.maximumResponseBytes,
+                    client = noRedirectHttpClient,
+                    onFailurePhase = { phase ->
+                        responseBodyMayHaveStarted = phase == JvmNetworkFailurePhase.ResponseBody
+                    },
+                )
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                if (safeRequest.method != NextcloudApiMethod.GET) throw failure
+                throw NextcloudApiReadFailure(responseBodyMayHaveStarted, failure)
+            }
             return NextcloudApiResponse(
                 response.status,
                 response.body,
@@ -2306,8 +5133,9 @@ class DesktopNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = request(
+        val conditionalInventory = request(
             method = "GET",
             url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
             session = session,
@@ -2316,9 +5144,22 @@ class DesktopNextcloudServices(
             maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
             client = noRedirectHttpClient,
         )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
+        val inventory = if (conditionalInventory.status == 304 && cachedCapabilities == null) {
+            request(
+                method = "GET",
+                url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
+                session = session,
+                ocsRequest = true,
+                maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
+                client = noRedirectHttpClient,
+            )
+        } else {
+            conditionalInventory.takeUnless { response -> response.status == 304 }
+        }
+        if (inventory != null) {
+            check(inventory.status in 200..299 && inventory.location == null) {
+                "Loading document editing capabilities failed (HTTP ${inventory.status})."
+            }
         }
         val capabilitiesResponse = request(
             method = "GET",
@@ -2331,13 +5172,11 @@ class DesktopNextcloudServices(
         check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
             "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
         }
-        NextcloudConditionalRead.Modified(
-            value = parseDesktopDocumentEditingCapabilities(
-                response.text,
-                supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text),
-            ),
-            responseEtag = response.etag,
-        )
+        val supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text)
+        val combined = inventory?.let { response ->
+            parseDesktopDocumentEditingCapabilities(response.text, supportsFileId)
+        } ?: requireNotNull(cachedCapabilities).copy(supportsFileId = supportsFileId)
+        NextcloudConditionalRead.Modified(combined, inventory?.etag ?: expectedEtag)
     }
 
     override suspend fun beginDocumentEditSession(
@@ -2431,10 +5270,30 @@ class DesktopNextcloudServices(
         }
 
     override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val result = loadNoteConditionally(session, noteId, expectedEtag = null)) {
-            is NextcloudConditionalRead.Modified -> result.value
-            NextcloudConditionalRead.NotModified -> error("An unconditional note read returned not modified.")
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
+
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
+        require(noteId >= 0L) { "The note ID is invalid." }
+        val response = request(
+            "GET",
+            session.serverUrl + notesDetailRelativePath(noteId),
+            session,
+        )
+        if (response.status == 404 || response.status == 410) {
+            return@withContext NextcloudNotePresence.Absent
+        }
+        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
+        val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+            "The note response is invalid."
+        }
+        NextcloudNotePresence.Present(note)
+    }
 
     override suspend fun loadNoteConditionally(
         session: NextcloudSession,
@@ -2481,7 +5340,7 @@ class DesktopNextcloudServices(
             session,
             body,
             "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -2519,9 +5378,7 @@ class DesktopNextcloudServices(
             plan.method.name,
             session.serverUrl + plan.relativePath,
             session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
@@ -2730,9 +5587,18 @@ class DesktopNextcloudServices(
         headers: Map<String, String> = emptyMap(),
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
+        expectedSuccessResponseBytes: Int? = null,
+        expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
+        mutationExecutor: DesktopHttpMutationExecutor? = null,
+        onAmbiguousMutationResult: () -> Unit = {},
+        onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
+        onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
+        diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
     ): HttpResponse {
+        val started = System.nanoTime()
+        require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         val requestBody = when {
             streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
@@ -2740,7 +5606,9 @@ class DesktopNextcloudServices(
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)
             else -> null
         }
+        val networkAttempt = JvmNetworkRequestAttempt()
         val builder = Request.Builder().url(url).method(method, requestBody)
+            .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
             .header("Accept", "application/json").header("User-Agent", USER_AGENT)
         if (ocsRequest) builder.header("OCS-APIRequest", "true")
         headers.forEach(builder::header)
@@ -2748,16 +5616,26 @@ class DesktopNextcloudServices(
             val encoded = Base64.getEncoder().encodeToString("${it.loginName}:${it.appPassword}".toByteArray())
             builder.header("Authorization", "Basic $encoded")
         }
-        return client.newCall(builder.build()).execute().use { response ->
+        val request = builder.build()
+        fun consumeResponse(response: okhttp3.Response): HttpResponse {
             val responseBody = response.body
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
-            check(contentLength <= readLimit || contentLength == -1L) {
-                "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
+            if (contentLength > readLimit && contentLength != -1L) {
+                throw NextcloudResponseTooLargeException(readLimit, response.code)
             }
-            HttpResponse(
+            val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
+                runCatching { responseBody.byteStream().readBounded(readLimit, response.code) }
+                    .getOrDefault(byteArrayOf())
+            } else {
+                responseBody.byteStream().readBounded(readLimit, response.code)
+            }
+            if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
+                bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
+            }
+            return HttpResponse(
                 response.code,
-                responseBody.byteStream().readBounded(readLimit),
+                bodyBytes,
                 responseBody.contentType()?.toString(),
                 response.header("ETag") ?: response.header("OC-Etag"),
                 if (session == null) {
@@ -2773,9 +5651,135 @@ class DesktopNextcloudServices(
                 response.header("Content-Range"),
             )
         }
+        return try {
+            val result = if (mutationExecutor == null) {
+                client.newCall(request).execute().use(::consumeResponse)
+            } else {
+                mutationExecutor.execute(
+                    request = request,
+                    onAmbiguousNetworkResult = onAmbiguousMutationResult,
+                    onAcceptedResponse = onAmbiguousMutationResult,
+                    consume = ::consumeResponse,
+                )
+            }
+            if (shouldRecordHttpStatusDiagnostic(result.status, diagnosticIgnoredHttpStatuses)) {
+                recordDesktopRequestDiagnostic(
+                    session,
+                    SupportDiagnosticEventDraft(
+                        severity = if (result.status >= 500) {
+                            SupportDiagnosticSeverity.Error
+                        } else {
+                            SupportDiagnosticSeverity.Warning
+                        },
+                        component = SupportDiagnosticComponent.Network,
+                        operation = "http.request",
+                        outcome = "rejected",
+                        code = "HTTP:${result.status}",
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft("method", method.lowercase()),
+                            SupportDiagnosticFieldDraft(
+                                "url",
+                                url,
+                                SupportDiagnosticValuePrivacy.Url,
+                            ),
+                            SupportDiagnosticFieldDraft("response_bytes", result.body.size.toString()),
+                            SupportDiagnosticFieldDraft("mutation", (mutationExecutor != null).toString()),
+                        ),
+                    ),
+                )
+            }
+            result
+        } catch (failure: Throwable) {
+            onFailurePhase(networkAttempt.phase)
+            if (failure.isJvmLocalUploadSourceFailure()) {
+                recordDesktopRequestDiagnostic(
+                    session,
+                    failure.toJvmLocalUploadSourceDiagnosticEvent(
+                        method = method,
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    ),
+                )
+                throw failure
+            }
+            val networkFailure = if (failure is IOException || failure is CancellationException) {
+                failure.toJvmNetworkFailureDiagnostic(
+                    attempt = networkAttempt,
+                    readOnlyRequest = method.isReadOnlyJvmNetworkMethod(),
+                    replayableRequest = requestBody?.isOneShot() != true,
+                )
+            } else {
+                null
+            }
+            networkFailure?.let(onNetworkFailure)
+            recordDesktopRequestDiagnostic(
+                session,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Network,
+                    operation = "http.request",
+                    outcome = "failed",
+                    code = networkFailure?.code,
+                    attempt = networkFailure?.attempt,
+                    durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft("method", method.lowercase()),
+                        SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
+                        SupportDiagnosticFieldDraft("mutation", (mutationExecutor != null).toString()),
+                    ) + networkFailure?.fields().orEmpty(),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
     }
 
-    private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
+    private fun recordDesktopRequestDiagnostic(
+        session: NextcloudSession?,
+        event: SupportDiagnosticEventDraft,
+    ) {
+        if (session == null) {
+            supportDiagnostics.record(event)
+        } else {
+            supportDiagnostics.recordForAccountIdentity(desktopFileCacheAccountId(session), event)
+        }
+    }
+
+    private fun recordDesktopStreamingFailure(
+        session: NextcloudSession,
+        streamKind: String,
+        startedNanos: Long,
+        attempt: JvmNetworkRequestAttempt,
+        failure: Throwable,
+    ) {
+        if (failure !is IOException && failure !is CancellationException) return
+        val networkFailure = failure.toJvmNetworkFailureDiagnostic(
+            attempt = attempt,
+            readOnlyRequest = true,
+            replayableRequest = true,
+        )
+        if (networkFailure.isCancellation) return
+        recordDesktopRequestDiagnostic(
+            session,
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Network,
+                operation = "http.stream",
+                outcome = "failed",
+                code = networkFailure.code,
+                attempt = networkFailure.attempt,
+                durationMillis = (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("method", "get"),
+                    SupportDiagnosticFieldDraft("stream_kind", streamKind),
+                    SupportDiagnosticFieldDraft("mutation", "false"),
+                ) + networkFailure.fields(),
+                exception = failure.toSupportDiagnosticExceptionDraft(),
+            ),
+        )
+    }
+
+    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
         var total = 0L
@@ -2783,37 +5787,12 @@ class DesktopNextcloudServices(
             val read = read(buffer)
             if (read == -1) break
             total += read
-            check(total <= maxBytes) {
-                "The server response is larger than the allowed ${formatByteLimit(maxBytes)} limit."
+            if (total > maxBytes) {
+                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
             }
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun java.io.InputStream.copyBoundedTo(
-        output: java.io.OutputStream,
-        maxBytes: Long,
-    ): Long {
-        require(maxBytes > 0L)
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            check(total <= maxBytes) {
-                "The Deck attachment is larger than the external handoff limit."
-            }
-            output.write(buffer, 0, read)
-        }
-        return total
-    }
-
-    private fun formatByteLimit(bytes: Long): String = when {
-        bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
-        bytes >= 1024 -> "${bytes / 1024} KiB"
-        else -> "$bytes bytes"
     }
 
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {
@@ -2843,11 +5822,33 @@ class DesktopNextcloudServices(
                         fileId = response.firstText(OC, "fileid")?.toLongOrNull(),
                         hasPreview = response.firstText(NC, "has-preview") == "true",
                         etag = response.firstText(DAV, "getetag"),
+                        favorite = response.firstText(OC, "favorite") == "1",
+                        ownerId = response.firstText(OC, "owner-id"),
+                        ownerDisplayName = response.firstText(OC, "owner-display-name"),
+                        unreadComments = response.firstText(OC, "comments-unread")?.toIntOrNull() ?: 0,
                         permissions = response.firstText(OC, "permissions"),
                     ),
                 )
             }
         }
+    }
+
+    private fun fileFavoriteUpdateSucceeded(xml: ByteArray): Boolean {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        }
+        val document = factory.newDocumentBuilder().parse(ByteArrayInputStream(xml))
+        val propstats = document.getElementsByTagNameNS(DAV, "propstat")
+        for (index in 0 until propstats.length) {
+            val propstat = propstats.item(index)
+            val status = propstat.firstText(DAV, "status").orEmpty()
+            val includesFavorite = propstat.childCount(OC, "favorite") > 0
+            if (includesFavorite && parseDavStatusCode(status) in 200..299) return true
+        }
+        return false
     }
 
     private fun org.w3c.dom.Node.firstText(namespace: String, name: String): String? =
@@ -2857,12 +5858,12 @@ class DesktopNextcloudServices(
     private fun org.w3c.dom.Node.childCount(namespace: String, name: String): Int =
         (this as? org.w3c.dom.Element)?.getElementsByTagNameNS(namespace, name)?.length ?: 0
 
-    private fun normalizeServerUrl(value: String): String {
-        val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
-        val uri = URI(candidate)
-        require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "Enter a valid secure https:// server address." }
-        return candidate.trimEnd('/').removeSuffix("/index.php")
-    }
+    private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
+        if (serverUrl.startsWith("http://", ignoreCase = true)) {
+            LoginTransportSecurity.PlainHttp
+        } else {
+            LoginTransportSecurity.Tls
+        }
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {
@@ -2938,6 +5939,7 @@ class DesktopNextcloudServices(
         const val KEY_LOGIN = "login"
         const val KEY_FILE_SYNC_PAUSED = "file_sync_paused"
         const val KEY_START_ON_LOGIN = "start_on_login"
+        const val KEY_KEEP_RUNNING_IN_BACKGROUND = "keep_running_in_background"
         const val DESKTOP_FILE_SYNC_INTERVAL_MILLIS = 2L * 60L * 1_000L
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Desktop)"
         const val DAV = "DAV:"
@@ -2953,13 +5955,209 @@ class DesktopNextcloudServices(
         val DAV_PROPERTIES = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:prop>
-              <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><d:resourcetype/><oc:fileid/><oc:size/><oc:permissions/><nc:has-preview/>
+              <d:displayname/><d:getcontenttype/><d:getlastmodified/><d:getcontentlength/><d:getetag/><d:resourcetype/>
+              <oc:fileid/><oc:size/><oc:permissions/><oc:favorite/><oc:owner-id/><oc:owner-display-name/>
+              <oc:comments-unread/><nc:has-preview/>
             </d:prop></d:propfind>
         """.trimIndent()
         val DAV_ETAG_PROPERTY = """
             <?xml version="1.0" encoding="UTF-8"?>
             <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>
         """.trimIndent()
+    }
+}
+
+internal fun retainedFolderAncestorListings(relativePath: String): List<String> {
+    val segments = relativePath.trim('/').split('/').filter(String::isNotBlank)
+    require(segments.isNotEmpty()) { "A retained folder path is required." }
+    return buildList {
+        add("")
+        var current = ""
+        segments.dropLast(1).forEach { segment ->
+            current = if (current.isEmpty()) segment else "$current/$segment"
+            add(current)
+        }
+    }
+}
+
+internal fun retainedFolderNavigationChild(parentPath: String, retainedRoot: String): String? {
+    val parent = parentPath.trim('/')
+    val root = retainedRoot.trim('/')
+    if (root.isEmpty() || parent.isNotEmpty() && root != parent && !root.startsWith("$parent/")) return null
+    if (root == parent) return null
+    val remainder = if (parent.isEmpty()) root else root.removePrefix("$parent/")
+    val child = remainder.substringBefore('/')
+    return if (parent.isEmpty()) child else "$parent/$child"
+}
+
+internal fun retainedFolderAvailableNavigationTargets(
+    currentTarget: String,
+    documents: Collection<DesktopRemoteSyncDocument>,
+): Set<String> = documents.mapTo(linkedSetOf()) { document -> document.entry.relativePath }.also { available ->
+    check(currentTarget in available) {
+        "The selected retained folder is no longer available at its saved path."
+    }
+}
+
+internal fun retainedRootsMissingNavigationTarget(
+    parentPath: String,
+    retainedRoots: Collection<String>,
+    availableTargets: Set<String>,
+): Set<String> = retainedRoots.filterTo(linkedSetOf()) { retainedRoot ->
+    retainedFolderNavigationChild(parentPath, retainedRoot)?.let { target -> target !in availableTargets } == true
+}
+
+private class VirtualFolderRefreshSupersededException : IllegalStateException(
+    "The retained folder changed while it was being published.",
+)
+
+internal fun shouldScheduleVirtualFolderHydration(
+    status: VirtualFolderHydrationStatus?,
+    nowEpochMillis: Long,
+    refreshIntervalMillis: Long = VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS,
+): Boolean {
+    require(nowEpochMillis >= 0L)
+    require(refreshIntervalMillis > 0L)
+    if (status == null) return true
+    if (status.phase == VirtualFolderHydrationPhase.Failed) return false
+    if (status.phase != VirtualFolderHydrationPhase.AvailableOffline) return true
+    if (status.refreshing) return true
+    val verifiedAt = status.verifiedAtEpochMillis ?: return true
+    status.refreshRetryAtEpochMillis?.let { retryAt ->
+        if (nowEpochMillis >= verifiedAt) return nowEpochMillis >= retryAt
+    }
+    val age = nowEpochMillis - verifiedAt
+    return age < 0L || age >= refreshIntervalMillis
+}
+
+internal fun virtualFolderHydrationStatusForStorageAvailability(
+    status: VirtualFolderHydrationStatus,
+    retainedOverflowUnavailable: Boolean,
+): VirtualFolderHydrationStatus = if (retainedOverflowUnavailable) {
+    status.copy(
+        phase = VirtualFolderHydrationPhase.Failed,
+        detail = "Reconnect the overflow cache drive to use this offline folder.",
+        refreshFailure = null,
+        refreshing = false,
+        refreshRetryAtEpochMillis = null,
+    )
+} else {
+    status
+}
+
+internal fun virtualFolderRefreshRetryAt(
+    nowEpochMillis: Long,
+    retryDelayMillis: Long = VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS,
+): Long {
+    require(nowEpochMillis >= 0L && retryDelayMillis > 0L)
+    return if (Long.MAX_VALUE - nowEpochMillis < retryDelayMillis) Long.MAX_VALUE else nowEpochMillis + retryDelayMillis
+}
+
+internal fun nextVirtualFolderRetainedMetadataCount(
+    currentEntries: Int,
+    additionalEntries: Int,
+    maximumEntries: Int = MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES,
+): Int {
+    require(currentEntries in 0..maximumEntries)
+    require(additionalEntries >= 0)
+    check(additionalEntries <= maximumEntries - currentEntries) {
+        "The selected virtual folder contains too much metadata for one reconciliation pass."
+    }
+    return currentEntries + additionalEntries
+}
+
+internal fun requireVirtualFolderListingCapacity(
+    currentListings: Int,
+    maximumListings: Int = MAX_VIRTUAL_FOLDER_RETAINED_LISTINGS,
+) {
+    require(currentListings >= 0 && maximumListings > 0)
+    check(currentListings < maximumListings) {
+        "The selected virtual folder contains too many directories to keep on this device safely."
+    }
+}
+
+internal fun isCompleteRetainedTreeListing(listingPath: String, retainedRoot: String): Boolean =
+    listingPath == retainedRoot || listingPath.startsWith("$retainedRoot/")
+
+internal fun Job?.occupiesVirtualFolderHydrationSlot(): Boolean = this != null && !isCompleted
+
+internal fun removeVirtualFolderHydrationJobIfOwned(
+    jobs: MutableMap<String, Job>,
+    key: String,
+    owner: Job,
+): Boolean {
+    if (jobs[key] !== owner) return false
+    jobs.remove(key)
+    return true
+}
+
+internal fun advanceAffectedVirtualFolderGenerations(
+    generations: MutableMap<String, Long>,
+    completedGenerations: MutableMap<String, Long>,
+    accountId: String,
+    retainedRoots: Iterable<String>,
+) {
+    retainedRoots.forEach { retainedRoot ->
+        val key = "$accountId\u0000$retainedRoot"
+        val current = generations.getOrDefault(key, 0L)
+        if (current == Long.MAX_VALUE) {
+            completedGenerations.remove(key)
+            generations[key] = 1L
+        } else {
+            generations[key] = current + 1L
+        }
+    }
+}
+
+internal fun handleDesktopFileVersionRestoreStatus(status: Int, onRestored: () -> Unit) {
+    when (status) {
+        in 200..299 -> onRestored()
+        403 -> error("You do not have permission to restore this file version.")
+        404 -> error("This historical version no longer exists.")
+        409 -> error("The server could not restore this version to the current file.")
+        else -> error("Restoring the file version failed (HTTP $status).")
+    }
+}
+
+private data class VirtualFolderListingGeneration(
+    val path: String,
+    val directory: Boolean,
+    val remoteRevision: String,
+    val size: Long?,
+)
+
+private fun List<DesktopRemoteSyncDocument>.hydrationGeneration(): List<VirtualFolderListingGeneration> =
+    map { document ->
+        VirtualFolderListingGeneration(
+            path = document.entry.relativePath,
+            directory = document.isDirectory,
+            remoteRevision = document.entry.etag,
+            size = document.entry.size,
+        )
+    }.sortedBy(VirtualFolderListingGeneration::path)
+
+internal fun reconcileVirtualRangeChildren(
+    cache: DesktopVirtualRangeCache,
+    accountId: String,
+    parent: String,
+    documents: List<DesktopRemoteSyncDocument>,
+    protectedPaths: Set<String>,
+) {
+    val liveChildren = documents.mapTo(hashSetOf()) { document -> document.entry.relativePath }
+    cache.cachedDirectChildren(accountId, parent)
+        .filterNot(liveChildren::contains)
+        .filterNot { missing ->
+            protectedPaths.any { protected -> protected == missing || protected.startsWith("$missing/") }
+        }
+        .forEach { missing -> cache.invalidateDisposableRanges(accountId, missing) }
+}
+
+internal fun publishDesktopLinuxFallbackMetadataBestEffort(
+    store: LinuxVirtualMetadataStore,
+    snapshots: Map<String, LinuxVirtualDirectorySnapshot>,
+) {
+    snapshots.filterValues(LinuxVirtualDirectorySnapshot::complete).forEach { (path, snapshot) ->
+        runCatching { store.store(path, snapshot) }
     }
 }
 

@@ -76,6 +76,7 @@ rm -- "${packages[0]}"
     --icon "$icon" \
     --linux-shortcut \
     --linux-app-category "$category" \
+    --linux-package-deps libsecret \
     --linux-rpm-license-type "$rpm_license"
 
 mapfile -d '' rebuilt < <(find "$package_directory" -maxdepth 1 -type f -name '*.rpm' -print0)

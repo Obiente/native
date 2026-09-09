@@ -25,9 +25,14 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             } else {
                 val existing = fields[index]
                 fields[index] = existing.copy(
+                    kind = input.kind.takeIf { candidate ->
+                        existing.kind == FieldKind.unknown ||
+                            existing.kind == FieldKind.string && candidate == FieldKind.userReference
+                    } ?: existing.kind,
                     readOnly = false,
                     format = input.format ?: existing.format,
                     enumValues = input.enumValues ?: existing.enumValues,
+                    enumLabels = input.enumLabels ?: existing.enumLabels,
                     repeatableObjectInput = input.repeatableObjectInput ?: existing.repeatableObjectInput,
                 )
             }
@@ -38,6 +43,12 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             confidence = resource.confidence,
             fields = fields,
             evidence = resource.provenance.map(Provenance::toEvidence),
+            recordImagePreview = resource.recordImagePreview?.let { preview ->
+                RecordImagePreviewSpec(
+                    actionId = preview.actionId,
+                    declaredContentTypes = preview.declaredContentTypes,
+                )
+            },
         )
     }
     val nativeViews = buildList {
@@ -49,7 +60,14 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     id = layout.id,
                     title = layout.title,
                     resourceId = layout.resourceId,
-                    component = layout.toNativeComponent(resource, sourceAction),
+                    component = layout.toNativeComponent(
+                        resource,
+                        sourceAction,
+                        hasWritableAction = actions.any { candidate ->
+                            !candidate.fallbackOnly && candidate.resourceId == resource.id &&
+                                candidate.intent == ActionIntent.update && candidate.risk == ActionRisk.mutating
+                        },
+                    ),
                     sourceActionId = layout.sourceActionId.orEmpty(),
                     confidence = layout.confidence,
                     evidence = layout.provenance.map(Provenance::toEvidence),
@@ -332,14 +350,15 @@ private fun FormField.toNativeField(): FieldSpec = FieldSpec(
     readOnly = false,
     format = format,
     enumValues = enumValues,
+    enumLabels = enumLabels,
     repeatableObjectInput = repeatableObjectInput,
 )
 
 private fun DynamicLayout.toNativeComponent(
     resource: DynamicResource,
     action: DynamicAction?,
+    hasWritableAction: Boolean,
 ): NativeComponent {
-    if (kind == LayoutKind.detail) return NativeComponent.detail
     if (kind == LayoutKind.grid) return NativeComponent.mediaGrid
 
     val words = semanticWords(
@@ -383,6 +402,9 @@ private fun DynamicLayout.toNativeComponent(
             "project", "projects", "spending", "budget", "budgets", "income", "revenue",
         )
     }
+    val hasCategoryCollectionSemantics = hasTitle && words.any {
+        it == "category" || it == "categories"
+    }
     val hasMailboxSemantics = words.any { it in setOf("mail", "mailbox", "mailboxes", "inbox", "outbox", "email", "emails") }
     val hasMessageShape = normalizedFields.keys.any {
         it in setOf("subject", "from", "sender", "to", "recipients", "sentat", "receivedat", "unread", "flags")
@@ -408,6 +430,35 @@ private fun DynamicLayout.toNativeComponent(
     val hasSettingsSemantics = words.any {
         it in setOf("setting", "settings", "preference", "preferences", "configuration", "config")
     }
+    val hasDocumentSemantics = words.any {
+        it in setOf(
+            "document", "documents", "editor", "note", "notes", "office", "richdocuments",
+            "collective", "collectives", "markdown", "text",
+        )
+    }
+    val hasDocumentBody = normalizedFields.any { (id, field) ->
+        id in setOf("body", "content", "document", "markdown", "text", "html") &&
+            field.kind in setOf(FieldKind.string, FieldKind.longText)
+    }
+    if (kind == LayoutKind.detail) {
+        return if (hasDocumentSemantics && hasDocumentBody && hasWritableAction) {
+            NativeComponent.documentEditor
+        } else {
+            NativeComponent.detail
+        }
+    }
+    val hasFileSemantics = words.any {
+        it in setOf("file", "files", "folder", "folders", "directory", "directories")
+    }
+    val hasFileShape = normalizedFields.keys.any {
+        it in setOf("path", "filename", "mimetype", "etag", "filesize", "parentpath")
+    }
+    val hasActivitySemantics = words.any {
+        it in setOf("activity", "activities", "audit", "history", "timeline")
+    }
+    val hasActivityShape = normalizedFields.keys.any {
+        it in setOf("actor", "actorid", "app", "datetime", "message", "objectname", "subject", "timestamp")
+    }
 
     return when {
         hasCellGridShape ||
@@ -422,8 +473,11 @@ private fun DynamicLayout.toNativeComponent(
         }
         hasTitle && hasCompletionShape -> NativeComponent.taskList
         hasTitle && hasBoardGrouping && hasBoardOrdering -> NativeComponent.board
+        hasCategoryCollectionSemantics -> NativeComponent.collectionList
         hasMeasure && hasFinancialSemantics -> NativeComponent.dashboard
         hasSettingsSemantics && action?.binding?.method == HttpMethod.GET -> NativeComponent.detail
+        hasActivitySemantics && hasActivityShape -> NativeComponent.timeline
+        hasFileSemantics && hasFileShape -> NativeComponent.fileBrowser
         hasMailboxSemantics &&
             (words.any { it in setOf("account", "accounts", "mailbox", "mailboxes", "message", "messages") } ||
                 hasMessageShape || resource.fields.isEmpty()) -> NativeComponent.mailbox
@@ -458,7 +512,10 @@ private fun DynamicLayout.toNativeComponent(
             NativeComponent.recipeList
         }
         words.any { it in setOf("gallery", "image", "images", "media", "memories", "photo", "photos") } &&
-            resource.fields.any { it.kind == FieldKind.image || it.kind == FieldKind.file } -> {
+            (
+                resource.recordImagePreview != null ||
+                    resource.fields.any { it.kind == FieldKind.image || it.kind == FieldKind.file }
+                ) -> {
             NativeComponent.mediaGrid
         }
         resource.fields.any { it.kind == FieldKind.image } -> NativeComponent.mediaGrid

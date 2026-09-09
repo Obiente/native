@@ -10,6 +10,7 @@ import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayActivityPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPhase
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTrayPopup
 import dev.obiente.nextcloudnative.app.DesktopFileSyncTraySnapshot
+import dev.obiente.nextcloudnative.app.DesktopTrayActionFeedback
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import java.awt.Robot
 import java.io.File
@@ -74,19 +75,26 @@ fun main() = application {
 
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Nextcloud Native tray QA",
+        title = "nati.ve tray QA",
         state = rememberWindowState(width = 430.dp, height = 560.dp),
         undecorated = true,
-        transparent = true,
+        // Keep the QA surface opaque so it renders without a compositor under Xvfb.
+        transparent = false,
         resizable = false,
     ) {
         NextcloudNativeTheme(darkTheme = false) {
             DesktopFileSyncTrayPopup(
                 snapshot = snapshot,
                 onOpenApp = {},
+                onOpenSettings = {},
+                onOpenSyncCenter = {},
                 onSyncNow = {},
                 onTogglePaused = {},
                 onQuit = {},
+                actionFeedback = DesktopTrayActionFeedback(
+                    message = "Sync started. Checking 4 folder mappings.",
+                    error = false,
+                ),
             )
         }
         LaunchedEffect(outputPath) {

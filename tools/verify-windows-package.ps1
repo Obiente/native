@@ -59,12 +59,49 @@ function Read-MsiProperty {
     }
 }
 
+function Read-MsiNames {
+    param(
+        [ValidateSet("File", "Shortcut")][string]$Table,
+        [ValidateSet("FileName", "Name")][string]$Column
+    )
+    $view = $database.GetType().InvokeMember(
+        "OpenView",
+        "InvokeMethod",
+        $null,
+        $database,
+        @("SELECT ``$Column`` FROM ``$Table``")
+    )
+    try {
+        $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
+        $names = [System.Collections.Generic.List[string]]::new()
+        while ($true) {
+            $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+            if ($null -eq $record) {
+                break
+            }
+            $encodedName = $record.GetType().InvokeMember(
+                "StringData",
+                "GetProperty",
+                $null,
+                $record,
+                @(1)
+            )
+            foreach ($name in ($encodedName -split "\|")) {
+                $names.Add($name)
+            }
+        }
+        return $names
+    } finally {
+        $view.GetType().InvokeMember("Close", "InvokeMethod", $null, $view, $null) | Out-Null
+    }
+}
+
 $productName = Read-MsiProperty -Name "ProductName"
 $productVersion = Read-MsiProperty -Name "ProductVersion"
 $manufacturer = Read-MsiProperty -Name "Manufacturer"
 $upgradeCode = Read-MsiProperty -Name "UpgradeCode"
 
-if ($productName -ne "NextcloudNative") {
+if ($productName -ne "nati.ve") {
     throw "Unexpected Windows product name: $productName"
 }
 if ($productVersion -ne $ExpectedVersion) {
@@ -76,6 +113,18 @@ if ($manufacturer -ne "Obiente") {
 $expectedUpgradeCode = "{81237D85-C511-47A7-B8DC-C87A5F5C5823}"
 if ($upgradeCode.ToUpperInvariant() -ne $expectedUpgradeCode) {
     throw "Unexpected Windows upgrade identity."
+}
+
+$packagedFiles = @(Read-MsiNames -Table File -Column FileName)
+foreach ($requiredFile in @("NextcloudNativeShellRegistrar.exe", "NextcloudNative.ico")) {
+    if ($requiredFile -notin $packagedFiles) {
+        throw "The Windows MSI does not contain $requiredFile."
+    }
+}
+
+$shortcuts = @(Read-MsiNames -Table Shortcut -Column Name)
+if ($shortcuts.Count -ne 2 -or @($shortcuts | Where-Object { $_ -ne "nati.ve" }).Count -ne 0) {
+    throw "The desktop and Start menu shortcuts must both be named nati.ve."
 }
 
 $signature = Get-AuthenticodeSignature -LiteralPath $package.FullName

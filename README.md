@@ -1,24 +1,21 @@
 <p align="center">
-  <img src="design/app-icon/cloud.svg" width="112" height="112" alt="Nextcloud Native cloud icon">
+  <img src="design/brand/banner.svg" width="960" alt="nati.ve">
 </p>
 
-<h1 align="center">Nextcloud Native</h1>
+<h1 align="center">Your cloud, natively.</h1>
+
+<p align="center">A native workspace for your Nextcloud.</p>
 
 <p align="center">
-  One coherent, native workspace for your whole Nextcloud.
+  <a href="https://nati.ve">Website</a> ·
+  <a href="https://nati.ve/roadmap/">Roadmap</a> ·
+  <a href="https://github.com/obiente/native/releases">Testing releases</a>
 </p>
 
-<p align="center">
-  <a href="https://nc-native.obiente.dev">Website</a> ·
-  <a href="https://nc-native.obiente.dev/roadmap/">Roadmap</a> ·
-  <a href="https://github.com/Obiente/nc-native/releases">Testing releases</a> ·
-  <a href="https://github.com/orgs/Obiente/projects/4">GitHub Project</a>
-</p>
-
-[![Build and test](https://github.com/Obiente/nc-native/actions/workflows/ci.yml/badge.svg)](https://github.com/Obiente/nc-native/actions/workflows/ci.yml)
+[![Build and test](https://github.com/obiente/native/actions/workflows/ci.yml/badge.svg)](https://github.com/obiente/native/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-Nextcloud Native is an independent Obiente project for building a fast,
+nati.ve is an independent Obiente project for building a fast,
 consistent client across Nextcloud Files and installed Nextcloud apps. It
 turns verified APIs and data relationships into real native interfaces instead
 of embedding remote web pages or exposing raw API responses.
@@ -39,12 +36,87 @@ feel like one operating-system service:
 - useful native support for previously unseen apps through typed contracts and
   reusable semantic components.
 
-> **Alpha software:** Nextcloud Native is under active development. Current
+> **Alpha software:** nati.ve is under active development. Current
 > prereleases are for testing and contribution, not yet a replacement for every
 > production workflow or the only copy of important data.
 
-Nextcloud Native is unofficial and is not affiliated with, sponsored by, or
+> **Status snapshot:** Last reviewed: **2026-08-20**. Implementation,
+> compatibility, packaging, and release availability may have changed. The
+> [GitHub Releases page](https://github.com/obiente/native/releases) is the
+> source of truth for published builds and their known limitations.
+
+nati.ve is unofficial and is not affiliated with, sponsored by, or
 endorsed by Nextcloud GmbH.
+
+## Product showcase
+
+These captures come from the real Compose application using deterministic
+synthetic fixtures. They demonstrate implemented interface behavior and
+responsive layout; they are not evidence that every pictured workflow is
+complete on every platform or server version.
+
+<table>
+  <tr>
+    <td width="68%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-overview-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-overview-desktop-light.png">
+        <img src="website/public/screenshots/homepage-overview-desktop-light.png" alt="nati.ve desktop overview with files, activity, events, storage, photo backup, mail, and conversations">
+      </picture>
+    </td>
+    <td width="32%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-overview-mobile-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-overview-mobile-light.png">
+        <img src="website/public/screenshots/homepage-overview-mobile-light.png" alt="nati.ve mobile overview with quick actions, recent files, and photo backup">
+      </picture>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Desktop workspace</strong></td>
+    <td align="center"><strong>Mobile workspace</strong></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-files-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-files-desktop-light.png">
+        <img src="website/public/screenshots/homepage-files-desktop-light.png" alt="Desktop Files workspace with navigation, file list, filters, search, actions, and details inspector">
+      </picture>
+    </td>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-planning-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-planning-desktop-light.png">
+        <img src="website/public/screenshots/homepage-planning-desktop-light.png" alt="Native planning board with planned, in-progress, and completed card lanes">
+      </picture>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Files and details</strong></td>
+    <td align="center"><strong>Semantic board surface</strong></td>
+  </tr>
+</table>
+
+## Quick downloads
+
+At the review date, Nightly is the default and only selectable in-app update
+track for direct installations.
+
+| Platform | Latest build | Explicit Nightly |
+| --- | --- | --- |
+| Android 8.0+ | [Download APK](https://nati.ve/d/android-latest) | [Nightly APK](https://nati.ve/d/android-nightly) |
+| Linux (Debian/Ubuntu) | [Download DEB](https://nati.ve/d/linux-deb-latest) | [Nightly DEB](https://nati.ve/d/linux-deb-nightly) |
+| Linux (Fedora/RHEL) | [Download RPM](https://nati.ve/d/linux-rpm-latest) | [Nightly RPM](https://nati.ve/d/linux-rpm-nightly) |
+| Windows x86-64 | [Download MSI](https://nati.ve/d/windows-latest) | [Nightly MSI](https://nati.ve/d/windows-nightly) |
+| macOS Intel preview | [Download DMG](https://nati.ve/d/macos-latest) | [Nightly DMG](https://nati.ve/d/macos-nightly) |
+
+The macOS package is a packaging preview and cannot sign in yet. Windows builds
+are not Authenticode-signed. See the current release notes for platform-specific
+limitations, checksums, and Windows provenance verification.
 
 ## Why this project exists
 
@@ -53,7 +125,7 @@ experiences vary. Some have separate clients, some rely on the browser, some
 expose only part of their server functionality, and each uses different
 navigation and interaction patterns.
 
-Nextcloud Native provides a shared native product layer without reducing every
+nati.ve provides a shared native product layer without reducing every
 app to the same generic screen. A table should behave like a table, a deck like
 a board, a mailbox like mail, a recipe like something a person can cook from,
 and an expense project like a financial workspace. The common layer supplies
@@ -62,25 +134,11 @@ platform behavior. Semantic components supply the workflow.
 
 ## How adaptive native apps work
 
-```text
-connected Nextcloud account
-    |
-    +-- capabilities and installed-app versions
-    +-- official OCS, DAV, OpenAPI, and app contracts
-    +-- exact signed App Store packages and verified source fallbacks
-    +-- approved successful read observations
-    |
-    v
-validated typed resources, relationships, permissions, and actions
-    |
-    v
-reusable semantic models
-    |
-    +-- files, media, people, mail, calendar, board, table, recipe ...
-    |
-    v
-platform-adapted native UI for Android and desktop
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/adaptive-native-architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/adaptive-native-architecture-light.svg">
+  <img src="docs/assets/adaptive-native-architecture-light.svg" alt="nati.ve architecture from verified evidence through typed resources and semantic models to platform-adapted native UI">
+</picture>
 
 Discovery is deterministic before it is heuristic. The runtime can infer field
 roles, relationships, component families, labels, and useful entry points, but
@@ -96,13 +154,18 @@ See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
 [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) for the trust and execution
 boundaries.
 
-## What works in the current alpha
+## Implemented alpha surfaces
+
+**Last reviewed: 2026-09-01.** Repository implementation may have changed. The
+[default branch](https://github.com/obiente/native/tree/main) is the source of
+truth for current code. A listed surface can still have platform, version,
+action, or lifecycle limitations and is not a shipped-support guarantee.
 
 The repository already contains runnable Android and Linux desktop
 applications with:
 
-- Nextcloud Login Flow v2 with Android Keystore and Linux Secret Service
-  credential storage;
+- Nextcloud Login Flow v2 with Android Keystore, Linux Secret Service, Windows
+  Credential Manager, and source-tested macOS Keychain credential storage;
 - authenticated native Files browsing, list/grid layouts, previews, sharing
   foundations, text editing, and media viewing;
 - Photos and Memories collections, albums, tags, people, favorites, RAW/JPEG
@@ -112,8 +175,12 @@ applications with:
 - Notes with folders, ETag-aware writes, and native Markdown edit/preview;
 - Activity, global search, Dashboard, user status, and app navigation;
 - native semantic flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks,
-  Tables, Deck, Cospend, Budget, Office metadata, and administration inventory
+  Tables, Deck, Cospend, Budget, and administration inventory
   at different levels of completeness;
+- a native Office document browser and capability-driven editor choices,
+  document-only embedded Office sessions on Android,
+  and a system-browser handoff on desktop. This is web integration, not a native
+  Office engine or a claim of verified compatibility with every suite;
 - signed-contract acquisition from exact Nextcloud App Store releases plus a
   guarded exact-source fallback for apps that do not advertise a contract;
 - shape-driven tables, boards, forms, settings, summaries, charts, collection
@@ -127,9 +194,9 @@ surfaces remain read-heavy, some actions still need stronger context binding,
 contract discovery and persistent caching need further work, and native UX
 quality varies by workflow. The public Project tracks those gaps.
 
-## The next phase
+## Planned work
 
-The project is moving from a broad native prototype to a dependable daily
+The project is strengthening the foundations required for a dependable daily
 client.
 
 | Workstream | What this phase delivers |
@@ -150,12 +217,17 @@ The dependency gates and data-safety criteria are in
 
 ## Platform status
 
+**Last reviewed: 2026-09-01.** Platform availability may have changed. The
+[GitHub Releases page](https://github.com/obiente/native/releases) is the
+source of truth for published artifacts and limitations. This table is not a
+stable-support guarantee.
+
 | Platform | Current state |
 | --- | --- |
-| Android | Active application target, routine emulator and physical-device QA, signed APK/AAB prereleases |
+| Android | Active application target with signed APK/AAB prereleases; hosted CI covers unit tests and packaging, while connected-device instrumentation remains separate |
 | Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
 | Windows | x86-64 MSI, native Credential Manager login storage, and Cloud Files sync under active prerelease qualification |
-| macOS | Early DMG packaging artifact; native Keychain login storage and supported authenticated use are not implemented yet |
+| macOS | Early DMG packaging artifact; native Keychain storage is covered by deterministic source tests, but authenticated use has not been live-validated or qualified |
 | iOS / iPadOS | Planned platform target; no supported launcher is shipped yet |
 
 Android and desktop already share domain models, semantic components, and
@@ -195,7 +267,7 @@ See [PLATFORMS.md](PLATFORMS.md) for the platform boundary and
 ## Try a prerelease
 
 Testing builds are published on the
-[GitHub Releases page](https://github.com/Obiente/nc-native/releases).
+[GitHub Releases page](https://github.com/obiente/native/releases).
 Releases remain below `1.0.0` and are marked as prereleases until the published
 product, data-loss, security, and platform gates pass.
 
@@ -203,8 +275,9 @@ Android release artifacts are signed with the project's protected release key.
 Desktop packages are provided per successful platform build. Windows MSI
 packages use native Credential Manager storage, include keyless GitHub build
 provenance, and are currently unsigned, so SmartScreen may require choosing
-`More info > Run anyway`. macOS packages still prove packaging only and do not
-yet have native Keychain login integration.
+`More info > Run anyway`. The source includes deterministically tested macOS
+Keychain integration, but the macOS package remains a packaging artifact until
+authenticated use passes a live macOS acceptance run.
 Read each release's known limitations before installing over an existing test
 build.
 
@@ -220,8 +293,8 @@ Use `ANDROID_HOME` or `ANDROID_SDK_ROOT` for your own SDK installation. Do not
 commit `local.properties` or a home-directory path.
 
 ```bash
-git clone https://github.com/Obiente/nc-native.git
-cd nc-native
+git clone https://github.com/obiente/native.git
+cd native
 
 cargo test --locked
 ./gradlew --no-daemon :ui:desktopTest
@@ -229,6 +302,16 @@ cargo test --locked
 ./gradlew --no-daemon :androidApp:assembleDebug
 bash tools/check-repository.sh
 ```
+
+For a locally signed app that installs alongside release and nightly builds, use the dedicated
+development variant:
+
+```bash
+./tools/deploy-android-dev.sh
+```
+
+It installs as `dev.obiente.nextcloudnative.dev` with the label `nati.ve Dev`, so local
+testing never replaces the signed `dev.obiente.nextcloudnative` package.
 
 The Gradle wrapper pins Gradle itself, and the project build targets JDK 21.
 Build and test jobs are path-filtered where appropriate so documentation-only
@@ -258,6 +341,7 @@ Architecture and protocol references:
 - [Native Schema](NATIVE_SCHEMA.md)
 - [Platform strategy](PLATFORMS.md)
 - [Compatibility matrix](COMPATIBILITY.md)
+- [Linux package repositories](docs/linux-package-repositories.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
@@ -284,11 +368,11 @@ human-led and accountable; disclosure is appreciated but optional. See
 [AI_POLICY.md](AI_POLICY.md).
 
 Report security issues privately through
-[GitHub private vulnerability reporting](https://github.com/Obiente/nc-native/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/obiente/native/security/advisories/new).
 
 ## License and trademark
 
-Nextcloud Native is licensed under the
+nati.ve is licensed under the
 [GNU Affero General Public License, version 3 or later](LICENSE).
 
 "Nextcloud" is a trademark of Nextcloud GmbH. This independent Obiente project

@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Typography
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
 import dev.obiente.nextcloudnative.app.MAX_PHOTO_EDIT_SOURCE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
@@ -28,6 +29,7 @@ import org.jetbrains.skia.Image
 internal class RawMediaMarketingCapture private constructor(
     private val mode: RawCaptureMode,
     private val renderedPreview: ByteArray,
+    captureIdentity: String,
 ) {
     private val requests = mutableListOf<NextcloudApiRequest>()
     private val nativePreviewBounds = mutableListOf<Int>()
@@ -36,7 +38,7 @@ internal class RawMediaMarketingCapture private constructor(
     private val services: NextcloudPlatformServices = networkInertServices()
     private val session = NextcloudSession(
         serverUrl = "https://fixture.invalid",
-        loginName = "$FIXTURE_USER_ID-${mode.name.lowercase()}",
+        loginName = "$FIXTURE_USER_ID-${mode.name.lowercase()}-$captureIdentity",
         appPassword = "synthetic-capture-password",
     )
 
@@ -50,8 +52,8 @@ internal class RawMediaMarketingCapture private constructor(
     }
 
     @Composable
-    fun Content() {
-        NextcloudNativeTheme(darkTheme = true) {
+    fun Content(darkTheme: Boolean, typography: Typography) {
+        NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
             NextcloudAppBackground {
                 NextcloudMediaViewer(
                     media = listOf(rawFile),
@@ -213,6 +215,7 @@ internal class RawMediaMarketingCapture private constructor(
     companion object {
         fun forScenarioOrNull(
             scenario: MarketingCaptureScenario,
+            captureIdentity: String,
         ): RawMediaMarketingCapture? {
             val mode = when (scenario) {
                 MarketingCaptureScenario.RawPreviewLoadingMobile -> RawCaptureMode.Loading
@@ -222,7 +225,7 @@ internal class RawMediaMarketingCapture private constructor(
                 else -> return null
             }
             val bytes = loadRawCaptureFixture()
-            return RawMediaMarketingCapture(mode, bytes)
+            return RawMediaMarketingCapture(mode, bytes, captureIdentity)
         }
     }
 }

@@ -18,6 +18,7 @@ class FileSyncCoordinatorSnapshotTest {
                     SyncEntryKind.File,
                     "local-2",
                     contentHash = "sha256:" + "11".repeat(32),
+                    modifiedEpochMillis = 1_000L,
                 ),
             ),
             listOf(
@@ -26,6 +27,7 @@ class FileSyncCoordinatorSnapshotTest {
                     SyncEntryKind.File,
                     "remote-2",
                     contentHash = "sha256:" + "22".repeat(32),
+                    modifiedEpochMillis = 2_000L,
                 ),
             ),
             100,
@@ -35,6 +37,35 @@ class FileSyncCoordinatorSnapshotTest {
             "pair-b",
             first.pairs.single { it.id == "pair-b" }.workItems.single().id,
             FileSyncDecisionChoice.UseLocal,
+        )
+        first = first.copy(
+            pairs = first.pairs.map { pair ->
+                if (pair.id != "pair-b") pair else pair.copy(
+                    contentVerificationProgress = listOf(
+                        FileSyncContentVerificationProgress(
+                            candidate = FileSyncContentVerificationCandidate(
+                                "archive.bin",
+                                "local-archive",
+                                "remote-archive",
+                                10_000L,
+                            ),
+                            verifiedBytes = 4_096L,
+                            aggregateHash = "sha256:" + "44".repeat(32),
+                        ),
+                    ),
+                    pendingUploadCleanups = listOf(
+                        FileSyncPendingUploadCleanup(
+                            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                            relativePath = "archive.bin",
+                            assembledStageEtag = "stage-etag",
+                            replacementBackupEtag = "directory-etag",
+                            expectedStageSizeBytes = 4,
+                            expectedStageContentHash = "sha256:" + "55".repeat(32),
+                            publicationInFlight = true,
+                        ),
+                    ),
+                )
+            },
         )
         val second = first.copy(pairs = first.pairs.reversed())
 
@@ -51,7 +82,7 @@ class FileSyncCoordinatorSnapshotTest {
     }
 
     @Test
-    fun `interrupted running command is ready after restart and not considered complete`() {
+    fun `interrupted running command requires reconciliation after restart`() {
         var state = FileSyncCoordinatorState(
             listOf(
                 pair(
@@ -72,8 +103,9 @@ class FileSyncCoordinatorSnapshotTest {
         val restored = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(state))
         val restoredPair = restored.pairs.single()
 
-        assertEquals(FileSyncExecutionState.Ready, restoredPair.workItems.single().state)
+        assertEquals(FileSyncExecutionState.Failed, restoredPair.workItems.single().state)
         assertEquals(1, restoredPair.workItems.single().attemptCount)
+        assertEquals(INTERRUPTED_FILE_SYNC_FAILURE_MESSAGE, restoredPair.workItems.single().failureMessage)
         assertEquals(listOf(baseline("note.md", "l1", "r1")), restoredPair.baselines)
     }
 
@@ -114,7 +146,10 @@ class FileSyncCoordinatorSnapshotTest {
 
     private fun state() = FileSyncCoordinatorState(
         pairs = listOf(
-            pair("pair-b", listOf(baseline("vault.md", "local-1", "remote-1"))),
+            pair(
+                "pair-b",
+                listOf(baseline("vault.md", "local-1", "remote-1", "sha256:" + "33".repeat(32))),
+            ),
             pair("pair-a"),
         ),
     )
@@ -135,6 +170,10 @@ class FileSyncCoordinatorSnapshotTest {
         baselines = baselines,
     )
 
-    private fun baseline(path: String, localRevision: String, remoteEtag: String) =
-        FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag)
+    private fun baseline(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        contentHash: String? = null,
+    ) = FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag, contentHash)
 }

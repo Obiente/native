@@ -22,6 +22,7 @@ jobs:
     outputs:
       version-code: ${{ steps.version-code.outputs.value }}
       desktop-version: ${{ steps.version-code.outputs.desktop_version }}
+      release-date: ${{ steps.version-code.outputs.release_date }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -62,9 +63,15 @@ jobs:
           desktop_version="$(
             tools/derive-desktop-package-version.sh "${source_sequence}" "${channel}"
           )"
+          release_started_at="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --jq .created_at
+          )"
+          release_date="$(date --utc --date="${release_started_at}" +%F)"
           {
             echo "value=${version_code}"
             echo "desktop_version=${desktop_version}"
+            echo "release_date=${release_date}"
           } >>"${GITHUB_OUTPUT}"
 
   validate:
@@ -89,7 +96,7 @@ jobs:
         run: cat docs/prerelease-checklist.md >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -163,11 +170,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
+
+      - name: Set up Rust for Windows packaging
+        if: matrix.platform == 'windows'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Build native desktop package
         shell: bash
@@ -180,6 +193,7 @@ jobs:
             -PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}" \
             -PncVersionName="${GITHUB_REF_NAME#v}" \
             -PncVersionCode="${{ needs.authorize-signing.outputs.version-code }}" \
+            -PncAppStreamReleaseDate="${{ needs.authorize-signing.outputs.release-date }}" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
@@ -200,7 +214,17 @@ jobs:
             -ExpectedVersion "${env:RELEASE_DESKTOP_VERSION}"
 
       - name: Attest Windows MSI provenance
+        id: attest-windows-msi
         if: matrix.platform == 'windows'
+        continue-on-error: true
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ui/build/compose/binaries/main/msi/*.msi
+
+      - name: Retry Windows MSI provenance attestation
+        if: >-
+          matrix.platform == 'windows' &&
+          steps.attest-windows-msi.outcome == 'failure'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: ui/build/compose/binaries/main/msi/*.msi
@@ -224,7 +248,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -531,6 +555,17 @@ jobs:
             NR == 2 && /^$/ { next }
             { print }
           ' "docs/release-notes/${version}.md" >"${RUNNER_TEMP}/release-notes.md"
+          node tools/release-download-table.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --assets dist \
+            --output "${RUNNER_TEMP}/release-downloads.md"
+          {
+            cat "${RUNNER_TEMP}/release-downloads.md"
+            cat "${RUNNER_TEMP}/release-notes.md"
+          } >"${RUNNER_TEMP}/release-notes-with-downloads.md"
+          mv "${RUNNER_TEMP}/release-notes-with-downloads.md" \
+            "${RUNNER_TEMP}/release-notes.md"
           if [[ "${SUCCESSFUL_PLATFORMS}" -lt 4 ]]; then
             {
               printf '\n## Build availability\n\n'
@@ -558,7 +593,7 @@ jobs:
                 'The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.'
               printf '\n'
               printf '%s\n' \
-                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo Obiente/nc-native` and compare the file with `SHA256SUMS`.'
+                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo obiente/native` and compare the file with `SHA256SUMS`.'
             } >>"${RUNNER_TEMP}/release-notes.md"
           fi
 
@@ -656,7 +691,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           else
             test "${#assets[@]}" -gt 0
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
@@ -666,7 +701,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           fi
 
           if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
@@ -678,6 +713,19 @@ jobs:
             if [[ -f "${canonical}/SHA256SUMS" ]]; then
               rm "${canonical}/SHA256SUMS"
             fi
+            node tools/release-download-table.mjs \
+              --repository "${GITHUB_REPOSITORY}" \
+              --tag "${GITHUB_REF_NAME}" \
+              --assets "${canonical}" \
+              --output "${RUNNER_TEMP}/canonical-release-downloads.md" \
+              --replace-in "${RUNNER_TEMP}/release-notes.md"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "nati.ve ${version}"
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0

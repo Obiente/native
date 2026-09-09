@@ -64,6 +64,18 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         else if (action.resourceId != form.resourceId) add("Form action resource does not match: ${form.id}")
         else if (action.binding.method == HttpMethod.GET) add("Form points to read action: ${form.id}")
         if (form.resourceId !in resourcesById) add("Missing resource reference: ${form.resourceId}")
+        form.fields.forEach { field ->
+            if (field.enumLabels?.let { labels ->
+                    field.enumValues == null ||
+                        labels.keys != field.enumValues.toSet() ||
+                        labels.values.any { label ->
+                            label.isBlank() || label.length > MAX_DYNAMIC_ENUM_LABEL_LENGTH
+                        }
+                } == true
+            ) {
+                add("Invalid enum labels: ${form.id}.${field.fieldId}")
+            }
+        }
     }
     resources.forEach { resource ->
         resource.capabilityIds.filter { it !in capabilityIds }.forEach {
@@ -71,6 +83,32 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         }
         resource.permissionIds.filter { it !in permissionIds }.forEach {
             add("Missing permission reference: $it")
+        }
+        resource.recordImagePreview?.let { preview ->
+            val action = actionsById[preview.actionId]
+            when {
+                action == null -> add("Missing record image preview action reference: ${preview.actionId}")
+                action.resourceId != resource.id ->
+                    add("Record image preview action resource does not match: ${resource.id}")
+                action.binding.method != HttpMethod.GET ||
+                    action.intent != ActionIntent.read ||
+                    action.risk != ActionRisk.readOnly ->
+                    add("Record image preview must target a read-only GET: ${preview.actionId}")
+                action.binding.pathParameters.isEmpty() ||
+                    action.binding.body != null ||
+                    action.binding.queryParameters.any(HttpParameter::required) ->
+                    add("Record image preview requires unsupported request input: ${preview.actionId}")
+                action.fallbackOnly -> add("Record image preview action is hidden: ${preview.actionId}")
+                action.provenance.none(Provenance::isTrustedRecordImagePreviewEvidence) ->
+                    add("Record image preview requires trusted evidence: ${preview.actionId}")
+            }
+            if (
+                preview.declaredContentTypes.isEmpty() ||
+                preview.declaredContentTypes.distinct().size != preview.declaredContentTypes.size ||
+                preview.declaredContentTypes.any { type -> !type.isSafeRecordImagePreviewContentType() }
+            ) {
+                add("Record image preview declares invalid response media types: ${preview.actionId}")
+            }
         }
     }
     actions.forEach { action ->
@@ -131,6 +169,18 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         if (action.fallbackOnly && action.binding.method != HttpMethod.GET) {
             add("Hidden fallback action is not read-only: ${action.id}")
         }
+        action.recordCursorFieldId?.let { fieldId ->
+            when {
+                fieldId.isBlank() -> add("Record cursor field is blank: ${action.id}")
+                action.binding.method != HttpMethod.GET || action.intent != ActionIntent.list ->
+                    add("Record cursor binding is not a collection GET: ${action.id}")
+                action.binding.queryParameters.none { parameter ->
+                    !parameter.required && parameter.name.equals("cursor", ignoreCase = true)
+                } -> add("Record cursor binding has no optional cursor query: ${action.id}")
+                action.provenance.none { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage } ->
+                    add("Record cursor binding lacks verified package evidence: ${action.id}")
+            }
+        }
         val placeholders = action.binding.path.pathPlaceholders()
         val parameters = action.binding.pathParameters.mapTo(mutableSetOf(), HttpParameter::name)
         if (placeholders != parameters) add("Path parameters do not match placeholders: ${action.id}")
@@ -151,6 +201,16 @@ private fun Provenance.isTrustedResultRecoveryEvidence(): Boolean =
         ProvenanceKind.verifiedAppPackage,
         ProvenanceKind.appStoreLinkedSourceTag,
     )
+
+private fun Provenance.isTrustedRecordImagePreviewEvidence(): Boolean =
+    kind in setOf(
+        ProvenanceKind.verifiedAppPackage,
+        ProvenanceKind.appStoreLinkedSourceTag,
+    )
+
+private fun String.isSafeRecordImagePreviewContentType(): Boolean =
+    isNotBlank() && length <= 128 && this == lowercase() && ';' !in this && none(Char::isISOControl) &&
+        (this == "*/*" || this == "application/octet-stream" || startsWith("image/"))
 
 fun DynamicAppDescriptor.requireValid(): DynamicAppDescriptor {
     val errors = validationErrors()

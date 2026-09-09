@@ -26,6 +26,17 @@ class NextcloudFileListingHttpException(
     }
 }
 
+/** A server-backed Files search was rejected by the WebDAV endpoint. */
+class NextcloudFileSearchHttpException(
+    val status: Int,
+) : Exception("File search failed (HTTP $status).") {
+    init {
+        require(status in 100..599 && status !in 200..299) {
+            "A file-search HTTP failure requires a non-success status."
+        }
+    }
+}
+
 internal fun nextcloudFileListingSummary(
     source: NextcloudFileListingSource?,
     visibleCount: Int,

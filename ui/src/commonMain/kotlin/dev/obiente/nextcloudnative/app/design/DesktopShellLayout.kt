@@ -18,6 +18,19 @@ enum class NextcloudNavigationStyle {
     ExpandedSidebar,
 }
 
+/**
+ * Identifies the content presented beside the persistent desktop navigation.
+ *
+ * The global Nextcloud sidebar remains useful in both cases: pinned and recent apps stay reachable
+ * while an app is open, so switching workspaces never requires returning to the Apps destination.
+ * Contextual app navigation belongs inside the app content area rather than replacing the global
+ * workspace switcher.
+ */
+enum class NextcloudDesktopWorkspaceKind {
+    Root,
+    AppWorkspace,
+}
+
 data class NextcloudRootShellLayout(
     val navigationStyle: NextcloudNavigationStyle,
     val navigationWidthDp: Int,
@@ -26,17 +39,19 @@ data class NextcloudRootShellLayout(
     val supportsAuxiliaryPane: Boolean,
 )
 
-/** Desktop chrome persists across detail screens; adaptive navigation only wraps root destinations. */
+/** Desktop always keeps its shell; adaptive layouts keep it for root and top-level app workspaces. */
 fun shouldUseNextcloudRootShell(
     presentation: NextcloudPresentation,
-    isRootScreen: Boolean,
-): Boolean = presentation == NextcloudPresentation.Desktop || isRootScreen
+    isRootOrAppWorkspace: Boolean,
+): Boolean = presentation == NextcloudPresentation.Desktop || isRootOrAppWorkspace
 
 /** Pure, platform-neutral layout policy used by the Compose shell and unit tests. */
 fun resolveNextcloudRootShellLayout(
     presentation: NextcloudPresentation,
     availableWidthDp: Int,
     destination: NextcloudDestination,
+    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
+    desktopSidebarExpanded: Boolean? = null,
 ): NextcloudRootShellLayout = when (presentation) {
     NextcloudPresentation.Adaptive -> {
         if (availableWidthDp < NextcloudWorkspaceBreakpoints.AdaptiveRailDp) {
@@ -54,6 +69,7 @@ fun resolveNextcloudRootShellLayout(
                 workspaceMarginDp = 0,
                 contentMaximumWidthDp = when (destination) {
                     NextcloudDestination.Apps -> 1_120
+                    NextcloudDestination.FolderSync -> 1_120
                     else -> 720
                 },
                 supportsAuxiliaryPane = false,
@@ -62,7 +78,8 @@ fun resolveNextcloudRootShellLayout(
     }
 
     NextcloudPresentation.Desktop -> {
-        val expanded = availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp
+        val expanded = availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp &&
+            desktopSidebarExpanded != false
         NextcloudRootShellLayout(
             navigationStyle = if (expanded) {
                 NextcloudNavigationStyle.ExpandedSidebar

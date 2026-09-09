@@ -2,9 +2,12 @@ import { renderToString } from "@vue/server-renderer";
 import { createServerApp } from "./site.js";
 import { docs } from "./generated/docs.js";
 import { docsContent } from "./generated/docs-content.js";
+import { guides } from "./generated/guides.js";
+import { guidesContent } from "./generated/guides-content.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
+import { guidePlatformHubs, guidePlatformHubForPath } from "./guide-platforms.js";
 import {
   metadataFor,
   sharingHeadFor,
@@ -45,6 +48,7 @@ export async function render(pathname) {
   const props = {
     initialPath,
     initialDoc: docsContent.find((doc) => doc.path === initialPath) ?? null,
+    initialGuide: guidesContent.find((guide) => guide.path === initialPath) ?? null,
     initialNews: news.find((post) => post.path === initialPath) ?? null,
   };
   const app = createServerApp(props);
@@ -54,13 +58,13 @@ export async function render(pathname) {
   const softwareData = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    name: "Nextcloud Native",
-    applicationCategory: "ProductivityApplication",
-    operatingSystem: "Android, Linux",
+    name: "nati.ve",
+    applicationCategory: "UtilitiesApplication",
+    operatingSystem: "Android, Linux, Windows",
     description:
-      "An early alpha native Nextcloud client for Android and Linux with real Files, media, Talk, Notes, Activity, dashboard, and adaptive app integrations.",
+      "An open-source native alpha client for Nextcloud on Android, Linux, and Windows, with verified Files, media, Calendar, app, offline, and sync foundations.",
     url: siteUrl,
-    codeRepository: "https://github.com/Obiente/nc-native",
+    codeRepository: "https://github.com/obiente/native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
     author: {
       "@type": "Organization",
@@ -74,36 +78,42 @@ export async function render(pathname) {
     },
     image: `${siteUrl}/icon-512.png`,
     isAccessibleForFree: true,
+    offers: {
+      "@type": "Offer",
+      price: 0,
+      priceCurrency: "EUR",
+    },
     inLanguage: "en",
-    downloadUrl: "https://github.com/Obiente/nc-native/releases",
-    softwareHelp: `${siteUrl}/contributing/`,
+    downloadUrl: "https://github.com/obiente/native/releases",
+    softwareHelp: `${siteUrl}/guides/`,
     featureList: [
-      "Native Nextcloud account connection on Android and Linux",
-      "WebDAV file browsing, previews, bounded downloads, and guarded text editing",
-      "Media browsing, server and RAW previews, recognized people, and per-person galleries",
-      "Talk room and read-only history views with typed attachments and system events",
-      "Markdown Notes editing and preview with explicit save and conflict handling",
-      "Read-only Activity timeline and adaptive typed views for installed apps",
+      "Nextcloud Login Flow on Android, Linux, and Windows with native credential storage",
+      "Native Files browsing, previews, sharing foundations, Android offline storage, and guarded folder sync",
+      "Photos and Memories browsing with media backup state on Android",
+      "Native Talk history, Notes editing, Calendar, Activity, Dashboard, search, and app navigation",
+      "Verified installed-app contracts rendered through reusable native workspaces",
     ],
     screenshot: [
       captureUrl("desktop-home"),
       captureUrl("mobile-home"),
     ],
   };
-  const structuredData = [
+  const structuredData = initialPath === "/" ? [
     softwareData,
     {
       "@context": "https://schema.org",
       "@type": "WebSite",
-      name: "Nextcloud Native",
+      name: "nati.ve",
       url: siteUrl,
       publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
       image: `${siteUrl}/icon-512.png`,
-      sameAs: ["https://github.com/Obiente/nc-native"],
+      sameAs: ["https://github.com/obiente/native"],
       inLanguage: "en",
     },
-  ];
+  ] : [];
   if (initialPath !== "/") {
+    const guide = guides.find((entry) => entry.path === initialPath);
+    const guideHub = guidePlatformHubForPath(initialPath);
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
@@ -111,7 +121,7 @@ export async function render(pathname) {
         {
           "@type": "ListItem",
           position: 1,
-          name: "Nextcloud Native",
+          name: "nati.ve",
           item: siteUrl,
         },
         ...(metadata.published
@@ -121,21 +131,80 @@ export async function render(pathname) {
               name: "News",
               item: `${siteUrl}/news/`,
             }]
+            : guide || guideHub
+            ? [{
+                "@type": "ListItem",
+                position: 2,
+                name: "Guides",
+                item: `${siteUrl}/guides/`,
+              }]
+            : []),
+        ...(guide
+          ? [{
+              "@type": "ListItem",
+              position: 3,
+              name: `${guide.platform} guides`,
+              item: `${siteUrl}/guides/${guide.platformSlug}/`,
+            }]
           : []),
         {
           "@type": "ListItem",
-          position: metadata.published ? 3 : 2,
-          name: metadata.title.replace(" · Nextcloud Native", ""),
+          position: guide ? 4 : metadata.published || guideHub ? 3 : 2,
+          name: metadata.title.replace(" | nati.ve", ""),
           item: metadata.canonical,
         },
       ],
+    });
+  }
+  const currentGuide = guides.find((guide) => guide.path === initialPath);
+  if (currentGuide) {
+    structuredData.push({
+      "@context": "https://schema.org",
+      "@type": ["TechArticle", "HowTo"],
+      name: currentGuide.title,
+      headline: currentGuide.title,
+      description: currentGuide.description,
+      dateModified: currentGuide.lastUpdated,
+      mainEntityOfPage: `${siteUrl}${currentGuide.path}`,
+      author: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      audience: {
+        "@type": "Audience",
+        audienceType: `${currentGuide.platform} ${currentGuide.device} users`,
+      },
+      about: [
+        { "@type": "SoftwareApplication", name: "nati.ve", url: siteUrl },
+        { "@type": "Thing", name: currentGuide.platform },
+      ],
+      timeRequired: `PT${currentGuide.durationMinutes}M`,
+      totalTime: `PT${currentGuide.durationMinutes}M`,
+      dependencies: currentGuide.prerequisites.join("; "),
+      hasPart: currentGuide.steps.map((step) => ({
+        "@type": "HowToStep",
+        position: step.number,
+        name: step.title,
+        text: step.text,
+        url: `${siteUrl}${currentGuide.path}#step-${step.number}`,
+        image: `${siteUrl}${step.imageDark}`,
+      })),
+      step: currentGuide.steps.map((step) => ({
+        "@type": "HowToStep",
+        position: step.number,
+        name: step.title,
+        text: step.text,
+        url: `${siteUrl}${currentGuide.path}#step-${step.number}`,
+        image: `${siteUrl}${step.imageDark}`,
+      })),
+      image: `${siteUrl}${currentGuide.imageDark}`,
+      inLanguage: "en",
+      isAccessibleForFree: true,
     });
   }
   if (metadata.published) {
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "Article",
-      headline: metadata.title.replace(" · Nextcloud Native", ""),
+      headline: metadata.title.replace(" | nati.ve", ""),
       description: metadata.description,
       datePublished: metadata.published,
       dateModified: metadata.modified,
@@ -153,42 +222,18 @@ export async function render(pathname) {
       isAccessibleForFree: true,
       inLanguage: "en",
       about: [
-        { "@type": "SoftwareApplication", name: "Nextcloud Native", url: siteUrl },
+        { "@type": "SoftwareApplication", name: "nati.ve", url: siteUrl },
         { "@type": "Thing", name: "Nextcloud" },
       ],
-    });
-  }
-  if (initialPath === "/") {
-    structuredData.push({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: [
-        [
-          "Is Nextcloud Native a web wrapper?",
-          "No. It uses Nextcloud server APIs and renders native interfaces for phone and desktop.",
-        ],
-        [
-          "Can Nextcloud Native sync an Obsidian folder?",
-          "Revision-aware folder-pair sync is in active development and is tracked on the public roadmap.",
-        ],
-        [
-          "Can Nextcloud Native back up phone photos?",
-          "Verified photo backup and safe storage recovery are in active development and are tracked on the public roadmap.",
-        ],
-      ].map(([name, text]) => ({
-        "@type": "Question",
-        name,
-        acceptedAnswer: { "@type": "Answer", text },
-      })),
     });
   }
   const head = [
     `<title>${escapeHtml(metadata.title)}</title>`,
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
     sharingHeadFor(metadata),
-    `<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">`,
+    `<meta name="robots" content="${metadata.robots ?? "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"}">`,
     `<meta name="author" content="Obiente">`,
-    `<link rel="alternate" type="application/rss+xml" title="Nextcloud Native project news" href="${siteUrl}/news.xml">`,
+    `<link rel="alternate" type="application/rss+xml" title="nati.ve project news" href="${siteUrl}/news.xml">`,
     `<script type="application/ld+json">${safeJson(structuredData)}</script>`,
   ].join("\n    ");
 
@@ -201,10 +246,32 @@ export async function render(pathname) {
 
 export const routes = [
   "/",
+  "/guides/",
+  ...guidePlatformHubs.map((hub) => `/guides/${hub.slug}/`),
   "/news/",
   "/visual-qa/",
   changelog.path,
   ...news.map((post) => post.path),
+  ...guides.map((guide) => guide.path),
   ...docs.map((doc) => doc.path),
 ];
+export const sitemapRoutes = routes.filter((route) => route !== "/visual-qa/");
 export const newsEntries = news;
+const latestModification = (entries) => entries
+  .map((entry) => entry.lastUpdated)
+  .filter(Boolean)
+  .sort()
+  .at(-1);
+export const sitemapEntries = [
+  ...news,
+  ...guides,
+  ...docs.map((doc) => ({ path: doc.path, lastUpdated: "2026-08-20" })),
+  { path: "/news/", lastUpdated: latestModification(news) },
+  { path: "/guides/", lastUpdated: latestModification(guides) },
+  ...guidePlatformHubs.map((hub) => ({
+    path: `/guides/${hub.slug}/`,
+    lastUpdated: latestModification(guides.filter((guide) =>
+      hub.slug === "desktop" ? guide.device === "Desktop" : guide.platforms.includes(hub.label)
+    )),
+  })),
+];

@@ -92,11 +92,12 @@ private fun Media3VideoPlayer(
             Base64.NO_WRAP,
         )
         val client = OkHttpClient.Builder()
+            .useAndroidNextcloudCertificateTrust(context.applicationContext)
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
         val sourceFactory = OkHttpDataSource.Factory(client)
-            .setUserAgent("Nextcloud Native")
+            .setUserAgent("nati.ve")
             .setDefaultRequestProperties(
                 source.authenticatedRequestProperties("Basic $authorization"),
             )

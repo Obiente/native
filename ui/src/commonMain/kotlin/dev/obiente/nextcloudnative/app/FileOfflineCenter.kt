@@ -109,6 +109,18 @@ fun defaultFileOfflineCenterSnapshot(
         ),
         folderAvailability = supportsRecursiveFolderAvailability.toOfflineFolderAvailability(),
     )
+} else if (supportsRecursiveFolderAvailability) {
+    FileOfflineCenterSnapshot(
+        support = FileOfflineCenterSupport.InventoryUnavailable,
+        items = emptyList(),
+        storageUsage = null,
+        limitations = listOf(
+            "Selected folders can be kept available offline through the retained-folder controls.",
+            "Recursive folder availability downloads server changes; it does not upload local edits or mirror local deletions.",
+            OFFLINE_CENTER_NO_BIDIRECTIONAL_SYNC_LIMITATION,
+        ),
+        folderAvailability = FileOfflineFolderAvailability.RecursiveDownloadOnly,
+    )
 } else {
     FileOfflineCenterSnapshot(
         support = FileOfflineCenterSupport.Unsupported,
@@ -200,6 +212,8 @@ fun FileOfflineAvailability.offlineCenterLabel(): String = when (this) {
 private fun FileSyncDecisionReason.readableOfflineConflict(): String = when (this) {
     FileSyncDecisionReason.FirstSyncCollision -> "A local copy already exists and needs review."
     FileSyncDecisionReason.SimultaneousEdit -> "The server file and local copy changed independently."
+    FileSyncDecisionReason.UnverifiedLocalContent ->
+        "The local copy could not be authenticated for automatic replacement."
     FileSyncDecisionReason.LocalDeletion -> "The local copy was removed after it was downloaded."
     FileSyncDecisionReason.RemoteDeletion -> "The server file was removed after it was downloaded."
     FileSyncDecisionReason.TypeChanged -> "The file type changed and cannot be reconciled automatically."

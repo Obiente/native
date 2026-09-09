@@ -79,6 +79,9 @@ internal fun nativeRelationOptions(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): List<NativeRelationOption> {
+    context.contextualNativeRelationChoices(field)?.let { projection ->
+        return projection.options
+    }
     val relationship = nativeRelationRelationship(field, formResource, schema) ?: return emptyList()
     val parentResource = schema.resources.singleOrNull { resource ->
         resource.id == relationship.parentResourceId &&
@@ -128,6 +131,9 @@ internal fun nativeRelationChoiceUnavailableReason(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): NativeRelationChoiceUnavailableReason? {
+    context.contextualNativeRelationChoices(field)?.let { projection ->
+        return projection.unavailableReason
+    }
     val relationship = nativeRelationRelationship(field, formResource, schema)
         ?: return NativeRelationChoiceUnavailableReason.relationship
     val parentResource = schema.resources.singleOrNull { resource ->
@@ -171,8 +177,11 @@ internal fun nativeRelationFieldRequiresChoice(
     field: FieldSpec,
     formResource: ResourceSpec,
     schema: NativeAppSchema,
+    context: NativeDatasetContext? = null,
 ): Boolean = nativeRelationRelationship(field, formResource, schema) != null ||
-    field.isOpaqueNativeRelationshipIdentity()
+    field.isOpaqueNativeRelationshipIdentity() ||
+    field.kind == FieldKind.userReference ||
+    context?.fieldChoices?.containsKey(field.id) == true
 
 internal fun nativeRelationChoicesLoaded(
     field: FieldSpec,
@@ -182,7 +191,7 @@ internal fun nativeRelationChoicesLoaded(
 ): Boolean = nativeRelationRelationship(field, formResource, schema)
     ?.parentResourceId
     ?.let(context.relatedRecords::containsKey)
-    ?: false
+    ?: context.fieldChoices.containsKey(field.id)
 
 internal fun nativeRelationChoiceSourceHasRecords(
     field: FieldSpec,
@@ -192,7 +201,60 @@ internal fun nativeRelationChoiceSourceHasRecords(
 ): Boolean = nativeRelationRelationship(field, formResource, schema)
     ?.parentResourceId
     ?.let { resourceId -> context.relatedRecords[resourceId].orEmpty().isNotEmpty() }
-    ?: false
+    ?: context.fieldChoices[field.id].orEmpty().isNotEmpty()
+
+private data class NativeContextualRelationChoiceProjection(
+    val options: List<NativeRelationOption>,
+    val unavailableReason: NativeRelationChoiceUnavailableReason?,
+)
+
+private fun NativeDatasetContext.contextualNativeRelationChoices(
+    field: FieldSpec,
+): NativeContextualRelationChoiceProjection? {
+    val declared = fieldChoices[field.id] ?: return null
+    if (declared.isEmpty()) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.sourceEmpty,
+        )
+    }
+    if (declared.size > 500) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.invalidValue,
+        )
+    }
+    val options = declared.mapNotNull { choice ->
+        val value = choice.value.trim().takeIf(String::isSafeNativeRelationOptionValue)
+            ?: return@mapNotNull null
+        val label = choice.label.trim().takeIf { text ->
+            text.isNotEmpty() && text.length <= 512 && text.none(Char::isISOControl)
+        } ?: return@mapNotNull null
+        val supportingText = choice.supportingText?.trim()?.takeIf { text ->
+            text.isNotEmpty() && text.length <= 512 && text.none(Char::isISOControl)
+        }
+        NativeRelationOption(value, label, supportingText)
+    }
+    if (options.size != declared.size) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.invalidValue,
+        )
+    }
+    if (options.groupingBy(NativeRelationOption::value).eachCount().any { (_, count) -> count > 1 }) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.duplicateValue,
+        )
+    }
+    return NativeContextualRelationChoiceProjection(
+        options.sortedWith(
+            compareBy<NativeRelationOption> { option -> option.label.lowercase() }
+                .thenBy(NativeRelationOption::value),
+        ),
+        null,
+    )
+}
 
 internal fun nativeRelationRelationship(
     field: FieldSpec,
@@ -381,6 +443,10 @@ internal fun ViewSpec.genericSurface(
 ): GenericNativeSurface {
     val declared = genericSurface()
     if (resource == null || records.isEmpty()) return declared
+    if (declared in setOf(GenericNativeSurface.List, GenericNativeSurface.Insights) &&
+        (nativeCategoryCollectionPresentations(resource, records) != null ||
+            nativeFinancialAccountCollectionPresentations(resource, records) != null)
+    ) return GenericNativeSurface.List
     // Endpoint names can conservatively compile to dashboards before response data exists. Once
     // the rows prove they are transactions, prefer the ledger and keep its summary collapsible.
     if (
@@ -471,34 +537,6 @@ internal fun NativeAppSchema.settingsFormPrefillView(form: ViewSpec): ViewSpec? 
         .firstOrNull()
 }
 
-internal fun nativeTableFields(
-    resource: ResourceSpec,
-    records: List<NativeRecord>,
-    maximumColumns: Int = 8,
-): List<FieldSpec> {
-    if (maximumColumns <= 0) return emptyList()
-    val populated = resource.fields.filter { field ->
-        field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) &&
-            !field.isNativeVisualPresentationField() &&
-            records.any { record -> !record.presentationValue(field.id).isNullOrBlank() }
-    }
-    val preferredIds = listOf("name", "title", "displayName", "subject", "description")
-    val primary = preferredIds.firstNotNullOfOrNull { id ->
-        populated.firstOrNull { field -> field.id.equals(id, ignoreCase = true) }
-    } ?: populated.firstOrNull { !it.isTechnicalTableField() }
-        ?: populated.firstOrNull { it.id.equals("id", ignoreCase = true) }
-    return buildList {
-        primary?.let(::add)
-        populated.filterNot { it.id == primary?.id }.forEach(::add)
-    }.take(maximumColumns)
-}
-
-private fun FieldSpec.isTechnicalTableField(): Boolean {
-    val normalized = id.lowercase().filter(Char::isLetterOrDigit)
-    return normalized == "id" || normalized.endsWith("id") || normalized in setOf(
-        "etag", "href", "token", "permissions", "permission", "createdby", "lasteditby",
-    )
-}
 
 data class NativeFormattedField(
     val label: String,
@@ -880,7 +918,8 @@ fun editableNativeFields(resource: ResourceSpec, action: ActionSpec): List<Field
                     field.format != DYNAMIC_INTEGER_ARRAY_FORMAT ||
                         action.hasExactDynamicIntegerArrayBodyField(field.id)
                     ) &&
-                (field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
+                (field.repeatableObjectInput != null ||
+                    field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
                     field.format in setOf(
                         SETTINGS_BOOLEAN_MAP_FORMAT,
                         DYNAMIC_INTEGER_ARRAY_FORMAT,
@@ -906,22 +945,6 @@ private fun ActionSpec.dynamicIntegerArrayBodySchema(fieldId: String): JsonEleme
     val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
         ?: return null
     return properties[fieldId]
-}
-
-private fun ActionSpec.hasSupportedDynamicArrayBodyField(field: FieldSpec): Boolean {
-    val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
-        ?: return true
-    val property = properties[field.id] as? JsonObject ?: return true
-    if ((property["type"] as? JsonPrimitive)?.contentOrNull != "array") return true
-    val itemType = ((property["items"] as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
-    val format = (property["format"] as? JsonPrimitive)?.contentOrNull
-    return when (field.format) {
-        DYNAMIC_INTEGER_ARRAY_FORMAT -> property.isExactDynamicIntegerArraySchema()
-        DYNAMIC_STRING_ARRAY_FORMAT,
-        DYNAMIC_STRING_LIST_FORMAT,
-        -> itemType == "string" && format == field.format
-        else -> false
-    }
 }
 
 /**
@@ -987,7 +1010,7 @@ internal fun FieldSpec.isSafeNativeDetailField(resource: ResourceSpec): Boolean 
         ACCOUNT_INTERNAL_DETAIL_PREFIXES.none(fieldIdentity::startsWith)
 }
 
-private fun FieldSpec.isNativeVisualPresentationField(): Boolean =
+internal fun FieldSpec.isNativeVisualPresentationField(): Boolean =
     id.lowercase().filter(Char::isLetterOrDigit) in setOf("icon", "symbol", "color", "colour")
 
 private val ACCOUNT_INTERNAL_DETAIL_FIELDS = setOf(
@@ -1051,11 +1074,19 @@ fun buildNativeSubmitRequest(
     ) {
         return NativeRequestBuildResult.Invalid("The declared action cannot submit this form.")
     }
+    val exactContextBoundBodyValues = action.binding.requiredBodyFieldNames
+        .asSequence()
+        .filter(action.binding.requiredPathParameterNames::contains)
+        .filter(action::hasExactServerManagedBodyFieldEvidence)
+        .mapNotNull { fieldId ->
+            values[fieldId]?.trim()?.takeIf(String::isNotBlank)?.let { value -> fieldId to value }
+        }
+        .toMap()
     if (
         uneditableNativeBodyFieldIds(
             action = action,
             editableFields = editableNativeFields(resource, action),
-            autoBoundValues = emptyMap(),
+            autoBoundValues = exactContextBoundBodyValues,
         ).isNotEmpty()
     ) {
         return NativeRequestBuildResult.Invalid(
@@ -1104,6 +1135,25 @@ private fun ApiBinding.isProvenNativeCreateParentAlias(parameterName: String): B
 
 fun interface NativeActionExecutor {
     suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
+}
+
+data class NativePendingMutationKey(
+    val actionId: String,
+    val targetRecordId: String,
+)
+
+interface NativePendingMutationStore {
+    suspend fun load(key: NativePendingMutationKey): Map<String, String>?
+
+    suspend fun save(key: NativePendingMutationKey, values: Map<String, String>)
+
+    /** Re-reads authoritative server state and verifies this exact staged mutation identity. */
+    suspend fun postconditionSatisfied(
+        key: NativePendingMutationKey,
+        values: Map<String, String>,
+    ): Boolean = false
+
+    suspend fun clear(key: NativePendingMutationKey)
 }
 
 enum class NativeActionFailureOutcome {
@@ -1186,6 +1236,12 @@ class NativeActionCoordinator(
         ) {
             state = NativeActionExecutionState.Idle
         }
+    }
+
+    fun reportValidationFailure(message: String, fieldErrors: Map<String, String>) {
+        val active = state is NativeActionExecutionState.Running ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+        if (!active) state = NativeActionExecutionState.ValidationFailed(message, fieldErrors)
     }
 
     fun reconcileAuthoritativeRefresh(reconciliationGeneration: Int) {

@@ -6,6 +6,8 @@ enum class FileMenuAction {
     OpenWith,
     EditText,
     EditWith,
+    AddFavorite,
+    RemoveFavorite,
     Details,
     VersionHistory,
     Download,
@@ -32,8 +34,10 @@ data class FileActionSupport(
     val offlineStorage: Boolean = false,
     val platformViewer: Boolean = false,
     val platformEditor: Boolean = false,
-    val maximumExternalFileBytes: Long? = null,
+    val maximumInMemoryExternalFileBytes: Long? = null,
+    val seekableExternalFileStreaming: Boolean = false,
     val documentEditing: NextcloudDocumentEditingCapabilities? = null,
+    val discoverDocumentEditing: Boolean = false,
 )
 
 data class PlannedFileAction(
@@ -62,30 +66,32 @@ fun planFileActions(
             file.canOpenInMediaViewer() || support.platformViewer
         )
     val hasVersion = !file.etag.isNullOrBlank()
+    val canStreamExternalFile = support.seekableExternalFileStreaming &&
+        file.size?.let { it >= 0L } == true &&
+        hasVersion
     val mutationReason = when {
         !support.webDavMutations -> "This server does not expose safe file changes."
         !hasVersion -> "Refresh the folder before changing this item."
         else -> null
     }
-    val boundedDownloadReason = when {
+    val downloadReason = when {
         file.isDirectory -> "Folder downloads are not supported yet."
-        file.size != null && file.size > DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES ->
-            "This file is larger than the ${DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES / (1024 * 1024)} MiB app limit."
+        else -> null
+    }
+    val inMemoryEditReason = when {
+        file.size != null && file.size > MAX_IN_MEMORY_FILE_CONTENT_BYTES ->
+            "Use another app for this file; it is too large for an in-memory editor."
         else -> null
     }
     val externalHandoffReason = when {
         file.isDirectory -> "Folders cannot be sent to another app as a single file."
         !file.originalAccessAllowed -> "This file allows preview only."
         !hasVersion -> "Refresh the folder before sending this file to another app."
-        support.maximumExternalFileBytes != null && file.size != null &&
-            file.size > support.maximumExternalFileBytes ->
-            "This file is larger than the ${support.maximumExternalFileBytes / (1024 * 1024)} MiB handoff limit."
-        else -> boundedDownloadReason
+        canStreamExternalFile -> null
+        else -> downloadReason
     }
     val offlineReason = when {
         !file.isDirectory && !hasVersion -> "Refresh the folder before making this file available offline."
-        !file.isDirectory && file.size != null && file.size > MAX_OFFLINE_FILE_BYTES ->
-            "This file is larger than the ${MAX_OFFLINE_FILE_BYTES / (1024 * 1024)} MiB offline limit."
         else -> null
     }
     val textEditReason = when {
@@ -112,10 +118,26 @@ fun planFileActions(
         if (!file.isDirectory && officeEditPlan != null) {
             val reason = (officeEditPlan as? OfficeEditSessionPlan.Blocked)?.reason?.userMessage()
             add(action(FileMenuAction.EditWith, "Edit in Office", FileActionPlacement.Overflow, reason))
+        } else if (!file.isDirectory && support.discoverDocumentEditing) {
+            add(
+                PlannedFileAction(
+                    FileMenuAction.EditWith,
+                    "Choose Office editor...",
+                    FileActionPlacement.Overflow,
+                ),
+            )
         } else if (!file.isDirectory && support.platformEditor) {
-            val reason = boundedDownloadReason ?: if (!hasVersion) "Refresh the folder before editing this file." else null
+            val reason = inMemoryEditReason ?: if (!hasVersion) "Refresh the folder before editing this file." else null
             add(action(FileMenuAction.EditWith, "Edit with...", FileActionPlacement.Overflow, reason))
         }
+        add(
+            action(
+                if (file.favorite) FileMenuAction.RemoveFavorite else FileMenuAction.AddFavorite,
+                if (file.favorite) "Remove from favorites" else "Add to favorites",
+                FileActionPlacement.Overflow,
+                mutationReason,
+            ),
+        )
         add(PlannedFileAction(FileMenuAction.Details, "Details", FileActionPlacement.Overflow))
         if (!file.isDirectory && file.fileId != null) {
             add(
@@ -128,7 +150,7 @@ fun planFileActions(
             )
         }
         if (!file.isDirectory) {
-            add(action(FileMenuAction.Download, "Download", FileActionPlacement.Overflow, boundedDownloadReason))
+            add(action(FileMenuAction.Download, "Download", FileActionPlacement.Overflow, downloadReason))
         }
         add(action(FileMenuAction.Rename, "Rename", FileActionPlacement.Overflow, mutationReason))
         add(action(FileMenuAction.Move, "Move", FileActionPlacement.Overflow, mutationReason))
@@ -319,7 +341,7 @@ fun planFileContentHandoffs(
     support: FileActionSupport = FileActionSupport(),
 ): FileContentHandoffPlan {
     if (file.isDirectory) return FileContentHandoffPlan(null, null, null)
-    val withinDownloadLimit = file.size == null || file.size <= DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES
+    val withinInMemoryLimit = file.size == null || file.size <= MAX_IN_MEMORY_FILE_CONTENT_BYTES
     val descriptor = describeDocument(file)
     val preview = when {
         descriptor.method == DocumentPreviewMethod.NativeText &&
@@ -338,11 +360,11 @@ fun planFileContentHandoffs(
             DEFAULT_DOCUMENT_PREVIEW_HEIGHT,
             file.etag,
         )
-        support.platformViewer && withinDownloadLimit -> FilePreviewHandoff.PlatformViewer(
+        support.platformViewer && withinInMemoryLimit -> FilePreviewHandoff.PlatformViewer(
             file.path,
             descriptor.mimeType,
             file.name,
-            DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
+            MAX_IN_MEMORY_FILE_CONTENT_BYTES,
             file.etag,
         )
         else -> null
@@ -362,17 +384,17 @@ fun planFileContentHandoffs(
             expectedEtag = currentEtag,
             request = officeEditRequest,
         )
-        support.platformEditor && withinDownloadLimit -> FileEditHandoff.PlatformEditor(
+        support.platformEditor && withinInMemoryLimit -> FileEditHandoff.PlatformEditor(
             file.path,
             descriptor.mimeType,
             currentEtag,
             file.name,
-            DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
+            MAX_IN_MEMORY_FILE_CONTENT_BYTES,
         )
         else -> null
     }
-    val download = if (withinDownloadLimit) {
-        FileDownloadHandoff(file.path, file.name, descriptor.mimeType, currentEtag, DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES)
+    val download = if (withinInMemoryLimit) {
+        FileDownloadHandoff(file.path, file.name, descriptor.mimeType, currentEtag, MAX_IN_MEMORY_FILE_CONTENT_BYTES)
     } else {
         null
     }
@@ -401,6 +423,9 @@ private val filesScreenImplementedActions = setOf(
     FileMenuAction.Preview,
     FileMenuAction.OpenWith,
     FileMenuAction.EditText,
+    FileMenuAction.EditWith,
+    FileMenuAction.AddFavorite,
+    FileMenuAction.RemoveFavorite,
     FileMenuAction.Details,
     FileMenuAction.VersionHistory,
     FileMenuAction.Rename,

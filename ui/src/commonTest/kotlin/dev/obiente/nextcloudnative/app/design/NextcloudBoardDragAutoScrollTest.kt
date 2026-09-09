@@ -41,7 +41,7 @@ class NextcloudBoardDragAutoScrollTest {
     @Test
     fun `edge scroll velocity scales toward both viewport edges`() {
         assertEquals(
-            -400f,
+            -200f,
             resolveBoardDragEdgeScrollVelocity(
                 pointer = 32f,
                 viewportStart = 0f,
@@ -51,7 +51,7 @@ class NextcloudBoardDragAutoScrollTest {
             ),
         )
         assertEquals(
-            600f,
+            450f,
             resolveBoardDragEdgeScrollVelocity(
                 pointer = 304f,
                 viewportStart = 0f,
@@ -60,6 +60,36 @@ class NextcloudBoardDragAutoScrollTest {
                 maxVelocity = 800f,
             ),
         )
+    }
+
+    @Test
+    fun `edge scroll speed responds immediately to boundary penetration`() {
+        val nearBoundary = resolveBoardDragEdgeScrollVelocity(
+            pointer = 548f,
+            viewportStart = 0f,
+            viewportEnd = 640f,
+            edgeThreshold = 100f,
+            maxVelocity = 240f,
+        )
+        val halfway = resolveBoardDragEdgeScrollVelocity(
+            pointer = 590f,
+            viewportStart = 0f,
+            viewportEnd = 640f,
+            edgeThreshold = 100f,
+            maxVelocity = 240f,
+        )
+        val atEdge = resolveBoardDragEdgeScrollVelocity(
+            pointer = 640f,
+            viewportStart = 0f,
+            viewportEnd = 640f,
+            edgeThreshold = 100f,
+            maxVelocity = 240f,
+        )
+
+        assertTrue(nearBoundary > 0f)
+        assertTrue(halfway > nearBoundary)
+        assertTrue(atEdge > halfway)
+        assertEquals(240f, atEdge)
     }
 
     @Test
@@ -106,6 +136,40 @@ class NextcloudBoardDragAutoScrollTest {
                 viewportEnd = 20f,
                 edgeThreshold = 64f,
                 maxVelocity = 800f,
+            ),
+        )
+    }
+
+    @Test
+    fun `edge activation boundary grows with the viewport and remains bounded`() {
+        assertEquals(
+            140f,
+            resolveBoardDragEdgeThreshold(
+                viewportStart = 100f,
+                viewportEnd = 800f,
+                minimumThreshold = 72f,
+                maximumThreshold = 180f,
+                viewportFraction = 0.2f,
+            ),
+        )
+        assertEquals(
+            180f,
+            resolveBoardDragEdgeThreshold(
+                viewportStart = 0f,
+                viewportEnd = 2_000f,
+                minimumThreshold = 72f,
+                maximumThreshold = 180f,
+                viewportFraction = 0.2f,
+            ),
+        )
+        assertEquals(
+            50f,
+            resolveBoardDragEdgeThreshold(
+                viewportStart = 0f,
+                viewportEnd = 100f,
+                minimumThreshold = 72f,
+                maximumThreshold = 180f,
+                viewportFraction = 0.2f,
             ),
         )
     }
@@ -207,6 +271,57 @@ class NextcloudBoardDragAutoScrollTest {
                 intentThreshold = 12f,
                 maxVelocity = 720f,
             ) > 0f,
+        )
+    }
+
+    @Test
+    fun `vertical edge scroll requires an outward nudge and uses eased velocity`() {
+        assertEquals(
+            0f,
+            resolveBoardDragVerticalEdgeScrollVelocity(
+                pointer = 608f,
+                dragOrigin = 608f,
+                viewportStart = 0f,
+                viewportEnd = 640f,
+                edgeThreshold = 64f,
+                intentThreshold = 12f,
+                maxVelocity = 240f,
+            ),
+        )
+        assertEquals(
+            0f,
+            resolveBoardDragVerticalEdgeScrollVelocity(
+                pointer = 616f,
+                dragOrigin = 608f,
+                viewportStart = 0f,
+                viewportEnd = 640f,
+                edgeThreshold = 64f,
+                intentThreshold = 12f,
+                maxVelocity = 240f,
+            ),
+        )
+        assertEquals(
+            135f,
+            resolveBoardDragVerticalEdgeScrollVelocity(
+                pointer = 624f,
+                dragOrigin = 608f,
+                viewportStart = 0f,
+                viewportEnd = 640f,
+                edgeThreshold = 64f,
+                intentThreshold = 12f,
+                maxVelocity = 240f,
+            ),
+        )
+        assertTrue(
+            resolveBoardDragVerticalEdgeScrollVelocity(
+                pointer = 16f,
+                dragOrigin = 32f,
+                viewportStart = 0f,
+                viewportEnd = 640f,
+                edgeThreshold = 64f,
+                intentThreshold = 12f,
+                maxVelocity = 240f,
+            ) < 0f,
         )
     }
 

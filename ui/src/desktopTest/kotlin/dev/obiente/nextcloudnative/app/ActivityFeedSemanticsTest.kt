@@ -72,6 +72,45 @@ class ActivityFeedSemanticsTest {
     }
 
     @Test
+    fun `file activity opens its verified native parent without treating a file as a folder`() {
+        val item = activity(
+            id = 10,
+            app = "files",
+            type = "file_changed",
+            subject = "Roadmap changed",
+            objectName = "/Projects/Phoenix/Roadmap.md",
+        )
+
+        val action = item.activityOpenAction(setOf("files"), "https://cloud.example.test")
+
+        assertEquals("Show in Files", action?.label)
+        assertEquals("Projects/Phoenix", action?.filesParentPath)
+        assertNull(action?.appId)
+        assertNull(action?.sameOriginUrl)
+        assertNull(
+            item.copy(objectName = "/Projects/../Secrets/key.txt")
+                .activityOpenAction(setOf("files"), "https://cloud.example.test")
+                ?.filesParentPath,
+        )
+    }
+
+    @Test
+    fun `media presentation retains the parent folder for files activity`() {
+        val item = activity(
+            id = 11,
+            app = "files",
+            type = "file_changed",
+            subject = "Photo updated",
+            objectName = "/Photos/Summer/beach.jpg",
+        )
+
+        val action = item.activityOpenAction(setOf("files", "photos"), "https://cloud.example.test")
+
+        assertEquals("Show in Files", action?.label)
+        assertEquals("Photos/Summer", action?.filesParentPath)
+    }
+
+    @Test
     fun `activity actions prefer native apps and only permit same origin browser links`() {
         val talk = activity(
             id = 4,
@@ -115,6 +154,7 @@ class ActivityFeedSemanticsTest {
         subject: String,
         message: String? = null,
         objectId: String? = null,
+        objectName: String? = null,
         link: String? = null,
         dateTime: String? = "2026-07-23T12:00:00Z",
     ) = NextcloudActivity(
@@ -125,7 +165,7 @@ class ActivityFeedSemanticsTest {
         message = message,
         objectType = null,
         objectId = objectId,
-        objectName = null,
+        objectName = objectName,
         link = link,
         icon = null,
         dateTime = dateTime,

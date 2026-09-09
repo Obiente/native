@@ -21,9 +21,9 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `adaptive Android switches from drawer to rail at shared breakpoint`() {
+    fun `adaptive Android uses tabs for a small compact destination set`() {
         assertEquals(
-            NextcloudCollectionNavigationMode.Drawer,
+            NextcloudCollectionNavigationMode.Tabs,
             resolveNextcloudCollectionNavigationMode(
                 NextcloudCollectionNavigationHost.AdaptiveAndroid,
                 NextcloudWorkspaceBreakpoints.AdaptiveRailDp - 1,
@@ -36,6 +36,18 @@ class NextcloudCollectionNavigatorTest {
                 NextcloudCollectionNavigationHost.AdaptiveAndroid,
                 NextcloudWorkspaceBreakpoints.AdaptiveRailDp,
                 2,
+            ),
+        )
+    }
+
+    @Test
+    fun `compact workspaces use a section sheet for many destinations`() {
+        assertEquals(
+            NextcloudCollectionNavigationMode.Sheet,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.AdaptiveAndroid,
+                NextcloudWorkspaceBreakpoints.AdaptiveRailDp - 1,
+                5,
             ),
         )
     }
@@ -61,23 +73,24 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `compact drawer keeps menu in the leading slot at every depth`() {
+    fun `compact workspace keeps Back in the leading slot at every depth`() {
         assertEquals(
-            NextcloudCollectionLeadingControl.Menu,
+            NextcloudCollectionLeadingControl.Back,
             resolveNextcloudCollectionLeadingControl(
-                mode = NextcloudCollectionNavigationMode.Drawer,
+                mode = NextcloudCollectionNavigationMode.Sheet,
                 hasHierarchyBack = false,
             ),
         )
         assertEquals(
-            NextcloudCollectionLeadingControl.Menu,
+            NextcloudCollectionLeadingControl.Back,
             resolveNextcloudCollectionLeadingControl(
-                mode = NextcloudCollectionNavigationMode.Drawer,
+                mode = NextcloudCollectionNavigationMode.Sheet,
                 hasHierarchyBack = true,
             ),
         )
         listOf(
             NextcloudCollectionNavigationMode.Hidden,
+            NextcloudCollectionNavigationMode.Tabs,
             NextcloudCollectionNavigationMode.Rail,
             NextcloudCollectionNavigationMode.Sidebar,
         ).forEach { mode ->
@@ -92,23 +105,23 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `nested compact route keeps drawer access in its stable leading slot`() {
+    fun `nested compact route does not add a competing second Back button`() {
         assertEquals(
-            NextcloudCollectionLeadingControl.Menu,
+            NextcloudCollectionLeadingControl.Back,
             resolveNextcloudCollectionLeadingControl(
-                mode = NextcloudCollectionNavigationMode.Drawer,
+                mode = NextcloudCollectionNavigationMode.Sheet,
                 hasHierarchyBack = true,
             ),
         )
         assertFalse(
             shouldShowNextcloudCollectionTrailingNavigation(
-                mode = NextcloudCollectionNavigationMode.Drawer,
+                mode = NextcloudCollectionNavigationMode.Sheet,
                 hasHierarchyBack = true,
             ),
         )
         assertFalse(
             shouldShowNextcloudCollectionTrailingNavigation(
-                mode = NextcloudCollectionNavigationMode.Drawer,
+                mode = NextcloudCollectionNavigationMode.Sheet,
                 hasHierarchyBack = false,
             ),
         )
@@ -121,17 +134,23 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `drawer and sidebar give long destination labels a second line`() {
+    fun `sheet and sidebar give long destination labels a second line`() {
         assertEquals(
             2,
             resolveNextcloudCollectionDestinationLabelMaxLines(
-                NextcloudCollectionNavigationMode.Drawer,
+                NextcloudCollectionNavigationMode.Sheet,
             ),
         )
         assertEquals(
             2,
             resolveNextcloudCollectionDestinationLabelMaxLines(
                 NextcloudCollectionNavigationMode.Sidebar,
+            ),
+        )
+        assertEquals(
+            1,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Tabs,
             ),
         )
         assertEquals(
@@ -181,6 +200,7 @@ class NextcloudCollectionNavigatorTest {
 
         assertNull(model.selectedDestinationId)
         assertNull(model.selectedDestination)
+        assertEquals(-1, resolveNextcloudCollectionSelectedIndex(model))
     }
 
     @Test

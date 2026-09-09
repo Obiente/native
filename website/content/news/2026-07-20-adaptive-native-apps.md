@@ -2,15 +2,20 @@
 title: One native app for Files, Talk, Photos, and more
 slug: adaptive-native-apps
 date: 2026-07-20
-lastUpdated: 2026-07-25
-description: Nextcloud Native is designed to make installed apps feel consistent without wrapping web pages, starting with Android and Linux and targeting iOS, macOS, and Windows.
-tags: Nextcloud apps, native Nextcloud client, Android, iOS, Linux, macOS, Windows, Files, Talk, Photos
-captureScenario: adaptive-dynamic-data
-imageAlt: Nextcloud Native rendering a synthetic community inventory as a native data table after recognizing verified typed fields
-imageCaption: The production adaptive Compose renderer maps a fixed synthetic contract into Item, Category, Value, Status, and Updated columns.
+lastUpdated: 2026-08-20
+description: How verified contracts and reusable views let current Android, Linux, and Windows builds render Nextcloud apps without wrapping their web pages.
+tags: Nextcloud apps, native Nextcloud client, Android, Linux, Windows, Files, Talk, Photos
+captureScenario: tables-insights-desktop
+imageAlt: Nextcloud Native showing an inventory Insights dashboard with total quantity, low-stock metrics, and category bars
+imageCaption: The production adaptive Compose renderer turns verified inventory data into responsive quantity metrics and category insights.
 ---
 
 # One native app for Files, Talk, Photos, and more
+
+**Historical article, reviewed 2026-08-20.** This post records product direction
+at publication. It is not a platform support list, and parts of the design remain
+planned. Check the [current releases](https://github.com/obiente/native/releases)
+and [compatibility notes](/compatibility/) for the current state.
 
 A Nextcloud can hold much more than files. It can be your photo library, group chat,
 calendar, address book, recipe collection, music library, project board, shared
@@ -18,10 +23,10 @@ budget, and note archive. On the web those tools live together. On a phone, peop
 often have to combine several unrelated apps, accept missing features, or return to a
 small web page that was never designed as a mobile workspace.
 
-Nextcloud Native makes the whole server feel like one product. It does not place every
-web page inside an app. It understands the verified information and actions an
-installed Nextcloud app exposes, then presents them with native components that are
-familiar on a phone or desktop.
+Nextcloud Native is being built to make the server feel like one product without
+placing every web page inside an app. Current Android, Linux, and Windows builds
+interpret verified information and actions from installed apps, then render native
+components. Coverage and write support vary by app and server version.
 
 ## A cloud made of more than files
 
@@ -74,30 +79,26 @@ On desktop, the persistent navigation leaves room for a list and detail pane. On
 mobile, the same destinations become touch-sized rows and bottom navigation. The
 shared rules stay the same, but the desktop is not merely a stretched phone screen.
 
-![Nextcloud Native mobile home with Files, Photos and Memories, Conversations, and app discovery](/screenshots/mobile-home.png)
-*The mobile home uses the same deterministic fixture and real Compose components as the product gallery. It is rendered offscreen without a server, account, cache, device, or user media.*
-
 ## One workspace, specialized native experiences
 
-Core Files, Photos and Memories, Talk, Activity, Notes, and dynamically discovered
-app data live in the same workspace. Mail opens as a mailbox rather than a list of API
-fields. Calendar and CalDAV data use calendar views. Contacts and CardDAV records use
-people-focused cards and detail screens. Tables becomes an editable grid, Deck
-becomes a Kanban board, Cookbook becomes a recipe library, Cospend becomes a budget
-dashboard, and Music provides albums, artwork, playback queues, and media controls.
+The product plan puts Files, Photos and Memories, Talk, Activity, Notes, and
+dynamically discovered app data in one workspace. Current builds implement parts of
+that list at different levels. Mail uses mailbox views, Calendar uses CalDAV views,
+and the shared renderer has table, board, recipe, finance, and music presentations.
+The presence of a presentation does not guarantee every server action is supported.
+Authenticated iPhone, iPad, and macOS clients are not currently supported.
 
 These experiences share context-aware forms that already know the current item and
-parent, consistent overflow menus, and global Nextcloud search. Durable cached startup
-across every app remains active delivery work while the account-scoped metadata store
-and invalidation rules are completed. The same file preview and share sheet work from
-Files, a Talk attachment, Mail, or another app that references a file.
+parent, consistent overflow menus, global Nextcloud search, and account-scoped cached
+startup. The same file preview and share sheet work from Files, a Talk attachment,
+Mail, or another app that references a file.
 
 ## Reusable components make unfamiliar apps useful
 
-The component system runs against open-source Nextcloud apps and multiple server
-versions. When a new data shape appears, one improved semantic component benefits
-other apps with the same shape. Specialized adapters remain small and verified: they
-add real product knowledge without creating a separate mobile client for every app.
+The component system is designed for open-source Nextcloud apps and multiple server
+versions. When a new verified data shape appears, one improved component can benefit
+other apps with the same shape. Specialized adapters add app-specific knowledge
+without creating a separate client for every app.
 
 ## Verified contracts come before inference
 

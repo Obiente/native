@@ -1,14 +1,16 @@
-# Nextcloud Native product and engineering roadmap
+# nati.ve product and engineering roadmap
 
-Status: working roadmap, 2026-07-23
+**Last reviewed: 2026-08-20.** Planned scope, ordering, and priorities may have
+changed. The [public GitHub Project](https://github.com/orgs/Obiente/projects/4)
+is the source of truth for active work and priority.
 
-Nextcloud Native is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
+nati.ve is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
 
 This roadmap is dependency-driven rather than date-driven. Milestones advance only when their acceptance gates pass. Feature count does not override data safety, battery use, accessibility, protocol correctness, or preservation of originals.
 
 ## 1. Product promise
 
-Nextcloud Native should make a self-hosted cloud feel like one operating-system service:
+nati.ve should make a self-hosted cloud feel like one operating-system service:
 
 - files appear in native pickers and file managers;
 - selected folders remain genuinely available offline and synchronize both ways;
@@ -45,56 +47,19 @@ Nextcloud Native should make a self-hosted cloud feel like one operating-system 
 
 These rules extend the boundaries in [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md), [NATIVE_SCHEMA.md](NATIVE_SCHEMA.md), and [PLATFORMS.md](PLATFORMS.md).
 
-## 3. Current baseline
+## 3. Roadmap scope
 
-The repository already provides a meaningful prototype:
+The roadmap must deliver these foundations in dependency order:
 
-- Login Flow v2 and platform credential storage on Android and Linux desktop;
-- authenticated native Files, Photos/Memories, People, Activity, Talk messaging, Notes, file preview, text editing, and media viewing;
-- ETag-aware text/Notes writes;
-- conditional, metadata-first Notes reads with cached ETags, stale-while-revalidate detail loading,
-  and a bounded native Markdown edit/preview flow;
-- typed Talk rich messages, files, calls, and system events with cursor-paged, read-state-safe
-  history requests and preview-only enforcement for hide-download attachments;
-- a Rust OpenAPI-to-native-schema compiler plus a Compose adaptive renderer;
-- automatic acquisition and local verification of exact-version signed App
-  Store packages and exact App Store-linked source tags, with packaged OpenAPI compilation,
-  bounded app-local controller inheritance, verified static-route CRUD, and guarded write forms;
-- reusable callable-route planning that rejects unresolved detail paths, binds documented API
-  versions without guessing, and preserves view/navigation state across Android recreation;
-- a live generic Cospend proof: canonical project list/detail reads and
-  generated declared actions without a Cospend-specific runtime adapter;
-- shape-driven native tables, nested kanban lanes/cards, financial summaries, and chart
-  surfaces shared by Tables, Deck, Cospend, Budget, and future similar apps;
-- native semantic Mail, Music, and Cookbook flows with mailbox/message bodies, artist/album/track
-  hierarchy, artwork, sparse recipe detail, and type-preserving editable settings;
-- a native Dashboard with adaptive widget cards, incremental item cursors, safe app deep links,
-  and an editable capability-gated User Status surface with rotation-persisted drafts and explicit
-  confirmation for every presence or message change;
-- reusable household/task semantics proven against Chores 0.1.0, including parent-scoped list
-  inference, named-array worklog flattening, recurrence, assignment, points, and completion history;
-- null-safe, cursor-paged Activity with refresh preservation and typed notification plans;
-- shared CardDAV/CalDAV discovery, sync-token paging, contact/event/task semantics, and
-  conflict-safe request planning;
-- permission-aware Office document metadata, conditional capability/template discovery, raster
-  preview, and explicit same-origin direct-editing handoff without an embedded web surface;
-- exact-MIME integration planning for Whiteboard and Draw.io, canonical Office-to-richdocuments
-  capability mapping, and honest authentication-required states for external integrations;
-- bounded, same-file DAV version-history discovery and ranged historical reads with inventory plus
-  reachability fallback when optional Files capability blocks are absent;
-- provider-driven global Nextcloud search with per-provider filtering,
-  pagination, partial failures, and automatic Mail discovery;
-- native Memories album and system-tag collection contracts with paged media
-  grids, cover previews, favorites, RAW/JPEG stacking, signature-checked source fallback, and
-  explicit zoom-gated full-quality selection;
-- verified native Memories routes acquired from its exact tagged source when the signed package
-  does not contain OpenAPI, while retaining a metadata-only, zero-action final fallback;
-- a native administrator app catalog with read-only inventory/update discovery, capability-gated
-  lifecycle plans, destructive uninstall warnings, and strict primary-password/session boundaries;
-- Android and desktop builds from shared Compose code;
-- official-source research for Files, Activity, Talk, Photos, Memories, Recognize, Notes, Deck, Tasks, Tables, Office, Cookbook, Cospend, Contacts, Calendar, Mail, Music, GitHub integration, and app administration.
-
-The prototype is not yet a sync client. Network and protocol code is duplicated between Android and desktop, metadata is mostly in memory, background work is not durable, Files actions are incomplete, and Talk calling is not implemented. Those gaps determine the milestone order.
+- one shared, bounded transport and typed protocol layer;
+- durable account metadata, caches, operation journals, and conflict state;
+- complete Files actions, selective offline storage, and crash-safe two-way sync;
+- dependable messaging, notifications, media, groupware, and separately gated
+  Talk calling;
+- verified dynamic-app contracts that cannot invent operations or permissions;
+- native operating-system integration with explicit platform acceptance gates;
+- repeatable compatibility, accessibility, security, migration, and release
+  evidence before stable support is declared.
 
 ## 4. Target architecture
 
@@ -140,7 +105,11 @@ The intended repository split is:
 | `ui` | Shared screens/components and accessibility semantics | Endpoint construction |
 | platform apps/extensions | Keychain, filesystem provider, workers, notifications, WebRTC, signing | Domain policy duplication |
 
-Near-term runtime repositories, transport, storage, and sync should be Kotlin Multiplatform because the application and platform integrations already use that boundary. The Rust compiler remains the deterministic automatic-adapter engine and exchanges versioned `NativeAppSchema` documents. A later UniFFI/FFI embedding spike is allowed, but production must not maintain two independent semantic compilers.
+Runtime repositories, transport, storage, and sync are planned as Kotlin
+Multiplatform boundaries. The Rust compiler remains the deterministic
+automatic-adapter engine and exchanges versioned `NativeAppSchema` documents.
+A later UniFFI/FFI embedding spike is allowed, but production must not maintain
+two independent semantic compilers.
 
 ### 4.2 Account-scoped identity
 
@@ -234,7 +203,7 @@ Work may proceed in parallel only when dependencies are satisfied. For example, 
 
 ### Principal risks
 
-- A rushed transport migration can regress working prototype screens. Move one adapter at a time behind contract tests.
+- A rushed transport migration can regress working product paths. Move one adapter at a time behind contract tests.
 - SQLDelight support and encryption choices vary by target. Store secrets separately regardless of database encryption, and define an explicit threat model before promising encrypted offline files.
 
 ## 8. M1: best-in-class online Files
@@ -306,7 +275,7 @@ DocumentsProvider alone is not advertised as sufficient for Obsidian until teste
 
 ## 10. M3: selective, offline, continuous two-way sync
 
-This is the highest-trust feature in the roadmap. The official Nextcloud desktop client maintains a sync journal and creates a local conflicted copy when local and remote both change; see the official [conflict behavior](https://docs.nextcloud.com/server/latest/user_manual/en/desktop/conflicts.html), [`syncengine.cpp`](https://github.com/nextcloud/desktop/blob/master/src/libsync/syncengine.cpp), and [`syncjournaldb.cpp`](https://github.com/nextcloud/desktop/blob/master/src/common/syncjournaldb.cpp). The Android client also has an [`InternalTwoWaySyncWork`](https://github.com/nextcloud/android/blob/master/app/src/main/java/com/nextcloud/client/jobs/InternalTwoWaySyncWork.kt), but Nextcloud Native requires a shared, fully journaled implementation with stronger conflict visibility.
+This is the highest-trust feature in the roadmap. The official Nextcloud desktop client maintains a sync journal and creates a local conflicted copy when local and remote both change; see the official [conflict behavior](https://docs.nextcloud.com/server/latest/user_manual/en/desktop/conflicts.html), [`syncengine.cpp`](https://github.com/nextcloud/desktop/blob/master/src/libsync/syncengine.cpp), and [`syncjournaldb.cpp`](https://github.com/nextcloud/desktop/blob/master/src/common/syncjournaldb.cpp). The Android client also has an [`InternalTwoWaySyncWork`](https://github.com/nextcloud/android/blob/master/app/src/main/java/com/nextcloud/client/jobs/InternalTwoWaySyncWork.kt), but nati.ve requires a shared, fully journaled implementation with stronger conflict visibility.
 
 ### Sync set model
 
@@ -502,7 +471,9 @@ Photos/Files DAV is the universal fallback; Memories is an optimized, version-ga
 - RAW+JPEG/stack awareness, clear derivative/original labels, server RAW previews, and safe original export.
 - Album create/rename/delete, add/remove membership, collaborators, location/filter/cover with explicit source-delete distinction.
 - Memories day/cluster APIs with describe/version gate, cache headers, transcode/live-photo, map, archive, tags, EXIF, and non-destructive image edit policy.
-- People through Memories first; direct Recognize DAV remains disabled when the current separate API-key gate cannot be satisfied through an official external-client flow.
+- Use Memories for people workflows first. Keep direct Recognize DAV disabled
+  whenever its API-key gate cannot be satisfied through an official
+  external-client flow.
 - Background camera auto-upload reuses M4 rather than a separate transfer stack.
 
 ### Acceptance criteria
@@ -517,23 +488,26 @@ Photos/Files DAV is the universal fallback; Memories is an optimized, version-ga
 
 ## 15. M8: documents and Office
 
-The public boundary is native reading and safe editing where the client can prove the format and conflict model, with capability-gated external Office handoff for richer formats.
+The public boundary is native reading and safe editing where the client can prove the format and conflict model, with capability-gated Office web integration for richer formats. Office support is provider-neutral: the client uses the secure editors and exact MIME pairs advertised by the server instead of assuming `richdocuments`, Collabora, or ONLYOFFICE.
 
 ### Phases
 
 1. **Native reading:** literal text/Markdown, native multipage PDF, server raster previews for Office formats, search/selection/accessibility where the format permits.
 2. **Safe native editing:** text/Markdown and explicitly supported image operations with ETags, versions, conflict UI, and preserve-original defaults.
-3. **External Office editing:** parse `files.directEditing` and `richdocuments` capabilities, request a one-time session only after a user tap, and open the system browser/editor handoff. Secret URLs are never persisted/logged.
+3. **Office web editing:** parse the core `files.directEditing` editor registry, show every secure editor advertised for the file's exact MIME type, and request a one-time session only after the user chooses one. Android embeds the validated same-origin session in an isolated web surface; desktop uses the system browser. Secret URLs are never persisted or logged.
 4. **Native Office feasibility:** evaluate a supported Collabora/LibreOfficeKit mobile/desktop SDK separately on every target. Require WOPI lifecycle, permissions, collaboration, autosave, reconnect, IME, clipboard, accessibility, and fidelity evidence before product commitment.
 
-Reimplementing OOXML/ODF is out of scope. Embedding the Direct Editing page in a WebView is not accepted as native Office.
+Reimplementing OOXML/ODF is out of scope. Office app entries open a native document browser. The Android web editor is labeled as an Office web integration, not native Office, and is limited to explicit document-specific Direct Editing sessions. Neither Office dashboards nor arbitrary apps receive a WebView fallback.
 
 ### Acceptance criteria
 
 - Secure-view/no-download policy blocks source download even when preview fails.
 - PDF temp files are encrypted/protected according to the platform threat model and removed after retention policy.
 - Text/Markdown conflicts preserve all three generations.
-- Direct Editing appears only for an advertised editor/MIME pair and returns through a deliberate external flow.
+- Direct Editing appears only for an advertised secure editor/MIME pair and returns through a deliberate embedded Android or external desktop flow.
+- Android clears Office cookies and web storage between sessions, confines top-level navigation to the selected document, rejects popups, never answers HTTP authentication challenges, and never sends the app password to a one-time Direct Editing URL.
+- Preview remains separate from Edit. Every server-advertised secure editor/MIME pair is eligible, including PDFs and formats outside the built-in Office family list; permissions and fresh file identity still gate edits.
+- Each advertised compatible editor is named in the chooser; no provider is silently preferred because of a hard-coded app ID.
 - Native Office is not labeled supported until the platform feasibility gate passes format-fidelity and collaborative-save tests.
 
 ## 16. M9: productivity, groupware, and communication apps
@@ -761,16 +735,18 @@ No sync/file-write beta ships until:
 
 - `main` stays buildable and migration-tested.
 - Small focused pull requests with tests and protocol evidence are preferred.
-- Nightly: automated artifacts, developer data only.
+- Nightly: automated test artifacts for disposable or independently backed-up data.
 - Alpha: migrations supported, debug export, known gaps visible, no data-loss-critical feature without its gate.
 - Beta: compatibility matrix and upgrade path published, release signing active, privacy/security review complete for enabled features.
 - Stable: rollback/recovery docs, migration support window, reproducible release process, no open critical security/data-loss issue.
 
-### CI/CD
+### Required CI/CD
 
 - Rust format/lint/test, Kotlin format/static analysis/test, schema golden compatibility, Android unit/instrumented, desktop tests, and platform builds.
 - Containerized Nextcloud integration matrix with cached official app fixtures and nightly live-main compatibility jobs that do not block stable releases without triage.
 - Signed artifacts, checksums, SBOM, provenance, dependency/license report, and changelog generated from reviewed inputs.
+- Versioned update-metadata sidecars with compatibility tests against every
+  supported client parser and full-history provenance for cumulative changelogs.
 - Release keys live in protected platform services, not repository/user config.
 - Database migrations and adapter schema version invalidation run in upgrade tests before publishing.
 
@@ -796,7 +772,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 ### Developer preview checkpoint
 
 - Shared builds remain reproducible.
-- Current native browsing/editing/talk/media prototype stays usable.
+- Native browsing, editing, messaging, and media paths remain usable throughout migration.
 - Generic unsupported-app screen is schema-driven and zero-action.
 - Research and compatibility docs are linked from contributor onboarding.
 
@@ -842,7 +818,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 | Server/app API drift | Broken adapters | Version manifests, capability gates, fixtures, schema invalidation, specialized-to-generic fallback |
 | Arbitrary apps expose private/no API | Cannot provide full native behavior | Honest metadata fallback, official OpenAPI/DAV first, reviewed adapters, no HTML scraping |
 | Talk signaling/WebRTC complexity | Unreliable calls/privacy bugs | Separate compatibility matrix, platform media drivers, soak/chaos/threat tests |
-| Office is a web/WOPI integration | False promise of native editing | Native preview first, external Direct Editing, SDK feasibility gate, no WebView branding trick |
+| Office is a provider-specific web/WOPI integration | Broken servers or a false promise of native editing | Capability-driven editor choices, isolated Android web integration, external desktop handoff, native preview first, and an SDK feasibility gate |
 | Recognize API-key gate | Direct people DAV unavailable | Memories clusters, explicit unavailable state, wait for official external flow |
 | Strict admin password confirmation | App password cannot authorize | Browser handoff first, primary password never stored, direct flow only after auth matrix |
 | Client-side E2EE/mounted storage | Incorrect content/permission behavior | Capability-specific adapter; fail closed/read-only until supported and tested |

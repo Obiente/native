@@ -11,7 +11,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -31,23 +30,27 @@ fun NativeDeckScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    var state by remember(session) { mutableStateOf<DeckWorkspaceState>(DeckWorkspaceState.Loading) }
-    var loadedBoards by remember(session) { mutableStateOf<List<DeckBoard>>(emptyList()) }
-    var capabilities by remember(session) { mutableStateOf<DeckCapabilities?>(null) }
-    var activeRoute by remember(session) { mutableStateOf<DeckReadRoutePlan?>(null) }
-    var requestedBoard by remember(session) { mutableStateOf<DeckBoard?>(null) }
+    val retainedWorkspace = remember(session) { DeckWorkspaceMemoryCache.get(session) }
+    var state by remember(session) {
+        mutableStateOf<DeckWorkspaceState>(retainedWorkspace?.state ?: DeckWorkspaceState.Loading)
+    }
+    var loadedBoards by remember(session) {
+        mutableStateOf(retainedWorkspace?.loadedBoards.orEmpty())
+    }
+    var capabilities by remember(session) { mutableStateOf(retainedWorkspace?.capabilities) }
+    var activeRoute by remember(session) { mutableStateOf(retainedWorkspace?.activeRoute) }
+    var requestedBoard by remember(session) { mutableStateOf(retainedWorkspace?.requestedBoard) }
     var requestedBoardId by rememberSaveable(session.serverUrl, session.loginName) {
-        mutableStateOf<Long?>(null)
+        mutableStateOf(retainedWorkspace?.requestedBoardId)
     }
     var requestedCardId by rememberSaveable(session.serverUrl, session.loginName) {
-        mutableStateOf<Long?>(null)
+        mutableStateOf(retainedWorkspace?.requestedCardId)
     }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
-    var restoredCardDraft by remember(session) { mutableStateOf<PersistedDeckCardDraft?>(null) }
-    var loadedCardDraftKey by remember(session) { mutableStateOf<DeckCardDraftKey?>(null) }
-    var recoveredCardDraftNotice by remember(session) { mutableStateOf(false) }
-    var draftPersistenceJob by remember(session) { mutableStateOf<Job?>(null) }
+    val cardDraftRecovery = remember(services, session) {
+        DeckCardDraftRecoveryCoordinator(services, session)
+    }
     var mutationBusy by remember(session) { mutableStateOf(false) }
     var mutationOutcomeUnknown by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
@@ -68,6 +71,30 @@ fun NativeDeckScreen(
     val authoritativeActionLoadGate = remember(session) { DeckCardLoadGate() }
     val commentsLoadGate = remember(session) { DeckCardLoadGate() }
     val attachmentsLoadGate = remember(session) { DeckCardLoadGate() }
+
+    LaunchedEffect(
+        session,
+        state,
+        loadedBoards,
+        capabilities,
+        activeRoute,
+        requestedBoard,
+        requestedBoardId,
+        requestedCardId,
+    ) {
+        DeckWorkspaceMemoryCache.store(
+            session,
+            DeckWorkspaceMemorySnapshot(
+                state = state,
+                loadedBoards = loadedBoards,
+                capabilities = capabilities,
+                activeRoute = activeRoute,
+                requestedBoard = requestedBoard,
+                requestedBoardId = requestedBoardId,
+                requestedCardId = requestedCardId,
+            ),
+        )
+    }
 
     fun boardState(): DeckWorkspaceState.Board? = state as? DeckWorkspaceState.Board
 
@@ -800,32 +827,12 @@ fun NativeDeckScreen(
 
     LaunchedEffect(interaction) {
         val editor = interaction as? DeckUiInteraction.CardEditor
-        loadedCardDraftKey = null
-        recoveredCardDraftNotice = false
-        restoredCardDraft = null
-        if (editor == null) return@LaunchedEffect
-        val key = cardDraftKey(editor)
-        restoredCardDraft = try {
-            draftPersistenceJob?.join()
-            services.loadDeckCardDraft(session, key)
-                ?.let { persisted ->
-                    val reconciled = persisted.copy(
-                        draft = persisted.draft.reconcileUntouchedDueDate(
-                            editor.card.toDeckUiDraft(),
-                        ),
-                    )
-                    if (reconciled != persisted) {
-                        runCatching { services.saveDeckCardDraft(session, reconciled) }
-                    }
-                    recoveredCardDraftNotice = true
-                    reconciled
-                }
-        } catch (failure: Exception) {
-            if (failure is CancellationException) throw failure
-            mutationError = "The saved card draft could not be restored safely."
-            null
+        if (editor == null) {
+            cardDraftRecovery.clearForClosedEditor()
+            return@LaunchedEffect
         }
-        loadedCardDraftKey = key
+        val key = cardDraftKey(editor)
+        mutationError = cardDraftRecovery.load(key, editor.card.toDeckUiDraft())
     }
 
     LaunchedEffect(session, requestedBoard?.id, loadAttempt) {
@@ -1209,72 +1216,72 @@ fun NativeDeckScreen(
                 }
             },
         )
-        is DeckUiInteraction.CardEditor -> if (loadedCardDraftKey == cardDraftKey(overlay)) {
+        is DeckUiInteraction.CardEditor -> if (cardDraftRecovery.loadedKey == cardDraftKey(overlay)) {
+            val cardDraftBusy = mutationBusy || cardDraftRecovery.recoveryBusy
             DeckUiCardEditorDialog(
             stack = overlay.stack,
             card = overlay.card,
-            initialDraft = restoredCardDraft
+            initialDraft = cardDraftRecovery.restoredDraft
                 ?.takeIf { it.key == cardDraftKey(overlay) }
                 ?.draft,
-            recoveredDraft = recoveredCardDraftNotice,
-            busy = mutationBusy,
+            recoveredDraft = cardDraftRecovery.recoveredNotice,
+            draftRecoveryFailed = cardDraftRecovery.unreadableKey == cardDraftKey(overlay),
+            draftRecoveryResetRequired = cardDraftRecovery.resetRequired,
+            busy = cardDraftBusy,
             errorMessage = mutationError,
             quickDueDates = deckQuickDueDates(),
             onDismiss = {
-                if (!mutationBusy) {
+                if (!cardDraftBusy) {
                     val key = cardDraftKey(overlay)
-                    restoredCardDraft = null
-                    recoveredCardDraftNotice = false
+                    cardDraftRecovery.clearForClosedEditor()
                     interaction = null
-                    val pendingPersistence = draftPersistenceJob
-                    draftPersistenceJob = scope.launch {
-                        pendingPersistence?.cancelAndJoin()
-                        runCatching { services.clearDeckCardDraft(session, key) }
+                    if (cardDraftRecovery.canClearOnClose(key)) {
+                        val pendingPersistence = cardDraftRecovery.persistenceJob
+                        cardDraftRecovery.persistenceJob = scope.launch {
+                            pendingPersistence?.cancelAndJoin()
+                            runCatching { services.clearDeckCardDraft(session, key) }
+                        }
                     }
                 }
             },
-            onDiscardRecoveredDraft = {
+            onDiscardRecoveredDraft = { draft ->
                 if (!mutationBusy) {
                     val key = cardDraftKey(overlay)
-                    val pendingPersistence = draftPersistenceJob
-                    draftPersistenceJob = scope.launch {
-                        pendingPersistence?.cancelAndJoin()
-                        runCatching { services.clearDeckCardDraft(session, key) }
-                            .onSuccess {
-                                restoredCardDraft = null
-                                recoveredCardDraftNotice = false
-                            }
-                            .onFailure {
-                                mutationError = "The recovered card draft could not be discarded."
-                            }
+                    val original = overlay.card.toDeckUiDraft()
+                    cardDraftRecovery.launchRecovery(scope) {
+                        mutationError = cardDraftRecovery.discardAndPersistReplacement(key, draft, original)
                     }
                 }
             },
-            onDraftChange = { draft ->
-                val key = cardDraftKey(overlay)
-                val original = overlay.card.toDeckUiDraft()
-                val pendingPersistence = draftPersistenceJob
-                draftPersistenceJob = scope.launch {
-                    pendingPersistence?.cancelAndJoin()
-                    if (draft.hasMeaningfulChangesFrom(original)) {
-                        val persisted = PersistedDeckCardDraft(key, draft)
-                        runCatching { services.saveDeckCardDraft(session, persisted) }
-                            .onSuccess { restoredCardDraft = persisted }
-                            .onFailure {
-                                mutationError = "The unsaved card draft could not be stored safely."
-                            }
-                    } else {
-                        runCatching { services.clearDeckCardDraft(session, key) }
-                            .onSuccess {
-                                restoredCardDraft = null
-                                recoveredCardDraftNotice = false
-                            }
-                        }
+            onResetDraftRecovery = { draft ->
+                if (!mutationBusy) {
+                    val key = cardDraftKey(overlay)
+                    val original = overlay.card.toDeckUiDraft()
+                    cardDraftRecovery.launchRecovery(scope) {
+                        mutationError = cardDraftRecovery.resetAndPersistReplacement(key, draft, original)
+                    }
                 }
             },
-            onSubmit = { draft ->
-                val board = checkNotNull(boardState()?.board)
+            onDraftChange = draftChange@ { draft ->
+                val key = cardDraftKey(overlay)
+                if (cardDraftRecovery.blocksPersistence(key)) return@draftChange
+                val original = overlay.card.toDeckUiDraft()
+                val pendingPersistence = cardDraftRecovery.persistenceJob
+                cardDraftRecovery.persistenceJob = scope.launch {
+                    pendingPersistence?.cancelAndJoin()
+                    val persistenceError = cardDraftRecovery.persist(key, draft, original)
+                    if (
+                        persistenceError != null ||
+                        mutationError == DeckCardDraftRecoveryCoordinator.DRAFT_SAVE_FAILURE
+                    ) {
+                        mutationError = persistenceError
+                    }
+                }
+            },
+            onSubmit = submit@ { draft ->
                 val draftKey = cardDraftKey(overlay)
+                if (cardDraftRecovery.blocksPersistence(draftKey)) return@submit
+                val board = checkNotNull(boardState()?.board)
                 if (overlay.card == null) {
                     runMutation(
                         request = {
@@ -1293,11 +1300,9 @@ fun NativeDeckScreen(
                             )
                         },
                         afterSuccess = {
-                            draftPersistenceJob?.cancelAndJoin()
-                            services.clearDeckCardDraft(session, draftKey)
-                            draftPersistenceJob = null
-                            restoredCardDraft = null
-                            recoveredCardDraftNotice = false
+                            cardDraftRecovery.persistenceJob?.cancelAndJoin()
+                            cardDraftRecovery.quarantineSubmitted(draftKey)?.let { mutationError = it }
+                            cardDraftRecovery.persistenceJob = null
                         },
                     )
                 } else {
@@ -1308,9 +1313,9 @@ fun NativeDeckScreen(
                                 val authoritativeDue = current.toDeckUiDraft()
                                 val reconciledDraft = draft.reconcileUntouchedDueDate(authoritativeDue)
                                 val persisted = PersistedDeckCardDraft(draftKey, reconciledDraft)
-                                restoredCardDraft = persisted
-                                val pendingPersistence = draftPersistenceJob
-                                draftPersistenceJob = scope.launch {
+                                cardDraftRecovery.markRestored(persisted)
+                                val pendingPersistence = cardDraftRecovery.persistenceJob
+                                cardDraftRecovery.persistenceJob = scope.launch {
                                     pendingPersistence?.cancelAndJoin()
                                     runCatching { services.saveDeckCardDraft(session, persisted) }
                                         .onFailure {
@@ -1331,11 +1336,9 @@ fun NativeDeckScreen(
                             )
                         },
                         afterSuccess = {
-                            draftPersistenceJob?.cancelAndJoin()
-                            services.clearDeckCardDraft(session, draftKey)
-                            draftPersistenceJob = null
-                            restoredCardDraft = null
-                            recoveredCardDraftNotice = false
+                            cardDraftRecovery.persistenceJob?.cancelAndJoin()
+                            cardDraftRecovery.quarantineSubmitted(draftKey)?.let { mutationError = it }
+                            cardDraftRecovery.persistenceJob = null
                         },
                     )
                 }
@@ -1683,6 +1686,7 @@ fun NativeDeckScreen(
     }
 }
 
+
 private data class LoadedDeckBoards(
     val route: DeckReadRoutePlan,
     val boards: List<DeckBoard>,
@@ -1849,13 +1853,13 @@ private fun DeckAttachment.toDeckUiAttachment(
         createdBy,
     ).joinToString(" - ").ifBlank { null },
         canOpen = handoffCapability != null &&
-            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions &&
-            (byteCount == null || byteCount <= handoffCapability.maximumFileBytes),
+            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions,
         canDelete = canEdit,
     )
 
 private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = when (this) {
     is ExternalFileHandoffResult.Launched -> null
+    is ExternalFileHandoffResult.Cancelled -> null
     is ExternalFileHandoffResult.NoCompatibleApplication ->
         "No installed app can open this attachment."
     is ExternalFileHandoffResult.Rejected -> message

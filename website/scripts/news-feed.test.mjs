@@ -119,7 +119,7 @@ test("canonical feed revision is cross-language stable and detects metadata chan
       entry.title += " updated";
     },
     (entry) => {
-      entry.publishedDate = "2026-07-23";
+      entry.publishedDate = "2026-07-31";
     },
     (entry) => {
       entry.tags = [...entry.tags, "changed"];

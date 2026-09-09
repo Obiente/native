@@ -4,9 +4,13 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 nightly="$project_root/.github/workflows/nightly.yml"
 prerelease="$project_root/.github/workflows/prerelease.yml"
+ci="$project_root/.github/workflows/ci.yml"
 nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
+download_promotion="$project_root/tools/promote-download-channel.sh"
 msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
+msi_verifier="$project_root/tools/verify-windows-package.ps1"
+ui_build="$project_root/ui/build.gradle.kts"
 temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
@@ -15,6 +19,19 @@ require_text() {
     local expected="$2"
     if ! grep -Fq -- "$expected" "$file"; then
         printf '%s is missing required release contract: %s\n' "$file" "$expected" >&2
+        exit 1
+    fi
+}
+
+require_count() {
+    local file="$1"
+    local expected="$2"
+    local count="$3"
+    local actual
+    actual="$(grep -Fc -- "$expected" "$file")"
+    if [[ "$actual" -ne "$count" ]]; then
+        printf '%s contains %s copies of release contract %s; expected %s.\n' \
+            "$file" "$actual" "$expected" "$count" >&2
         exit 1
     fi
 }
@@ -37,9 +54,15 @@ require_text "$nightly" 'runner: windows-latest'
 require_text "$nightly" 'runner: macos-15-intel'
 require_text "$nightly" 'tasks: ":ui:packageDeb :ui:packageRpm"'
 require_text "$nightly" 'tasks: ":ui:packageMsi"'
+require_text "$nightly" 'name: Set up Rust for Windows packaging'
+require_text "$nightly" 'targets: x86_64-pc-windows-msvc'
 require_text "$nightly" 'name: Verify unsigned Windows MSI'
 require_text "$nightly" 'tools/verify-windows-package.ps1'
 require_text "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_count "$nightly" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1' 2
+require_text "$nightly" 'id: attest-windows-msi'
+require_text "$nightly" 'name: Retry Windows MSI provenance attestation'
+require_text "$nightly" "steps.attest-windows-msi.outcome == 'failure'"
 require_text "$nightly" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
 require_text "$nightly" 'artifact-metadata: write'
 require_text "$nightly" 'attestations: write'
@@ -47,11 +70,15 @@ require_text "$nightly" 'id-token: write'
 require_text "$nightly" 'tasks: ":ui:packageDmg"'
 require_text "$nightly" 'tools/derive-desktop-package-version.sh'
 require_text "$nightly" 'source_sequence="$(git rev-list --count "${SOURCE_SHA}")"'
+require_text "$nightly" 'release_date="$(date --utc --date="${SOURCE_STARTED_AT}" +%F)"'
+require_text "$nightly" 'release-date: ${{ steps.source.outputs.release_date }}'
+require_text "$nightly" '-PncAppStreamReleaseDate="${{ needs.source.outputs.release-date }}"'
 require_text "$nightly" '-PncDesktopPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncDesktopReleaseBuild=true'
 require_text "$nightly" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$nightly" 'direct_updates: "true"'
+require_count "$ci" '-PncDirectDesktopPackageUpdates=true' 2
 require_text "$nightly" 'name: nextcloud-native-${{ matrix.platform }}'
 require_text "$nightly" 'name: nextcloud-native-android'
 require_text "$nightly" 'tools/stage-nightly-assets.sh artifacts dist'
@@ -83,6 +110,8 @@ require_text "$nightly" 'canonical-release-assets'
 require_text "$nightly" 'if [[ "${canonical_successful}" -ge 3 ]]; then'
 require_text "$nightly" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
 require_text "$nightly" 'tools/promote-app-update-channel.sh'
+require_text "$nightly" 'tools/promote-download-channel.sh'
+require_text "$nightly" 'channel-nightly'
 require_text "$nightly" 'tools/verify-android-update-manifest-assets.sh'
 require_text "$nightly" 'tools/verify-desktop-update-manifest-assets.sh'
 require_text "$nightly_notes" 'The Windows MSI is currently unsigned.'
@@ -103,12 +132,22 @@ require_text "$prerelease" 'group: prerelease-release-${{ github.ref }}'
 require_text "$prerelease" 'group: app-prerelease-channel'
 require_text "$prerelease" 'tools/derive-desktop-package-version.sh'
 require_text "$prerelease" 'source_sequence="$(git rev-list --count "${GITHUB_SHA}")"'
+require_text "$prerelease" 'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"'
+require_text "$prerelease" 'release_date="$(date --utc --date="${release_started_at}" +%F)"'
+require_text "$prerelease" 'release-date: ${{ steps.version-code.outputs.release_date }}'
+require_text "$prerelease" '-PncAppStreamReleaseDate="${{ needs.authorize-signing.outputs.release-date }}"'
 require_text "$prerelease" '-PncDesktopPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncMacosPackageVersion="${RELEASE_DESKTOP_VERSION}"'
 require_text "$prerelease" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$prerelease" 'name: Verify unsigned Windows MSI'
+require_text "$prerelease" 'name: Set up Rust for Windows packaging'
+require_text "$prerelease" 'targets: x86_64-pc-windows-msvc'
 require_text "$prerelease" 'tools/verify-windows-package.ps1'
 require_text "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1'
+require_count "$prerelease" 'uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1' 2
+require_text "$prerelease" 'id: attest-windows-msi'
+require_text "$prerelease" 'name: Retry Windows MSI provenance attestation'
+require_text "$prerelease" "steps.attest-windows-msi.outcome == 'failure'"
 require_text "$prerelease" 'subject-path: ui/build/compose/binaries/main/msi/*.msi'
 require_text "$prerelease" 'artifact-metadata: write'
 require_text "$prerelease" 'attestations: write'
@@ -143,11 +182,22 @@ require_text "$promotion" 'pointer_state'
 require_text "$promotion" '--clobber'
 require_text "$promotion" 'test "$release_state" = $'\''false\ttrue\t'\''"$immutable_tag"'
 require_text "$msi_repackager" 'Join-Path $AppImage "app/.jpackage.xml"'
+require_text "$msi_repackager" 'Id="LaunchNextcloudNative"'
+require_text "$msi_repackager" 'NOT REMOVE AND UILevel &gt;= 3 AND NOT NEXTCLOUD_NATIVE_UPDATER_HANDOFF'
+require_text "$msi_repackager" 'Return="asyncNoWait"'
+require_text "$msi_repackager" 'NextcloudNativeShellRegistrar.exe'
+require_text "$msi_repackager" 'NextcloudNative.ico'
+require_text "$msi_verifier" 'NextcloudNativeShellRegistrar.exe'
+require_text "$msi_verifier" 'NextcloudNative.ico'
+require_text "$ui_build" 'val stageWindowsShellAssets by tasks.registering'
+require_text "$ui_build" 'finalizedBy(stageWindowsShellAssets)'
+require_text "$ui_build" 'dependsOn("createDistributable", stageWindowsShellAssets)'
 if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; then
     echo "Windows MSI repackaging must use the Windows jpackage metadata layout." >&2
     exit 1
 fi
 bash -n "$promotion"
+bash -n "$download_promotion"
 
 if [[ -e "$project_root/tools/sign-windows-package.ps1" ]]; then
     echo "The unsigned Windows release path must not retain a PFX signing helper." >&2
@@ -210,7 +260,7 @@ fi
 tag="nightly-20260726-1430-run42-abcdef12"
 version_code="$("$project_root/tools/derive-android-version-code.sh" 42 nightly)"
 manifest="$temporary_directory/update-manifest.json"
-GITHUB_REPOSITORY="Obiente/nc-native" \
+GITHUB_REPOSITORY="Obiente/native" \
     "$project_root/tools/create-android-update-manifest.sh" \
     "$manifest" \
     "nightly-v1" \
@@ -223,6 +273,11 @@ GITHUB_REPOSITORY="Obiente/nc-native" \
     '["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]'
 
 jq -e --arg tag "$tag" --argjson code "$version_code" '
+  keys == [
+    "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+    "packageName", "releaseNotesUrl", "schemaVersion",
+    "signingCertificateSha256Digests", "versionCode", "versionName"
+  ] and
   .schemaVersion == 1 and
   .channel == "nightly-v1" and
   .versionName == $tag and

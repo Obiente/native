@@ -23,8 +23,12 @@ enum class VirtualFileActivity {
 
 data class VirtualFileCachePolicy(
     val automaticCleanup: Boolean = true,
+    /** Budget for hot content in the primary cache tier. */
     val maximumCacheBytes: Long? = DEFAULT_VIRTUAL_FILE_CACHE_BYTES,
     val minimumFreeSpaceBytes: Long = DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
+    /** Optional budget for cold automatic content after it moves to overflow. */
+    val overflowMaximumCacheBytes: Long? = null,
+    val overflowMinimumFreeSpaceBytes: Long = DEFAULT_VIRTUAL_FILE_MINIMUM_FREE_BYTES,
     val unusedFileAgeMillis: Long? = DEFAULT_VIRTUAL_FILE_UNUSED_AGE_MILLIS,
 ) {
     init {
@@ -33,6 +37,12 @@ data class VirtualFileCachePolicy(
         }
         require(minimumFreeSpaceBytes >= 0L) {
             "The minimum free-space reserve cannot be negative."
+        }
+        require(overflowMaximumCacheBytes == null || overflowMaximumCacheBytes > 0L) {
+            "The overflow cache budget must be positive."
+        }
+        require(overflowMinimumFreeSpaceBytes >= 0L) {
+            "The overflow free-space reserve cannot be negative."
         }
         require(unusedFileAgeMillis == null || unusedFileAgeMillis > 0L) {
             "The unused-file age must be positive."

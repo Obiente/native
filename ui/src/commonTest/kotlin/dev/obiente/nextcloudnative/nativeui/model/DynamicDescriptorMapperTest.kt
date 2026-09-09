@@ -253,8 +253,12 @@ class DynamicDescriptorMapperTest {
             component("projects", fields("id", "name") + field("total_spent", FieldKind.decimal)),
         )
         assertEquals(
-            NativeComponent.dashboard,
-            component("categories", fields("id", "name") + field("budgetAmount", FieldKind.decimal)),
+            NativeComponent.collectionList,
+            component(
+                "categories",
+                fields("id", "name", "type", "parentId", "icon", "color") +
+                    field("budgetAmount", FieldKind.decimal),
+            ),
         )
         assertEquals(
             NativeComponent.dataTable,
@@ -281,6 +285,18 @@ class DynamicDescriptorMapperTest {
             component("photos", fields("id") + field("preview", FieldKind.image)),
         )
         assertEquals(NativeComponent.recipeList, component("recipes", fields("id", "title", "ingredients")))
+        assertEquals(
+            NativeComponent.timeline,
+            component("activities", fields("id", "actor", "subject", "timestamp")),
+        )
+        assertEquals(
+            NativeComponent.fileBrowser,
+            component("folders", fields("id", "filename", "path", "mimeType", "etag")),
+        )
+        assertEquals(
+            NativeComponent.detail,
+            component("document", fields("id") + field("content", FieldKind.longText), LayoutKind.detail),
+        )
     }
 
     @Test

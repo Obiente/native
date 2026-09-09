@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -21,24 +23,49 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DynamicForm
+import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
+import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
+import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 
 enum class MarketingCapturePurpose(val manifestValue: String) {
     Showcase("showcase"),
     StateCoverage("state-coverage"),
+}
+
+enum class MarketingCaptureTheme(
+    val manifestValue: String,
+    val darkTheme: Boolean,
+) {
+    Dark("dark", true),
+    Light("light", false),
 }
 
 enum class MarketingCaptureScenario(
@@ -56,7 +83,386 @@ enum class MarketingCaptureScenario(
     val width: Int,
     val height: Int,
     val density: Float,
+    val darkTheme: Boolean = true,
 ) {
+    SharedControlsDesktop(
+        "shared-controls-desktop", "shared-controls-desktop.png", NextcloudPresentation.Desktop,
+        "Shared UI", "Choice controls", "Views, filters and form states", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_280, height = 900, density = 1f,
+    ),
+    SharedControlsMobile(
+        "shared-controls-mobile", "shared-controls-mobile.png", NextcloudPresentation.Adaptive,
+        "Shared UI", "Choice controls", "Compact views, filters and form states", MarketingCapturePurpose.StateCoverage,
+        "android", "phone", width = 1_080, height = 2_400, density = 3f,
+    ),
+    ShellCompactDesktop(
+        "shell-compact-desktop", "shell-compact-desktop.png", NextcloudPresentation.Desktop,
+        "App shell", "Compact sidebar", "Editing an event", MarketingCapturePurpose.StateCoverage,
+        "desktop", "compact", width = 820, height = 800, density = 1f,
+    ),
+    ShellAppSwitcherMobile(
+        "shell-app-switcher-mobile", "shell-app-switcher-mobile.png", NextcloudPresentation.Adaptive,
+        "App shell", "App switcher", "Pinned and installed apps", MarketingCapturePurpose.StateCoverage,
+        "android", "phone", width = 1_080, height = 2_400, density = 3f,
+    ),
+    ShellTablet(
+        "shell-tablet", "shell-tablet.png", NextcloudPresentation.Adaptive,
+        "App shell", "Tablet navigation", "Editing an event", MarketingCapturePurpose.StateCoverage,
+        "android", "tablet", width = 1_680, height = 1_600, density = 2f,
+    ),
+    HomepageOverviewDesktopDark(
+        "homepage-overview-desktop-dark",
+        "homepage-overview-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Complete account overview",
+        "Ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepageOverviewDesktopLight(
+        "homepage-overview-desktop-light",
+        "homepage-overview-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Complete account overview",
+        "Ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    HomepageOverviewMobileDark(
+        "homepage-overview-mobile-dark",
+        "homepage-overview-mobile-dark.png",
+        NextcloudPresentation.Adaptive,
+        "Homepage",
+        "Complete account overview",
+        "Ready",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 2_400,
+        density = 2.625f,
+    ),
+    HomepageOverviewMobileLight(
+        "homepage-overview-mobile-light",
+        "homepage-overview-mobile-light.png",
+        NextcloudPresentation.Adaptive,
+        "Homepage",
+        "Complete account overview",
+        "Ready",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 2_400,
+        density = 2.625f,
+        darkTheme = false,
+    ),
+    HomepageFilesDesktopDark(
+        "homepage-files-desktop-dark",
+        "homepage-files-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Files workspace",
+        "Synced with offline content",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepageFilesDesktopLight(
+        "homepage-files-desktop-light",
+        "homepage-files-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Files workspace",
+        "Synced with offline content",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    HomepageFilesMobileDark(
+        "homepage-files-mobile-dark",
+        "homepage-files-mobile-dark.png",
+        NextcloudPresentation.Adaptive,
+        "Homepage",
+        "Files workspace",
+        "Synced with offline content",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 2_400,
+        density = 2.625f,
+    ),
+    HomepageFilesMobileLight(
+        "homepage-files-mobile-light",
+        "homepage-files-mobile-light.png",
+        NextcloudPresentation.Adaptive,
+        "Homepage",
+        "Files workspace",
+        "Synced with offline content",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        width = 1_080,
+        height = 2_400,
+        density = 2.625f,
+        darkTheme = false,
+    ),
+    HomepagePhotosDesktopDark(
+        "homepage-photos-desktop-dark",
+        "homepage-photos-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Photos and memories workspace",
+        "Library ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepagePhotosDesktopLight(
+        "homepage-photos-desktop-light",
+        "homepage-photos-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Photos and memories workspace",
+        "Library ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    HomepageConversationsDesktopDark(
+        "homepage-conversations-desktop-dark",
+        "homepage-conversations-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Conversation workspace",
+        "Active conversation",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepageConversationsDesktopLight(
+        "homepage-conversations-desktop-light",
+        "homepage-conversations-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Conversation workspace",
+        "Active conversation",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    HomepagePlanningDesktopDark(
+        "homepage-planning-desktop-dark",
+        "homepage-planning-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Planning workspace",
+        "Board ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepagePlanningDesktopLight(
+        "homepage-planning-desktop-light",
+        "homepage-planning-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Planning workspace",
+        "Board ready",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    HomepageAppsDesktopDark(
+        "homepage-apps-desktop-dark",
+        "homepage-apps-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Installed app workspace",
+        "Verified native data",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    HomepageAppsDesktopLight(
+        "homepage-apps-desktop-light",
+        "homepage-apps-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Homepage",
+        "Installed app workspace",
+        "Verified native data",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    AppsWorkspaceDesktopDark(
+        "apps-workspace-desktop-dark",
+        "apps-workspace-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Apps",
+        "Installed app command center",
+        "Active account with pinned and recent workspaces",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    AppsWorkspaceDesktopLight(
+        "apps-workspace-desktop-light",
+        "apps-workspace-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Apps",
+        "Installed app command center",
+        "Active account with pinned and recent workspaces",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    CalendarWorkspaceDesktopDark(
+        "calendar-workspace-desktop-dark",
+        "calendar-workspace-desktop-dark.png",
+        NextcloudPresentation.Desktop,
+        "Calendar",
+        "Month planning workspace",
+        "Four calendars, selected event, and active month",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        pullRequest = 273,
+        width = 1_440,
+        height = 900,
+        density = 1f,
+    ),
+    CalendarWorkspaceDesktopLight(
+        "calendar-workspace-desktop-light",
+        "calendar-workspace-desktop-light.png",
+        NextcloudPresentation.Desktop,
+        "Calendar",
+        "Month planning workspace",
+        "Four calendars, selected event, and active month",
+        MarketingCapturePurpose.Showcase,
+        "desktop",
+        "wide",
+        pullRequest = 273,
+        width = 1_440,
+        height = 900,
+        density = 1f,
+        darkTheme = false,
+    ),
+    CalendarWorkspaceMobileDark(
+        "calendar-workspace-mobile-dark",
+        "calendar-workspace-mobile-dark.png",
+        NextcloudPresentation.Adaptive,
+        "Calendar",
+        "Mobile agenda",
+        "Active week with personal, team, and community events",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        pullRequest = 273,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+    ),
+    CalendarWorkspaceMobileLight(
+        "calendar-workspace-mobile-light",
+        "calendar-workspace-mobile-light.png",
+        NextcloudPresentation.Adaptive,
+        "Calendar",
+        "Mobile agenda",
+        "Active week with personal, team, and community events",
+        MarketingCapturePurpose.Showcase,
+        "mobile",
+        "phone-portrait",
+        pullRequest = 273,
+        width = 1_080,
+        height = 1_800,
+        density = 2.625f,
+        darkTheme = false,
+    ),
+    CalendarMonthMobile(
+        "calendar-month-mobile", "calendar-month-mobile.png", NextcloudPresentation.Adaptive,
+        "Calendar", "Mobile month", "Selected date with writable and read-only sources",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    CalendarEventEditorMobile(
+        "calendar-event-editor-mobile", "calendar-event-editor-mobile.png", NextcloudPresentation.Adaptive,
+        "Calendar", "Mobile event editor", "Existing event with date, time, and recurrence controls",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    CalendarWeekMobile(
+        "calendar-week-mobile", "calendar-week-mobile.png", NextcloudPresentation.Adaptive,
+        "Calendar", "Mobile week", "Selected day and event schedule",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    CalendarWeekDesktop(
+        "calendar-week-desktop", "calendar-week-desktop.png", NextcloudPresentation.Desktop,
+        "Calendar", "Desktop week", "Scrollable day columns and event inspector",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    CalendarEventEditorDesktop(
+        "calendar-event-editor-desktop", "calendar-event-editor-desktop.png", NextcloudPresentation.Desktop,
+        "Calendar", "Desktop event editor", "Existing event with date, time, and recurrence controls",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
     DesktopHome(
         "desktop-home", "desktop-home.png", NextcloudPresentation.Desktop,
         "Workspace", "Home dashboard", "Ready", MarketingCapturePurpose.Showcase,
@@ -93,8 +499,98 @@ enum class MarketingCaptureScenario(
     FileSyncStatusDesktop(
         "file-sync-status-desktop", "file-sync-status-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder sync center", "Priority queue, conflict, and failure",
-        MarketingCapturePurpose.StateCoverage, "linux", "wide",
+        MarketingCapturePurpose.Showcase, "linux", "wide",
+        width = 1_440, height = 1_145, density = 1f,
+    ),
+    ActivityWorkspaceDesktop(
+        "activity-workspace-desktop", "activity-workspace-desktop.png", NextcloudPresentation.Desktop,
+        "Activity", "Attention-first activity workspace", "Grouped automation and actionable events",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_721, height = 914, density = 1f,
+    ),
+    ActivityWorkspaceMobileDark(
+        "activity-workspace-mobile-dark", "activity-workspace-mobile-dark.png", NextcloudPresentation.Adaptive,
+        "Activity", "Attention-first activity workspace", "Actionable events and compact filters",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    ActivityWorkspaceMobileLight(
+        "activity-workspace-mobile-light", "activity-workspace-mobile-light.png", NextcloudPresentation.Adaptive,
+        "Activity", "Attention-first activity workspace", "Actionable events and compact filters",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f, darkTheme = false,
+    ),
+    BudgetDashboardDesktopDark(
+        "budget-dashboard-desktop-dark", "budget-dashboard-desktop-dark.png", NextcloudPresentation.Desktop,
+        "Budget", "Finance dashboard", "Verified account, transaction, budget, bill, and goal data",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
         width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetDashboardDesktopLight(
+        "budget-dashboard-desktop-light", "budget-dashboard-desktop-light.png", NextcloudPresentation.Desktop,
+        "Budget", "Finance dashboard", "Verified account, transaction, budget, bill, and goal data",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f, darkTheme = false,
+    ),
+    BudgetDashboardMobileDark(
+        "budget-dashboard-mobile-dark", "budget-dashboard-mobile-dark.png", NextcloudPresentation.Adaptive,
+        "Budget", "Finance dashboard", "Progressive compact finance overview",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetDashboardMobileLight(
+        "budget-dashboard-mobile-light", "budget-dashboard-mobile-light.png", NextcloudPresentation.Adaptive,
+        "Budget", "Finance dashboard", "Progressive compact finance overview",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f, darkTheme = false,
+    ),
+    BudgetTransactionsDesktop(
+        "budget-transactions-desktop", "budget-transactions-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetTransactionsMobile(
+        "budget-transactions-mobile", "budget-transactions-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetAccountsDesktop(
+        "budget-accounts-desktop", "budget-accounts-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetAccountsMobile(
+        "budget-accounts-mobile", "budget-accounts-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetCategoriesDesktop(
+        "budget-categories-desktop", "budget-categories-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Categories", "Synthetic data from verified Budget category API routes",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetCategoriesMobile(
+        "budget-categories-mobile", "budget-categories-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Categories", "Synthetic data from verified Budget category API routes",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetPlanDesktop(
+        "budget-plan-desktop", "budget-plan-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetPlanMobile(
+        "budget-plan-mobile", "budget-plan-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
     ),
     FileSyncSetupDesktop(
         "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
@@ -126,51 +622,153 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.StateCoverage, "linux", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
+    WindowsCloudFilesStorageDesktop(
+        "windows-cloud-files-storage-desktop", "windows-cloud-files-storage-desktop.png",
+        NextcloudPresentation.Desktop, "Windows Cloud Files", "File Explorer storage", "Active placeholders, hydrated files, and pins",
+        MarketingCapturePurpose.Showcase, "windows", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    WindowsCloudFilesRecoveryDesktop(
+        "windows-cloud-files-recovery-desktop", "windows-cloud-files-recovery-desktop.png",
+        NextcloudPresentation.Desktop, "Windows Cloud Files", "Writeback recovery", "Local edits retained after a remote generation conflict",
+        MarketingCapturePurpose.Showcase, "windows", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
     DesktopStartupSettings(
         "desktop-startup-settings", "desktop-startup-settings.png", NextcloudPresentation.Desktop,
-        "File sync", "Desktop settings", "Start on login enabled",
+        "File sync", "Desktop settings", "Background sync and start on login enabled",
         MarketingCapturePurpose.StateCoverage, "desktop", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveApp(
-        "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
-        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+        "tables-insights-desktop", "tables-insights-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Inventory overview and category chart", "Synthetic Tables data",
         MarketingCapturePurpose.Showcase,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
-    AdaptiveAppMobile(
-        "adaptive-dynamic-data-mobile", "adaptive-dynamic-data-mobile.png", NextcloudPresentation.Adaptive,
-        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+    TablesRowsDesktop(
+        "tables-rows-desktop", "tables-rows-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Inventory rows and actions", "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
-        "mobile", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesRowFormDesktop(
+        "tables-row-form-desktop", "tables-row-form-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Add inventory row", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    InlineRecordEditDesktop(
+        "inline-record-edit-desktop", "inline-record-edit-desktop.png", NextcloudPresentation.Desktop,
+        "Dynamic workspaces", "Edit record in place", "Existing values with inline save and cancel",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    InlineRecordEditMobile(
+        "inline-record-edit-mobile", "inline-record-edit-mobile.png", NextcloudPresentation.Adaptive,
+        "Dynamic workspaces", "Edit record in place", "Existing values with inline save and cancel",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
+    ),
+    TablesColumnsDesktop(
+        "tables-columns-desktop", "tables-columns-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesViewsDesktop(
+        "tables-views-desktop", "tables-views-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesSharesDesktop(
+        "tables-shares-desktop", "tables-shares-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    AdaptiveAppMobile(
+        "tables-row-form-mobile", "tables-row-form-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Add inventory row", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
     ),
     AdaptiveAppCollectionMobile(
-        "adaptive-dynamic-collection-mobile",
-        "adaptive-dynamic-collection-mobile.png",
+        "tables-rows-mobile",
+        "tables-rows-mobile.png",
         NextcloudPresentation.Adaptive,
-        "Dynamic apps",
-        "Nested collection actions",
-        "Synthetic visual QA",
+        "Tables",
+        "Inventory rows and actions",
+        "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
         "mobile",
         "phone-portrait",
-        width = 1_080,
-        height = 1_800,
+        width = 1_024,
+        height = 2_216,
         density = 2.625f,
     ),
     AdaptiveAppContextMenuMobile(
-        "adaptive-dynamic-context-menu-mobile",
-        "adaptive-dynamic-context-menu-mobile.png",
+        "tables-overview-mobile",
+        "tables-overview-mobile.png",
         NextcloudPresentation.Adaptive,
-        "Dynamic apps",
-        "Context workspace menu",
-        "Synthetic visual QA",
+        "Tables",
+        "Inventory overview and category chart",
+        "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
         "mobile",
         "phone-portrait",
-        width = 1_080,
-        height = 1_800,
+        width = 1_024,
+        height = 2_216,
         density = 2.625f,
+    ),
+    TablesColumnsMobile(
+        "tables-columns-mobile", "tables-columns-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesViewsMobile(
+        "tables-views-mobile", "tables-views-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesSharesMobile(
+        "tables-shares-mobile", "tables-shares-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    MailWorkspaceDesktop(
+        "mail-workspace-desktop", "mail-workspace-desktop.png", NextcloudPresentation.Desktop,
+        "Mail", "Adaptive mailbox workspace", "Inbox message selected", MarketingCapturePurpose.Showcase,
+        "desktop", "wide", issue = 54, width = 1_440, height = 900, density = 1f,
+    ),
+    MailWorkspaceMobile(
+        "mail-workspace-mobile", "mail-workspace-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Inbox message list", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailMessageBodyMobile(
+        "mail-message-body-mobile", "mail-message-body-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Uncached selected message body", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceLoadingMobile(
+        "mail-workspace-loading-mobile", "mail-workspace-loading-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Loading inbox", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceEmptyMobile(
+        "mail-workspace-empty-mobile", "mail-workspace-empty-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Empty inbox", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MailWorkspaceErrorDesktop(
+        "mail-workspace-error-desktop", "mail-workspace-error-desktop.png", NextcloudPresentation.Desktop,
+        "Mail", "Adaptive mailbox workspace", "Message body error", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", issue = 54, width = 1_440, height = 900, density = 1f,
     ),
     PhotoTimelineRevalidationErrorMobile(
         "photo-timeline-revalidation-error-mobile",
@@ -374,272 +972,53 @@ enum class MarketingCaptureScenario(
         "mobile", "phone-portrait", pullRequest = 221, issue = 52,
         width = 1_080, height = 1_800, density = 2.625f,
     ),
+    MusicLibraryAlbumTracksMobile(
+        "music-library-album-tracks-mobile", "music-library-album-tracks-mobile.png",
+        NextcloudPresentation.Adaptive, "Music", "Album track collection",
+        "Ready", MarketingCapturePurpose.Showcase,
+        "mobile", "phone-portrait", issue = 56,
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    MusicLibraryPlaybackErrorDesktop(
+        "music-library-playback-error-desktop", "music-library-playback-error-desktop.png",
+        NextcloudPresentation.Desktop, "Music", "Playback queue",
+        "Playback error with queue retained", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", issue = 56,
+        width = 1_440, height = 900, density = 1f,
+    ),
+    GuideAndroidGettingStartedHome("guide-android-getting-started-home", "guide-android-getting-started-home.png", NextcloudPresentation.Adaptive, "Guides", "Android setup", "Connected mobile Home", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_400, density = 2.625f),
+    GuideAndroidGettingStartedFiles("guide-android-getting-started-files", "guide-android-getting-started-files.png", NextcloudPresentation.Adaptive, "Guides", "Android setup", "Files and offline state", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_400, density = 2.625f),
+    GuideAndroidGettingStartedCalendar("guide-android-getting-started-calendar", "guide-android-getting-started-calendar.png", NextcloudPresentation.Adaptive, "Guides", "Android setup", "Native Calendar workspace", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideDesktopGettingStartedHome("guide-desktop-getting-started-home", "guide-desktop-getting-started-home.png", NextcloudPresentation.Desktop, "Guides", "Desktop setup", "Connected desktop Home", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopGettingStartedApps("guide-desktop-getting-started-apps", "guide-desktop-getting-started-apps.png", NextcloudPresentation.Desktop, "Guides", "Desktop setup", "Installed app catalog", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopGettingStartedSettings("guide-desktop-getting-started-settings", "guide-desktop-getting-started-settings.png", NextcloudPresentation.Desktop, "Guides", "Desktop setup", "Sync and storage settings", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideAndroidOfflineFilesBrowse("guide-android-offline-files-browse", "guide-android-offline-files-browse.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "Files and availability", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_400, density = 2.625f),
+    GuideAndroidOfflineFilesStorage("guide-android-offline-files-storage", "guide-android-offline-files-storage.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "System Files storage", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
+    GuideAndroidOfflineFilesTransfers("guide-android-offline-files-transfers", "guide-android-offline-files-transfers.png", NextcloudPresentation.Adaptive, "Guides", "Android offline files", "Pending and failed work", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidFolderSyncLocations("guide-android-folder-sync-locations", "guide-android-folder-sync-locations.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Device and Nextcloud mapping", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidFolderSyncRules("guide-android-folder-sync-rules", "guide-android-folder-sync-rules.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Direction and safety rules", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
+    GuideAndroidFolderSyncStatus("guide-android-folder-sync-status", "guide-android-folder-sync-status.png", NextcloudPresentation.Adaptive, "Guides", "Android folder sync", "Schedule, conflict, and health", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
+    GuideLinuxFolderSyncWorkspace("guide-linux-folder-sync-workspace", "guide-linux-folder-sync-workspace.png", NextcloudPresentation.Desktop, "Guides", "Linux folder sync", "Active pair workspace", MarketingCapturePurpose.Showcase, "linux", "wide", width = 1_721, height = 914, density = 1f),
+    GuideLinuxFolderSyncLocations("guide-linux-folder-sync-locations", "guide-linux-folder-sync-locations.png", NextcloudPresentation.Desktop, "Guides", "Linux folder sync", "Local and Nextcloud mapping", MarketingCapturePurpose.Showcase, "linux", "wide", width = 1_440, height = 900, density = 1f),
+    GuideLinuxFolderSyncRules("guide-linux-folder-sync-rules", "guide-linux-folder-sync-rules.png", NextcloudPresentation.Desktop, "Guides", "Linux folder sync", "Scope and conflict rules", MarketingCapturePurpose.Showcase, "linux", "wide", width = 1_440, height = 900, density = 1f),
+    GuideWindowsCloudFilesSettings("guide-windows-cloud-files-settings", "guide-windows-cloud-files-settings.png", NextcloudPresentation.Desktop, "Guides", "Windows Cloud Files", "Sync and storage settings", MarketingCapturePurpose.Showcase, "windows", "wide", width = 1_440, height = 900, density = 1f),
+    GuideWindowsCloudFilesStorage("guide-windows-cloud-files-storage", "guide-windows-cloud-files-storage.png", NextcloudPresentation.Desktop, "Guides", "Windows Cloud Files", "File Explorer placeholders", MarketingCapturePurpose.Showcase, "windows", "wide", width = 1_440, height = 900, density = 1f),
+    GuideWindowsCloudFilesRecovery("guide-windows-cloud-files-recovery", "guide-windows-cloud-files-recovery.png", NextcloudPresentation.Desktop, "Guides", "Windows Cloud Files", "Guarded writeback recovery", MarketingCapturePurpose.Showcase, "windows", "wide", width = 1_440, height = 900, density = 1f),
+    GuideAndroidPhotoBackupFolders("guide-android-photo-backup-folders", "guide-android-photo-backup-folders.png", NextcloudPresentation.Adaptive, "Guides", "Android photo backup", "Media folder discovery", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 2_200, density = 2.625f),
+    GuideAndroidPhotoBackupQueue("guide-android-photo-backup-queue", "guide-android-photo-backup-queue.png", NextcloudPresentation.Adaptive, "Guides", "Android photo backup", "Durable transfer queue", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidPhotoBackupLibrary("guide-android-photo-backup-library", "guide-android-photo-backup-library.png", NextcloudPresentation.Adaptive, "Guides", "Android photo backup", "Remote photo library", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidCalendarMonth("guide-android-calendar-month", "guide-android-calendar-month.png", NextcloudPresentation.Adaptive, "Guides", "Android Calendar", "Compact month", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidCalendarAgenda("guide-android-calendar-agenda", "guide-android-calendar-agenda.png", NextcloudPresentation.Adaptive, "Guides", "Android Calendar", "Touch agenda", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideAndroidCalendarEdit("guide-android-calendar-edit", "guide-android-calendar-edit.png", NextcloudPresentation.Adaptive, "Guides", "Android Calendar", "Writable event context", MarketingCapturePurpose.Showcase, "android", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f),
+    GuideDesktopCalendarMonth("guide-desktop-calendar-month", "guide-desktop-calendar-month.png", NextcloudPresentation.Desktop, "Guides", "Desktop Calendar", "Month and inspector", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopCalendarSources("guide-desktop-calendar-sources", "guide-desktop-calendar-sources.png", NextcloudPresentation.Desktop, "Guides", "Desktop Calendar", "Sources and authority", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopCalendarEdit("guide-desktop-calendar-edit", "guide-desktop-calendar-edit.png", NextcloudPresentation.Desktop, "Guides", "Desktop Calendar", "Writable event context", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopSwitchAppsCatalog("guide-desktop-switch-apps-catalog", "guide-desktop-switch-apps-catalog.png", NextcloudPresentation.Desktop, "Guides", "Desktop app switching", "Installed app catalog", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopSwitchAppsSidebar("guide-desktop-switch-apps-sidebar", "guide-desktop-switch-apps-sidebar.png", NextcloudPresentation.Desktop, "Guides", "Desktop app switching", "Persistent shortcuts", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
+    GuideDesktopSwitchAppsNested("guide-desktop-switch-apps-nested", "guide-desktop-switch-apps-nested.png", NextcloudPresentation.Desktop, "Guides", "Desktop app switching", "Verified nested workspace", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
 }
 
-internal data class MarketingCaptureRegistryEntry(
-    val id: String,
-    val fileName: String,
-    val feature: String,
-    val surface: String,
-    val state: String,
-    val purpose: String,
-    val platform: String,
-    val viewport: String,
-    val pullRequest: Int?,
-    val issue: Int?,
-    val width: Int,
-    val height: Int,
-    val density: Float,
-)
 
-private val marketingCaptureSlug = Regex("[a-z0-9-]+")
-private val marketingCapturePngFileName = Regex("[a-z0-9-]+\\.png")
-
-internal fun MarketingCaptureScenario.registryEntry(): MarketingCaptureRegistryEntry =
-    MarketingCaptureRegistryEntry(
-        id = id,
-        fileName = fileName,
-        feature = feature,
-        surface = surface,
-        state = state,
-        purpose = purpose.manifestValue,
-        platform = platform,
-        viewport = viewport,
-        pullRequest = pullRequest,
-        issue = issue,
-        width = width,
-        height = height,
-        density = density,
-    )
-
-internal fun validateMarketingCaptureRegistry(
-    entries: List<MarketingCaptureRegistryEntry>,
-) {
-    require(entries.isNotEmpty()) {
-        "The marketing capture registry must not be empty."
-    }
-    require(entries.map(MarketingCaptureRegistryEntry::id).toSet().size == entries.size) {
-        "Marketing capture scenario IDs must be unique."
-    }
-    require(entries.map(MarketingCaptureRegistryEntry::fileName).toSet().size == entries.size) {
-        "Marketing capture file names must be unique."
-    }
-    entries.forEach { entry ->
-        require(entry.id.matches(marketingCaptureSlug)) {
-            "Invalid marketing capture scenario ID: ${entry.id}"
-        }
-        require(entry.fileName.matches(marketingCapturePngFileName)) {
-            "Invalid marketing capture PNG file name: ${entry.fileName}"
-        }
-        require(entry.width > 0 && entry.height > 0) {
-            "${entry.id} must have positive pixel dimensions."
-        }
-        require(entry.density.isFinite() && entry.density > 0f) {
-            "${entry.id} must have a positive finite density."
-        }
-        listOf(
-            "feature" to entry.feature,
-            "surface" to entry.surface,
-            "state" to entry.state,
-        ).forEach { (label, value) ->
-            require(value.isNotEmpty() && value == value.trim()) {
-                "${entry.id} $label must be a non-empty trimmed label."
-            }
-        }
-        require(
-            entry.purpose == MarketingCapturePurpose.Showcase.manifestValue ||
-                entry.purpose == MarketingCapturePurpose.StateCoverage.manifestValue,
-        ) {
-            "${entry.id} has an unsupported capture purpose."
-        }
-        require(entry.platform.matches(marketingCaptureSlug)) {
-            "${entry.id} has an invalid platform slug."
-        }
-        require(entry.viewport.matches(marketingCaptureSlug)) {
-            "${entry.id} has an invalid viewport slug."
-        }
-        require(entry.pullRequest == null || entry.pullRequest > 0) {
-            "${entry.id} must use a positive pull request number."
-        }
-        require(entry.issue == null || entry.issue > 0) {
-            "${entry.id} must use a positive issue number."
-        }
-    }
-}
-
-internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.FileShareUserMobile,
-    MarketingCaptureScenario.FileShareGroupDesktop,
-    MarketingCaptureScenario.FileShareLoadingMobile,
-    MarketingCaptureScenario.FileShareErrorMobile,
-)
-
-val marketingCaptureScenarios: List<MarketingCaptureScenario> =
-    MarketingCaptureScenario.entries
-
-val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.RawPreviewLoadingMobile,
-    MarketingCaptureScenario.RawPreviewErrorMobile,
-    MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
-    MarketingCaptureScenario.RawPreviewHighDetailDesktop,
-)
-
-val photoMediaReviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.LivePhotoMotionFailureMobile,
-    MarketingCaptureScenario.NativeTiffPreviewMobile,
-)
-
-data class MarketingCaptureAssets(
-    val avatar: ImageBitmap,
-    val mediaPreview: ImageBitmap,
-    val services: NextcloudPlatformServices,
-)
-
-@Composable
-internal fun MarketingFileShareScenario(
-    scenario: MarketingCaptureScenario,
-    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
-) {
-    val capture = marketingFileShareCaptureState(scenario, fixture)
-    val desktop = scenario.presentation == NextcloudPresentation.Desktop
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(if (desktop) NextcloudSpacing.XLarge else NextcloudSpacing.Medium),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            modifier = Modifier
-                .widthIn(max = if (desktop) 760.dp else 560.dp)
-                .fillMaxWidth(),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 6.dp,
-        ) {
-            Column(
-                modifier = Modifier.padding(NextcloudSpacing.XLarge),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-            ) {
-                Text(
-                    text = "Share ${capture.dialog.file.name}",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                FileShareDialogContent(
-                    state = capture.dialog,
-                    onTargetChanged = { _ -> },
-                    onAllowEditingChanged = { _ -> },
-                    onDetailsChanged = { _ -> },
-                    recipientPicker = { target ->
-                        FileShareRecipientPickerContent(
-                            target = target,
-                            state = capture.recipientPicker,
-                            enabled = !capture.dialog.running,
-                            onQueryChanged = { _ -> },
-                            onSelected = { _ -> },
-                        )
-                    },
-                    existingShare = { share ->
-                        ExistingFileShareSummary(
-                            share = share,
-                            running = false,
-                            canCopy = false,
-                            showManagementActions = true,
-                            onCopy = {},
-                            onPermissions = {},
-                            onRevoke = {},
-                        )
-                    },
-                    maximumHeight = when {
-                        desktop -> 620.dp
-                        scenario == MarketingCaptureScenario.FileShareLoadingMobile -> 420.dp
-                        scenario == MarketingCaptureScenario.FileShareErrorMobile -> 470.dp
-                        else -> 480.dp
-                    },
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(
-                        NextcloudSpacing.Small,
-                        Alignment.End,
-                    ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FileShareDialogDismissAction(
-                        state = capture.dialog,
-                        onDismiss = {},
-                    )
-                    FileShareDialogConfirmAction(
-                        state = capture.dialog,
-                        onCreate = { _ -> },
-                    )
-                }
-            }
-        }
-    }
-}
-
-internal data class MarketingFileShareCaptureState(
-    val dialog: FileShareDialogUiState,
-    val recipientPicker: FileShareRecipientPickerUiState,
-)
-
-internal fun marketingFileShareCaptureState(
-    scenario: MarketingCaptureScenario,
-    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
-): MarketingFileShareCaptureState {
-    val target: FileShareTarget
-    val existingShares: List<NextcloudFileShare>
-    val picker: FileShareRecipientPickerUiState
-    val capabilities: NextcloudFileSharingCapabilities
-    when (scenario) {
-        MarketingCaptureScenario.FileShareUserMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                results = fixture.userResults,
-            )
-        }
-        MarketingCaptureScenario.FileShareGroupDesktop -> {
-            target = FileShareTarget.Group
-            existingShares = listOf(fixture.existingUserShare)
-            capabilities = fixture.capabilities
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                results = fixture.groupResults,
-            )
-        }
-        MarketingCaptureScenario.FileShareLoadingMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                loading = true,
-            )
-        }
-        MarketingCaptureScenario.FileShareErrorMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                error = "Could not search recipients. Check your connection and try again.",
-            )
-        }
-        else -> error("${scenario.id} is not a file-share capture.")
-    }
-    return MarketingFileShareCaptureState(
-        dialog = FileShareDialogUiState(
-            file = fixture.file,
-            capabilities = capabilities,
-            existingShares = existingShares,
-            target = target,
-        ),
-        recipientPicker = picker,
-    )
-}
 
 @Composable
 internal fun MarketingObsidianSyncScenario() {
@@ -649,36 +1028,37 @@ internal fun MarketingObsidianSyncScenario() {
             subtitle = "Two-way folder sync",
             onBack = {},
         )
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
-            FolderSyncSection(
-                snapshot = FileSyncCenterSnapshot(
-                    support = FileSyncCenterSupport.Available,
-                    pairs = listOf(
-                        marketingSyncPair(
-                            id = "fixture-obsidian",
-                            name = "Obsidian Vault",
-                            remote = "Notes/Obsidian",
-                            direction = FileSyncDirection.Bidirectional,
-                            pending = 1,
-                            completed = 42,
+            item {
+                FolderSyncSection(
+                    snapshot = FileSyncCenterSnapshot(
+                        support = FileSyncCenterSupport.Available,
+                        pairs = listOf(
+                            marketingSyncPair(
+                                id = "fixture-obsidian",
+                                name = "Obsidian Vault",
+                                remote = "Notes/Obsidian",
+                                direction = FileSyncDirection.Bidirectional,
+                                pending = 1,
+                                completed = 42,
                             schedule = "Background sync · Wi-Fi or mobile data",
+                            ),
                         ),
                     ),
-                ),
-                loading = false,
-                mediaDiscovery = null,
-                mediaDiscoveryLoading = false,
-                busyPairId = null,
-                onAdd = {},
-                onOpenMediaSuggestion = {},
-                onRequestMediaPermission = {},
-                onRun = {},
-                onRemove = {},
-                onResolve = { _, _, _ -> },
-            )
+                    loading = false,
+                    mediaDiscovery = null,
+                    mediaDiscoveryLoading = false,
+                    busyPairId = null,
+                    onAdd = {}, onOpenMediaSuggestion = {},
+                    onRequestMediaPermission = {}, onRun = {},
+                    onRemove = {},
+                    onResolve = { _, _, _ -> },
+                )
+            }
         }
     }
 }
@@ -753,7 +1133,10 @@ internal fun MarketingMediaBackupScenario() {
 }
 
 @Composable
-internal fun MarketingFileSyncRulesScenario() {
+internal fun MarketingFileSyncRulesScenario(
+    initialStep: FileSyncSetupStep = FileSyncSetupStep.Rules,
+    initialAdvancedSettingsVisible: Boolean = false,
+) {
     var configuration by remember {
         mutableStateOf(
             FileSyncConfiguration(
@@ -786,27 +1169,31 @@ internal fun MarketingFileSyncRulesScenario() {
         onConfigurationChanged = { configuration = it },
         onAdd = {},
         modifier = Modifier.fillMaxSize(),
-        initialStep = FileSyncSetupStep.Rules,
+        initialStep = initialStep,
+        initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
         syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
     )
 }
 
 @Composable
 internal fun MarketingFileSyncStatusDesktopScenario() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "Folder sync",
-            subtitle = "Linux workstation",
-            onBack = {},
-        )
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.FolderSync,
+        onSelected = {},
+        identity = marketingDesktopIdentity(),
+    ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+            modifier = Modifier.fillMaxSize(),
         ) {
+            FileOfflineWorkspaceTabs(
+                selected = FileOfflineWorkspaceSection.FolderSync,
+                onSelected = {},
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             FileSyncWorkspace(
                 snapshot = FileSyncCenterSnapshot(
                     support = FileSyncCenterSupport.Available,
-                    limitation = "Automatic background desktop scheduling is not enabled yet. Use Sync now.",
+                    limitation = "Background checks run every two minutes while the desktop app is active.",
                     pairs = listOf(
                         FileSyncPairSummary(
                             id = "fixture-studio",
@@ -829,8 +1216,9 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 341,
-                            lastScanEpochMillis = 1,
-                            scheduleDescription = "Manual sync on this desktop",
+                            lastScanEpochMillis = 1_786_640_400_000L,
+                            scheduleDescription = "Background checks every two minutes",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-client",
@@ -855,13 +1243,24 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                                         FileSyncDecisionChoice.KeepBoth,
                                         FileSyncDecisionChoice.Skip,
                                     ),
+                                    local = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_486_272L,
+                                        modifiedEpochMillis = 1_786_640_400_000L,
+                                    ),
+                                    remote = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_513_920L,
+                                        modifiedEpochMillis = 1_786_640_100_000L,
+                                    ),
                                 ),
                             ),
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 86,
-                            lastScanEpochMillis = 1,
-                            scheduleDescription = "Manual sync on this desktop",
+                            lastScanEpochMillis = 1_786_640_400_000L,
+                            scheduleDescription = "Background checks every two minutes",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-documents",
@@ -874,13 +1273,14 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                                 ignoredPatterns = listOf("*.tmp"),
                             ),
                             readyCount = 0,
-                            runningCount = 0,
+                            runningCount = 1,
                             conflicts = emptyList(),
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 219,
-                            lastScanEpochMillis = 1,
-                            scheduleDescription = "Manual sync on this desktop",
+                            lastScanEpochMillis = 1_786_640_400_000L,
+                            scheduleDescription = "Background checks every two minutes",
+                            networkState = FileSyncNetworkState.Available,
                         ),
                         FileSyncPairSummary(
                             id = "fixture-archive",
@@ -894,11 +1294,12 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             readyCount = 12,
                             runningCount = 0,
                             conflicts = emptyList(),
-                            failedCount = 1,
+                            failedCount = 0,
                             skippedCount = 0,
                             completedCount = 802,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Will resume when Nextcloud is reachable",
+                            networkState = FileSyncNetworkState.WaitingForNetwork,
                         ),
                     ),
                 ),
@@ -908,14 +1309,169 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                 onRun = {},
                 onRemove = {},
                 onResolve = { _, _, _ -> },
-                initialSelectedPairId = "fixture-client",
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(
+                    start = NextcloudSpacing.Large,
+                    end = NextcloudSpacing.Large,
+                    bottom = NextcloudSpacing.Large,
+                ),
+                fillAvailableHeight = true,
             )
         }
     }
 }
 
 @Composable
-internal fun MarketingFileSyncSetupDesktopScenario() {
+internal fun MarketingActivityWorkspaceDesktopScenario() {
+    val activities = remember { marketingActivityFixture() }
+    val timeline = remember(activities) {
+        ActivityTimelineState(
+            activities = activities,
+            initialized = true,
+            nextSince = 120,
+            hasMore = true,
+        )
+    }
+    val feed = remember(activities) { buildActivityFeedPresentation(activities) }
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.Activity,
+        onSelected = {},
+        identity = marketingDesktopIdentity(),
+    ) {
+        ActivityDesktopWorkspace(
+            timeline = timeline,
+            feed = feed,
+            query = "",
+            selectedSemantic = null,
+            selectedApp = null,
+            selectedType = null,
+            serverFilters = marketingActivityFilters(),
+            selectedServerFilterId = "all",
+            onQueryChanged = {},
+            onSemanticSelected = {},
+            onAppSelected = {},
+            onTypeSelected = {},
+            onServerFilterSelected = {},
+            onClearFilters = {},
+            onRefresh = {},
+            onLoadMore = {},
+            actionFor = { activity ->
+                when {
+                    activity.subject.contains("conflict", ignoreCase = true) ->
+                        ActivityOpenAction("Review conflict", appId = "files")
+                    activity.subject.contains("expir", ignoreCase = true) ->
+                        ActivityOpenAction("Extend link", appId = "files")
+                    activity.subject.contains("failed", ignoreCase = true) ->
+                        ActivityOpenAction("Retry upload", appId = "files")
+                    else -> null
+                }
+            },
+            onOpenAction = {},
+            loadPreview = { null },
+            onOpenSettings = {},
+        )
+    }
+}
+
+@Composable
+internal fun MarketingActivityWorkspaceMobileScenario() {
+    val activities = remember { marketingActivityFixture() }
+    val timeline = remember(activities) {
+        ActivityTimelineState(
+            activities = activities,
+            initialized = true,
+            nextSince = 120,
+            hasMore = true,
+        )
+    }
+    val feed = remember(activities) { buildActivityFeedPresentation(activities) }
+    Column(Modifier.fillMaxSize()) {
+        ActivityMobileWorkspace(
+            timeline = timeline,
+            feed = feed,
+            query = "",
+            selectedSemantic = null,
+            selectedApp = null,
+            selectedType = null,
+            serverFilters = marketingActivityFilters(),
+            selectedServerFilterId = "all",
+            onQueryChanged = {},
+            onSemanticSelected = {},
+            onAppSelected = {},
+            onTypeSelected = {},
+            onServerFilterSelected = {},
+            onClearFilters = {},
+            onRefresh = {},
+            onLoadMore = {},
+            actionFor = { activity ->
+                when {
+                    activity.subject.contains("conflict", ignoreCase = true) ->
+                        ActivityOpenAction("Review conflict", appId = "files")
+                    activity.subject.contains("expir", ignoreCase = true) ->
+                        ActivityOpenAction("Extend link", appId = "files")
+                    activity.subject.contains("failed", ignoreCase = true) ->
+                        ActivityOpenAction("Retry upload", appId = "files")
+                    else -> null
+                }
+            },
+            onOpenAction = {},
+            loadPreview = { null },
+            onOpenSettings = {},
+            modifier = Modifier.weight(1f),
+        )
+        NextcloudBottomNavigation(selected = NextcloudDestination.Activity, onSelected = {})
+    }
+}
+
+private fun marketingActivityFilters(): List<NextcloudActivityFilterOption> = listOf(
+    NextcloudActivityFilterOption("all", "All activities", 0),
+    NextcloudActivityFilterOption("self", "By you", 1),
+    NextcloudActivityFilterOption("by", "By others", 2),
+    NextcloudActivityFilterOption("files", "File changes", 10),
+    NextcloudActivityFilterOption("calendar", "Calendar", 70),
+    NextcloudActivityFilterOption("comments", "Comments", 70),
+)
+
+private fun marketingActivityFixture(): List<NextcloudActivity> = listOf(
+    marketingActivity(150, "files", "sync_conflict", "Sync conflict in Project plan 2026.docx", "Both copies changed", "2026-08-02T09:46:00Z"),
+    marketingActivity(149, "files_sharing", "share_expiring", "Public share for Budget Q3.xlsx expires soon", "Shared link expires in 2 days", "2026-08-02T09:31:00Z"),
+    marketingActivity(148, "files", "upload_failed", "Background upload failed for IMG_211830.jpg", "The connection was interrupted", "2026-08-02T09:18:00Z"),
+    marketingActivity(147, "files_sharing", "shared", "Elena Schneider shared Project Phoenix", "Shared with 6 people via link", "2026-08-02T08:58:00Z"),
+    marketingActivity(146, "comments", "comment", "Kai Lind commented on Budget Q3.xlsx", "Please review the updated numbers.", "2026-08-02T08:42:00Z"),
+    marketingActivity(145, "spreed", "mention", "You were mentioned in Campaign Assets", "Can you confirm the final version?", "2026-08-02T08:21:00Z"),
+    marketingActivity(144, "files", "file_changed", "Jonas Lund changed 3 files in Brand Kit", "logo.svg, colors.css, type-scale.md", "2026-08-02T07:48:00Z"),
+    marketingActivity(143, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_201.jpg", null, "2026-08-02T06:15:00Z"),
+    marketingActivity(142, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_202.jpg", null, "2026-08-02T06:14:00Z"),
+    marketingActivity(141, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_203.jpg", null, "2026-08-02T06:14:00Z"),
+    marketingActivity(140, "recognize", "system_tag", "System tag added to Photos/Camera/IMG_204.jpg", null, "2026-08-02T06:13:00Z"),
+    marketingActivity(139, "files", "file_created", "Mara created Field notes.md", "Projects/Research", "2026-08-01T18:24:00Z"),
+)
+
+private fun marketingActivity(
+    id: Long,
+    app: String,
+    type: String,
+    subject: String,
+    message: String?,
+    dateTime: String,
+) = NextcloudActivity(
+    id = id,
+    app = app,
+    type = type,
+    subject = subject,
+    message = message,
+    objectType = null,
+    objectId = null,
+    objectName = null,
+    link = null,
+    icon = null,
+    dateTime = dateTime,
+)
+
+@Composable
+internal fun MarketingFileSyncSetupDesktopScenario(
+    initialStep: FileSyncSetupStep = FileSyncSetupStep.Rules,
+    initialAdvancedSettingsVisible: Boolean = false,
+) {
     var configuration by remember {
         mutableStateOf(
             FileSyncConfiguration(
@@ -948,8 +1504,9 @@ internal fun MarketingFileSyncSetupDesktopScenario() {
             onChooseDestination = {},
             onConfigurationChanged = { configuration = it },
             onAdd = {},
-            modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
-            initialStep = FileSyncSetupStep.Rules,
+            modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth().heightIn(max = 760.dp),
+            initialStep = initialStep,
+            initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
             syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
         )
     }
@@ -958,7 +1515,7 @@ internal fun MarketingFileSyncSetupDesktopScenario() {
 @Composable
 internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServices) {
     Box(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
         RemoteFileSyncSelectionDialog(
@@ -978,14 +1535,19 @@ internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServi
 internal fun MarketingFileSyncStatusMobileScenario() {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
-            title = "Folder sync",
-            subtitle = "Alex's phone",
+            title = FileOfflineWorkspaceSection.FolderSync.title,
+            subtitle = FileOfflineWorkspaceSection.FolderSync.subtitle,
             onBack = {},
+            trailingContent = { androidx.compose.material3.TextButton(onClick = {}) { Text("Refresh") } },
         )
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        FileOfflineWorkspaceTabs(selected = FileOfflineWorkspaceSection.FolderSync, onSelected = {})
+        HorizontalDivider()
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
+            item {
             FileSyncWorkspace(
                 snapshot = FileSyncCenterSnapshot(
                     support = FileSyncCenterSupport.Available,
@@ -1011,7 +1573,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 341,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Background sync enabled",
                         ),
                         FileSyncPairSummary(
@@ -1037,12 +1599,22 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                                         FileSyncDecisionChoice.KeepBoth,
                                         FileSyncDecisionChoice.Skip,
                                     ),
+                                    local = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_486_272L,
+                                        modifiedEpochMillis = 1_786_640_400_000L,
+                                    ),
+                                    remote = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_513_920L,
+                                        modifiedEpochMillis = 1_786_640_100_000L,
+                                    ),
                                 ),
                             ),
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 86,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Waiting for your decision",
                         ),
                         FileSyncPairSummary(
@@ -1061,7 +1633,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 1_842,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Wi-Fi only",
                         ),
                     ),
@@ -1074,6 +1646,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                 onResolve = { _, _, _ -> },
                 initialSelectedPairId = "fixture-mobile-client",
             )
+            }
         }
     }
 }
@@ -1119,35 +1692,95 @@ internal fun MarketingVirtualFileStorageMobileScenario() {
 }
 
 @Composable
-internal fun MarketingVirtualFileStorageDesktopScenario() {
+internal fun MarketingVirtualFileStorageOverviewMobileScenario() {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = "Sync & offline",
-            subtitle = "Virtual files and device storage",
-            onBack = {},
+        ScreenHeader(title = "Virtual files", subtitle = "System Files and offline storage", onBack = {})
+        VirtualFileStorageCard(
+            snapshot = marketingVirtualFileStorageSnapshot(
+                support = VirtualFileStorageSupport.Available,
+                integration = VirtualFilePlatformIntegration.AndroidDocumentsProvider,
+            ),
+            loading = false,
+            busy = false,
+            onManage = {},
+            onFreeUp = {},
+            onActivateProvider = {},
+            onDeactivateProvider = {},
+            onAcknowledgeRecovery = {},
+            onChangeLocation = {},
+            onChangeCacheTiers = {},
+            onChoosePinnedFolder = {},
+            onReleaseFolder = {},
+            onRetryFolder = {},
         )
-        Box(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-            contentAlignment = Alignment.TopCenter,
-        ) {
+    }
+}
+
+@Composable
+internal fun MarketingVirtualFileStorageDesktopScenario(scenario: MarketingCaptureScenario) {
+    val windows = scenario == MarketingCaptureScenario.WindowsCloudFilesStorageDesktop ||
+        scenario == MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop ||
+        scenario == MarketingCaptureScenario.GuideWindowsCloudFilesSettings
+    val recovery = scenario == MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
+    val activation = scenario == MarketingCaptureScenario.GuideWindowsCloudFilesSettings
+    NextcloudDesktopShell(
+        selected = NextcloudDestination.FolderSync,
+        onSelected = {},
+        identity = marketingDesktopIdentity(),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            FileOfflineWorkspaceTabs(
+                selected = FileOfflineWorkspaceSection.VirtualFiles,
+                onSelected = {},
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(
-                modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                Text(
-                    "Keep the whole cloud visible in your file manager",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                Text(
-                    "Opened files stay fast in a managed cache. Pins remain offline, while safe " +
-                        "cleanup protects edits, transfers, conflicts, and files in use.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                        Text("Virtual files", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            "Keep your cloud visible locally and choose what must stay available offline",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            if (recovery) "Edits need review" else if (activation) "Not connected" else "Storage and connection",
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
                 VirtualFileStorageCard(
                     snapshot = marketingVirtualFileStorageSnapshot(
                         support = VirtualFileStorageSupport.Available,
-                        integration = VirtualFilePlatformIntegration.WindowsCloudFiles,
+                        integration = if (windows) {
+                            VirtualFilePlatformIntegration.WindowsCloudFiles
+                        } else {
+                            VirtualFilePlatformIntegration.LinuxFilesystemMount
+                        },
+                        limitations = if (recovery) {
+                            listOf(
+                                "A local edit conflicts with a newer remote generation and is retained for recovery.",
+                                "Review the pending writeback before freeing space or removing this account.",
+                            )
+                        } else {
+                            emptyList()
+                        },
+                        pendingWritebackCount = if (recovery) 1 else 0,
+                        providerActive = !activation,
                     ),
                     loading = false,
                     busy = false,
@@ -1155,6 +1788,12 @@ internal fun MarketingVirtualFileStorageDesktopScenario() {
                     onFreeUp = {},
                     onActivateProvider = {},
                     onDeactivateProvider = {},
+                    onAcknowledgeRecovery = {},
+                    onChangeLocation = {},
+                    onChangeCacheTiers = {},
+                    onChoosePinnedFolder = {},
+                    onReleaseFolder = {},
+                    onRetryFolder = {},
                 )
             }
         }
@@ -1164,6 +1803,9 @@ internal fun MarketingVirtualFileStorageDesktopScenario() {
 private fun marketingVirtualFileStorageSnapshot(
     support: VirtualFileStorageSupport,
     integration: VirtualFilePlatformIntegration,
+    limitations: List<String> = emptyList(),
+    pendingWritebackCount: Int? = null,
+    providerActive: Boolean = true,
 ): VirtualFileStorageSnapshot = VirtualFileStorageSnapshot(
     support = support,
     integration = integration,
@@ -1180,28 +1822,126 @@ private fun marketingVirtualFileStorageSnapshot(
     pinnedFileCount = 318,
     availableFreeBytes = 68_719_476_736L,
     storageCapacityBytes = 512L * 1024L * 1024L * 1024L,
-    limitations = emptyList(),
-    providerState = VirtualFileProviderState.Active,
+    limitations = limitations,
+    providerState = if (providerActive) VirtualFileProviderState.Active else VirtualFileProviderState.Inactive,
+    providerActive = providerActive,
     providerLocation = when (integration) {
-        VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
-        VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"
+        VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / nati.ve"
+        VirtualFilePlatformIntegration.WindowsCloudFiles -> "nati.ve in File Explorer"
         VirtualFilePlatformIntegration.LinuxFilesystemMount -> "~/Nextcloud Native"
-        VirtualFilePlatformIntegration.AppleFileProvider -> "Files / Nextcloud Native"
+        VirtualFilePlatformIntegration.AppleFileProvider -> "Files / nati.ve"
         VirtualFilePlatformIntegration.InAppOnDemandCache -> null
     },
+    providerLocationConfiguration = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        VirtualFileProviderLocation("Home folder", "nati.ve")
+    } else {
+        null
+    },
+    providerLocationCanChange = integration == VirtualFilePlatformIntegration.LinuxFilesystemMount,
+    folderRetentionRules = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        listOf(
+            VirtualFolderRetentionRule("Projects/Phoenix", VirtualFolderRetention.KeepOnDevice),
+            VirtualFolderRetentionRule("Photos/Portfolio", VirtualFolderRetention.KeepOnDevice),
+            VirtualFolderRetentionRule("Shared/Field research", VirtualFolderRetention.KeepOnDevice),
+        )
+    } else {
+        emptyList()
+    },
+    folderHydrationStatuses = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
+        listOf(
+            VirtualFolderHydrationStatus(
+                relativePath = "Projects/Phoenix",
+                phase = VirtualFolderHydrationPhase.AvailableOffline,
+                verifiedAtEpochMillis = 1,
+            ),
+            VirtualFolderHydrationStatus(
+                relativePath = "Photos/Portfolio",
+                phase = VirtualFolderHydrationPhase.Downloading,
+            ),
+            VirtualFolderHydrationStatus(
+                relativePath = "Shared/Field research",
+                phase = VirtualFolderHydrationPhase.Failed,
+                detail = "Connection interrupted. Existing offline files remain available.",
+            ),
+        )
+    } else {
+        emptyList()
+    },
+    pendingWritebackCount = pendingWritebackCount
+        ?: if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) 1 else 0,
 )
 
 @Composable
-internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
+internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) {
     require(
-        scenario == MarketingCaptureScenario.AdaptiveApp ||
-            scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
+        scenario in setOf(
+            MarketingCaptureScenario.MailWorkspaceDesktop,
+            MarketingCaptureScenario.MailWorkspaceMobile,
+            MarketingCaptureScenario.MailMessageBodyMobile,
+            MarketingCaptureScenario.MailWorkspaceLoadingMobile,
+            MarketingCaptureScenario.MailWorkspaceEmptyMobile,
+            MarketingCaptureScenario.MailWorkspaceErrorDesktop,
+        ),
     ) {
-        "${scenario.id} is not an adaptive data capture."
+        "${scenario.id} is not a Mail workspace capture."
     }
-    MarketingDynamicUiScenario(scenario)
+    val desktop = scenario.presentation == NextcloudPresentation.Desktop
+    val messageDetail = desktop || scenario == MarketingCaptureScenario.MailMessageBodyMobile
+    val composeAction = marketingMailDescriptor.preferredNativeMailComposeAction(marketingMailSchema)
+    val currentView = if (messageDetail) marketingMailBodyView else marketingMailMessageView
+    val currentState = when (scenario) {
+        MarketingCaptureScenario.MailWorkspaceLoadingMobile -> NativeScreenState.Loading
+        MarketingCaptureScenario.MailWorkspaceEmptyMobile -> NativeScreenState.Ready(emptyList())
+        MarketingCaptureScenario.MailWorkspaceErrorDesktop -> NativeScreenState.Error(
+            message = "The server did not return the selected message body.",
+            retry = {},
+            retryLabel = "Try again",
+        )
+        else -> NativeScreenState.Ready(
+            if (messageDetail) listOf(marketingMailBodyRecord) else marketingMailMessages,
+        )
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Mail",
+            subtitle = "Inbox",
+            onBack = {},
+            trailingContent = {
+                val compose = composeAction
+                if (compose != null) {
+                    androidx.compose.material3.Button(onClick = {}) {
+                        Text(compose.label)
+                    }
+                }
+            },
+        )
+        GenericNativeAppScreen(
+            schema = marketingMailSchema,
+            view = currentView,
+            state = currentState,
+            actionExecutor = NativeActionExecutor {
+                NativeActionExecutionResult.Failure("This synthetic fixture is read-only.")
+            },
+            selectedRecordId = if (messageDetail) marketingMailSelectedMessage.id else null,
+            selectedRecordResourceId = if (messageDetail) "messages" else null,
+            showSelectedRecordDetail = messageDetail,
+            onSelectRecord = {},
+            datasetContext = NativeDatasetContext(
+                parentResourceId = if (messageDetail) "messages" else "mailboxes",
+                parentRecord = if (messageDetail) marketingMailSelectedMessage else marketingMailInbox,
+                relatedRecords = mapOf(
+                    "accounts" to listOf(marketingMailAccount),
+                    "mailboxes" to marketingMailboxes,
+                    // The desktop fixture intentionally renders a selected body after the
+                    // envelope collection has been evicted. This keeps visual QA aligned with
+                    // direct/deep-linked detail behavior instead of relying on a warm list cache.
+                    "messages" to if (messageDetail) emptyList() else marketingMailMessages,
+                    "mailboxStats" to listOf(marketingMailInboxStats),
+                ),
+            ),
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
 
 @Composable
@@ -1222,7 +1962,11 @@ internal fun MarketingHomeDashboardScenario(
     NativeDashboardPresentation(
         state = DashboardSurfaceState.Available(
             snapshot = marketingDashboardSnapshot,
-            status = marketingUserStatus,
+            status = if (scenario.feature == "Homepage") {
+                marketingHomepageUserStatus
+            } else {
+                marketingUserStatus
+            },
         ),
         installedApps = fixture.apps,
         workspaceLayout = defaultHomeWorkspaceLayout(workspaceScope),
@@ -1238,7 +1982,8 @@ internal fun MarketingHomeDashboardScenario(
 }
 
 @Composable
-internal fun MarketingDeckBoardScenario() {
+internal fun MarketingDeckBoardScenario(scenario: MarketingCaptureScenario? = null) {
+    val content: @Composable () -> Unit = {
     NativeDeckBoardSurface(
         state = DeckWorkspaceState.Board(
             board = marketingDeckBoard,
@@ -1256,6 +2001,15 @@ internal fun MarketingDeckBoardScenario() {
         onMoveCard = { _, _, _ -> },
         modifier = Modifier.fillMaxSize(),
     )
+    }
+    if (scenario?.presentation == NextcloudPresentation.Desktop) {
+        NextcloudDesktopShell(
+            selected = NextcloudDestination.Apps, onSelected = {},
+            identity = marketingDesktopIdentity(), activeAppId = "deck",
+            workspaceKind = dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind.AppWorkspace,
+            content = content,
+        )
+    } else content()
 }
 
 private fun marketingSyncPair(
@@ -1280,7 +2034,7 @@ private fun marketingSyncPair(
     failedCount = 0,
     skippedCount = 0,
     completedCount = completed,
-    lastScanEpochMillis = 1,
+    lastScanEpochMillis = 1_786_640_400_000L,
     scheduleDescription = schedule,
 )
 
@@ -1374,12 +2128,303 @@ internal val marketingAdaptiveRecords = listOf(
     ),
 )
 
+private val marketingMailComposeAction = DynamicAction(
+    id = "route.drafts.create",
+    label = "Compose",
+    resourceId = "drafts",
+    intent = ActionIntent.create,
+    risk = ActionRisk.mutating,
+    requiresConfirmation = false,
+    // Exact Nextcloud Mail v5.10.x route. Capture data remains synthetic, but the visual QA
+    // exercises the same contract identities used by signed-package discovery.
+    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/apps/mail/api/drafts"),
+    confidence = Confidence.verified,
+)
+
+internal val marketingMailSchema = NativeAppSchema(
+    schemaVersion = "0.1",
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
+    confidence = Confidence.verified,
+    resources = listOf(
+        ResourceSpec(
+            id = "accounts",
+            name = "Accounts",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("accountName", "Account", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("emailAddress", "Email", FieldKind.string, required = true, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("name", "Mailbox", FieldKind.string, required = true, readOnly = true),
+                FieldSpec("specialUse", "Role", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("unreadCount", "Unread", FieldKind.integer, required = false, readOnly = true),
+                FieldSpec("path", "Path", FieldKind.string, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("subject", "Subject", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("from", "From", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("preview", "Preview", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("date", "Date", FieldKind.dateTime, required = false, readOnly = true),
+                FieldSpec("seen", "Seen", FieldKind.boolean, required = false, readOnly = true),
+                FieldSpec("flagged", "Flagged", FieldKind.boolean, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("total", "Messages", FieldKind.integer, required = true, readOnly = true),
+                FieldSpec("unread", "Unread", FieldKind.integer, required = true, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "messageBody",
+            name = "Message body",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("body", "Body", FieldKind.longText, required = true, readOnly = true),
+                FieldSpec("hasHtmlBody", "HTML", FieldKind.boolean, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "drafts",
+            name = "Drafts",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("accountId", "From", FieldKind.integer, required = true, readOnly = false),
+                FieldSpec("subject", "Subject", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("bodyPlain", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("editorBody", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("isHtml", "Rich text", FieldKind.boolean, required = true, readOnly = false),
+            ),
+        ),
+    ),
+    views = listOf(
+        ViewSpec(
+            id = "messages.mailbox",
+            title = "Inbox",
+            resourceId = "messages",
+            component = NativeComponent.mailbox,
+            sourceActionId = "route.messages.index",
+            confidence = Confidence.verified,
+        ),
+        ViewSpec(
+            id = "message.body",
+            title = "Message",
+            resourceId = "messageBody",
+            component = NativeComponent.detail,
+            sourceActionId = "route.messages.getbody",
+            confidence = Confidence.verified,
+        ),
+    ),
+    actions = listOf(
+        ActionSpec(
+            id = "route.messages.index",
+            label = "Messages",
+            resourceId = "messages",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages",
+                operationId = "route.messages.index",
+                queryParameterNames = listOf("mailboxId", "cursor", "filter", "limit", "view", "v"),
+                requiredQueryParameterNames = listOf("mailboxId"),
+            ),
+            intent = ActionIntent.list,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = "route.messages.getbody",
+            label = "Message body",
+            resourceId = "messageBody",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages/{id}/body",
+                operationId = "route.messages.getbody",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = "route.mailboxes.stats",
+            label = "Mailbox stats",
+            resourceId = "mailboxStats",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/mailboxes/{id}/stats",
+                operationId = "route.mailboxes.stats",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = marketingMailComposeAction.id,
+            label = marketingMailComposeAction.label,
+            resourceId = marketingMailComposeAction.resourceId,
+            binding = ApiBinding(
+                method = marketingMailComposeAction.binding.method,
+                path = marketingMailComposeAction.binding.path,
+                operationId = marketingMailComposeAction.id,
+            ),
+            intent = marketingMailComposeAction.intent,
+            risk = marketingMailComposeAction.risk,
+            requiresConfirmation = marketingMailComposeAction.requiresConfirmation,
+            confidence = marketingMailComposeAction.confidence,
+        ),
+    ),
+)
+
+internal val marketingMailDescriptor = DynamicAppDescriptor(
+    descriptorVersion = "0.1",
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
+    endpointPolicy = EndpointPolicy(serverOrigin = "https://fixture.invalid"),
+    resources = emptyList(),
+    actions = listOf(marketingMailComposeAction),
+    forms = listOf(
+        DynamicForm(
+            id = "compose-message-form",
+            title = "Compose",
+            resourceId = "messages",
+            actionId = marketingMailComposeAction.id,
+            confidence = Confidence.verified,
+        ),
+    ),
+)
+
+private val marketingMailMessageView = requireNotNull(
+    marketingMailSchema.views.firstOrNull { view -> view.id == "messages.mailbox" },
+)
+private val marketingMailBodyView = requireNotNull(
+    marketingMailSchema.views.firstOrNull { view -> view.id == "message.body" },
+)
+private val marketingMailAccount = NativeRecord(
+    id = "personal",
+    values = mapOf(
+        "accountName" to "Obiente",
+        "emailAddress" to "obiente@example.test",
+    ),
+)
+private val marketingMailInbox = NativeRecord(
+    id = "inbox",
+    values = mapOf(
+        "name" to "Inbox",
+        "specialUse" to "inbox",
+        "unreadCount" to "2",
+        "path" to "Personal/Inbox",
+        "accountId" to marketingMailAccount.id,
+    ),
+)
+private val marketingMailInboxStats = NativeRecord(
+    id = "inbox-stats",
+    values = mapOf("total" to "84", "unread" to "2"),
+)
+private val marketingMailboxes = listOf(
+    marketingMailInbox,
+    NativeRecord(
+        id = "drafts",
+        values = mapOf(
+            "name" to "Drafts", "specialUse" to "drafts", "path" to "Personal/Drafts",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+    NativeRecord(
+        id = "sent",
+        values = mapOf(
+            "name" to "Sent", "specialUse" to "sent", "path" to "Personal/Sent",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+    NativeRecord(
+        id = "archive",
+        values = mapOf(
+            "name" to "Archive", "specialUse" to "archive", "path" to "Personal/Archive",
+            "accountId" to marketingMailAccount.id,
+        ),
+    ),
+)
+private val marketingMailMessages = listOf(
+    NativeRecord(
+        id = "mail-1",
+        values = mapOf(
+            "subject" to "Release candidate is ready",
+            "from" to "Ada <ada@example.test>",
+            "preview" to "The Android and desktop artifacts passed the final checks.",
+            "date" to "2026-07-29T08:42:00Z",
+            "seen" to "false",
+            "flagged" to "true",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+    NativeRecord(
+        id = "mail-2",
+        values = mapOf(
+            "subject" to "Design review notes",
+            "from" to "Mira <mira@example.test>",
+            "preview" to "I added the adaptive navigation feedback to the shared notes.",
+            "date" to "2026-07-28T17:30:00Z",
+            "seen" to "false",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+    NativeRecord(
+        id = "mail-3",
+        values = mapOf(
+            "subject" to "Community call",
+            "from" to "Nextcloud community <community@example.test>",
+            "preview" to "Here is the agenda for Thursday's community call.",
+            "date" to "2026-07-27T11:05:00Z",
+            "seen" to "true",
+            "accountId" to marketingMailAccount.id,
+            "mailboxId" to marketingMailInbox.id,
+        ),
+    ),
+)
+private val marketingMailSelectedMessage = marketingMailMessages.first()
+private val marketingMailBodyRecord = NativeRecord(
+    id = marketingMailSelectedMessage.id,
+    values = mapOf(
+        "body" to """
+            <p>Hello Obiente,</p>
+            <p>The <strong>release candidate</strong> is ready for review.</p>
+            <p>Android and desktop artifacts passed the final checks. The visual audit is attached to the build.</p>
+            <p>Thanks,<br>Ada</p>
+        """.trimIndent(),
+        "hasHtmlBody" to "true",
+    ),
+)
+
 internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
     widgets = listOf(
         marketingDashboardWidget("activity", "Recent activity", 10),
         marketingDashboardWidget("calendar", "Upcoming events", 20),
         marketingDashboardWidget("recommendations", "Recent files", 30),
         marketingDashboardWidget("photos", "Photo backup", 40),
+        marketingDashboardWidget("favorites", "Favorite files", 50),
+        marketingDashboardWidget("storage", "Storage", 60),
+        marketingDashboardWidget("talk", "Unread conversations", 70),
+        marketingDashboardWidget("mail", "Important mail", 80),
     ),
     itemsByWidget = mapOf(
         "activity" to listOf(
@@ -1395,6 +2440,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Today",
                 sinceId = "activity-1",
             ),
+            marketingDashboardItem("activity", "Kai commented on Q3 roadmap.xlsx", "18 minutes ago", "activity-0b"),
+            marketingDashboardItem("activity", "Camera backup uploaded 27 new photos", "42 minutes ago", "activity-0a"),
         ),
         "calendar" to listOf(
             marketingDashboardItem(
@@ -1409,6 +2456,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Tomorrow at 10:30",
                 sinceId = "calendar-1",
             ),
+            marketingDashboardItem("calendar", "Design review", "Tomorrow at 14:30 · Product room", "calendar-0b"),
+            marketingDashboardItem("calendar", "Release retrospective", "Friday at 09:30", "calendar-0a"),
         ),
         "recommendations" to listOf(
             marketingDashboardItem(
@@ -1423,6 +2472,8 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "Notes",
                 sinceId = "files-1",
             ),
+            marketingDashboardItem("recommendations", "Q3 roadmap.xlsx", "Projects · edited 18 min ago", "files-0b"),
+            marketingDashboardItem("recommendations", "Brand presentation.pptx", "Design system", "files-0a"),
         ),
         "photos" to listOf(
             marketingDashboardItem(
@@ -1431,6 +2482,29 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
                 subtitle = "128 photos and 14 videos",
                 sinceId = "photos-1",
             ),
+            marketingDashboardItem("photos", "Weekend in Texel", "38 new photos · Yesterday", "photos-0b"),
+            marketingDashboardItem("photos", "7 people recognized", "Review suggested matches", "photos-0a"),
+        ),
+        "favorites" to listOf(
+            marketingDashboardItem("favorites", "Q3 roadmap.xlsx", "Projects/Planning", "favorites-3"),
+            marketingDashboardItem("favorites", "Product direction.md", "Projects/Native", "favorites-2"),
+            marketingDashboardItem("favorites", "Brand presentation.pptx", "Design system", "favorites-1"),
+        ),
+        "storage" to listOf(
+            marketingDashboardItem("storage", "34.2 GB of 100 GB used", "65.8 GB available", "storage-2"),
+            marketingDashboardItem("storage", "8.6 GB available offline", "4 folder sync pairs", "storage-1"),
+        ),
+        "talk" to listOf(
+            marketingDashboardItem("talk", "nati.ve", "Mara: The updated brief is ready · 3 unread", "talk-4"),
+            marketingDashboardItem("talk", "Design system", "Kai: I reviewed the new tokens · 1 unread", "talk-3"),
+            marketingDashboardItem("talk", "Community", "Elena: See you at the call · 1 unread", "talk-2"),
+            marketingDashboardItem("talk", "Release crew", "You: Desktop artifacts are ready", "talk-1"),
+        ),
+        "mail" to listOf(
+            marketingDashboardItem("mail", "Release candidate is ready", "Ada Lovelace · 8 minutes ago", "mail-4"),
+            marketingDashboardItem("mail", "Design review notes", "Kai Lind · 31 minutes ago", "mail-3"),
+            marketingDashboardItem("mail", "Your weekly cloud summary", "Nextcloud · Today", "mail-2"),
+            marketingDashboardItem("mail", "Community call agenda", "Elena Schneider · Yesterday", "mail-1"),
         ),
     ),
 )
@@ -1444,6 +2518,10 @@ internal val marketingUserStatus = NativeUserStatus(
     clearAtEpochSeconds = null,
     messageIsPredefined = false,
     statusIsUserDefined = true,
+)
+
+internal val marketingHomepageUserStatus = marketingUserStatus.copy(
+    message = "Your cloud is ready",
 )
 
 private fun marketingDashboardWidget(

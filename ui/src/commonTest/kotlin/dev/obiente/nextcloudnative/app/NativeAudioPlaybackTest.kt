@@ -53,7 +53,10 @@ class NativeAudioPlaybackTest {
             id = "784",
             values = mapOf("name" to "Selected album"),
         )
-        val context = nativeAudioCollectionContext("albums", album)
+        val context = nativeAudioCollectionContext(
+            ResourceSpec("albums", "Albums", Confidence.verified),
+            album,
+        )
         val track = nativeAudioTrack(
             trackResource,
             trackRecord().copy(
@@ -308,6 +311,24 @@ class NativeAudioPlaybackTest {
         assertEquals("two", queue.next().currentTrack?.recordId)
         assertNull(queue.next().next().currentTrack)
         assertEquals("one", queue.next().previous().currentTrack?.recordId)
+    }
+
+    @Test
+    fun `playback error retains the selected queue item for recovery and inspection`() {
+        val queue = startNativeAudioQueue(
+            tracks = listOf(nativeTrack("one", 1), nativeTrack("two", 2)),
+            selectedRecordId = "one",
+        )
+        val error = NativeAudioEngineState(
+            sourceId = "one:9001:audio/mpeg",
+            status = NativeAudioEngineStatus.Error,
+            error = "The stream ended before playback started.",
+        )
+
+        assertEquals("one", queue.currentTrack?.recordId)
+        assertEquals(NativeAudioEngineStatus.Error, error.status)
+        assertEquals("The stream ended before playback started.", error.error)
+        assertEquals(2, queue.tracks.size)
     }
 
     @Test

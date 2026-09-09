@@ -458,8 +458,7 @@ internal fun canExportFileVersion(
 ): Boolean {
     val capability = (support as? ExternalFileHandoffSupport.Available)?.capability ?: return false
     return ExternalFileHandoffAction.Share in capability.supportedActions &&
-        (version.sizeBytes == null || version.sizeBytes <= capability.maximumFileBytes) &&
-        capability.maximumFileBytes <= MAX_FILE_VERSION_DOWNLOAD_BYTES
+        version.sizeBytes?.let { it >= 0L } != false
 }
 
 internal fun canRestoreFileVersion(
@@ -471,6 +470,7 @@ internal fun canRestoreFileVersion(
 
 private fun ExternalFileHandoffResult.fileVersionActionMessage(): String = when (this) {
     is ExternalFileHandoffResult.Launched -> "A detached historical copy is ready in the platform export sheet."
+    is ExternalFileHandoffResult.Cancelled -> "Export cancelled."
     is ExternalFileHandoffResult.NoCompatibleApplication -> "No app can receive this historical copy."
     is ExternalFileHandoffResult.Rejected -> message
     is ExternalFileHandoffResult.Unsupported -> reason

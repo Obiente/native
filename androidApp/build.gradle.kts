@@ -54,6 +54,12 @@ android {
     }
 
     buildTypes {
+        create("dev") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             signingConfig = signingConfigs.findByName("release")
         }
@@ -64,6 +70,8 @@ android {
             buildConfigField("boolean", "DIRECT_APK_UPDATES", "true")
         }
     }
+
+    sourceSets.getByName("dev").java.srcDir("src/debug/kotlin")
 
     buildFeatures {
         compose = true
@@ -91,11 +99,14 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
     testImplementation(kotlin("test"))
+    testImplementation(libs.org.json)
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.4.0")
 }
 
 val validateReleaseSigning by tasks.registering {

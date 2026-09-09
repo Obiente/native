@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class ExternalFileHandoffTest {
     private val capability = ExternalFileHandoffCapability(
         supportedActions = ExternalFileHandoffAction.entries.toSet(),
-        maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+        maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
     )
 
     @Test
@@ -25,15 +25,30 @@ class ExternalFileHandoffTest {
     }
 
     @Test
-    fun `known oversized files are rejected before download`() {
+    fun `files larger than the in-memory threshold remain eligible for streamed staging`() {
         val rejection = validateExternalFileHandoff(
-            file(name = "video.mov", size = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            file(name = "video.mov", size = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
             ExternalFileHandoffAction.OpenWith,
             capability,
         )
 
-        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
-        assertTrue(requireNotNull(rejection).message.contains("64 MiB"))
+        assertNull(rejection)
+    }
+
+    @Test
+    fun `known oversized files remain eligible for seekable remote streaming`() {
+        val streamingCapability = capability.copy(supportsSeekableRemoteStreaming = true)
+        val file = file(name = "video.mov", size = 4L * 1024L * 1024L * 1024L)
+
+        assertNull(
+            validateExternalFileHandoff(
+                file,
+                ExternalFileHandoffAction.OpenWith,
+                streamingCapability,
+            ),
+        )
+        assertTrue(file.canUseSeekableRemoteHandoff(streamingCapability))
+        assertTrue(!file.copy(size = null).canUseSeekableRemoteHandoff(streamingCapability))
     }
 
     @Test
@@ -45,6 +60,34 @@ class ExternalFileHandoffTest {
                 capability,
             ),
         )
+    }
+
+    @Test
+    fun `streamed staging is bounded only by current safe storage`() {
+        val gibibyte = 1024L * 1024L * 1024L
+
+        assertEquals(
+            12L * gibibyte,
+            stagedFileTransferLimit(
+                availableBytes = 20L * gibibyte,
+                declaredByteCount = 12L * gibibyte,
+            ),
+        )
+        assertEquals(
+            20L * gibibyte - STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+            stagedFileTransferLimit(availableBytes = 20L * gibibyte, declaredByteCount = null),
+        )
+        assertEquals(1L, stagedFileTransferLimit(availableBytes = gibibyte, declaredByteCount = 0L))
+        assertFailsWith<IllegalStateException> {
+            stagedFileTransferLimit(availableBytes = 10L * gibibyte, declaredByteCount = 12L * gibibyte)
+        }
+    }
+
+    @Test
+    fun `detached file exports require a complete response`() {
+        assertTrue(isFullDetachedFileResponse(200))
+        assertTrue(!isFullDetachedFileResponse(204))
+        assertTrue(!isFullDetachedFileResponse(206))
     }
 
     @Test
@@ -72,14 +115,14 @@ class ExternalFileHandoffTest {
     }
 
     @Test
-    fun `known oversized deck attachment is rejected before streaming`() {
+    fun `known oversized deck attachment remains eligible for streaming`() {
         val rejection = validateDeckAttachmentHandoff(
-            attachment = attachment(byteCount = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            attachment = attachment(byteCount = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
             action = ExternalFileHandoffAction.OpenWith,
             capability = capability,
         )
 
-        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
+        assertNull(rejection)
     }
 
     @Test

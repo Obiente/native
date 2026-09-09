@@ -27,6 +27,11 @@ const scopes = {
     epic: "EPIC-SYNC",
     areas: ["Files and sync"],
   },
+  "native-folder-sync": {
+    title: "Files and folder sync",
+    epic: "EPIC-SYNC",
+    areas: ["Files and sync"],
+  },
   "media-sync-foundations": {
     title: "Safe photo backup and Memories",
     epic: "EPIC-MEDIA",
@@ -307,7 +312,7 @@ const syncLabel = computed(() => {
 }
 
 .epic-row small {
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -329,7 +334,7 @@ const syncLabel = computed(() => {
 .linked-head {
   min-height: 34px;
   border-bottom: 1px solid var(--outline);
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -347,7 +352,7 @@ const syncLabel = computed(() => {
 .linked-row:focus-visible,
 .epic-row:hover,
 .epic-row:focus-visible {
-  background: #15181e;
+  background: var(--surface-low);
 }
 
 .linked-title {
@@ -365,7 +370,7 @@ const syncLabel = computed(() => {
 }
 
 .linked-title small {
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 8px;
 }
 

@@ -13,6 +13,8 @@ private const val READ_FALLBACK_OPERATION_IDS_EXTENSION =
     "x-nextcloud-native-read-fallback-operation-ids"
 private const val READ_FALLBACK_FOR_OPERATION_EXTENSION =
     "x-nextcloud-native-fallback-for-operation-id"
+private const val RECORD_CURSOR_FIELD_EXTENSION =
+    "x-nextcloud-native-record-cursor-field"
 private const val DESCRIPTION_INFERRED_MULTIPART_EXTENSION =
     "x-nextcloud-native-description-inferred-multipart"
 private const val MAX_MULTIPART_DESCRIPTION_CHARACTERS = 2_048
@@ -165,6 +167,7 @@ class DynamicAppDescriptorCompiler {
         )
         val state = KotlinCompilerState(
             input = input,
+            serverBase = serverBase,
             document = document,
             source = source,
             allowSignedDescriptionMultipartInference =
@@ -181,7 +184,7 @@ class DynamicAppDescriptorCompiler {
             )
         }
         val inferredReadRouteResourceIdentities = paths.entries.mapNotNull { (openApiPath, itemElement) ->
-            val path = combinePaths(serverBase, openApiPath)
+            val path = resolveOpenApiPath(serverBase, openApiPath, input.endpointPolicy)
             val pathItem = itemElement as? JsonObject ?: return@mapNotNull null
             state.routeResourceIdentity(path, pathItem)?.let { identity -> path to identity }
         }.toMap()
@@ -200,7 +203,7 @@ class DynamicAppDescriptorCompiler {
             require(openApiPath.startsWith('/') && !openApiPath.startsWith("//")) {
                 "Invalid OpenAPI path: $openApiPath"
             }
-            val path = combinePaths(serverBase, openApiPath)
+            val path = resolveOpenApiPath(serverBase, openApiPath, input.endpointPolicy)
             require(path.isApproved(input.endpointPolicy)) { "Unapproved OpenAPI path: $path" }
             val pathItem = itemElement as? JsonObject ?: return@forEach
             val inheritedParameters = pathItem["parameters"] as? JsonArray
@@ -491,6 +494,7 @@ private fun String.observedResourceId(): String = split('/').asReversed().firstO
 private data class KotlinRouteResourceIdentity(
     val resourceId: String,
     val collection: Boolean,
+    val responseFieldIds: Set<String>,
 )
 
 private fun String.collectionRouteForTerminalIdentity(): String? {
@@ -504,6 +508,98 @@ private fun String.collectionRouteForTerminalState(): String? {
     val segments = trimEnd('/').split('/')
     if (terminalCollectionState() == null) return null
     return segments.dropLast(1).joinToString("/").ifBlank { "/" }
+}
+
+private fun recordImagePreviewRouteResourceIdentity(
+    path: String,
+    readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+): KotlinRouteResourceIdentity? {
+    val segments = path.trim('/').split('/').filter(String::isNotBlank)
+    if (segments.size < 3 || segments.last().stableId() !in RECORD_IMAGE_PREVIEW_TERMINALS) return null
+    val recordSegment = segments[segments.lastIndex - 1]
+    if (!recordSegment.startsWith('{') || !recordSegment.endsWith('}')) return null
+    val collectionPath = "/" + segments.dropLast(2).joinToString("/")
+    return readRouteResourceIdentities.entries
+        .filter { (candidatePath, identity) ->
+            identity.collection && candidatePath.trimEnd('/') == collectionPath
+        }
+        .map { entry -> entry.value }
+        .distinct()
+        .singleOrNull()
+}
+
+private val RECORD_IMAGE_PREVIEW_TERMINALS = setOf("image", "preview", "thumbnail")
+
+private val TRUSTED_RECORD_IMAGE_PREVIEW_PROVENANCE = setOf(
+    ProvenanceKind.verifiedAppPackage,
+    ProvenanceKind.appStoreLinkedSourceTag,
+)
+
+private fun String.isDeclaredRecordImageContentType(): Boolean =
+    this == "*/*" || this == "application/octet-stream" || startsWith("image/")
+
+/**
+ * A mutation such as `/category/{category}` acts on the category even when the GET on that exact
+ * route returns a collection of recipes. Prefer the sibling collection only when the terminal
+ * path segment and parameter name agree and exactly one declared collection GET proves the same
+ * route prefix. Generic `{id}` detail routes naturally resolve to their ordinary collection too.
+ */
+private fun terminalSubjectCollectionIdentity(
+    path: String,
+    method: HttpMethod,
+    readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+): KotlinRouteResourceIdentity? {
+    if (method == HttpMethod.GET) return null
+    val segments = path.routeSegments()
+    if (segments.size < 2) return null
+    val parameterSegment = segments.last()
+    if (!parameterSegment.startsWith('{') || !parameterSegment.endsWith('}')) return null
+    val parameterName = parameterSegment.removePrefix("{").removeSuffix("}")
+    val subjectSegment = segments[segments.lastIndex - 1]
+    val parameterSubject = parameterName
+        .takeIf { name -> name.endsWith("Id", ignoreCase = true) && name.length > 2 }
+        ?.dropLast(2)
+    if (
+        !parameterName.equals("id", ignoreCase = true) &&
+        parameterSubject?.sameDynamicResourceAs(subjectSegment) != true &&
+        !parameterName.sameDynamicResourceAs(subjectSegment)
+    ) {
+        return null
+    }
+    val subjectPrefix = segments.dropLast(2).map(String::stableId)
+    return readRouteResourceIdentities.entries
+        .filter { (readPath, identity) ->
+            val readSegments = readPath.routeSegments()
+            identity.collection &&
+                readSegments.size == segments.size - 1 &&
+                readSegments.dropLast(1).map(String::stableId) == subjectPrefix &&
+                readSegments.last().sameDynamicResourceAs(subjectSegment)
+        }
+        .map { (_, identity) -> identity }
+        .distinct()
+        .singleOrNull()
+}
+
+private fun DynamicAction.hasResolvableRecordImageShape(resource: KotlinResourceBuilder): Boolean {
+    val segments = binding.path.trim('/').split('/').filter(String::isNotBlank)
+    val recordToken = segments.getOrNull(segments.lastIndex - 1) ?: return false
+    if (!recordToken.startsWith('{') || !recordToken.endsWith('}')) return false
+    val recordParameterName = recordToken.removePrefix("{").removeSuffix("}")
+    if (binding.pathParameters.none { parameter -> parameter.name == recordParameterName }) return false
+    val recordParameterStem = recordParameterName
+        .takeIf { name -> name.endsWith("Id", ignoreCase = true) && name.length > 2 }
+        ?.dropLast(2)
+    if (
+        !recordParameterName.equals("id", ignoreCase = true) &&
+        recordParameterStem?.semanticBaseVariants()
+            ?.intersect(resource.id.semanticBaseVariants())
+            ?.isNotEmpty() != true
+    ) {
+        return false
+    }
+    return resource.fields.values.any { field ->
+        field.id.lowercase() in setOf("id", "databaseid", "uuid", "token")
+    }
 }
 
 private fun String.terminalCollectionState(): String? =
@@ -624,6 +720,7 @@ private val COLLECTION_STATE_ROUTE_WORDS = setOf(
 
 private class KotlinCompilerState(
     private val input: DynamicDiscoveryInput,
+    private val serverBase: String,
     private val document: JsonObject,
     private val source: Provenance,
     private val allowSignedDescriptionMultipartInference: Boolean,
@@ -637,6 +734,7 @@ private class KotlinCompilerState(
     private val operationActionIds = linkedMapOf<String, String>()
     private val fallbackOperationIds = linkedMapOf<String, List<String>>()
     private val readActionIdsByExactContractPath = linkedMapOf<String, MutableList<String>>()
+    private val recordImagePreviewCandidates = linkedMapOf<String, MutableList<DynamicRecordImagePreviewSpec>>()
     val warnings = mutableListOf<DynamicWarning>()
 
     /**
@@ -703,6 +801,10 @@ private class KotlinCompilerState(
         return KotlinRouteResourceIdentity(
             resourceId = resourceId,
             collection = responseCollection || filteredCollectionResourceId != null,
+            responseFieldIds = itemSchema
+                ?.let(::fieldsFromSchema)
+                .orEmpty()
+                .mapTo(linkedSetOf()) { field -> field.id.lowercase() },
         )
     }
 
@@ -739,8 +841,19 @@ private class KotlinCompilerState(
             method = method,
             filteredCollectionResourceId = filteredCollectionResourceId,
         )
+        val explicitlyDeclaredResourceId = operation.explicitNativeResourceId()
         val response = responseSchema(operation)
-        val binaryRead = method == HttpMethod.GET && hasSuccessfulBinaryResponse(operation)
+        val binaryResponseContentTypes = if (method == HttpMethod.GET) {
+            successfulBinaryResponseContentTypes(operation)
+        } else {
+            null
+        }
+        val binaryRead = binaryResponseContentTypes != null
+        val recordImagePreviewIdentity = if (binaryRead) {
+            recordImagePreviewRouteResourceIdentity(path, readRouteResourceIdentities)
+        } else {
+            null
+        }
         val (itemSchema, responseCollection) = responseItemSchema(response)
         val preliminaryCollection =
             responseCollection ||
@@ -753,16 +866,36 @@ private class KotlinCompilerState(
             operationId = operationId,
             label = label,
             collection = preliminaryCollection,
+            fileUpload = declaredBody?.let { body ->
+                body.contentType.substringBefore(';').trim()
+                    .equals("multipart/form-data", ignoreCase = true) &&
+                    isExactDynamicMultipartSchema(body.schema)
+            } == true,
         )
-        val semanticRouteResourceIdentity = transitionRouteResourceIdentity(
-            path = path,
-            effect = effect,
-            readRouteResourceIdentities = readRouteResourceIdentities,
-        )
+        val semanticRouteResourceIdentity =
+            terminalSubjectCollectionIdentity(path, method, readRouteResourceIdentities)
+                ?: transitionRouteResourceIdentity(
+                    path = path,
+                    effect = if (
+                        effect == ActionEffect.execute &&
+                        actionSemanticWords(path, operationId, label).any { word ->
+                            word == "import" || word == "upload"
+                        }
+                    ) {
+                        // Import is a transfer route for resource grouping even when its request
+                        // is a JSON URL and therefore not a file-upload UI action.
+                        ActionEffect.upload
+                    } else {
+                        effect
+                    },
+                    readRouteResourceIdentities = readRouteResourceIdentities,
+                )
             ?: routeResourceIdentity
         val collection = preliminaryCollection || semanticRouteResourceIdentity?.collection == true
         val resourceId =
-            filteredCollectionResourceId
+            recordImagePreviewIdentity?.resourceId
+                ?: filteredCollectionResourceId
+                ?: explicitlyDeclaredResourceId
                 ?: semanticRouteResourceIdentity?.resourceId
                 ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
@@ -785,7 +918,11 @@ private class KotlinCompilerState(
         val (boundPath, pathParameters) = normalizeCollectionParentIdentifier(
             defaultBoundPath,
             defaultPathParameters,
-            collection && method == HttpMethod.GET,
+            collection,
+            collectionResponseFieldIds = routeResourceIdentity?.responseFieldIds.orEmpty(),
+            identifierUsedOutsidePath = queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
+                (declaredBody?.schema as? JsonObject)?.let(::fieldsFromSchema).orEmpty()
+                    .any { it.id.equals("id", ignoreCase = true) },
         )
         val body = declaredBody
         (body?.schema as? JsonObject)?.let { bodySchema ->
@@ -847,6 +984,7 @@ private class KotlinCompilerState(
                 ocs = ocsMetadata(path, queryParameters),
             ),
             fallbackOnly = fallbackForOperationId != null,
+            recordCursorFieldId = operation.string(RECORD_CURSOR_FIELD_EXTENSION),
             responseFieldIds = if (method == HttpMethod.GET) {
                 responseFields.map(DynamicField::id)
             } else {
@@ -859,6 +997,21 @@ private class KotlinCompilerState(
             resultRecoveryActionId = resultRecoveryActionId,
         )
         actions[actionId] = action
+        if (
+            recordImagePreviewIdentity != null &&
+            source.kind in TRUSTED_RECORD_IMAGE_PREVIEW_PROVENANCE &&
+            binaryResponseContentTypes != null &&
+            binaryResponseContentTypes.all(String::isDeclaredRecordImageContentType) &&
+            action.binding.body == null &&
+            action.binding.queryParameters.none(HttpParameter::required) &&
+            action.hasResolvableRecordImageShape(resource)
+        ) {
+            recordImagePreviewCandidates.getOrPut(resourceId) { mutableListOf() } +=
+                DynamicRecordImagePreviewSpec(
+                    actionId = actionId,
+                    declaredContentTypes = binaryResponseContentTypes,
+                )
+        }
         if (method == HttpMethod.GET) {
             readActionIdsByExactContractPath.getOrPut(path) { mutableListOf() } += actionId
         }
@@ -934,7 +1087,13 @@ private class KotlinCompilerState(
                     .distinct(),
             )
         }
-        val completedResources = resources.values.map(KotlinResourceBuilder::finish)
+        val completedResources = resources.values.map(KotlinResourceBuilder::finish).map { resource ->
+            val preview = recordImagePreviewCandidates[resource.id]
+                .orEmpty()
+                .distinct()
+                .singleOrNull()
+            resource.copy(recordImagePreview = preview)
+        }
         val preferredLayoutSeeds = layoutSeeds.values.filter { candidate ->
             !candidate.alternate || layoutSeeds.values.none { other ->
                 !other.alternate &&
@@ -1052,7 +1211,10 @@ private class KotlinCompilerState(
      * the wildcard content type. Local references are resolved before classification so those
      * bytes cannot accidentally enter the JSON record parser.
      */
-    private fun hasSuccessfulBinaryResponse(operation: JsonObject): Boolean {
+    private fun hasSuccessfulBinaryResponse(operation: JsonObject): Boolean =
+        successfulBinaryResponseContentTypes(operation) != null
+
+    private fun successfulBinaryResponseContentTypes(operation: JsonObject): List<String>? {
         val responseMedia = operation.objectValue("responses")
             ?.entries
             ?.filter { (status, _) -> status.startsWith('2') }
@@ -1061,21 +1223,24 @@ private class KotlinCompilerState(
             }
             ?.flatMap { content -> content.entries }
             .orEmpty()
-        if (responseMedia.isEmpty()) return false
-        return responseMedia.all { (declaredType, mediaElement) ->
+        if (responseMedia.isEmpty()) return null
+        val accepted = responseMedia.mapNotNull { (declaredType, mediaElement) ->
             val type = declaredType.substringBefore(';').trim().lowercase()
-            if (type.contains("json")) return@all false
+            if (type.contains("json")) return@mapNotNull null
             val media = resolveLocal(mediaElement) as? JsonObject
             val schema = media?.get("schema")?.let(::resolveLocal) as? JsonObject
             val exactBinarySchema = schema?.let { declared ->
                 declared.string("type") == "string" && declared.string("format") == "binary"
             } == true
-            exactBinarySchema ||
+            type.takeIf {
+                exactBinarySchema ||
                 type.startsWith("image/") ||
                 type.startsWith("audio/") ||
                 type.startsWith("video/") ||
                 type == "application/octet-stream"
+            }
         }
+        return accepted.distinct().sorted().takeIf { it.size == responseMedia.size }
     }
 
     private fun responseItemSchema(schema: JsonElement?): Pair<JsonObject?, Boolean> {
@@ -1196,10 +1361,22 @@ private class KotlinCompilerState(
         // serialization depends on exact media encoding/style/explode metadata that the descriptor
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
-        if (jsonBody && declaredSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
-        if (jsonBody && declaredSchema.hasUnsupportedDynamicStringArrayProperty()) return null
+        val normalizedObjectSchema = if (jsonBody) {
+            declaredSchema.flattenDynamicObjectComposition(
+                allowImplicitlyOpenFragments = cookbookRecipeWriteOperationId(operation) != null,
+            )
+                ?.withCookbookRecipeWriteCompatibility(operation)
+                ?: return null
+        } else {
+            null
+        }
+        if (jsonBody) {
+            val objectSchema = requireNotNull(normalizedObjectSchema)
+            if (objectSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
+            if (objectSchema.hasUnsupportedDynamicStringArrayProperty()) return null
+        }
         val schema = if (jsonBody) {
-            declaredSchema.withDynamicFormFormats()
+            requireNotNull(normalizedObjectSchema).withDynamicFormFormats()
         } else {
             declaredSchema
         }
@@ -1208,6 +1385,101 @@ private class KotlinCompilerState(
             required = request.boolean("required") ?: false,
             schema = schema,
         )
+    }
+
+    private fun JsonElement.flattenDynamicObjectComposition(
+        allowImplicitlyOpenFragments: Boolean,
+        depth: Int = 0,
+    ): JsonObject? {
+        require(depth <= 24) { "OpenAPI object composition depth exceeded" }
+        val resolved = resolveLocal(this) as? JsonObject ?: return null
+        val allOf = resolved["allOf"] as? JsonArray ?: return resolved
+        if (allOf.isEmpty()) return null
+
+        val fragments = allOf.map { member ->
+            member.flattenDynamicObjectComposition(allowImplicitlyOpenFragments, depth + 1) ?: return null
+        }
+        val mergedProperties = linkedMapOf<String, JsonElement>()
+        val required = linkedSetOf<String>()
+        (listOf(resolved) + fragments).forEach { fragment ->
+            val type = fragment.string("type")
+            val properties = fragment.objectValue("properties")
+            val requiredProperties = fragment.stringArray("required").orEmpty()
+            if (type != null && type != "object") return null
+            if (!fragment.isSafeToFlattenObjectShape(properties, requiredProperties, allowImplicitlyOpenFragments)) {
+                return null
+            }
+            properties.orEmpty().forEach { (id, field) ->
+                val existing = mergedProperties[id]
+                if (existing != null && resolveFieldSchema(existing) != resolveFieldSchema(field)) return null
+                mergedProperties.putIfAbsent(id, field)
+            }
+            requiredProperties.forEach(required::add)
+        }
+        if (mergedProperties.isEmpty()) return null
+        val annotations = resolved.filterKeys { key ->
+            key !in setOf("allOf", "type", "properties", "required", "additionalProperties")
+        }
+        return JsonObject(
+            annotations +
+                ("type" to JsonPrimitive("object")) +
+                ("properties" to JsonObject(mergedProperties)) +
+                ("required" to JsonArray(required.map(::JsonPrimitive))) +
+                ("additionalProperties" to JsonPrimitive(false)),
+        )
+    }
+
+    private fun JsonObject.withCookbookRecipeWriteCompatibility(operation: JsonObject): JsonObject {
+        val operationId = cookbookRecipeWriteOperationId(operation) ?: return this
+        val properties = objectValue("properties") ?: return this
+        if (!setOf("id", "name", "recipeIngredient", "recipeInstructions", "tool").all(properties::containsKey)) {
+            return this
+        }
+        val allowed = setOf(
+            "id",
+            "name",
+            "description",
+            "keywords",
+            "prepTime",
+            "cookTime",
+            "totalTime",
+            "recipeYield",
+            "recipeCategory",
+            "url",
+            "tool",
+            "recipeIngredient",
+            "recipeInstructions",
+        )
+        val compatibleProperties = properties
+            .filterKeys(allowed::contains)
+            .mapValues { (id, value) ->
+                if (id != "id") value else {
+                    val idSchema = resolveFieldSchema(value) as? JsonObject ?: return this
+                    JsonObject(idSchema + ("readOnly" to JsonPrimitive(true)))
+                }
+            }
+            .toMutableMap()
+        if (operationId == "newrecipe") compatibleProperties.remove("id")
+        return JsonObject(
+            filterKeys { key -> key !in setOf("properties", "required", "additionalProperties") } +
+                ("properties" to JsonObject(compatibleProperties)) +
+                ("required" to JsonArray(
+                    listOfNotNull("id".takeIf { operationId == "updaterecipe" }, "name")
+                        .map(::JsonPrimitive),
+                )) +
+                ("additionalProperties" to JsonPrimitive(false)),
+        )
+    }
+
+    private fun cookbookRecipeWriteOperationId(operation: JsonObject): String? {
+        if (
+            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
+            source.kind != ProvenanceKind.appStoreLinkedSourceTag
+        ) {
+            return null
+        }
+        return operation.string("operationId")?.stableId()
+            ?.takeIf { operationId -> operationId in setOf("newrecipe", "updaterecipe") }
     }
 
     private fun JsonElement.hasUnnormalizableReadOnlyRepeatableObjectProperty(): Boolean {
@@ -1466,12 +1738,7 @@ private class KotlinCompilerState(
     ): Pair<String, List<HttpParameter>> {
         var boundPath = path
         val remaining = parameters.filter { parameter ->
-            val schema = parameter.schema as? JsonObject
-            val default = (schema?.get("default") as? JsonPrimitive)?.contentOrNull
-                ?: (schema?.get("enum") as? JsonArray)
-                    ?.singleOrNull()
-                    ?.let { it as? JsonPrimitive }
-                    ?.contentOrNull
+            val default = documentedOpenApiPathDefault(parameter, serverBase)
             val safeDefault = default?.takeIf(String::isSafeDocumentedPathSegment)
                 ?: return@filter true
             boundPath = boundPath.replace("{${parameter.name}}", safeDefault)
@@ -1484,10 +1751,18 @@ private class KotlinCompilerState(
         path: String,
         parameters: List<HttpParameter>,
         collection: Boolean,
+        collectionResponseFieldIds: Set<String> = emptySet(),
+        identifierUsedOutsidePath: Boolean = false,
     ): Pair<String, List<HttpParameter>> {
         if (!collection || parameters.size != 1) return path to parameters
         val parameter = parameters.single()
         if (parameter.name.equals("id", ignoreCase = true) || !parameter.name.endsWith("Id", ignoreCase = true)) {
+            return path to parameters
+        }
+        val parameterFieldId = parameter.name.lowercase()
+        val itemHasOwnIdentity = "id" in collectionResponseFieldIds
+        val itemCarriesParentIdentity = parameterFieldId in collectionResponseFieldIds
+        if (identifierUsedOutsidePath || itemHasOwnIdentity && !itemCarriesParentIdentity) {
             return path to parameters
         }
         val placeholder = "{${parameter.name}}"
@@ -1541,6 +1816,9 @@ private class KotlinCompilerState(
             if (field.boolean("readOnly") == true) return@mapNotNull null
             if (field.string("type") == "array" && !supportsTypedArrays) return@mapNotNull null
             val repeatableObjectInput = field.repeatableObjectInputSpec()
+            val enumValues = field.stringArray("enum")
+            val enumLabels = field.nativeEnumLabels(enumValues)
+            if (ENUM_LABELS_EXTENSION in field && enumLabels == null) return@mapNotNull null
             FormField(
                 fieldId = id,
                 label = field.string("title") ?: id.humanize(),
@@ -1549,7 +1827,8 @@ private class KotlinCompilerState(
                 format = repeatableObjectInput
                     ?.let { DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT }
                     ?: field.dynamicEditorFormat(),
-                enumValues = field.stringArray("enum"),
+                enumValues = enumValues,
+                enumLabels = enumLabels,
                 repeatableObjectInput = repeatableObjectInput,
             )
         }
@@ -1557,13 +1836,17 @@ private class KotlinCompilerState(
 
     private fun formField(parameter: HttpParameter): FormField? {
         val schema = resolveFieldSchema(parameter.schema) as? JsonObject ?: return null
+        val enumValues = schema.stringArray("enum")
+        val enumLabels = schema.nativeEnumLabels(enumValues)
+        if (ENUM_LABELS_EXTENSION in schema && enumLabels == null) return null
         return FormField(
             fieldId = parameter.name,
             label = schema.string("title") ?: parameter.name.humanize(),
             kind = fieldKind(parameter.name, schema),
             required = parameter.required,
             format = schema.string("format"),
-            enumValues = schema.stringArray("enum"),
+            enumValues = enumValues,
+            enumLabels = enumLabels,
         )
     }
 
@@ -1730,79 +2013,6 @@ private fun metadataDescriptor(input: DynamicDiscoveryInput): DynamicAppDescript
     )
 }
 
-private data class NormalizedOpenApiServer(
-    val pathBase: String,
-    val requiresTrustedRebase: Boolean,
-    val original: String,
-)
-
-private fun openApiServerBase(
-    document: JsonObject,
-    origin: String,
-    allowTrustedRebase: Boolean,
-): String {
-    val servers = (document["servers"] as? JsonArray)
-        .orEmpty()
-        .mapNotNull { (it as? JsonObject)?.string("url") }
-        .distinct()
-    if (servers.isEmpty()) return ""
-    if (servers.size == 1) {
-        val value = servers.single()
-        require(!value.contains('{') && !value.contains('?') && !value.contains('#')) {
-            "Templated or qualified OpenAPI server URL is unsupported: $value"
-        }
-        return normalizeOpenApiServer(value, origin).also { normalized ->
-            require(!normalized.requiresTrustedRebase) { "Cross-origin OpenAPI server: $value" }
-        }.pathBase
-    }
-
-    val normalized = servers.map { value -> normalizeOpenApiServer(value, origin) }
-    val pathBases = normalized.map(NormalizedOpenApiServer::pathBase).distinct().sorted()
-    require(pathBases.size == 1) {
-        "OpenAPI server entries resolve to conflicting path bases: ${pathBases.joinToString()}"
-    }
-    val rebased = normalized.filter(NormalizedOpenApiServer::requiresTrustedRebase)
-    require(rebased.isEmpty() || allowTrustedRebase) {
-        "OpenAPI server entries require cross-origin or templated rebasing: " +
-            rebased.joinToString { server -> server.original }
-    }
-    return pathBases.single()
-}
-
-private fun normalizeOpenApiServer(value: String, origin: String): NormalizedOpenApiServer {
-    require(value.isNotBlank() && !value.contains('?') && !value.contains('#') && !value.contains('\\')) {
-        "OpenAPI server URL is unsupported: $value"
-    }
-    if (value.startsWith('/') && !value.startsWith("//")) {
-        require(!value.contains('{') && value.isSafeRelativePath()) {
-            "OpenAPI server path is unsupported: $value"
-        }
-        return NormalizedOpenApiServer(value.trimEnd('/'), false, value)
-    }
-
-    val separator = value.indexOf("://")
-    require(separator > 0) { "OpenAPI server URL is unsupported: $value" }
-    val authorityStart = separator + 3
-    val pathStart = value.indexOf('/', authorityStart)
-    val authority = if (pathStart < 0) value.substring(authorityStart) else value.substring(authorityStart, pathStart)
-    require(authority.isNotBlank() && !authority.contains('@') && authority.none(Char::isWhitespace)) {
-        "OpenAPI server authority is unsupported: $value"
-    }
-    val path = if (pathStart < 0) "" else value.substring(pathStart)
-    require(!path.contains('{') && (path.isEmpty() || path.isSafeRelativePath())) {
-        "OpenAPI server path is unsupported: $value"
-    }
-    val declaredOrigin = value.substring(0, authorityStart) + authority
-    val sameOrigin = !declaredOrigin.contains('{') &&
-        declaredOrigin.trimEnd('/').equals(origin.trimEnd('/'), ignoreCase = true)
-    return NormalizedOpenApiServer(path.trimEnd('/'), !sameOrigin, value)
-}
-
-private fun combinePaths(base: String, path: String): String =
-    "${base.trimEnd('/')}/${path.trimStart('/')}"
-
-private fun String.isApproved(policy: EndpointPolicy): Boolean =
-    isSafeRelativePath() && policy.approvedApiPrefixes.any(::matchesPrefix)
 
 private fun String.isSameOriginDocument(origin: String): Boolean = when {
     startsWith('/') -> !startsWith("//") && !contains('\\')
@@ -1826,10 +2036,7 @@ private fun resourceId(
     filteredCollectionResourceId: String? =
         semanticFilteredCollectionResourceId(operation, path, operationId, method),
 ): String {
-    operation.string(RESOURCE_ID_EXTENSION)
-        ?.stableId()
-        ?.takeIf { it.isNotBlank() && it.length <= 64 }
-        ?.let { return it }
+    operation.explicitNativeResourceId()?.let { return it }
     filteredCollectionResourceId?.let { return it }
     val rawTag = (operation["tags"] as? JsonArray)
         ?.firstOrNull()
@@ -1862,6 +2069,11 @@ private fun resourceId(
     if (operationId.provesResource(pathResource)) return pathResource
     return tagResource
 }
+
+private fun JsonObject.explicitNativeResourceId(): String? =
+    string(RESOURCE_ID_EXTENSION)
+        ?.stableId()
+        ?.takeIf { it.isNotBlank() && it.length <= 64 }
 
 private fun JsonObject.referencesSemanticResource(resourceId: String, operationId: String): Boolean {
     val evidence = listOfNotNull(
@@ -2142,10 +2354,19 @@ private fun String.hierarchyParent(
     val parentSegment = segments.take(parameterIndex).asReversed().firstOrNull { segment ->
         !segment.startsWith('{') && segment.stableId() !in NON_RESOURCE_PATH_SEGMENTS
     } ?: return null
-    val parentVariants = parentSegment.semanticBaseVariants()
-    return resources.firstOrNull { resource ->
-        resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
-    }
+    val normalizedParent = parentSegment.stableId()
+    val parentVariants = normalizedParent.semanticBaseVariants()
+    return resources
+        .asSequence()
+        .filter { resource ->
+            resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
+        }
+        .sortedWith(
+            compareByDescending<DynamicResource> { resource -> resource.id == normalizedParent }
+                .thenByDescending(DynamicResource::collection)
+                .thenBy(DynamicResource::id),
+        )
+        .firstOrNull()
 }
 
 private fun layoutPreference(
@@ -2254,167 +2475,6 @@ private val ALTERNATE_SURFACE_WORDS = setOf(
 
 private val SURFACE_SCOPE_WORDS = ALTERNATE_SURFACE_WORDS + setOf("api", "local", "shared")
 
-private fun actionEffect(
-    method: HttpMethod,
-    path: String,
-    operationId: String,
-    label: String,
-    collection: Boolean,
-): ActionEffect {
-    if (method == HttpMethod.GET) {
-        return when {
-            path.endsWithIdentityPlaceholder() -> ActionEffect.read
-            collection -> ActionEffect.list
-            operationId.looksLikeCollectionReadOperation() -> ActionEffect.list
-            path.contains('{') -> ActionEffect.read
-            else -> ActionEffect.read
-        }
-    }
-
-    val words = actionSemanticWords(path, operationId, label)
-    return when {
-        "empty" in words -> ActionEffect.empty
-        words.any { it in PERMANENT_DELETE_WORDS } -> ActionEffect.permanentDelete
-        words.any { it in REORDER_WORDS } -> ActionEffect.reorder
-        "batch" in words -> ActionEffect.batch
-        "restore" in words -> ActionEffect.restore
-        "unarchive" in words -> ActionEffect.unarchive
-        "archive" in words -> ActionEffect.archive
-        words.any { it in COMPLETION_TRANSITION_WORDS } ||
-            ("toggle" in words && words.any { it in COMPLETION_STATE_WORDS }) -> ActionEffect.toggle
-        "move" in words -> ActionEffect.move
-        "copy" in words || "duplicate" in words -> ActionEffect.copy
-        "upload" in words || "import" in words -> ActionEffect.upload
-        "assign" in words || "replace" in words -> ActionEffect.assign
-        "leave" in words -> ActionEffect.leave
-        "clear" in words -> ActionEffect.clear
-        method == HttpMethod.DELETE -> ActionEffect.delete
-        words.any { it in CREATE_WORDS } -> ActionEffect.create
-        method == HttpMethod.PUT || method == HttpMethod.PATCH -> ActionEffect.update
-        else -> ActionEffect.execute
-    }
-}
-
-private fun actionRisk(
-    method: HttpMethod,
-    effect: ActionEffect,
-    path: String,
-    operationId: String,
-    label: String,
-): ActionRisk {
-    if (method == HttpMethod.GET) return ActionRisk.readOnly
-    if (
-        effect in setOf(
-            ActionEffect.delete,
-            ActionEffect.permanentDelete,
-            ActionEffect.empty,
-            ActionEffect.leave,
-            ActionEffect.clear,
-        )
-    ) {
-        return ActionRisk.destructive
-    }
-    val words = actionSemanticWords(path, operationId, label)
-    return if (words.any { it in DESTRUCTIVE_ACTION_WORDS }) {
-        ActionRisk.destructive
-    } else {
-        ActionRisk.mutating
-    }
-}
-
-private fun ActionEffect.toActionIntent(): ActionIntent = when (this) {
-    ActionEffect.list -> ActionIntent.list
-    ActionEffect.read -> ActionIntent.read
-    ActionEffect.create -> ActionIntent.create
-    ActionEffect.update,
-    ActionEffect.assign,
-    -> ActionIntent.update
-    ActionEffect.delete,
-    ActionEffect.permanentDelete,
-    ActionEffect.empty,
-    ActionEffect.clear,
-    -> ActionIntent.delete
-    ActionEffect.unspecified,
-    ActionEffect.toggle,
-    ActionEffect.archive,
-    ActionEffect.unarchive,
-    ActionEffect.restore,
-    ActionEffect.move,
-    ActionEffect.copy,
-    ActionEffect.reorder,
-    ActionEffect.batch,
-    ActionEffect.upload,
-    ActionEffect.leave,
-    ActionEffect.execute,
-    -> ActionIntent.execute
-}
-
-private fun actionSemanticWords(
-    path: String,
-    operationId: String,
-    label: String,
-): Set<String> = sequenceOf(path, operationId.humanize(), label)
-    .flatMap { value -> value.stableId().split('-').asSequence() }
-    .filter(String::isNotBlank)
-    .toSet()
-
-private val CREATE_WORDS = setOf("add", "create", "new")
-private val TOGGLE_WORDS = setOf("toggle", "complete", "reopen")
-private val COMPLETION_TRANSITION_WORDS = setOf("complete", "reopen")
-private val COMPLETION_STATE_WORDS = setOf(
-    "checked",
-    "complete",
-    "completed",
-    "completion",
-    "done",
-)
-private val REORDER_WORDS = setOf("reorder", "reposition", "sort")
-private val PERMANENT_DELETE_WORDS = setOf("permanent", "permanently", "purge")
-private val DESTRUCTIVE_ACTION_WORDS = setOf(
-    "clear",
-    "delete",
-    "destroy",
-    "empty",
-    "permanent",
-    "permanently",
-    "purge",
-    "remove",
-)
-
-/**
- * A terminal identity placeholder proves an item read even when a plural operation name such as
- * `recipeDetails` resembles a collection controller. Non-identity filters such as
- * `/category/{category}` remain eligible for collection classification from their response.
- */
-private fun String.endsWithIdentityPlaceholder(): Boolean {
-    val segment = trimEnd('/').substringAfterLast('/')
-    if (!segment.startsWith('{') || !segment.endsWith('}') || segment.length <= 2) return false
-    val name = segment.substring(1, segment.lastIndex)
-    return name.lowercase() in setOf("id", "uuid", "token") ||
-        name.endsWith("Id") ||
-        name.endsWith("ID") ||
-        name.endsWith("_id") ||
-        name.endsWith("-id")
-}
-
-/**
- * Recognizes conventional collection controller names even when a sparse static contract has no
- * response schema. Parent-scoped routes such as `getItems(parentId)` otherwise look like detail
- * reads solely because their path contains a parent placeholder.
- */
-private fun String.looksLikeCollectionReadOperation(): Boolean {
-    val compact = lowercase().filter(Char::isLetterOrDigit)
-    if ("list" in compact || "findall" in compact || "getall" in compact) return true
-    val target = compact.substringAfterLast("get", missingDelimiterValue = compact)
-    if (target.endsWith("history") || target.endsWith("log") || target.endsWith("feed")) return true
-    if (!target.endsWith('s') || target.endsWith("ss")) return false
-    return COLLECTION_SINGLETON_SUFFIXES.none(target::endsWith)
-}
-
-private val COLLECTION_SINGLETON_SUFFIXES = setOf(
-    "capabilities", "preferences", "settings", "status",
-)
-
 private fun authKind(definition: JsonObject?): AuthKind = when {
     definition?.string("type") == "http" && definition.string("scheme") == "basic" -> AuthKind.basic
     definition?.string("type") == "http" && definition.string("scheme") == "bearer" -> AuthKind.bearer
@@ -2460,6 +2520,8 @@ private fun fieldKind(id: String, schema: JsonObject): FieldKind {
         value.string("type") == "string" && value.string("format") == "binary" -> FieldKind.file
         value.string("type") == "string" && value.string("format") == "date" -> FieldKind.date
         value.string("type") == "string" && value.string("format") == "date-time" -> FieldKind.dateTime
+        value.string("type") == "string" && value.string("format") == "nextcloud-user-id" ->
+            FieldKind.userReference
         value.string("type") == "integer" -> FieldKind.integer
         value.string("type") == "number" -> FieldKind.decimal
         value.string("type") == "boolean" -> FieldKind.boolean
@@ -2516,7 +2578,7 @@ private fun uniqueId(existing: Set<String>, requested: String): String {
     return "$requested-$suffix"
 }
 
-private fun String.stableId(): String = buildString {
+internal fun String.stableId(): String = buildString {
     var separator = false
     this@stableId.forEach { character ->
         if (character.isLetterOrDigit() && character.code < 128) {
@@ -2529,7 +2591,7 @@ private fun String.stableId(): String = buildString {
     }
 }.trim('-')
 
-private fun String.humanize(): String = buildString(length + 4) {
+internal fun String.humanize(): String = buildString(length + 4) {
     this@humanize.forEachIndexed { index, character ->
         val previous = this@humanize.getOrNull(index - 1)
         val next = this@humanize.getOrNull(index + 1)
@@ -2562,3 +2624,15 @@ private fun JsonObject.objectValue(key: String): JsonObject? = get(key) as? Json
 private fun JsonObject.stringArray(key: String): List<String>? = (get(key) as? JsonArray)?.mapNotNull {
     (it as? JsonPrimitive)?.contentOrNull
 }
+
+private fun JsonObject.nativeEnumLabels(enumValues: List<String>?): Map<String, String>? =
+    (get(ENUM_LABELS_EXTENSION) as? JsonObject)?.entries
+        ?.mapNotNull { (wireValue, labelElement) ->
+            (labelElement as? JsonPrimitive)
+                ?.takeIf(JsonPrimitive::isString)
+                ?.contentOrNull
+                ?.takeIf { label -> label.isNotBlank() && label.length <= MAX_DYNAMIC_ENUM_LABEL_LENGTH }
+                ?.let { label -> wireValue to label }
+        }
+        ?.toMap()
+        ?.takeIf { labels -> enumValues != null && labels.keys == enumValues.toSet() }

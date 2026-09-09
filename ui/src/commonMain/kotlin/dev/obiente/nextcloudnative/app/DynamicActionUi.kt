@@ -12,11 +12,14 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresInvitationAcceptRecoveryPlan
 
 internal data class PendingDynamicDirectAction(
     val action: ActionSpec,
     val values: Map<String, String>,
     val targetLabel: String,
+    val invitationAcceptRecoveryPlan: NativeChoresInvitationAcceptRecoveryPlan? = null,
+    val durableRecoveryRequired: Boolean = false,
 )
 
 internal enum class DynamicActionUiMode {
@@ -62,6 +65,40 @@ internal fun dynamicActionUiMode(
     DynamicActionUiMode.ConfirmDirectly
 } else {
     DynamicActionUiMode.NavigateToForm
+}
+
+/**
+ * Places a planner-issued root form on its active native read surface.
+ *
+ * Most contracts give the read and create operations the same resource identity. Some generators
+ * derive different identities from their response and request schemas even though GET and POST
+ * use one exact singleton route. Accept that narrow case only when both operations and the form
+ * retain verified contract evidence.
+ */
+internal fun dynamicRootFormTargetsActiveSurface(
+    action: ActionSpec,
+    formView: ViewSpec,
+    activeView: ViewSpec,
+    activeReadAction: ActionSpec?,
+    selectedCollectionState: String?,
+): Boolean {
+    if (selectedCollectionState != null) return false
+    if (action.resourceId.sameDynamicResourceAs(activeView.resourceId)) return true
+    if (
+        action.intent != ActionIntent.create ||
+        formView.resourceId != action.resourceId ||
+        !formView.hasVerifiedNativeContractEvidence() ||
+        !action.hasVerifiedNativeContractEvidence()
+    ) {
+        return false
+    }
+    val verifiedActiveRead = activeReadAction?.takeIf { read ->
+        read.id == activeView.sourceActionId &&
+            read.binding.method == HttpMethod.GET &&
+            read.risk == ActionRisk.readOnly &&
+            read.hasVerifiedNativeContractEvidence()
+    } ?: return false
+    return verifiedActiveRead.binding.isExactNativeSingletonRoute(action.binding)
 }
 
 /**
@@ -112,6 +149,14 @@ internal fun dynamicContextualFormTargetsActiveSurface(
             action.effect == ActionEffect.upload &&
             action.risk == ActionRisk.mutating &&
             hasEditableFileField &&
+            verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
+        action.intent == ActionIntent.execute &&
+            action.effect != ActionEffect.upload &&
+            action.risk == ActionRisk.mutating &&
+            action.binding.requiredBodyFieldNames.isNotEmpty() &&
+            action.binding.requiredBodyFieldNames.all { name ->
+                plannedBindingValues[name]?.isNotBlank() == true
+            } &&
             verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
         action.intent == ActionIntent.update &&
             action.risk == ActionRisk.mutating &&

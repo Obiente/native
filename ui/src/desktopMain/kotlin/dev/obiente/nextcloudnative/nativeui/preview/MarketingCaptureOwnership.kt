@@ -99,15 +99,12 @@ internal fun validateStagedCaptureCatalog(
     stagedDirectory: Path,
     registry: List<MarketingCaptureRegistryEntry>,
     expectedCaptureSources: List<String>,
-    expectedCaptureSourceSha256: String,
+    expectedCaptureSourceHashes: Map<String, String>,
     expectedAvatarSha256: String,
     preservedFileNames: Set<String> = preservedMarketingCaptureFiles,
 ) {
     validatePreservedFileNames(preservedFileNames)
     requireDirectoryWithoutSymlinks(stagedDirectory, "Capture staging directory")
-    require(expectedCaptureSourceSha256.matches(sha256Digest)) {
-        "The expected capture source digest is invalid."
-    }
     require(expectedAvatarSha256.matches(sha256Digest)) {
         "The expected avatar digest is invalid."
     }
@@ -128,19 +125,18 @@ internal fun validateStagedCaptureCatalog(
             "cloudIdentity",
             "networkAccess",
             "captureSources",
-            "captureSourceSha256",
+            "captureSourceHashes",
             "avatarSha256",
             "captures",
         ),
     ) {
         "The staged capture manifest has an unexpected top-level schema."
     }
-    require(manifest.getInt("schemaVersion") == 2)
+    require(manifest.getInt("schemaVersion") == 4)
     require(manifest.getString("renderer") == "Compose ImageComposeScene")
     require(manifest.getString("identity") == "Obiente")
     require(manifest.getString("cloudIdentity") == "Nextcloud")
     require(!manifest.getBoolean("networkAccess"))
-    require(manifest.getString("captureSourceSha256") == expectedCaptureSourceSha256)
     require(manifest.getString("avatarSha256") == expectedAvatarSha256)
 
     val declaredSources = manifest.getJSONArray("captureSources").let { sources ->
@@ -148,6 +144,15 @@ internal fun validateStagedCaptureCatalog(
     }
     require(declaredSources == expectedCaptureSources) {
         "The staged capture source inventory is stale."
+    }
+    val declaredSourceHashes = manifest.getJSONObject("captureSourceHashes")
+    require(declaredSourceHashes.keySet() == expectedCaptureSourceHashes.keys) {
+        "The staged capture source hash inventory is stale."
+    }
+    expectedCaptureSourceHashes.forEach { (relative, digest) ->
+        require(declaredSourceHashes.getString(relative) == digest) {
+            "The staged capture source hash is stale: $relative"
+        }
     }
 
     val captures = manifest.getJSONArray("captures")
@@ -160,7 +165,9 @@ internal fun validateStagedCaptureCatalog(
             addAll(
                 listOf(
                     "scenario",
+                    "baseScenario",
                     "file",
+                    "theme",
                     "width",
                     "height",
                     "density",
@@ -180,7 +187,9 @@ internal fun validateStagedCaptureCatalog(
             "${entry.id} has unexpected or missing manifest fields."
         }
         require(capture.getString("scenario") == entry.id)
+        require(capture.getString("baseScenario") == entry.baseScenario)
         require(capture.getString("file") == entry.fileName)
+        require(capture.getString("theme") == entry.theme)
         require(capture.getInt("width") == entry.width)
         require(capture.getInt("height") == entry.height)
         require(capture.getDouble("density") == entry.density.toDouble())
@@ -307,6 +316,9 @@ private fun restoreBackupAfterFailure(
     failure: Throwable,
 ) {
     try {
+        // A rejected initial rename leaves the original catalog in place.
+        // Never remove it unless a backup actually exists to restore.
+        if (!Files.exists(backupDirectory, LinkOption.NOFOLLOW_LINKS)) return
         if (Files.exists(captureDirectory, LinkOption.NOFOLLOW_LINKS)) {
             deleteDirectoryTree(captureDirectory)
         }

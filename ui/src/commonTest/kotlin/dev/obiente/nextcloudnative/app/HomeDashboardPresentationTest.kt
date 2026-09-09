@@ -24,6 +24,10 @@ class HomeDashboardPresentationTest {
             rootDestinationContent(NextcloudDestination.Apps),
         )
         assertEquals(
+            RootDestinationContent.FolderSync,
+            rootDestinationContent(NextcloudDestination.FolderSync),
+        )
+        assertEquals(
             RootDestinationContent.Activity,
             rootDestinationContent(NextcloudDestination.Activity),
         )

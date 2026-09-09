@@ -227,7 +227,7 @@ watch([query, area, status, platform], () => {
       <div class="disclosure-body">
         <div class="section-tool">
           <p>Target milestones from the public repository.</p>
-          <a href="https://github.com/Obiente/nc-native/milestones" target="_blank" rel="noreferrer">
+          <a href="https://github.com/obiente/native/milestones" target="_blank" rel="noreferrer">
             All milestones
             <PhArrowSquareOut :size="14" weight="bold" aria-hidden="true" />
           </a>
@@ -486,9 +486,8 @@ watch([query, area, status, platform], () => {
 .roadmap-ledger {
   margin-top: 30px;
   overflow: hidden;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-large);
-  background: var(--surface-low);
+  border-block: 1px solid var(--outline);
+  background: transparent;
 }
 
 .ledger-heading {
@@ -496,7 +495,7 @@ watch([query, area, status, platform], () => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 30px;
-  padding: 22px 26px;
+  padding: 22px 0;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -539,7 +538,7 @@ watch([query, area, status, platform], () => {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 0 26px;
+  padding: 0;
   border-bottom: 1px solid var(--outline);
   color: var(--muted);
   font-size: 10px;
@@ -555,7 +554,7 @@ watch([query, area, status, platform], () => {
   display: grid;
   grid-template-columns: minmax(250px, 0.7fr) minmax(420px, 1.3fr);
   gap: 34px;
-  padding: 20px 26px;
+  padding: 20px 0;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -651,7 +650,7 @@ watch([query, area, status, platform], () => {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 26px;
+  padding: 0;
   cursor: pointer;
   list-style: none;
 }
@@ -663,7 +662,7 @@ watch([query, area, status, platform], () => {
 
 .ledger-disclosure > summary:hover,
 .ledger-disclosure > summary:focus-visible {
-  background: #15181e;
+  background: var(--surface-low);
 }
 
 .ledger-disclosure > summary > span {
@@ -691,7 +690,7 @@ watch([query, area, status, platform], () => {
 }
 
 .disclosure-body {
-  padding: 0 26px 24px;
+  padding: 0 0 24px;
 }
 
 .section-tool,
@@ -708,7 +707,7 @@ watch([query, area, status, platform], () => {
 }
 
 .workstream-section {
-  padding: 22px 26px 24px;
+  padding: 22px 0 24px;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -752,7 +751,7 @@ watch([query, area, status, platform], () => {
   min-height: 34px;
   align-items: center;
   border-bottom: 1px solid var(--outline);
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -769,7 +768,7 @@ watch([query, area, status, platform], () => {
   min-height: 54px;
   align-items: center;
   border-bottom: 1px solid var(--outline);
-  color: #c7c4cc;
+  color: var(--text-soft);
   font-size: 10px;
   line-height: 1.4;
 }
@@ -787,7 +786,7 @@ watch([query, area, status, platform], () => {
 .workstream-row:focus-visible,
 .issue-record > summary:hover,
 .issue-record > summary:focus-visible {
-  background: #15181e;
+  background: var(--surface-low);
 }
 
 .release-row > strong,
@@ -816,7 +815,7 @@ watch([query, area, status, platform], () => {
 
 .feature-name small {
   overflow: hidden;
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -921,14 +920,14 @@ watch([query, area, status, platform], () => {
   gap: 10px 22px;
   padding: 11px 16px;
   border-bottom: 1px solid var(--outline);
-  background: #111319;
+  background: var(--surface-low);
   color: var(--muted);
   font-size: 9px;
 }
 
 .issue-record-details strong {
   margin-right: 4px;
-  color: #b7b4bd;
+  color: var(--text-soft);
 }
 
 .issue-record-details a {
@@ -951,7 +950,7 @@ watch([query, area, status, platform], () => {
   min-width: 0;
   display: grid;
   gap: 6px;
-  color: #85838d;
+  color: var(--text-subtle);
   font-size: 9px;
   font-weight: 700;
 }
@@ -1026,11 +1025,11 @@ watch([query, area, status, platform], () => {
 }
 
 .roadmap-fallback-note {
-  padding: 13px 26px;
+  padding: 13px 0;
 }
 
 .completed-section {
-  padding: 22px 26px 24px;
+  padding: 22px 0 24px;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -1160,34 +1159,62 @@ watch([query, area, status, platform], () => {
 
 @media (max-width: 780px) {
   .roadmap-ledger {
-    margin-top: 22px;
-    border-radius: var(--radius-surface);
+    margin-top: 20px;
   }
 
   .ledger-heading {
     align-items: flex-start;
     flex-direction: column;
-    gap: 14px;
-    padding: 20px 17px;
+    gap: 12px;
+    padding: 18px 0;
+  }
+
+  .ledger-heading h2 {
+    font-size: 26px;
+  }
+
+  .ledger-heading p:not(.eyebrow),
+  .workstream-section header p,
+  .section-tool p {
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .ledger-heading > a,
+  .section-tool > a {
+    min-height: 44px;
+    font-size: 13px;
   }
 
   .ledger-source {
     min-height: 0;
     align-items: flex-start;
     flex-direction: column;
-    gap: 4px;
-    padding: 11px 17px;
+    gap: 6px;
+    padding: 12px 0;
+    font-size: 11px;
   }
 
   .progress-overview,
   .workstream-section,
   .completed-section {
-    padding: 18px 17px;
+    padding: 20px 0;
+  }
+
+  .progress-focus span,
+  .progress-measure span,
+  .progress-focus small,
+  .progress-measure ul {
+    font-size: 11px;
+  }
+
+  .progress-focus strong {
+    font-size: 16px;
   }
 
   .ledger-disclosure > summary {
     min-height: 62px;
-    padding: 0 17px;
+    padding: 0;
   }
 
   .ledger-disclosure > summary > span {
@@ -1197,7 +1224,7 @@ watch([query, area, status, platform], () => {
   }
 
   .disclosure-body {
-    padding: 0 17px 20px;
+    padding: 0 0 20px;
   }
 
   .section-tool,
@@ -1217,7 +1244,24 @@ watch([query, area, status, platform], () => {
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 7px 12px;
-    padding: 13px 4px;
+    padding: 15px 2px;
+    font-size: 12px;
+  }
+
+  .release-row > strong,
+  .feature-name strong {
+    font-size: 13px;
+  }
+
+  .feature-name small,
+  .epic-progress small {
+    font-size: 11px;
+  }
+
+  .quiet-status,
+  .issue-link,
+  .record-reference {
+    font-size: 11px;
   }
 
   .release-row > strong,
@@ -1285,7 +1329,9 @@ watch([query, area, status, platform], () => {
   .issue-record-details {
     align-items: flex-start;
     flex-direction: column;
-    gap: 7px;
+    gap: 9px;
+    padding: 13px 12px;
+    font-size: 11px;
   }
 
   .issue-record-details a {
@@ -1294,6 +1340,32 @@ watch([query, area, status, platform], () => {
 
   .roadmap-filters {
     grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .roadmap-filters label {
+    font-size: 10px;
+  }
+
+  .roadmap-filters select,
+  .roadmap-search > span:last-child {
+    height: 44px;
+    font-size: 12px;
+  }
+
+  .roadmap-search input {
+    font-size: 12px;
+  }
+
+  .table-more {
+    min-height: 54px;
+    padding-inline: 2px;
+    font-size: 11px;
+  }
+
+  .table-more button {
+    min-height: 40px;
+    font-size: 11px;
   }
 
   .completed-section > header {
@@ -1304,6 +1376,18 @@ watch([query, area, status, platform], () => {
 
   .completed-grid {
     grid-template-columns: 1fr;
+  }
+
+  .completed-grid > a {
+    min-height: 64px;
+  }
+
+  .completed-grid strong {
+    font-size: 12px;
+  }
+
+  .completed-grid small {
+    font-size: 10px;
   }
 }
 </style>

@@ -59,7 +59,7 @@ class CospendOpenApiCompatibilityTest {
                 "api-edit-bill|update|PUT|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}/bills/{billId}",
                 "api-edit-project|update|PUT|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}",
                 "api-get-bill|read|GET|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}/bills/{billId}",
-                "api-get-bills|list|GET|/ocs/v2.php/apps/cospend/api/v1/projects/{id}/bills",
+                "api-get-bills|list|GET|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}/bills",
                 "api-get-local-projects|list|GET|/ocs/v2.php/apps/cospend/api/v1/projects",
                 "api-get-project-info|read|GET|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}",
             ),

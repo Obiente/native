@@ -1,7 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.PreparedMultipartUpload
-import dev.obiente.nextcloudnative.app.writePreparedMultipartUpload
+import dev.obiente.nextcloudnative.app.openJvmLocalUploadSource
+import dev.obiente.nextcloudnative.app.writeJvmPreparedMultipartUpload
 import java.io.InputStream
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,8 +20,8 @@ internal class AndroidStreamingMultipartRequestBody(
     override fun isOneShot(): Boolean = true
 
     override fun writeTo(sink: BufferedSink) {
-        openSource().use { source ->
-            writePreparedMultipartUpload(
+        openJvmLocalUploadSource(openSource).use { source ->
+            writeJvmPreparedMultipartUpload(
                 upload = upload,
                 readFile = source::read,
                 write = { bytes, offset, count ->

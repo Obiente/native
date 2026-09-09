@@ -1,5 +1,4 @@
 package dev.obiente.nextcloudnative
-
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -23,6 +22,8 @@ import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_FEED_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_IMAGE_BYTES
+import dev.obiente.nextcloudnative.app.canonicalReleaseDownloadRequestUrl
+import dev.obiente.nextcloudnative.app.canonicalProjectNewsImageRequestUrl
 import dev.obiente.nextcloudnative.app.PROJECT_NEWS_FEED_URL
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
@@ -54,12 +55,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-
 internal const val PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
 internal const val PROJECT_CONTENT_CALL_TIMEOUT_SECONDS = 10L * 60L
-
 internal fun buildProjectContentHttpClient(): OkHttpClient =
     OkHttpClient.Builder()
         .connectTimeout(PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -114,7 +113,7 @@ internal class AndroidProjectContentClient(
             canCheckDirectUpdates = directUpdatesEnabled,
             explanation = when (channel) {
                 AppDistributionChannel.DirectApk if directUpdatesEnabled ->
-                    "This APK was installed directly. Updates are checked securely by Nextcloud Native."
+                    "This APK was installed directly. Updates are checked securely by nati.ve."
                 AppDistributionChannel.DirectApk ->
                     "This build does not include direct APK installation. Use its distribution channel for updates."
                 AppDistributionChannel.DirectDesktopPackage ->
@@ -192,7 +191,7 @@ internal class AndroidProjectContentClient(
                 publicContent.sha256() == image.sha256
             }?.let { return it }
         }
-        val bytes = getBounded(image.url, MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
+        val bytes = getBounded(canonicalProjectNewsImageRequestUrl(image.url), MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
         check(bytes.sha256() == image.sha256) { "Project news image verification failed." }
         newsImageDirectory.mkdirs()
         val temporary = File(newsImageDirectory, "${image.sha256}.part")
@@ -276,9 +275,15 @@ internal class AndroidProjectContentClient(
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val androidRelease = release as? AndroidDirectRelease
-            ?: return AppUpdateInstallResult.Rejected("This is not an Android update package.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "This is not an Android update package.",
+                "android-package-type",
+            )
         if (!updateMutex.tryLock()) {
-            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+            return AppUpdateInstallResult.Rejected(
+                "An app update is already in progress.",
+                "android-already-running",
+            )
         }
         try {
             return beginUpdateLocked(androidRelease)
@@ -291,10 +296,13 @@ internal class AndroidProjectContentClient(
     private suspend fun beginUpdateLocked(release: AndroidDirectRelease): AppUpdateInstallResult {
         val support = support()
         if (!support.canCheckDirectUpdates) {
-            return AppUpdateInstallResult.Rejected(support.explanation)
+            return AppUpdateInstallResult.Rejected(support.explanation, "android-distribution-ineligible")
         }
         if (!isNewerAndroidRelease(support.currentVersionCode, release)) {
-            return AppUpdateInstallResult.Rejected("This release is not newer than the installed app.")
+            return AppUpdateInstallResult.Rejected(
+                "This release is not newer than the installed app.",
+                "android-release-ineligible",
+            )
         }
         val selectedChannel = updateChannel()
         runCatching {
@@ -302,13 +310,17 @@ internal class AndroidProjectContentClient(
         }.getOrElse {
             return AppUpdateInstallResult.Rejected(
                 "The update metadata is invalid for the selected ${selectedChannel.name} channel.",
+                "android-metadata",
             )
         }
         val foregroundActivity = activity
-            ?: return AppUpdateInstallResult.Rejected("Open the app before installing an update.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "Open the app before installing an update.",
+                "android-no-foreground-activity",
+            )
         if (!appContext.packageManager.canRequestPackageInstalls()) {
             val message =
-                "Allow installs from Nextcloud Native, then return and confirm the update again."
+                "Allow installs from nati.ve, then return and confirm the update again."
             mutableUpdateState.value = AppUpdateInstallState.PermissionRequired(
                 versionName = release.versionName,
                 versionCode = release.versionCode,
@@ -335,6 +347,7 @@ internal class AndroidProjectContentClient(
             activePartial = temporary,
         )
         updateCancellationRequested = false
+        var diagnosticStage = "download"
         return try {
             val resumedFromBytes = settleUpdatePartial(
                 file = temporary,
@@ -370,9 +383,11 @@ internal class AndroidProjectContentClient(
                 versionName = release.versionName,
                 versionCode = release.versionCode,
             )
+            diagnosticStage = "verification"
             verifyDownloadedApk(release, temporary)
             if (staged.exists()) check(staged.delete())
             check(temporary.renameTo(staged)) { "Could not stage the verified update." }
+            diagnosticStage = "installer-handoff"
             val uri = FileProvider.getUriForFile(
                 appContext,
                 "${appContext.packageName}.sharedfiles",
@@ -435,7 +450,10 @@ internal class AndroidProjectContentClient(
                 downloadedBytes = retainedBytes,
                 canResume = recoverable && retainedBytes in 1 until release.apkSize,
             )
-            AppUpdateInstallResult.Rejected(failure.message ?: "The update could not be verified.")
+            AppUpdateInstallResult.Rejected(
+                failure.message ?: "The update could not be verified.",
+                "android-$diagnosticStage",
+            )
         } finally {
             updateCancellationRequested = false
         }
@@ -627,8 +645,14 @@ internal class AndroidProjectContentClient(
         const val UPDATE_PROGRESS_STEP_BYTES = 256L * 1024L
     }
 
-    private fun storedUpdateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.getString(KEY_UPDATE_CHANNEL, null))
+    private fun storedUpdateChannel(): AndroidUpdateChannel {
+        val storedValue = preferences.getString(KEY_UPDATE_CHANNEL, null)
+        val channel = parseAndroidUpdateChannel(storedValue)
+        if (storedValue != channel.storageValue) {
+            preferences.edit().putString(KEY_UPDATE_CHANNEL, channel.storageValue).apply()
+        }
+        return channel
+    }
 }
 
 internal fun isRetryableAppUpdateHttpStatus(status: Int): Boolean =
@@ -899,28 +923,29 @@ internal fun executeWithTrustedGitHubReleaseRedirect(
     request: Request,
     onCallChanged: (Call?) -> Unit = {},
 ): Response {
-    val initialCall = client.newCall(request)
+    val canonicalRequest = if (request.url.host == "github.com") request.newBuilder().url(canonicalReleaseDownloadRequestUrl(request.url.toString())).build() else request
+    val initialCall = client.newCall(canonicalRequest)
     onCallChanged(initialCall)
     val initialResponse = initialCall.execute()
     if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
     return try {
         check(
-            request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+            canonicalRequest.url.host == "github.com" &&
+                canonicalRequest.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) {
             "Unexpected redirect while loading public project content."
         }
         val location = requireNotNull(initialResponse.header("Location")) {
             "GitHub release download redirect did not include a destination."
         }
-        val redirectedUrl = requireNotNull(request.url.resolve(location)) {
+        val redirectedUrl = requireNotNull(canonicalRequest.url.resolve(location)) {
             "GitHub release download redirect was invalid."
         }
         check(isTrustedGitHubReleaseAssetRedirect(redirectedUrl.toString())) {
             "GitHub release download redirected to an untrusted destination."
         }
         initialResponse.close()
-        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        val redirectedCall = client.newCall(canonicalRequest.newBuilder().url(redirectedUrl).build())
         onCallChanged(redirectedCall)
         redirectedCall.execute()
     } catch (failure: Exception) {

@@ -9,3 +9,6 @@ ui/src/commonMain/kotlin
 ?ui/src/commonMain/resources
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview
 ui/src/desktopMain/resources/marketing
+website/public/demo-media/field-notes.webp
+website/public/demo-media/forest-trail.webp
+website/public/demo-media/north-sea.webp

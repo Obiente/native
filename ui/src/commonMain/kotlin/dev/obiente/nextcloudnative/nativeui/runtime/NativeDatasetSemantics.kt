@@ -43,6 +43,12 @@ internal data class NativeDatasetInsights(
     val points: List<NativeChartPoint>,
 )
 
+internal data class NativeCategoricalSummary(
+    val dimension: FieldSpec,
+    val recordCount: Int,
+    val points: List<NativeChartPoint>,
+)
+
 internal data class NativeTableProjection(
     val resource: ResourceSpec,
     val records: List<NativeRecord>,
@@ -186,6 +192,7 @@ internal fun validateNativeCellEdit(field: FieldSpec, value: String): String? {
 data class NativeDatasetContext(
     val parentResourceId: String? = null,
     val parentRecord: NativeRecord? = null,
+    val currentUserId: String? = null,
     /**
      * Exact values already resolved by descriptor-driven navigation.
      *
@@ -195,6 +202,18 @@ data class NativeDatasetContext(
     val bindingValues: Map<String, String> = emptyMap(),
     val relatedRecords: Map<String, List<NativeRecord>> = emptyMap(),
     val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
+    /** Resources proven by navigation semantics to contain mailbox collection counts. */
+    val mailCollectionSummaryResourceIds: Set<String> = emptySet(),
+    /** Stable adaptive collection identity shared by a collection and its adjacent detail pane. */
+    val collectionSearchScopeKey: String? = null,
+    /** Exact typed choices projected from an already-verified active record or embedded relation. */
+    val fieldChoices: Map<String, List<NativeFieldChoice>> = emptyMap(),
+)
+
+data class NativeFieldChoice(
+    val value: String,
+    val label: String,
+    val supportingText: String? = null,
 )
 
 data class NativeRelatedRecordPaging(
@@ -202,6 +221,7 @@ data class NativeRelatedRecordPaging(
     val error: String? = null,
     val discardedChoiceCount: Int = 0,
     val loadMore: (() -> Unit)? = null,
+    val retry: (() -> Unit)? = null,
     val returnToFirstPage: (() -> Unit)? = null,
 ) {
     init {
@@ -688,6 +708,59 @@ internal fun nativeDatasetInsights(
     )
 }
 
+/**
+ * Builds a bounded count distribution only from a declared categorical field with useful
+ * semantics. This supports status and boolean summaries without treating arbitrary strings as
+ * chart dimensions. Missing values stay visible as "Not set" instead of disappearing.
+ */
+internal fun nativeCategoricalSummary(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+): NativeCategoricalSummary? {
+    if (records.size < 2) return null
+    val dimension = resource.fields
+        .mapNotNull { field ->
+            val priority = field.categoricalSummaryPriority()
+            if (priority <= 0) return@mapNotNull null
+            val populated = records.mapNotNull { record ->
+                record.presentationValue(field.id)?.trim()?.takeIf(String::isNotBlank)
+            }
+            val distinct = populated.distinct().size
+            if (distinct !in 2..MAX_CATEGORICAL_POINTS) return@mapNotNull null
+            Triple(field, priority, populated.size)
+        }
+        .maxWithOrNull(
+            compareBy<Triple<FieldSpec, Int, Int>> { it.second }
+                .thenBy { it.third },
+        )
+        ?.first
+        ?: return null
+
+    val counts = linkedMapOf<String, Int>()
+    records.forEach { record ->
+        val raw = record.presentationValue(dimension.id)?.trim().orEmpty()
+        val label = if (raw.isBlank()) "Not set" else chartLabel(dimension, raw)
+        counts[label] = counts.getOrDefault(label, 0) + 1
+    }
+    val declaredOrder = dimension.enumValues
+        .orEmpty()
+        .map { value -> chartLabel(dimension, value) }
+        .withIndex()
+        .associate { (index, label) -> label to index }
+    val points = counts
+        .map { (label, count) -> NativeChartPoint(label, count.toDouble()) }
+        .sortedWith(
+            compareBy<NativeChartPoint> { point -> declaredOrder[point.label] ?: Int.MAX_VALUE }
+                .thenByDescending(NativeChartPoint::value)
+                .thenBy(NativeChartPoint::label),
+        )
+    return NativeCategoricalSummary(
+        dimension = dimension,
+        recordCount = records.size,
+        points = points,
+    )
+}
+
 internal fun formatNativeMetric(field: FieldSpec, value: Double): String {
     val rounded = if (abs(value) < Double.MAX_VALUE / 100.0) round(value * 100.0) / 100.0 else value
     val normalized = when {
@@ -791,6 +864,23 @@ private fun FieldSpec.dimensionPriority(hasResolvedForeignLabels: Boolean = fals
         "budgetperiod", "frequency", "period" -> 760
         "date", "created", "updated", "modified" -> 700
         else -> if (kind == FieldKind.enumeration) 620 else 0
+    }
+}
+
+private fun FieldSpec.categoricalSummaryPriority(): Int {
+    val id = semanticId()
+    val semantic = when (id) {
+        "status", "state", "stage" -> 1_000
+        "priority", "severity" -> 920
+        "category", "categoryname", "type" -> 840
+        "complete", "completed", "done", "enabled", "active" -> 760
+        else -> 0
+    }
+    return when {
+        kind == FieldKind.enumeration -> semantic + 500
+        kind == FieldKind.boolean -> semantic.coerceAtLeast(700) + 300
+        semantic > 0 && enumValues != null -> semantic + 400
+        else -> 0
     }
 }
 
@@ -1090,6 +1180,7 @@ private fun String.humanizeSemanticValue(): String = buildString(length) {
 
 private const val UNASSIGNED_LANE = "__unassigned__"
 private const val MAX_CHART_POINTS = 6
+private const val MAX_CATEGORICAL_POINTS = 6
 
 private val CELL_MAP_FIELD_IDS = setOf("data", "databyalias", "values", "cells", "fields", "attributes")
 private val CELL_ARRAY_KEY_IDS = listOf("alias", "technicalName", "columnId", "column_id", "key", "id", "name")

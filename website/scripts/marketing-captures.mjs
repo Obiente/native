@@ -13,6 +13,7 @@ export const captureManifestPath = path.join(
   "capture-manifest.json",
 );
 const captureInventoryRelativePath = "tools/marketing-capture-inputs.txt";
+const captureThemes = ["dark", "light"];
 
 export async function readCaptureManifest() {
   const manifest = JSON.parse(await readFile(captureManifestPath, "utf8"));
@@ -31,13 +32,13 @@ export function validateCaptureManifest(manifest) {
       "cloudIdentity",
       "networkAccess",
       "captureSources",
-      "captureSourceSha256",
+      "captureSourceHashes",
       "avatarSha256",
       "captures",
     ],
     "Capture manifest",
   );
-  requireValue(manifest.schemaVersion === 2, "schemaVersion must be 2");
+  requireValue(manifest.schemaVersion === 4, "schemaVersion must be 4");
   requireValue(
     manifest.renderer === "Compose ImageComposeScene",
     "renderer must identify ImageComposeScene",
@@ -45,7 +46,6 @@ export function validateCaptureManifest(manifest) {
   requireValue(manifest.identity === "Obiente", "identity must be Obiente");
   requireValue(manifest.cloudIdentity === "Nextcloud", "cloudIdentity must be Nextcloud");
   requireValue(manifest.networkAccess === false, "networkAccess must be false");
-  requireSha256(manifest.captureSourceSha256, "captureSourceSha256");
   requireSha256(manifest.avatarSha256, "avatarSha256");
 
   requireValue(
@@ -59,6 +59,16 @@ export function validateCaptureManifest(manifest) {
   for (const relative of manifest.captureSources) {
     requireSafeRelativePath(relative, "captureSources entry");
   }
+  requireObject(manifest.captureSourceHashes, "captureSourceHashes");
+  requireExactKeys(
+    manifest.captureSourceHashes,
+    manifest.captureSources,
+    "captureSourceHashes",
+  );
+  for (const [relative, digest] of Object.entries(manifest.captureSourceHashes)) {
+    requireSafeRelativePath(relative, "captureSourceHashes entry");
+    requireSha256(digest, `captureSourceHashes ${relative}`);
+  }
 
   requireValue(
     Array.isArray(manifest.captures) && manifest.captures.length > 0,
@@ -70,7 +80,9 @@ export function validateCaptureManifest(manifest) {
     requireObject(capture, "Capture");
     const expectedCaptureKeys = [
       "scenario",
+      "baseScenario",
       "file",
+      "theme",
       "width",
       "height",
       "density",
@@ -86,6 +98,11 @@ export function validateCaptureManifest(manifest) {
     if (capture.issue !== undefined) expectedCaptureKeys.push("issue");
     requireExactKeys(capture, expectedCaptureKeys, "Capture");
     requireSlug(capture.scenario, "capture scenario");
+    requireSlug(capture.baseScenario, `${capture.scenario} baseScenario`);
+    requireValue(
+      captureThemes.includes(capture.theme),
+      `${capture.scenario} theme must be dark or light`,
+    );
     requireValue(
       !scenarios.has(capture.scenario),
       `Duplicate capture scenario: ${capture.scenario}`,
@@ -122,6 +139,40 @@ export function validateCaptureManifest(manifest) {
       requirePositiveInteger(capture.issue, `${capture.scenario} issue`);
     }
   }
+  const capturesByBase = new Map();
+  for (const capture of manifest.captures) {
+    const pair = capturesByBase.get(capture.baseScenario) ?? [];
+    pair.push(capture);
+    capturesByBase.set(capture.baseScenario, pair);
+  }
+  for (const [baseScenario, pair] of capturesByBase) {
+    requireValue(
+      pair.length === captureThemes.length &&
+        captureThemes.every(
+          (theme) => pair.filter((capture) => capture.theme === theme).length === 1,
+        ),
+      `${baseScenario} must declare exactly one dark and one light capture`,
+    );
+    const [reference, candidate] = pair;
+    for (const field of [
+      "width",
+      "height",
+      "density",
+      "feature",
+      "surface",
+      "state",
+      "purpose",
+      "platform",
+      "viewport",
+      "pullRequest",
+      "issue",
+    ]) {
+      requireValue(
+        candidate[field] === reference[field],
+        `${baseScenario} theme variants must share ${field}`,
+      );
+    }
+  }
   return manifest;
 }
 
@@ -130,25 +181,36 @@ export function stableCapturePath(capture) {
 }
 
 export function websiteCapturePath(manifest, capture) {
-  const revision = createHash("sha256")
-    .update(`${manifest.captureSourceSha256}:${capture.sha256}`)
-    .digest("hex");
+  const revision = createHash("sha256").update(capture.sha256).digest("hex");
   return `${stableCapturePath(capture)}?v=${revision}`;
 }
 
 export function articleCapture(manifest, scenario, sourceLabel) {
-  const capture = manifest.captures.find((candidate) => candidate.scenario === scenario);
-  if (!capture) {
+  return articleCapturePair(manifest, scenario, sourceLabel).dark;
+}
+
+export function articleCapturePair(manifest, baseScenario, sourceLabel) {
+  const captures = manifest.captures.filter(
+    (candidate) => candidate.baseScenario === baseScenario,
+  );
+  if (captures.length === 0) {
     throw new Error(
       `${sourceLabel}: captureScenario must reference a declared Compose capture.`,
     );
   }
-  if (capture.purpose !== "showcase") {
+  if (captures.some((capture) => capture.purpose !== "showcase")) {
     throw new Error(
       `${sourceLabel}: captureScenario must reference a showcase capture, not state coverage.`,
     );
   }
-  return capture;
+  const dark = captures.find((capture) => capture.theme === "dark");
+  const light = captures.find((capture) => capture.theme === "light");
+  if (!dark || !light) {
+    throw new Error(
+      `${sourceLabel}: captureScenario must provide both dark and light captures.`,
+    );
+  }
+  return { dark, light };
 }
 
 export async function verifyCaptureAssets(manifest) {
@@ -189,13 +251,12 @@ export async function verifyCaptureFreshness(manifest) {
   if (obsolete.length > 0) {
     failures.push(`captureSources contains obsolete entries: ${obsolete.join(", ")}`);
   }
-  if (missing.length === 0 && obsolete.length === 0) {
-    const digest = await digestCaptureSources(expectedSources);
-    if (digest !== manifest.captureSourceSha256) {
-      failures.push("captureSourceSha256 does not match the current capture inputs");
+  for (const relative of expectedSources) {
+    const bytes = await readFile(path.join(repositoryRoot, relative));
+    if (manifest.captureSourceHashes[relative] !== sha256(bytes)) {
+      failures.push(`captureSourceHashes does not match: ${relative}`);
     }
   }
-
   if (manifest.avatarSha256) {
     const avatar = await readFile(
       path.join(
@@ -266,16 +327,6 @@ async function walkFiles(directory, output, root, realRoot) {
       throw new Error(`Capture input is not a regular file or directory: ${relative}`);
     }
   }
-}
-
-async function digestCaptureSources(sources) {
-  const digest = createHash("sha256");
-  for (const relative of sources) {
-    digest.update(relative);
-    digest.update(new Uint8Array([0]));
-    digest.update(await readFile(path.join(repositoryRoot, relative)));
-  }
-  return digest.digest("hex");
 }
 
 export function decodePngDimensions(bytes) {

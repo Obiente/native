@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.runtime.formatNativeField
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeDatasetInsights
 import dev.obiente.nextcloudnative.nativeui.runtime.shouldUseCompactTableRecordList
@@ -12,11 +13,96 @@ import kotlin.test.assertTrue
 
 class MarketingProductionCaptureTest {
     @Test
-    fun `home fixture provides useful deterministic dashboard content`() {
-        assertEquals(4, marketingDashboardSnapshot.widgets.size)
-        assertTrue(marketingDashboardSnapshot.widgets.all { widget ->
-            marketingDashboardSnapshot.itemsByWidget[widget.id].orEmpty().isNotEmpty()
+    fun `mail visual QA uses upstream routes with synthetic records`() {
+        val schemaRoutes = marketingMailSchema.actions.associate { action -> action.id to action.binding.path }
+        val compose = assertNotNull(
+            marketingMailDescriptor.actions.singleOrNull { action -> action.id == "route.drafts.create" },
+        )
+
+        assertEquals("/apps/mail/api/messages", schemaRoutes["route.messages.index"])
+        assertEquals("/apps/mail/api/messages/{id}/body", schemaRoutes["route.messages.getbody"])
+        assertEquals("/apps/mail/api/mailboxes/{id}/stats", schemaRoutes["route.mailboxes.stats"])
+        assertEquals("/apps/mail/api/drafts", compose.binding.path)
+        assertEquals(HttpMethod.POST, compose.binding.method)
+        assertEquals("5.10.12", marketingMailSchema.app.version)
+    }
+
+    @Test
+    fun `homepage captures cover every story in matched dark and light themes`() {
+        val homepageCaptures = marketingCaptureVariants.filter { it.scenario.feature == "Homepage" }
+        val expectedPairs = setOf(
+            "homepage-overview-desktop",
+            "homepage-overview-mobile",
+            "homepage-files-desktop",
+            "homepage-files-mobile",
+            "homepage-photos-desktop",
+            "homepage-conversations-desktop",
+            "homepage-planning-desktop",
+            "homepage-apps-desktop",
+        )
+
+        assertEquals(expectedPairs.size * 2, homepageCaptures.size)
+        assertEquals(expectedPairs, homepageCaptures.map(MarketingCaptureVariant::baseScenario).toSet())
+        expectedPairs.forEach { baseId ->
+            val pair = homepageCaptures.filter { capture -> capture.baseScenario == baseId }
+            assertEquals(2, pair.size)
+            assertEquals(setOf(true, false), pair.map { it.theme.darkTheme }.toSet())
+            assertTrue(pair.all { it.scenario.purpose == MarketingCapturePurpose.Showcase })
+        }
+    }
+
+    @Test
+    fun `every marketing capture is generated in both themes`() {
+        val pairs = marketingCaptureVariants.groupBy(MarketingCaptureVariant::baseScenario)
+
+        assertTrue(pairs.isNotEmpty())
+        pairs.forEach { (_, pair) ->
+            assertEquals(2, pair.size)
+            assertEquals(setOf(MarketingCaptureTheme.Dark, MarketingCaptureTheme.Light), pair.map { it.theme }.toSet())
+            assertEquals(1, pair.map { it.width to it.height }.toSet().size)
+        }
+    }
+
+    @Test
+    fun `homepage files fixture exercises the production workspace with useful synthetic content`() {
+        assertTrue(marketingHomepageFiles.size >= 12)
+        assertTrue(marketingHomepageFiles.count(NextcloudFile::isDirectory) >= 5)
+        assertTrue(marketingHomepageFiles.count { it.mimeType?.startsWith("image/") == true } >= 3)
+        assertTrue(marketingHomepageFiles.any { it.mimeType == "text/markdown" })
+        assertTrue(marketingHomepageFiles.any { it.mimeType == "application/pdf" })
+        assertTrue(marketingHomepageFiles.any { it.mimeType?.startsWith("video/") == true })
+        assertTrue(marketingHomepageFiles.any { it.mimeType?.startsWith("audio/") == true })
+        assertTrue(marketingHomepageFiles.filterNot(NextcloudFile::isDirectory).all { it.fileId != null })
+        assertTrue(marketingHomepageFiles.filter { it.hasPreview }.all { !it.etag.isNullOrBlank() })
+        assertTrue(marketingHomepageFiles.count(NextcloudFile::favorite) >= 4)
+        assertTrue(marketingHomepageFiles.any { it.unreadComments > 0 })
+        assertTrue(marketingHomepageFiles.all { !it.ownerDisplayName.isNullOrBlank() })
+        assertEquals(NextcloudFileListingSource.Cache, marketingHomepageCachedFileListing.source)
+        assertEquals(NextcloudFileListingSource.Network, marketingHomepageFileListing.source)
+        assertTrue(marketingHomepageFileOfflineAvailability.values.all {
+            it == FileOfflineAvailability.Available
         })
+    }
+
+    @Test
+    fun `home fixture provides useful deterministic dashboard content`() {
+        assertEquals(8, marketingDashboardSnapshot.widgets.size)
+        assertTrue(marketingDashboardSnapshot.widgets.all { widget ->
+            marketingDashboardSnapshot.itemsByWidget[widget.id].orEmpty().size >= 2
+        })
+        assertTrue(marketingDashboardSnapshot.itemsByWidget.values.sumOf { it.size } >= 25)
+        assertEquals(6, marketingHomepageTalkPage.messages.size)
+    }
+
+    @Test
+    fun `apps command center capture covers both desktop themes`() {
+        val captures = marketingCaptureVariants.filter { variant ->
+            variant.baseScenario == "apps-workspace-desktop"
+        }
+
+        assertEquals(2, captures.size)
+        assertEquals(setOf(MarketingCaptureTheme.Dark, MarketingCaptureTheme.Light), captures.map { it.theme }.toSet())
+        assertTrue(captures.all { it.scenario.purpose == MarketingCapturePurpose.Showcase })
     }
 
     @Test
@@ -31,8 +117,8 @@ class MarketingProductionCaptureTest {
         assertEquals(900, desktop.height)
         assertEquals("mobile", mobile.platform)
         assertEquals("phone-portrait", mobile.viewport)
-        assertEquals(1_080, mobile.width)
-        assertEquals(1_800, mobile.height)
+        assertEquals(1_024, mobile.width)
+        assertEquals(2_216, mobile.height)
         assertTrue(mobile.density > 1f)
         assertEquals("mobile", mobileCollection.platform)
         assertEquals("phone-portrait", mobileCollection.viewport)

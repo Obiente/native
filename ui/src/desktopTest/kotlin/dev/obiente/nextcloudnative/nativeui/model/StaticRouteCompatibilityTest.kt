@@ -7,6 +7,69 @@ import kotlin.test.assertTrue
 
 class StaticRouteCompatibilityTest {
     @Test
+    fun topLevelFormEnumsPreserveAuditedLabelsInNativeSchema() {
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("example", "Example", "1.0.0"),
+                endpointPolicy = EndpointPolicy(
+                    serverOrigin = "https://cloud.example.test",
+                    approvedApiPrefixes = listOf("/apps/example"),
+                ),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    documentUrl = "https://apps.nextcloud.com/packages/example#openapi.json",
+                    document = Json.parseToJsonElement(
+                        """
+                        {
+                          "openapi":"3.0.3",
+                          "info":{"title":"Example","version":"1.0.0"},
+                          "paths":{
+                            "/apps/example/items/{itemId}":{
+                              "patch":{
+                                "operationId":"item-update",
+                                "parameters":[
+                                  {"name":"itemId","in":"path","required":true,"schema":{"type":"integer"}}
+                                ],
+                                "requestBody":{
+                                  "required":true,
+                                  "content":{
+                                    "application/json":{
+                                      "schema":{
+                                        "type":"object",
+                                        "additionalProperties":false,
+                                        "properties":{
+                                          "repeat":{
+                                            "type":"string",
+                                            "enum":["d:1","w:1"],
+                                            "$ENUM_LABELS_EXTENSION":{
+                                              "d:1":"Every day",
+                                              "w:1":"Every week"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "responses":{"200":{"description":"Updated"}}
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent(),
+                    ),
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+
+        val formRepeat = descriptor.forms.single().fields.single()
+        assertEquals(mapOf("d:1" to "Every day", "w:1" to "Every week"), formRepeat.enumLabels)
+        val nativeRepeat = descriptor.toNativeAppSchema().resources.single().fields.single { it.id == "repeat" }
+        assertEquals(formRepeat.enumLabels, nativeRepeat.enumLabels)
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
     fun deckStyleStaticRoutesCompileIntoNativeReadOnlySurfaces() {
         val descriptor = DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(

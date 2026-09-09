@@ -2,8 +2,10 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MediaViewerNavigationTest {
     @Test
@@ -83,6 +85,38 @@ class MediaViewerNavigationTest {
         assertEquals(0, renderedRoute.selectedIndex)
         assertEquals(rendered, assertNotNull(repository.resolve(renderedRoute)).selected)
         assertNull(repository.select(route, unrelatedRaw))
+    }
+
+    @Test
+    fun `navigation waits for every viewer mutation state`() {
+        assertTrue(
+            canConfirmMediaViewerNavigation(
+                editing = false,
+                tagSaving = false,
+                activeActionMutations = 0,
+            ),
+        )
+        assertFalse(
+            canConfirmMediaViewerNavigation(
+                editing = true,
+                tagSaving = false,
+                activeActionMutations = 0,
+            ),
+        )
+        assertFalse(
+            canConfirmMediaViewerNavigation(
+                editing = false,
+                tagSaving = true,
+                activeActionMutations = 0,
+            ),
+        )
+        assertFalse(
+            canConfirmMediaViewerNavigation(
+                editing = false,
+                tagSaving = false,
+                activeActionMutations = 1,
+            ),
+        )
     }
 
     private fun file(id: Long) = NextcloudFile(

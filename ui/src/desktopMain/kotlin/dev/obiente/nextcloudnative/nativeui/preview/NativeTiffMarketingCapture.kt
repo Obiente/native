@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Typography
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
 import dev.obiente.nextcloudnative.app.MAX_PHOTO_EDIT_SOURCE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
@@ -25,6 +26,7 @@ import java.lang.reflect.Proxy
 
 internal class NativeTiffMarketingCapture private constructor(
     private val renderedPreview: ByteArray,
+    captureIdentity: String,
 ) {
     private val previewRequests = mutableListOf<Int>()
     private val memoriesRequests = mutableListOf<NextcloudApiRequest>()
@@ -32,10 +34,15 @@ internal class NativeTiffMarketingCapture private constructor(
     private val observations = mutableListOf<MediaViewerStateObservation>()
     private val rejectedCalls = mutableListOf<String>()
     private val services = networkInertServices()
+    private val fixtureSession = NextcloudSession(
+        serverUrl = "https://fixture.invalid",
+        loginName = "$FIXTURE_USER_ID-$captureIdentity",
+        appPassword = "synthetic-capture-password",
+    )
 
     @Composable
-    fun Content() {
-        NextcloudNativeTheme(darkTheme = true) {
+    fun Content(darkTheme: Boolean, typography: Typography) {
+        NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
             NextcloudAppBackground {
                 NextcloudMediaViewer(
                     media = listOf(tiffFile),
@@ -153,10 +160,11 @@ internal class NativeTiffMarketingCapture private constructor(
     companion object {
         fun forScenarioOrNull(
             scenario: MarketingCaptureScenario,
+            captureIdentity: String,
         ): NativeTiffMarketingCapture? = if (
             scenario == MarketingCaptureScenario.NativeTiffPreviewMobile
         ) {
-            NativeTiffMarketingCapture(loadRawCaptureFixture())
+            NativeTiffMarketingCapture(loadRawCaptureFixture(), captureIdentity)
         } else {
             null
         }
@@ -183,11 +191,6 @@ private const val TIFF_MEMORIES_RENDER_PATH =
     "/index.php/apps/memories/api/image/decodable/$FIXTURE_FILE_ID"
 private const val HIGH_DETAIL_CAPTURE_ZOOM = 2.5f
 
-private val fixtureSession = NextcloudSession(
-    serverUrl = "https://fixture.invalid",
-    loginName = FIXTURE_USER_ID,
-    appPassword = "synthetic-capture-password",
-)
 
 private val tiffFile = NextcloudFile(
     path = TIFF_PATH,

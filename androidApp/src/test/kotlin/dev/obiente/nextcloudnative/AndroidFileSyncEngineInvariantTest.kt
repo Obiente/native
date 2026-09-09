@@ -1,5 +1,18 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
+import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
+import dev.obiente.nextcloudnative.app.FileSyncDirection
+import dev.obiente.nextcloudnative.app.FileSyncOperation
+import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.RemoteSyncEntry
+import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.scanFileSyncPair
+import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
+import dev.obiente.nextcloudnative.app.releaseCancelledFileSyncOperation
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -8,43 +21,465 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
     @Test
+    fun verifiedContentHashWinsOverEarlierSafScanEvidence() {
+        val verified = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "same-revision",
+            size = 2L,
+            contentHash = "sha256:${"2".repeat(64)}",
+        )
+        val unverified = verified.copy(relativePath = "Other.bin", contentHash = null)
+        val scanHashes = mapOf(
+            verified.relativePath to "sha256:${"1".repeat(64)}",
+            unverified.relativePath to "sha256:${"3".repeat(64)}",
+        )
+
+        val reconciled = retainNewestAndroidFileSyncLocalContentHashes(
+            localEntries = listOf(verified, unverified),
+            scanContentHashes = scanHashes,
+            verifiedPaths = setOf(verified.relativePath),
+        )
+
+        assertEquals(verified.contentHash, reconciled[0].contentHash)
+        assertEquals(scanHashes.getValue(unverified.relativePath), reconciled[1].contentHash)
+    }
+
+    @Test
+    fun largeFileDirectoryReplacementKeepsTheDirectoryUntilProtectedPublication() {
+        val directory = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
+
+        assertTrue(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", 21L * 1024L * 1024L),
+                directory,
+            ),
+        )
+        assertTrue(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", size = null),
+                directory,
+            ),
+        )
+        assertFalse(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", 1L * 1024L * 1024L),
+                directory,
+            ),
+        )
+    }
+
+    @Test
+    fun workerCancellationIsNeverConvertedIntoFailedSyncWork() {
+        val cancellation = CancellationException("Worker stopped")
+
+        assertEquals(
+            cancellation,
+            assertFailsWith<CancellationException> {
+                rethrowAndroidFileSyncCancellation(cancellation)
+            },
+        )
+        rethrowAndroidFileSyncCancellation(IllegalStateException("ordinary operation failure"))
+    }
+
+    @Test
+    fun cancellationCancelsTheActiveTransportCall() {
+        var transportCancelled = false
+        val cancellation = AndroidFileSyncRunCancellation { true }
+        cancellation.setOnCancelAction { transportCancelled = true }
+
+        cancellation.cancel()
+
+        assertTrue(transportCancelled)
+        assertFailsWith<CancellationException> { cancellation.throwIfCancelled() }
+    }
+
+    @Test
+    fun cancelledWorkReturnsToReadyWithoutConsumingItsAttempt() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("large.bin", SyncEntryKind.File, "local-1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 1L,
+        )
+        val claim = claimNextFileSyncOperation(planned, pair.id, nowEpochMillis = 2L)
+        val workId = requireNotNull(claim.command).workId
+
+        val released = releaseCancelledFileSyncOperation(claim.state, pair.id, workId)
+            .pairs.single().workItems.single()
+
+        assertEquals(dev.obiente.nextcloudnative.app.FileSyncExecutionState.Ready, released.state)
+        assertEquals(0, released.attemptCount)
+        assertEquals(null, released.lastAttemptEpochMillis)
+    }
+
+    @Test
+    fun weakSafRevisionVerificationCompletesOneUnboundedGenerationWithoutDurableSlices() {
+        val candidate = FileSyncContentVerificationCandidate(
+            relativePath = "Archive/large.bin",
+            localRevision = "metadata-only-revision",
+            remoteEtag = "\"remote-generation\"",
+            expectedSizeBytes = Long.MAX_VALUE,
+        )
+        var observedMaximum = 0L
+
+        val result = verifyAndroidFileSyncGeneration(
+            candidate = candidate,
+            readLocal = { expectedBytes, maximumBytes ->
+                assertEquals(Long.MAX_VALUE, expectedBytes)
+                observedMaximum = maximumBytes
+                AndroidFileSyncContentHashRead("sha256:${"a".repeat(64)}", Long.MAX_VALUE)
+            },
+            verifyRemote = { hash, expectedBytes, maximumBytes ->
+                assertEquals("sha256:${"a".repeat(64)}", hash)
+                assertEquals(Long.MAX_VALUE, expectedBytes)
+                assertEquals(Long.MAX_VALUE, maximumBytes)
+                true
+            },
+        )
+
+        assertEquals(Long.MAX_VALUE, observedMaximum)
+        assertEquals(result.localContentHash, result.matchingContentHash)
+    }
+
+    @Test
+    fun downloadsStreamIntoTheProtectedLocalStageWithoutACacheDuplicate() {
+        val destination = ByteArrayOutputStream()
+        var localStage: ByteArrayOutputStream? = null
+        var remoteDestination: ByteArrayOutputStream? = null
+
+        streamAndroidFileSyncDownload(
+            declaredByteCount = 3L,
+            writeLocal = { write ->
+                localStage = destination
+                write(destination)
+            },
+            readRemote = { output, maximumBytes ->
+                assertEquals(3L, maximumBytes)
+                remoteDestination = output as ByteArrayOutputStream
+                output.write(byteArrayOf(1, 2, 3))
+            },
+        )
+
+        assertTrue(localStage === remoteDestination)
+        assertEquals(listOf<Byte>(1, 2, 3), destination.toByteArray().toList())
+    }
+
+    @Test
+    fun androidPlanningRetainsTheSnapshotCompatibleWorkLimit() {
+        assertEquals(10_000, ANDROID_FILE_SYNC_MAX_WORK_ITEMS)
+        assertEquals(1_000, ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE)
+        assertTrue(ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE in 1 until ANDROID_FILE_SYNC_MAX_WORK_ITEMS)
+    }
+
+    @Test
+    fun androidPlanningKeepsActionableWorkBeyondAFullSkippedPrefix() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(
+                direction = FileSyncDirection.DownloadOnly,
+                deviceLabel = "Phone",
+            ),
+        )
+        val localEntries = (0 until ANDROID_FILE_SYNC_MAX_WORK_ITEMS).map { index ->
+            val suffix = index.toString().padStart(5, '0')
+            LocalSyncEntry("Local/$suffix.jpg", SyncEntryKind.File, "local-$suffix")
+        }
+        val remoteOnly = RemoteSyncEntry("Remote/download.jpg", SyncEntryKind.File, "remote-download")
+
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries,
+            listOf(remoteOnly),
+            nowEpochMillis = 10L,
+            maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
+            reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+        ).pairs.single()
+
+        assertTrue(planned.workItems.any { it.operation is FileSyncOperation.Download })
+        assertTrue(
+            planned.workItems.count { it.operation is FileSyncOperation.Skipped } <=
+                ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+        )
+    }
+
+    @Test
     fun pairRemovalDoesNotPersistOrCancelWhenLedgerCleanupFails() = runBlocking {
         val events = mutableListOf<String>()
 
         assertFailsWith<IllegalStateException> {
             removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    true
+                },
+                cleanRemoteUploads = { events += "remote"; true },
                 cleanLedger = {
                     events += "clean"
                     error("ledger unavailable")
                 },
                 persistRemoval = { events += "persist" },
                 cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
             )
         }
 
-        assertEquals(listOf("clean"), events)
+        assertEquals(listOf("reconcile", "remote", "clean"), events)
     }
 
     @Test
-    fun pairRemovalPersistsBeforeCancellingItsSchedule() = runBlocking {
+    fun pairRemovalReconcilesBeforePersistingAndReleasingItsGrant() = runBlocking {
         val events = mutableListOf<String>()
 
-        removeConfiguredFileSyncPair(
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
+            cleanRemoteUploads = { events += "remote"; true },
             cleanLedger = { events += "clean" },
             persistRemoval = { events += "persist" },
             cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
         )
 
-        assertEquals(listOf("clean", "persist", "cancel"), events)
+        assertTrue(removed)
+        assertEquals(listOf("reconcile", "remote", "clean", "persist", "cancel", "release"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateAndGrantWhenLocalRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                false
+            },
+            cleanRemoteUploads = { events += "remote"; true },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateWhenRemoteRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
+            cleanRemoteUploads = {
+                events += "remote"
+                false
+            },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile", "remote"), events)
+    }
+
+    @Test
+    fun pairRemovalAllowsExpiredSafGrantWhenNoRecoveryIsPending() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = false,
+        ) { reconciled = true }
+
+        assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalDoesNotTraverseALargeGrantedTreeWithoutPendingRecovery() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = false,
+        ) {
+            reconciled = true
+            error("A tree without owned recovery rows must not be traversed")
+        }
+
+        assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRetainsExpiredSafGrantPairWhileRecoveryIsPending() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
+
+        assertFalse(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRecoveryContinuationTracksCoroutineJobCancellation() {
+        val job = Job()
+        val shouldContinue = androidFileSyncJobContinuation(job)
+
+        assertTrue(shouldContinue())
+        job.cancel()
+
+        assertFalse(shouldContinue())
+    }
+
+    @Test
+    fun pairRemovalStopsAfterAReconciliationThatCancelsItsJob() = runBlocking {
+        val events = mutableListOf<String>()
+        val removal = launch {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    currentCoroutineContext().cancel()
+                    true
+                },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalFinishesCleanupNonCancellablyAfterPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = {
+                    events += "persist"
+                    removal.cancel()
+                },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.start()
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
+    fun pairRemovalCannotBeCancelledBetweenLedgerCleanupAndPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = {
+                    events += "clean"
+                    removal.cancel()
+                },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.start()
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
+    fun pairRemovalReconcilesDownloadsWhenAnotherPairRetainsTheSafGrant() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
+
+        assertTrue(safeToRemove)
+        assertTrue(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRecoveryPropagatesCancellationBeforeAnyMutation() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    throw CancellationException("pair removal cancelled")
+                },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        assertEquals(listOf("reconcile"), events)
     }
 
     @Test
@@ -336,6 +771,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "restore-old-authority"
                     "account-old"
                 },
+                publishAccount = { _, accountId -> events += "publish-${accountId ?: "none"}" },
             )
         }
         loadThread.start()
@@ -345,6 +781,7 @@ class AndroidFileSyncEngineInvariantTest {
             guard.clearSession(
                 persist = { events += "clear-session" },
                 cancelAll = { events += "cancel-all" },
+                clearPublishedAccount = { events += "publish-none" },
             )
         }
         clearThread.start()
@@ -359,7 +796,9 @@ class AndroidFileSyncEngineInvariantTest {
             listOf(
                 "read-old-session",
                 "restore-old-authority",
+                "publish-account-old",
                 "clear-session",
+                "publish-none",
                 "cancel-all",
             ),
             events,
@@ -386,6 +825,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "restore-old-authority"
                     "account-old"
                 },
+                publishAccount = { _, accountId -> events += "publish-$accountId" },
             )
         }
         loadThread.start()
@@ -396,6 +836,7 @@ class AndroidFileSyncEngineInvariantTest {
                 replacementAccountId = "account-new",
                 persist = { events += "save-new-session" },
                 cancelAll = { events += "cancel-old-work" },
+                publishAccount = { accountId -> events += "publish-$accountId" },
             )
         }
         replacementThread.start()
@@ -410,7 +851,9 @@ class AndroidFileSyncEngineInvariantTest {
             listOf(
                 "read-old-session",
                 "restore-old-authority",
+                "publish-account-old",
                 "save-new-session",
+                "publish-account-new",
                 "cancel-old-work",
             ),
             events,

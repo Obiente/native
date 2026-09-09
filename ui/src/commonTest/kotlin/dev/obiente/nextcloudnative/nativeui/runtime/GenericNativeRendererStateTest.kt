@@ -33,6 +33,131 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun nativeMailKeepsSearchInsideItsWorkspace() {
+        val ready = NativeScreenState.Ready(
+            listOf(
+                NativeRecord(id = "1", values = emptyMap()),
+                NativeRecord(id = "2", values = emptyMap()),
+            ),
+        )
+
+        assertTrue(
+            genericCollectionSearchAvailable(
+                state = ready,
+                recordCount = 2,
+                surface = GenericNativeSurface.Mailbox,
+                nativeMailWorkspaceEligible = false,
+            ),
+        )
+        assertFalse(
+            genericCollectionSearchAvailable(
+                state = ready,
+                recordCount = 2,
+                surface = GenericNativeSurface.Mailbox,
+                nativeMailWorkspaceEligible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun dedicatedCollectionUsesTheSameFilteredRecordsAsItsSearchBar() {
+        val first = NativeRecord(id = "1", values = mapOf("name" to "Kitchen"))
+        val second = NativeRecord(id = "2", values = mapOf("name" to "Garden"))
+
+        val filtered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = true,
+            ),
+        )
+        val unfiltered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = false,
+            ),
+        )
+
+        assertEquals(listOf(second), filtered.records)
+        assertEquals(listOf(first, second), unfiltered.records)
+    }
+
+    @Test
+    fun enumSearchMatchesTheLabelsShownToUsers() {
+        val field = FieldSpec(
+            id = "repeat",
+            label = "Repeat",
+            kind = FieldKind.enumeration,
+            required = true,
+            readOnly = false,
+            enumValues = listOf("d:1", "w:1", "m:1"),
+            enumLabels = mapOf(
+                "d:1" to "Every day",
+                "w:1" to "Every week",
+                "m:1" to "Every month",
+            ),
+        )
+
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "week"))
+        assertEquals(listOf("d:1", "w:1", "m:1"), nativeEnumOptionsMatchingQuery(field, "every"))
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "w:1"))
+        assertEquals("Every week", nativeEnumOptionLabel(field, "w:1"))
+        assertEquals("Custom Value", nativeEnumOptionLabel(field, "custom-value"))
+    }
+
+    @Test
+    fun collectionSearchMatchesMeaningfulRecordContentAndIgnoresTechnicalFields() {
+        val resource = ResourceSpec(
+            id = "entries",
+            name = "Entries",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("id", FieldKind.integer),
+                field("title", FieldKind.string),
+                field("description", FieldKind.string),
+                field("categoryId", FieldKind.integer),
+                field("sortOrder", FieldKind.integer),
+            ),
+        )
+        val record = NativeRecord(
+            id = "server-record-91",
+            values = mapOf(
+                "id" to "91",
+                "title" to "Weekend groceries",
+                "description" to "Fresh fruit and bread",
+                "categoryId" to "742",
+                "sortOrder" to "1200",
+            ),
+            displayValues = mapOf("description" to "Fresh fruit and bread"),
+        )
+
+        assertTrue(nativeRecordMatchesCollectionQuery(resource, record, "weekend bread"))
+        assertTrue(nativeRecordMatchesCollectionQuery(resource, record, "FRUIT"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "742"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "1200"))
+        assertFalse(nativeRecordMatchesCollectionQuery(resource, record, "server-record-91"))
+    }
+
+    @Test
+    fun formHidesOptionalServerOrderingButKeepsRequiredOrderingInputs() {
+        val visible = nativeFormDisplayFields(
+            listOf(
+                field("title", FieldKind.string, required = true),
+                field("sortOrder", FieldKind.integer),
+                field("position", FieldKind.integer),
+                field("displayIndex", FieldKind.integer),
+                field("rank", FieldKind.integer, required = true),
+                field("quantity", FieldKind.integer),
+            ),
+        )
+
+        assertEquals(listOf("title", "rank", "quantity"), visible.map(FieldSpec::id))
+    }
+
+    @Test
     fun formColorOptionsProduceOrdinaryOpaqueArgbValues() {
         val colorField = FieldSpec(
             id = "color",
@@ -210,7 +335,7 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
-    fun `verified shape-only finance lists become insights after numeric fields are observed`() {
+    fun `verified budget category lists keep their category presentation when numeric fields are observed`() {
         val shapeOnly = view(NativeComponent.collectionList)
         val budgetCategories = ResourceSpec(
             id = "categories",
@@ -226,7 +351,7 @@ class GenericNativeRendererStateTest {
             NativeRecord("two", mapOf("budgetAmount" to "25", "budgetPeriod" to "weekly")),
         )
 
-        assertEquals(GenericNativeSurface.Insights, shapeOnly.genericSurface(budgetCategories, financeRecords))
+        assertEquals(GenericNativeSurface.List, shapeOnly.genericSurface(budgetCategories, financeRecords))
         assertEquals(
             GenericNativeSurface.List,
             shapeOnly.genericSurface(
@@ -742,6 +867,76 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun `categorical summaries count declared status values in schema order`() {
+        val resource = ResourceSpec(
+            id = "cards",
+            name = "Cards",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("title", FieldKind.string),
+                field("status", FieldKind.enumeration).copy(
+                    enumValues = listOf("planned", "in-progress", "complete"),
+                ),
+            ),
+        )
+        val records = listOf(
+            NativeRecord("one", mapOf("title" to "First", "status" to "complete")),
+            NativeRecord("two", mapOf("title" to "Second", "status" to "planned")),
+            NativeRecord("three", mapOf("title" to "Third", "status" to "complete")),
+            NativeRecord("four", mapOf("title" to "Fourth", "status" to "in-progress")),
+        )
+
+        val summary = requireNotNull(nativeCategoricalSummary(resource, records))
+
+        assertEquals("status", summary.dimension.id)
+        assertEquals(4, summary.recordCount)
+        assertEquals(
+            listOf("Planned" to 1.0, "In progress" to 1.0, "Complete" to 2.0),
+            summary.points.map { point -> point.label to point.value },
+        )
+    }
+
+    @Test
+    fun `categorical summaries reject arbitrary strings and high cardinality fields`() {
+        val resource = ResourceSpec(
+            id = "notes",
+            name = "Notes",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("title", FieldKind.string),
+                field("status", FieldKind.string),
+            ),
+        )
+        val records = (1..7).map { index ->
+            NativeRecord(index.toString(), mapOf("title" to "Note $index", "status" to "state-$index"))
+        }
+
+        assertNull(nativeCategoricalSummary(resource, records))
+    }
+
+    @Test
+    fun `categorical summaries retain missing values visibly`() {
+        val resource = ResourceSpec(
+            id = "tasks",
+            name = "Tasks",
+            confidence = Confidence.high,
+            fields = listOf(field("completed", FieldKind.boolean)),
+        )
+        val records = listOf(
+            NativeRecord("one", mapOf("completed" to "true")),
+            NativeRecord("two", mapOf("completed" to "false")),
+            NativeRecord("three", emptyMap()),
+        )
+
+        val summary = requireNotNull(nativeCategoricalSummary(resource, records))
+
+        assertEquals(
+            listOf("False" to 1.0, "Not set" to 1.0, "True" to 1.0),
+            summary.points.map { point -> point.label to point.value },
+        )
+    }
+
+    @Test
     fun `dataset insights reject unrecognized numeric metadata and timestamps`() {
         val resource = ResourceSpec(
             id = "houses",
@@ -952,6 +1147,66 @@ class GenericNativeRendererStateTest {
                 NativeRelationOption("collection-9", "Later", "Collections"),
             ),
             options,
+        )
+    }
+
+    @Test
+    fun contextualTypedChoicesRenderHiddenUserIdsWithoutADeclaredTopLevelResource() {
+        val chores = ResourceSpec(
+            id = "chores",
+            name = "Chores",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec(
+                    id = "assignee",
+                    label = "Assignee",
+                    kind = FieldKind.userReference,
+                    required = false,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(chores),
+        )
+        val context = NativeDatasetContext(
+            fieldChoices = mapOf(
+                "assignee" to listOf(
+                    NativeFieldChoice("sam", "Sam", "Team member"),
+                    NativeFieldChoice("alex", "Alex", "Team member"),
+                ),
+            ),
+        )
+
+        assertTrue(nativeRelationFieldRequiresChoice(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoicesLoaded(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoiceSourceHasRecords(chores.fields.single(), chores, schema, context))
+        assertNull(nativeRelationChoiceUnavailableReason(chores.fields.single(), chores, schema, context))
+        assertEquals(
+            listOf(
+                NativeRelationOption("alex", "Alex", "Team member"),
+                NativeRelationOption("sam", "Sam", "Team member"),
+            ),
+            nativeRelationOptions(chores.fields.single(), chores, schema, context),
+        )
+        assertEquals(
+            NativeRelationChoiceUnavailableReason.duplicateValue,
+            nativeRelationChoiceUnavailableReason(
+                chores.fields.single(),
+                chores,
+                schema,
+                context.copy(
+                    fieldChoices = mapOf(
+                        "assignee" to listOf(
+                            NativeFieldChoice("alex", "Alex"),
+                            NativeFieldChoice("alex", "Alex duplicate"),
+                        ),
+                    ),
+                ),
+            ),
         )
     }
 
@@ -1279,7 +1534,7 @@ class GenericNativeRendererStateTest {
         assertEquals("Milk", projection.records.first().values["dataByAlias.item"])
         assertEquals("2", projection.records.first().values["dataByAlias.quantity"])
         assertEquals(
-            listOf("dataByAlias.item", "dataByAlias.quantity", "id"),
+            listOf("dataByAlias.item", "dataByAlias.quantity"),
             nativeTableFields(projection.resource, projection.records).map { it.id },
         )
     }

@@ -7,9 +7,11 @@ const props = prerenderedProps ?? {
 
 if (!prerenderedProps && window.location.pathname !== "/") {
   const { docsContent } = await import("./generated/docs-content.js");
+  const { guidesContent } = await import("./generated/guides-content.js");
   const { news } = await import("./generated/news.js");
   const normalizedPath = `/${window.location.pathname.replace(/^\/|\/$/g, "")}/`;
   props.initialDoc = docsContent.find((doc) => doc.path === normalizedPath) ?? null;
+  props.initialGuide = guidesContent.find((guide) => guide.path === normalizedPath) ?? null;
   props.initialNews = news.find((post) => post.path === normalizedPath) ?? null;
 }
 

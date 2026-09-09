@@ -2,10 +2,13 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -23,26 +26,25 @@ import org.json.JSONObject
  */
 internal class DesktopDeckCardDraftStore(
     private val root: File = desktopDeckDraftDirectory(),
-    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(),
+    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(
+        legacySecretRequired = { desktopDeckLegacySecretRequired(root) },
+    ),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
+    private val deleteFile: (File) -> Boolean = ::deleteDeckDraftFile,
+    private val syncDirectory: (File) -> Unit = ::syncDeckDraftDirectory,
 ) {
     @Synchronized
     fun load(session: NextcloudSession, key: DeckCardDraftKey): PersistedDeckCardDraft? {
         val file = draftFile(session, key)
-        if (!file.exists()) return null
-        if (!file.isSafeRegularFile() || file.length() !in 1..MAX_ENVELOPE_BYTES) {
-            deleteInvalid(file)
+        val quarantine = quarantineFile(file)
+        if (quarantine.exists()) {
+            if (deleteDurably(file)) deleteDurably(quarantine)
             return null
         }
+        if (!file.exists()) return null
         val encryptionKey = keyProvider.encryptionKey()
-        return decode(file.readBytes(), file.name, encryptionKey)
-            ?.takeIf { it.draft.key == key }
-            ?.draft
-            ?: run {
-                deleteInvalid(file)
-                null
-            }
+        return readAuthenticated(file, encryptionKey, key).draft
     }
 
     @Synchronized
@@ -51,21 +53,65 @@ internal class DesktopDeckCardDraftStore(
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
         val file = draftFile(session, persisted.key)
         val encryptionKey = keyProvider.encryptionKey()
+        if (file.exists()) {
+            readAuthenticated(file, encryptionKey, persisted.key)
+        } else {
+            ensureCapacityForNewDraft(encryptionKey)
+        }
         val plaintext = encodePlaintext(persisted, updatedAtEpochMillis)
         require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "The Deck card draft is too large." }
         val envelope = encrypt(plaintext, file.name, encryptionKey)
         require(envelope.size.toLong() <= MAX_ENVELOPE_BYTES) { "The Deck card draft is too large." }
+        val verified = decode(envelope, file.name, encryptionKey)
+        check(verified.draft == persisted && verified.updatedAtEpochMillis == updatedAtEpochMillis) {
+            "The Deck card draft could not be verified."
+        }
         ensurePrivateDirectory()
+        clearQuarantineBeforeSave(file)
         publish(file, envelope)
         prune(encryptionKey)
     }
 
     @Synchronized
-    fun clear(session: NextcloudSession, key: DeckCardDraftKey) {
+    fun clear(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+        discardUnreadable: Boolean = false,
+    ) {
         val file = draftFile(session, key)
-        check(Files.deleteIfExists(file.toPath()) || !file.exists()) {
+        if (file.exists() && !discardUnreadable) {
+            val encryptionKey = keyProvider.encryptionKey()
+            readAuthenticated(file, encryptionKey, key)
+        }
+        check(!Files.isSymbolicLink(root.toPath())) {
+            "Desktop Deck draft storage must not be a symbolic link."
+        }
+        check(deleteDurably(file) && deleteDurably(quarantineFile(file))) {
             "The Deck card draft could not be cleared."
         }
+    }
+
+    @Synchronized
+    fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey) {
+        val file = draftFile(session, key)
+        val quarantine = quarantineFile(file)
+        ensurePrivateDirectory()
+        publish(quarantine, SUBMITTED_MARKER_BYTES)
+        if (deleteDurably(file)) deleteDurably(quarantine)
+    }
+
+    @Synchronized
+    fun discardAll() {
+        if (!root.exists()) return
+        check(root.isDirectory && !Files.isSymbolicLink(root.toPath())) {
+            "Desktop Deck draft storage cannot be reset safely."
+        }
+        val files = checkNotNull(root.listFiles()) {
+            "Desktop Deck draft storage cannot be inspected for reset."
+        }.filter { file ->
+            file.name.matches(DRAFT_FILE_PATTERN) || file.name.matches(SUBMITTED_FILE_PATTERN)
+        }
+        check(files.all(::deleteDurably)) { "Saved Deck card drafts could not be discarded." }
     }
 
     internal fun storageFileName(session: NextcloudSession, key: DeckCardDraftKey): String {
@@ -80,6 +126,19 @@ internal class DesktopDeckCardDraftStore(
 
     private fun draftFile(session: NextcloudSession, key: DeckCardDraftKey): File =
         File(root, storageFileName(session, key))
+
+    private fun quarantineFile(draftFile: File): File {
+        val digest = draftFile.name.removePrefix(FILE_PREFIX).removeSuffix(FILE_SUFFIX)
+        return File(root, "$SUBMITTED_FILE_PREFIX$digest$SUBMITTED_FILE_SUFFIX")
+    }
+
+    private fun clearQuarantineBeforeSave(draftFile: File) {
+        val quarantine = quarantineFile(draftFile)
+        if (!quarantine.exists()) return
+        check(deleteDurably(draftFile) && deleteDurably(quarantine)) {
+            "The submitted Deck card draft quarantine could not be cleared."
+        }
+    }
 
     private fun encodePlaintext(
         persisted: PersistedDeckCardDraft,
@@ -99,11 +158,34 @@ internal class DesktopDeckCardDraftStore(
         .toString()
         .encodeToByteArray()
 
+    private fun readAuthenticated(
+        file: File,
+        encryptionKey: ByteArray,
+        expectedKey: DeckCardDraftKey? = null,
+    ): StoredDeckCardDraft = try {
+        if (!file.isSafeRegularFile() || file.length() !in 1..MAX_ENVELOPE_BYTES) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft file is invalid."),
+            )
+        }
+        val stored = decode(file.readBytes(), file.name, encryptionKey)
+        if (expectedKey != null && stored.draft.key != expectedKey) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft resource identity does not match."),
+            )
+        }
+        stored
+    } catch (failure: DesktopDeckDraftRecoveryException) {
+        throw failure
+    } catch (failure: Exception) {
+        throw DesktopDeckDraftRecoveryException(failure)
+    }
+
     private fun decode(
         envelopeBytes: ByteArray,
         fileName: String,
         encryptionKey: ByteArray,
-    ): StoredDeckCardDraft? = runCatching {
+    ): StoredDeckCardDraft = try {
         require(encryptionKey.size == AES_KEY_BYTES) { "The Deck draft encryption key is invalid." }
         val envelope = JSONObject(envelopeBytes.decodeToString())
         require(envelope.getInt("version") == ENVELOPE_FORMAT_VERSION) {
@@ -152,7 +234,9 @@ internal class DesktopDeckCardDraftStore(
             ),
             updatedAtEpochMillis = updatedAtEpochMillis,
         )
-    }.getOrNull()
+    } catch (failure: Exception) {
+        throw DesktopDeckDraftRecoveryException(failure)
+    }
 
     private fun encrypt(
         plaintext: ByteArray,
@@ -180,28 +264,38 @@ internal class DesktopDeckCardDraftStore(
     private fun prune(encryptionKey: ByteArray) {
         val files = root.listFiles().orEmpty()
             .filter { it.name.matches(DRAFT_FILE_PATTERN) }
-        val malformed = linkedSetOf<File>()
         val entries = files.mapNotNull { file ->
-            val stored = if (
-                file.isSafeRegularFile() &&
-                file.length() in 1..MAX_ENVELOPE_BYTES
-            ) {
-                decode(file.readBytes(), file.name, encryptionKey)
-            } else {
+            val stored = try {
+                readAuthenticated(file, encryptionKey)
+            } catch (_: DesktopDeckDraftRecoveryException) {
+                // A keyring or filesystem failure can make valid ciphertext temporarily unreadable.
+                // Preserve it so a later app process can authenticate and recover the draft.
                 null
             }
-            if (stored == null) {
-                malformed += file
-                null
-            } else {
-                DeckCardDraftRetention.Entry(file.name, stored.updatedAtEpochMillis)
-            }
+            stored?.let { DeckCardDraftRetention.Entry(file.name, it.updatedAtEpochMillis) }
         }
         val namesToPrune = DeckCardDraftRetention.keysToPrune(
             entries = entries,
-            maximumEntries = DeckCardDraftRetention.MAX_ENTRIES,
+            maximumEntries = (DeckCardDraftRetention.MAX_ENTRIES - (files.size - entries.size))
+                .coerceAtLeast(0),
         )
-        (malformed + files.filter { it.name in namesToPrune }).forEach(::deleteInvalid)
+        files.filter { it.name in namesToPrune }.forEach(::deleteDraft)
+    }
+
+    private fun ensureCapacityForNewDraft(encryptionKey: ByteArray) {
+        val files = root.listFiles().orEmpty()
+            .filter { it.name.matches(DRAFT_FILE_PATTERN) }
+        val overflow = files.size + 1 - DeckCardDraftRetention.MAX_ENTRIES
+        if (overflow <= 0) return
+        val readableFiles = files.count { file ->
+            try {
+                readAuthenticated(file, encryptionKey)
+                true
+            } catch (_: DesktopDeckDraftRecoveryException) {
+                false
+            }
+        }
+        if (readableFiles < overflow) throw DeckCardDraftCapacityException()
     }
 
     private fun ensurePrivateDirectory() {
@@ -248,15 +342,23 @@ internal class DesktopDeckCardDraftStore(
                 file,
                 setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
             )
+            syncDirectory(root)
         } finally {
             temporary.delete()
         }
     }
 
-    private fun deleteInvalid(file: File) {
-        check(Files.deleteIfExists(file.toPath()) || !file.exists()) {
-            "An invalid Deck card draft could not be removed."
+    private fun deleteDraft(file: File) {
+        check(deleteDurably(file)) {
+            "An old Deck card draft could not be removed."
         }
+    }
+
+    private fun deleteDurably(file: File): Boolean {
+        val existed = Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+        val deleted = deleteFile(file)
+        if (deleted && existed) syncDirectory(root)
+        return deleted
     }
 
     private fun File.isSafeRegularFile(): Boolean =
@@ -277,6 +379,8 @@ internal class DesktopDeckCardDraftStore(
     internal companion object {
         const val FILE_PREFIX = "draft_"
         const val FILE_SUFFIX = ".json.enc"
+        const val SUBMITTED_FILE_PREFIX = "submitted_"
+        const val SUBMITTED_FILE_SUFFIX = ".marker"
         const val ENVELOPE_FORMAT_VERSION = 1
         const val PLAINTEXT_FORMAT_VERSION = 1
         const val AES_KEY_BYTES = 32
@@ -289,7 +393,33 @@ internal class DesktopDeckCardDraftStore(
         const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         const val AES_ALGORITHM = "AES"
         val DRAFT_FILE_PATTERN = Regex("^draft_[0-9a-f]{64}\\.json\\.enc$")
+        val SUBMITTED_FILE_PATTERN = Regex("^submitted_[0-9a-f]{64}\\.marker$")
+        val SUBMITTED_MARKER_BYTES = "confirmed\n".encodeToByteArray()
     }
+}
+
+private fun deleteDeckDraftFile(file: File): Boolean =
+    Files.deleteIfExists(file.toPath()) || !file.exists()
+
+private fun syncDeckDraftDirectory(directory: File) {
+    if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+        channel.force(true)
+    }
+}
+
+internal class DesktopDeckDraftRecoveryException(
+    cause: Throwable,
+) : IllegalStateException("The saved Deck card draft could not be restored safely.", cause)
+
+internal fun desktopDeckLegacySecretRequired(
+    root: File,
+    listFiles: (File) -> Array<File>? = File::listFiles,
+): Boolean {
+    if (!root.exists()) return false
+    if (!root.isDirectory) return true
+    val entries = listFiles(root) ?: return true
+    return entries.any { file -> file.name.matches(DesktopDeckCardDraftStore.DRAFT_FILE_PATTERN) }
 }
 
 internal fun interface DesktopDeckDraftKeyProvider {
@@ -299,6 +429,7 @@ internal fun interface DesktopDeckDraftKeyProvider {
 internal class PlatformDeckDraftKeyProvider(
     private val secretStore: DesktopSecretStore = defaultDesktopSecretStore(),
     private val random: SecureRandom = SecureRandom(),
+    private val legacySecretRequired: () -> Boolean = { true },
 ) : DesktopDeckDraftKeyProvider {
     @Volatile
     private var cached: ByteArray? = null
@@ -322,17 +453,43 @@ internal class PlatformDeckDraftKeyProvider(
             username = null,
             secret = encoded.encodeToByteArray(),
         )
-        return lookup() ?: generated
+        val persisted = lookup() ?: throw DesktopSecretStoreUnavailableException(
+            "The Deck draft encryption key could not be verified after saving.",
+        )
+        if (!MessageDigest.isEqual(generated, persisted)) {
+            throw DesktopSecretStoreUnavailableException(
+                "The Deck draft encryption key changed during secure storage verification.",
+            )
+        }
+        return generated
     }
 
     private fun lookup(): ByteArray? {
-        val encoded = secretStore.load(desktopDeckDraftSecretReference())
+        val stored = try {
+            secretStore.load(desktopDeckDraftSecretReference())
+        } catch (failure: NextcloudSessionLegacyMigrationUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
+        } catch (failure: DesktopSecretStoreUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
+        }
+        val encoded = stored
             ?.let { value -> value.copyOf(minOf(value.size, MAX_ENCODED_KEY_BYTES)) }
             ?.decodeToString()
             ?.trim()
-            ?: return null
-        if (encoded.isBlank()) return null
-        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
+            ?: return missingKey()
+        if (encoded.isBlank()) return missingKey()
+        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull() ?: missingKey()
+    }
+
+    private fun missingKey(): ByteArray? {
+        if (legacySecretRequired()) {
+            throw DeckCardDraftResetRequiredException(
+                "The Deck draft encryption key is missing while encrypted drafts still exist.",
+            )
+        }
+        return null
     }
 
     private companion object {
