@@ -44,6 +44,9 @@ internal class AndroidDeckCardDraftStore(
 
     fun save(session: NextcloudSession, persisted: PersistedDeckCardDraft): Unit =
         synchronized(STORAGE_LOCK) {
+            check(
+                migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), persisted.key),
+            ) { "The previous Deck card draft could not be retired before saving its replacement." }
             migrateLegacyEntries(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session))
             val storedKey = storageKey(session, persisted.key)
             clearQuarantineBeforeSave(storedKey)
@@ -105,16 +108,16 @@ internal class AndroidDeckCardDraftStore(
         legacyAccountIdentity: String,
         key: DeckCardDraftKey,
         decodedLegacy: StoredDeckCardDraft? = null,
-    ) {
+    ): Boolean {
         val legacyKey = legacyStorageKey(legacyAccountIdentity, key)
         val legacyMarker = quarantineKey(legacyKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX)
         val targetKey = storageKey(accountStorageKey, key)
         val targetMarker = quarantineKey(targetKey)
         val legacyEncrypted = storage.getString(legacyKey)
         if (legacyEncrypted == null) {
-            val markerValue = storage.entries()[legacyMarker] as? String ?: return
-            if (storage.putString(targetMarker, markerValue)) storage.remove(setOf(legacyMarker))
-            return
+            val markerValue = storage.entries()[legacyMarker] as? String ?: return true
+            if (!storage.putString(targetMarker, markerValue)) return false
+            return storage.remove(setOf(legacyMarker))
         }
         val legacy = decodedLegacy ?: decode(legacyEncrypted)
         if (
@@ -128,17 +131,17 @@ internal class AndroidDeckCardDraftStore(
         }
         val migrated = encode(accountStorageKey, targetKey, legacy.draft, legacy.updatedAtEpochMillis)
         val markerValue = storage.entries()[legacyMarker] as? String
-        if (markerValue != null && !storage.putString(targetMarker, markerValue)) return
+        if (markerValue != null && !storage.putString(targetMarker, markerValue)) return false
         val existingTarget = storage.getString(targetKey)
         if (existingTarget == null) {
-            if (!storage.putString(targetKey, migrated)) return
+            if (!storage.putString(targetKey, migrated)) return false
         } else {
             val existing = decode(existingTarget)
             requireStorageSlot(existing, targetKey)
             requireStorageOwner(existing, accountStorageKey)
             requireResource(existing, key)
         }
-        storage.remove(setOf(legacyKey, legacyMarker))
+        return storage.remove(setOf(legacyKey, legacyMarker))
     }
 
     private fun encode(
@@ -178,6 +181,21 @@ internal class AndroidDeckCardDraftStore(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean = false,
     ): Unit = synchronized(STORAGE_LOCK) {
+        if (discardUnreadable) {
+            val storedKey = storageKey(session, key)
+            val legacyKey = legacyStorageKey(NextcloudDocumentIds.accountKey(session), key)
+            check(
+                storage.remove(
+                    setOf(
+                        storedKey,
+                        quarantineKey(storedKey),
+                        legacyKey,
+                        quarantineKey(legacyKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX),
+                    ),
+                ),
+            ) { "The Deck card draft could not be cleared." }
+            return@synchronized
+        }
         migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
         val storedKey = storageKey(session, key)
         if (!discardUnreadable) {
@@ -195,12 +213,18 @@ internal class AndroidDeckCardDraftStore(
 
     fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey): Unit =
         synchronized(STORAGE_LOCK) {
-            migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
             val storedKey = storageKey(session, key)
+            val legacyKey = legacyStorageKey(NextcloudDocumentIds.accountKey(session), key)
+            val legacyMarker = quarantineKey(legacyKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX)
+            check(storage.putString(legacyMarker, QUARANTINE_MARKER)) {
+                "The submitted legacy Deck card draft could not be quarantined."
+            }
             check(storage.putString(quarantineKey(storedKey), QUARANTINE_MARKER)) {
                 "The submitted Deck card draft could not be quarantined."
             }
-            if (!storage.remove(setOf(storedKey, quarantineKey(storedKey)))) return@synchronized
+            if (!storage.remove(setOf(legacyKey, legacyMarker, storedKey, quarantineKey(storedKey)))) {
+                return@synchronized
+            }
         }
 
     fun discardAll(): Unit = synchronized(STORAGE_LOCK) {
