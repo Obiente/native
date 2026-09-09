@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -9,6 +10,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -154,6 +156,161 @@ class DynamicApiRequestCoalescerTest {
     }
 
     @Test
+    fun `displaced owner and waiter remain fenced after replacement finishes and account reopens`() = runBlocking {
+        assertDisplacedOwnerRemainsFenced(failLoad = false)
+    }
+
+    @Test
+    fun `displaced failed owner cannot retry old credentials after account reopens`() = runBlocking {
+        assertDisplacedOwnerRemainsFenced(failLoad = true)
+    }
+
+    private suspend fun assertDisplacedOwnerRemainsFenced(failLoad: Boolean) = supervisorScope {
+        val coalescer = DynamicApiRequestCoalescer<String>()
+        val finishOldRead = CompletableDeferred<Unit>()
+        val committed = mutableListOf<String>()
+        var oldCredentialLoads = 0
+        val owner = async(start = CoroutineStart.UNDISPATCHED) {
+            coalescer.execute("account-a", "GET items", load = {
+                oldCredentialLoads += 1
+                finishOldRead.await()
+                if (failLoad) error("retired credential transport failed")
+                "retired account data"
+            }, commit = committed::add)
+        }
+        val waiter = async(start = CoroutineStart.UNDISPATCHED) {
+            coalescer.execute("account-a", "GET items", load = { fail("must not retry retired waiter") })
+        }
+        coalescer.invalidateAccount("account-a") { committed.clear() }
+        assertEquals("replacement", coalescer.execute("account-a", "GET items", load = { "replacement" }))
+        assertEquals(2, coalescer.activeReadCount())
+
+        coalescer.fenceAccount("account-a") { committed.clear() }
+        coalescer.activateAccount("account-a")
+        assertEquals("new credentials", coalescer.execute("account-a", "GET items", load = { "new credentials" }))
+        finishOldRead.complete(Unit)
+
+        assertFailsWith<DynamicReadAccountFencedException> { owner.await() }
+        assertFailsWith<DynamicReadAccountFencedException> { waiter.await() }
+        assertEquals(1, oldCredentialLoads)
+        assertEquals(emptyList(), committed)
+        assertEquals(0, coalescer.activeReadCount())
+    }
+
+    @Test
+    fun `queued invalidated waiter stays fenced after its owner finishes and account reopens`() = runBlocking {
+        supervisorScope {
+            val coalescer = DynamicApiRequestCoalescer<String>()
+            val dispatcher = QueuedReadDispatcher()
+            val finishFirstLoad = CompletableDeferred<Unit>()
+            var ownerLoads = 0
+            var retiredWaiterLoads = 0
+            val owner = async(start = CoroutineStart.UNDISPATCHED) {
+                coalescer.execute("account-a", "GET items", load = {
+                    ownerLoads += 1
+                    if (ownerLoads == 1) finishFirstLoad.await()
+                    "owner-$ownerLoads"
+                })
+            }
+            val waiter = async(dispatcher, start = CoroutineStart.UNDISPATCHED) {
+                coalescer.execute("account-a", "GET items", load = {
+                    retiredWaiterLoads += 1
+                    "retired waiter credentials"
+                })
+            }
+            try {
+                assertEquals(2, coalescer.activeReadCount())
+                coalescer.invalidateRequest("account-a", "GET items") {}
+                finishFirstLoad.complete(Unit)
+                assertEquals("owner-2", owner.await())
+                assertEquals(1, coalescer.activeReadCount())
+                assertEquals(1, dispatcher.pendingCount)
+                assertEquals(0, coalescer.retainedRequestGenerationCount())
+
+                coalescer.fenceAccount("account-a") {}
+                coalescer.activateAccount("account-a")
+                dispatcher.runAll()
+
+                assertFailsWith<DynamicReadAccountFencedException> { waiter.await() }
+                assertEquals(0, retiredWaiterLoads)
+                assertEquals(0, coalescer.activeReadCount())
+                assertEquals("new credentials", coalescer.execute("account-a", "GET items", load = { "new credentials" }))
+            } finally {
+                owner.cancel()
+                waiter.cancel()
+                dispatcher.runAll()
+            }
+        }
+    }
+
+    @Test
+    fun `queued successful waiter cannot deliver retired data after account reopens`() = runBlocking {
+        supervisorScope {
+            val coalescer = DynamicApiRequestCoalescer<String>()
+            val dispatcher = QueuedReadDispatcher()
+            val finishLoad = CompletableDeferred<Unit>()
+            val owner = async(start = CoroutineStart.UNDISPATCHED) {
+                coalescer.execute("account-a", "GET items", load = {
+                    finishLoad.await()
+                    "retired account data"
+                })
+            }
+            val waiter = async(dispatcher, start = CoroutineStart.UNDISPATCHED) {
+                coalescer.execute("account-a", "GET items", load = { fail("must not reload retired waiter") })
+            }
+            try {
+                finishLoad.complete(Unit)
+                assertEquals("retired account data", owner.await())
+                assertEquals(1, coalescer.activeReadCount())
+                assertEquals(1, dispatcher.pendingCount)
+
+                coalescer.fenceAccount("account-a") {}
+                coalescer.activateAccount("account-a")
+                dispatcher.runAll()
+
+                assertFailsWith<DynamicReadAccountFencedException> { waiter.await() }
+                assertEquals(0, coalescer.activeReadCount())
+                assertEquals("new credentials", coalescer.execute("account-a", "GET items", load = { "new credentials" }))
+            } finally {
+                owner.cancel()
+                waiter.cancel()
+                dispatcher.runAll()
+            }
+        }
+    }
+
+    @Test
+    fun `displaced cancellation retires only its own owner and preserves another account`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<String>()
+        val otherRelease = CompletableDeferred<Unit>()
+        val cancelled = launch(start = CoroutineStart.UNDISPATCHED) {
+            coalescer.execute("account-a", "GET items", load = { awaitCancellation() })
+        }
+        coalescer.invalidateAccount("account-a") {}
+        assertEquals("replacement", coalescer.execute("account-a", "GET items", load = { "replacement" }))
+        val other = async(start = CoroutineStart.UNDISPATCHED) {
+            coalescer.execute("account-b", "GET items", load = { otherRelease.await(); "other" })
+        }
+        coalescer.fenceAccount("account-a") {}
+        cancelled.cancelAndJoin()
+        assertEquals(1, coalescer.activeReadCount())
+        otherRelease.complete(Unit)
+        assertEquals("other", other.await())
+        assertEquals(0, coalescer.activeReadCount())
+    }
+
+    @Test
+    fun `failed commit retires its active owner`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<String>()
+        assertFailsWith<IllegalStateException> {
+            coalescer.execute("account-a", "GET items", load = { "loaded" }, commit = { error("cache failed") })
+        }
+        assertEquals(0, coalescer.activeReadCount())
+        assertEquals("fresh", coalescer.execute("account-a", "GET items", load = { "fresh" }))
+        assertEquals(0, coalescer.activeReadCount())
+    }
+
+    @Test
     fun `cancelled owner remains cancelled and releases its in flight entry`() = runBlocking {
         val coalescer = DynamicApiRequestCoalescer<String>()
         var loads = 0
@@ -274,5 +431,18 @@ class DynamicApiRequestCoalescerTest {
         }
 
         assertEquals(0, coalescer.retainedRequestGenerationCount())
+    }
+
+    private class QueuedReadDispatcher : CoroutineDispatcher() {
+        private val pending = ArrayDeque<Runnable>()
+        val pendingCount: Int get() = pending.size
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            pending.addLast(block)
+        }
+
+        fun runAll() {
+            while (pending.isNotEmpty()) pending.removeFirst().run()
+        }
     }
 }
