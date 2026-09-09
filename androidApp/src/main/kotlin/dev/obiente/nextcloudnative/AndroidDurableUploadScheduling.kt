@@ -147,7 +147,7 @@ internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(j
 }
 
 internal suspend fun monitorQueuedDurableUploadScheduling(
-    recover: suspend () -> Unit,
+    recover: suspend () -> Boolean,
     awaitWorkStopsRunning: suspend (UUID) -> Unit = {},
     wait: suspend (Long) -> Unit,
     workerFailureFollowUpDelayMillis: Long =
@@ -158,11 +158,11 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
         ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
 ) {
     require(workerFailureFollowUpDelayMillis > 0L)
-    recover()
     var immediatePending = false
     val workIdsToAwait = linkedMapOf<String, UUID>()
     val followUpDeadlinesMillis = mutableMapOf<String, Long>()
     val stoppedWorkIds = mutableMapOf<String, UUID>()
+    var recoveryRetryDeadlineMillis: Long? = null
 
     fun addRequests(batch: AndroidDurableUploadSchedulingRecoveryBatch) {
         immediatePending = immediatePending || batch.immediate
@@ -175,12 +175,36 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
         }
     }
 
+    suspend fun recoverOnce() {
+        recoveryRetryDeadlineMillis = if (recover()) {
+            null
+        } else {
+            monotonicTimeMillis() + workerFailureFollowUpDelayMillis
+        }
+    }
+
+    recoverOnce()
+
     while (true) {
-        if (!immediatePending && workIdsToAwait.isEmpty()) addRequests(recoverySignal.await())
+        if (!immediatePending && workIdsToAwait.isEmpty()) {
+            val retryDeadline = recoveryRetryDeadlineMillis
+            if (retryDeadline == null) {
+                addRequests(recoverySignal.await())
+            } else {
+                val retryDelay = (retryDeadline - monotonicTimeMillis()).coerceAtLeast(0L)
+                val step = recoverySignal.runUntilRequested { if (retryDelay > 0L) wait(retryDelay) }
+                if (step is AndroidDurableUploadSchedulingRecoveryStep.Interrupted) {
+                    addRequests(step.batch)
+                    continue
+                }
+                recoverOnce()
+                continue
+            }
+        }
         if (!immediatePending && workIdsToAwait.isEmpty()) continue
         if (immediatePending) {
             immediatePending = false
-            recover()
+            recoverOnce()
             continue
         }
 
@@ -201,12 +225,23 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
         val remainingDelayMillis =
             (followUpDeadlinesMillis.getValue(jobId) - monotonicTimeMillis()).coerceAtLeast(0L)
         if (remainingDelayMillis > 0L) {
+            val recoveryRetryDelayMillis = recoveryRetryDeadlineMillis
+                ?.let { deadline -> (deadline - monotonicTimeMillis()).coerceAtLeast(0L) }
+            if (recoveryRetryDelayMillis == 0L) {
+                recoverOnce()
+                continue
+            }
+            val recoveryRetryFirst =
+                recoveryRetryDelayMillis != null && recoveryRetryDelayMillis < remainingDelayMillis
             when (
                 val step = recoverySignal.runUntilRequested {
-                    wait(remainingDelayMillis)
+                    wait(if (recoveryRetryFirst) requireNotNull(recoveryRetryDelayMillis) else remainingDelayMillis)
                 }
             ) {
-                AndroidDurableUploadSchedulingRecoveryStep.Completed -> Unit
+                AndroidDurableUploadSchedulingRecoveryStep.Completed -> if (recoveryRetryFirst) {
+                    recoverOnce()
+                    continue
+                }
                 is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
                     addRequests(step.batch)
                     continue
@@ -223,7 +258,7 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
         stoppedWorkIds.remove(jobId)
         workIdsToAwait.remove(jobId, workId)
         recoverySignal.retireBackoff(jobId, workId)
-        recover()
+        recoverOnce()
     }
 }
 
