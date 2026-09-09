@@ -564,6 +564,17 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun futureCredentialFreeRegistryDefersDurableUploadAccountResolution() {
+        val futureRegistry = """{"version":99,"accounts":[]}"""
+        val healthyAccount = firstSession().accountRecord()
+        val healthyRegistry = encodeNextcloudAccountRegistry(NextcloudAccountRegistry.Empty.upsertAndSelect(healthyAccount))
+        assertFalse(androidCredentialFreeRegistryAllowsAccountResolution(futureRegistry))
+        assertTrue(androidCredentialFreeRegistryAllowsAccountResolution(healthyRegistry))
+        assertTrue(androidCredentialFreeRegistryAllowsAccountResolution("{not-json"))
+        assertTrue(androidCredentialFreeRegistryAllowsAccountResolution(null))
+    }
+
+    @Test
     fun credentialSlotReadDecryptsOnlyTheRequestedAccount() {
         val first = firstSession()
         val second = secondSession()

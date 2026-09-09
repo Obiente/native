@@ -9,6 +9,7 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,6 +19,20 @@ import kotlin.test.assertTrue
 import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
+    @Test
+    fun `worker cancellation does not become a terminal upload outcome`() = runBlocking {
+        assertFailsWith<CancellationException> {
+            captureDurableUploadRequestOutcome<Unit> {
+                throw CancellationException("worker stopped")
+            }
+        }
+        assertTrue(
+            captureDurableUploadRequestOutcome<Unit> {
+                throw IOException("transport failed")
+            }.isFailure,
+        )
+    }
+
     @Test
     fun `account cleanup removes a row only after its source capability is released`() = runBlocking {
         val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
@@ -63,17 +78,26 @@ class AndroidDurableMultipartUploadPolicyTest {
 
     @Test
     fun `encrypted queue read and decryption failures preserve recoverable jobs`() {
-        listOf("read", "decrypt").forEach { failureMode ->
+        listOf("read", "read-type", "decrypt").forEach { failureMode ->
             val storage = FakeDurableUploadEncryptedStorage()
             val cipher = FakeDurableUploadCipher()
             val recoverable = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
             AndroidDurableMultipartUploadStore(storage, cipher).add(recoverable)
             val encryptedBeforeFailure = storage.value
             if (failureMode == "read") storage.readFailure = IOException("synthetic read failure")
+            if (failureMode == "read-type") storage.readFailure = ClassCastException("synthetic stored type")
             if (failureMode == "decrypt") cipher.decryptFailure = IOException("synthetic decrypt failure")
 
             val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
-            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            assertEquals(
+                if (failureMode == "read") {
+                    DurableUploadQueueRecoveryDisposition.Retry
+                } else {
+                    DurableUploadQueueRecoveryDisposition.Quarantine
+                },
+                failure.disposition,
+            )
             assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
                 restarted.add(fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43))
             }
@@ -315,7 +339,7 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `retained background account is deferred without reading its credential`() {
+    fun `inactive retained account defers when its credential is temporarily unavailable`() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -323,25 +347,17 @@ class AndroidDurableMultipartUploadPolicyTest {
         )
         val accountId = NextcloudDocumentIds.accountKey(retainedSession)
 
-        assertEquals(
-            DurableUploadAccountMismatchOutcome.DeferAccountActivation,
-            durableUploadAccountMismatchOutcome(
-                accountId,
-                AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
-            ),
+        val resolution = resolveDurableUploadSession(
+            expectedAccountId = accountId,
+            registry = DurableUploadAccountRegistry.Available(listOf(retainedSession.accountRecord())),
+            loadSession = { null },
         )
+
+        assertEquals(DurableUploadAccountResolution.DeferAccountActivation, resolution)
     }
 
     @Test
-    fun `unreadable account registry defers queued upload recovery`() {
-        assertEquals(
-            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
-            durableUploadAccountMismatchOutcome(ACCOUNT_A, AndroidAccountRetentionSnapshot.Unavailable),
-        )
-    }
-
-    @Test
-    fun `active account with unreadable credential keeps its upload scheduled`() {
+    fun `active retained account retries when its credential is temporarily unavailable`() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -349,43 +365,31 @@ class AndroidDurableMultipartUploadPolicyTest {
         )
         val accountId = NextcloudDocumentIds.accountKey(retainedSession)
 
-        assertEquals(
-            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
-            durableUploadAccountMismatchOutcome(
-                accountId,
-                AndroidAccountRetentionSnapshot.Available(
-                    accounts = listOf(retainedSession.accountRecord()),
-                    activeAccountId = retainedSession.accountId,
-                ),
+        val resolution = resolveDurableUploadSession(
+            expectedAccountId = accountId,
+            registry = DurableUploadAccountRegistry.Available(
+                accounts = listOf(retainedSession.accountRecord()),
+                activeAccountId = retainedSession.accountId,
             ),
+            loadSession = { null },
         )
+
+        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolution)
     }
 
     @Test
-    fun `valid account registry without expected account makes upload unavailable`() {
-        val retainedSession = NextcloudSession(
-            serverUrl = "https://cloud.example.test/nextcloud",
-            loginName = "alice",
-            appPassword = "fixture-password",
-        )
-        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+    fun `removed account terminally fails and releases its queued upload exactly once`() {
+        val events = mutableListOf<String>()
 
-        assertEquals(
-            DurableUploadAccountMismatchOutcome.AccountUnavailable,
-            durableUploadAccountMismatchOutcome(
-                accountId,
-                AndroidAccountRetentionSnapshot.Available(emptyList()),
-            ),
+        val result = failQueuedDurableUploadForUnavailableAccount(
+            transitionToFailed = { events += "fail" },
+            releaseSelection = { events += "release" },
+            recordFailure = { events += "diagnose" },
+            failureResult = "worker-failure",
         )
-        assertEquals(
-            DurableUploadAccountMismatchOutcome.AccountUnavailable,
-            durableUploadAccountMismatchOutcome(
-                accountId,
-                AndroidAccountRetentionSnapshot.Available(
-                    listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
-                ),
-            ),
-        )
+
+        assertEquals("worker-failure", result)
+        assertEquals(listOf("fail", "release", "diagnose"), events)
     }
 
     @Test
@@ -403,6 +407,307 @@ class AndroidDurableMultipartUploadPolicyTest {
             listOf(queuedForA),
             queuedDurableUploadsForAccount(listOf(queuedForA, queuedForB, completedForA), ACCOUNT_A),
         )
+    }
+
+    @Test
+    fun `background upload resolves the queued account instead of the active account`() {
+        val queuedSession = fixtureSession("alice")
+        val activeSession = fixtureSession("bob")
+        val loadedAccountIds = mutableListOf<String>()
+
+        val resolved = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            registry = DurableUploadAccountRegistry.Available(
+                listOf(activeSession.accountRecord(), queuedSession.accountRecord()),
+            ),
+            loadSession = { accountId ->
+                loadedAccountIds += accountId.storageKey
+                when (accountId) {
+                    queuedSession.accountId -> queuedSession
+                    activeSession.accountId -> activeSession
+                    else -> null
+                }
+            },
+        )
+
+        assertEquals(DurableUploadAccountResolution.Available(queuedSession), resolved)
+        assertEquals(listOf(queuedSession.accountId.storageKey), loadedAccountIds)
+    }
+
+    @Test
+    fun `background upload recovers missing account metadata before rejecting the account`() {
+        val queuedSession = fixtureSession("alice")
+        var registry: DurableUploadAccountRegistry = DurableUploadAccountRegistry.Unavailable
+        val events = mutableListOf<String>()
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            readRegistry = {
+                events += "registry"
+                registry
+            },
+            recoverRegistry = {
+                events += "recover"
+                registry = DurableUploadAccountRegistry.Available(listOf(queuedSession.accountRecord()))
+                null
+            },
+            loadSession = {
+                events += "load:${it.storageKey}"
+                queuedSession
+            },
+        )
+
+        assertEquals(DurableUploadAccountResolution.Available(queuedSession), resolved)
+        assertEquals(
+            listOf("registry", "recover", "registry", "load:${queuedSession.accountId.storageKey}"),
+            events,
+        )
+    }
+
+    @Test
+    fun `background upload defers when the credential-free registry remains unreadable`() {
+        val queuedSession = fixtureSession("alice")
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            readRegistry = { DurableUploadAccountRegistry.Unavailable },
+            recoverRegistry = { null },
+            loadSession = { error("an unreadable registry must not select a credential") },
+        )
+
+        assertEquals(DurableUploadAccountResolution.RegistryUnavailable, resolved)
+    }
+
+    @Test
+    fun `background upload retains a matching recovered session when registry repair cannot persist`() {
+        val queuedSession = fixtureSession("alice")
+        var accountReads = 0
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            readRegistry = {
+                accountReads += 1
+                DurableUploadAccountRegistry.Unavailable
+            },
+            recoverRegistry = { queuedSession },
+            loadSession = { error("the uncommitted registry must not hide the recovered session") },
+        )
+
+        assertEquals(DurableUploadAccountResolution.Available(queuedSession), resolved)
+        assertEquals(1, accountReads)
+    }
+
+    @Test
+    fun `background upload skips registry recovery when account metadata is healthy`() {
+        val queuedSession = fixtureSession("alice")
+        var registryRecoveryAttempted = false
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            readRegistry = {
+                DurableUploadAccountRegistry.Available(listOf(queuedSession.accountRecord()))
+            },
+            recoverRegistry = {
+                registryRecoveryAttempted = true
+                null
+            },
+            loadSession = { queuedSession },
+        )
+
+        assertEquals(DurableUploadAccountResolution.Available(queuedSession), resolved)
+        assertFalse(registryRecoveryAttempted)
+    }
+
+    @Test
+    fun `startup reconciliation schedules every queued upload across accounts`() = runBlocking {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val completed = fixtureJob(
+            index = 3,
+            account = ACCOUNT_A,
+            cardId = 44,
+            state = DurableUploadState.Completed,
+        )
+        val attempted = mutableListOf<String>()
+
+        val allScheduled = reconcileQueuedDurableUploads(listOf(first, completed, second)) { job ->
+            attempted += job.id
+            if (job == first) throw IOException("Synthetic scheduler rejection")
+        }
+
+        assertEquals(listOf(first.id, second.id), attempted)
+        assertFalse(allScheduled)
+    }
+
+    @Test
+    fun `startup scheduling retries an observed asynchronous failure`() = runBlocking {
+        var attempts = 0
+        val waits = mutableListOf<Long>()
+
+        val recovered = retryQueuedDurableUploadScheduling(
+            retryDelaysMillis = listOf(10L, 20L),
+            reconcile = {
+                attempts += 1
+                attempts >= 2
+            },
+            wait = { delayMillis -> waits += delayMillis },
+        )
+
+        assertTrue(recovered)
+        assertEquals(2, attempts)
+        assertEquals(listOf(10L), waits)
+    }
+
+    @Test
+    fun `exhausted startup scheduling is reported before the next recovery cycle`() {
+        var attempts = 0
+        var diagnostics = 0
+        var recoveryCycles = 0
+        val waits = mutableListOf<Long>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                keepRetryingQueuedDurableUploadScheduling(
+                    retryDelaysMillis = listOf(10L),
+                    followUpDelayMillis = 20L,
+                    reconcile = {
+                        attempts += 1
+                        false
+                    },
+                    wait = { delayMillis ->
+                        waits += delayMillis
+                        if (delayMillis == 20L && ++recoveryCycles == 2) {
+                            throw CancellationException("stop after two cycles")
+                        }
+                    },
+                    recordRecoveryFailure = { diagnostics += 1 },
+                )
+            }
+        }
+
+        assertEquals(4, attempts)
+        assertEquals(1, diagnostics)
+        assertEquals(listOf(10L, 20L, 10L, 20L), waits)
+    }
+
+    @Test
+    fun `successful startup reconciliation stops background polling`() = runBlocking {
+        var attempts = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            reconcile = {
+                attempts += 1
+                true
+            },
+            wait = { error("a successful reconciliation must not schedule another poll") },
+        )
+
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun `permanently unreadable queue is quarantined without background polling`() = runBlocking {
+        var attempts = 0
+        var diagnostics = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            reconcile = {
+                attempts += 1
+                throw AndroidDurableMultipartUploadRecoveryException(
+                    IOException("synthetic invalid ciphertext"),
+                    DurableUploadQueueRecoveryDisposition.Quarantine,
+                )
+            },
+            wait = { error("a quarantined queue must not schedule another poll") },
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
+
+        assertEquals(1, attempts)
+        assertEquals(1, diagnostics)
+    }
+
+    @Test
+    fun `startup recovery contains uploader construction failures`() = runBlocking {
+        val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            constructAndReconcileQueuedDurableUploads {
+                throw IOException("synthetic keystore failure")
+            }
+        }
+        val malformedPreference = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            constructAndReconcileQueuedDurableUploads {
+                throw ClassCastException("synthetic non-string account registry")
+            }
+        }
+
+        assertTrue(failure.cause is IOException)
+        assertTrue(malformedPreference.cause is ClassCastException)
+    }
+
+    @Test
+    fun `startup recovery contains an unreadable queue and records one bounded diagnostic`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        runAndroidDurableUploadStartupRecovery(
+            recover = {
+                events += "recover"
+                throw AndroidDurableMultipartUploadRecoveryException(IOException("sensitive storage detail"))
+            },
+            recordRecoveryFailure = { events += "diagnose" },
+        )
+
+        assertEquals(listOf("recover", "diagnose"), events)
+    }
+
+    @Test
+    fun `startup recovery preserves cancellation`() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                runAndroidDurableUploadStartupRecovery(
+                    recover = { throw CancellationException("application stopped") },
+                    recordRecoveryFailure = { events += "diagnose" },
+                )
+            }
+        }
+
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun `background upload never substitutes another account on the same server path`() {
+        val queuedSession = fixtureSession("alice")
+        val otherSession = fixtureSession("bob")
+        var credentialRead = false
+
+        val missing = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            registry = DurableUploadAccountRegistry.Available(listOf(otherSession.accountRecord())),
+            loadSession = {
+                credentialRead = true
+                otherSession
+            },
+        )
+
+        assertEquals(DurableUploadAccountResolution.AccountUnavailable, missing)
+        assertFalse(credentialRead)
+    }
+
+    @Test
+    fun `background upload rejects a credential that does not match its registry owner`() {
+        val queuedSession = fixtureSession("alice")
+        val otherSession = fixtureSession("bob")
+
+        val resolved = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            registry = DurableUploadAccountRegistry.Available(
+                accounts = listOf(queuedSession.accountRecord(), otherSession.accountRecord()),
+                activeAccountId = queuedSession.accountId,
+            ),
+            loadSession = { otherSession },
+        )
+
+        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolved)
     }
 
     private fun fixtureJob(
@@ -443,6 +748,12 @@ class AndroidDurableMultipartUploadPolicyTest {
 
     private fun selectionId(index: Int): String = "selection-${index.toString().padStart(16, '0')}"
 
+    private fun fixtureSession(loginName: String): NextcloudSession = NextcloudSession(
+        serverUrl = "https://cloud.example.test/nextcloud",
+        loginName = loginName,
+        appPassword = "fixture-password",
+    )
+
     private companion object {
         const val ACCOUNT_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         const val ACCOUNT_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -452,7 +763,7 @@ class AndroidDurableMultipartUploadPolicyTest {
 private class FakeDurableUploadEncryptedStorage(
     var value: String? = null,
 ) : AndroidDurableMultipartUploadEncryptedStorage {
-    var readFailure: IOException? = null
+    var readFailure: Exception? = null
     var failWrites: Boolean = false
 
     override fun read(): String? {
