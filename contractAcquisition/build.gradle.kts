@@ -15,7 +15,7 @@ kotlin {
 dependencies {
     implementation(libs.okhttp)
     implementation(libs.org.json)
-    implementation("org.snakeyaml:snakeyaml-engine:3.0.1")
+    implementation("org.snakeyaml:snakeyaml-engine:3.1.1")
     testImplementation(kotlin("test-junit5"))
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
 }
