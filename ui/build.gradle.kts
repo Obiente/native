@@ -229,7 +229,7 @@ kotlin {
         }
         val desktopTest by getting
         desktopTest.dependencies {
-            implementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+            implementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
         }
     }
 }
