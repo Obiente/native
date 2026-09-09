@@ -50,8 +50,10 @@ internal class DesktopDeckCardDraftStore(
 
     @Synchronized
     fun save(session: NextcloudSession, persisted: PersistedDeckCardDraft) {
+        check(migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), persisted.key)) {
+            "The previous Deck card draft could not be retired before saving its replacement."
+        }
         migrateLegacyEntries(session)
-        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), persisted.key)
         val updatedAtEpochMillis = nowEpochMillis()
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
         val file = draftFile(session, persisted.key)
@@ -87,6 +89,18 @@ internal class DesktopDeckCardDraftStore(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean = false,
     ) {
+        if (discardUnreadable) {
+            check(!Files.isSymbolicLink(root.toPath())) {
+                "Desktop Deck draft storage must not be a symbolic link."
+            }
+            val legacy = File(root, legacyStorageFileName(desktopFileCacheAccountId(session), key))
+            val file = draftFile(session, key)
+            check(
+                deleteDurably(legacy) && deleteDurably(legacyQuarantineFile(legacy)) &&
+                    deleteDurably(file) && deleteDurably(quarantineFile(file)),
+            ) { "The Deck card draft could not be cleared." }
+            return
+        }
         migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), key)
         val file = draftFile(session, key)
         if (file.exists() && !discardUnreadable) {
@@ -241,17 +255,16 @@ internal class DesktopDeckCardDraftStore(
         key: DeckCardDraftKey,
         decodedLegacy: StoredDeckCardDraft? = null,
         providedEncryptionKey: ByteArray? = null,
-    ) {
+    ): Boolean {
         val legacyFile = File(root, legacyStorageFileName(legacyAccountIdentity, key))
         val legacyMarker = legacyQuarantineFile(legacyFile)
         val target = File(root, storageFileName(accountStorageKey, key))
         val targetMarker = quarantineFile(target)
         if (!legacyFile.exists()) {
-            if (!legacyMarker.exists()) return
+            if (!legacyMarker.exists()) return true
             ensurePrivateDirectory()
             publish(targetMarker, SUBMITTED_MARKER_BYTES)
-            deleteDurably(legacyMarker)
-            return
+            return deleteDurably(legacyMarker)
         }
         val encryptionKey = providedEncryptionKey ?: keyProvider.encryptionKey()
         val legacy = decodedLegacy ?: readAuthenticated(legacyFile, encryptionKey, key)
@@ -277,8 +290,7 @@ internal class DesktopDeckCardDraftStore(
         } else {
             publish(target, envelope)
         }
-        deleteDurably(legacyFile)
-        deleteDurably(legacyMarker)
+        return deleteDurably(legacyFile) && deleteDurably(legacyMarker)
     }
 
     private fun clearQuarantineBeforeSave(draftFile: File) {
