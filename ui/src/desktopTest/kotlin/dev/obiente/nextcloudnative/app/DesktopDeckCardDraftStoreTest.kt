@@ -241,13 +241,123 @@ class DesktopDeckCardDraftStoreTest {
 
             failing.migrateLegacyEntries(session)
             val updated = original.copy(draft = original.draft.copy(title = "Newer"))
-            failing.save(session, updated)
-
-            assertEquals(updated, failing.load(session, original.key))
+            assertFailsWith<IllegalStateException> { failing.save(session, updated) }
+            assertEquals(original, failing.load(session, original.key))
             assertTrue(legacy.exists())
+
+            val restarted = DesktopDeckCardDraftStore(root, fixedKey(key))
+            restarted.save(session, updated)
+
+            assertEquals(updated, restarted.load(session, original.key))
+            assertTrue(!legacy.exists())
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `legacy submitted markers must retire before replacement survives restart`() {
+        listOf("marker-only", "draft-deletion", "marker-deletion").forEach { failureMode ->
+            withStore { root, key, store ->
+                val session = session()
+                val original = persisted(title = "Submitted")
+                val replacement = persisted(title = "Fresh replacement")
+                val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), original.key))
+                val marker = root.resolve(
+                    legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker",
+                )
+                if (failureMode != "marker-only") writeLegacyDraft(legacy, key, original)
+                marker.writeBytes(DesktopDeckCardDraftStore.SUBMITTED_MARKER_BYTES)
+                val failedTarget = if (failureMode == "draft-deletion") legacy else marker
+                val failing = DesktopDeckCardDraftStore(
+                    root = root,
+                    keyProvider = fixedKey(key),
+                    deleteFile = { file ->
+                        if (file == failedTarget) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+                    },
+                )
+
+                assertNull(failing.load(session, original.key))
+                assertTrue(marker.exists())
+                assertFailsWith<IllegalStateException> { failing.save(session, replacement) }
+                assertTrue(marker.exists())
+
+                val restarted = DesktopDeckCardDraftStore(root, fixedKey(key))
+                restarted.save(session, replacement)
+
+                assertTrue(!legacy.exists())
+                assertTrue(!marker.exists())
+                repeat(2) {
+                    assertEquals(replacement, DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, original.key))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `submitted legacy draft cannot return after migration deletion fails`() = withStore { root, key, store ->
+        val session = session()
+        val original = persisted(title = "Submitted legacy draft")
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), original.key))
+        val marker = root.resolve(legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker")
+        writeLegacyDraft(legacy, key, original)
+        val originalEnvelope = legacy.readText()
+        val failing = DesktopDeckCardDraftStore(
+            root = root,
+            keyProvider = fixedKey(key),
+            deleteFile = { file ->
+                if (file == legacy) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+            },
+        )
+
+        assertEquals(original, failing.load(session, original.key))
+        failing.quarantineAfterSubmit(session, original.key)
+
+        assertEquals(originalEnvelope, legacy.readText())
+        assertTrue(marker.exists())
+        assertNull(failing.load(session, original.key))
+        assertNull(DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, original.key))
+        assertTrue(root.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `explicit legacy discard bypasses keyring and preserves unrelated recovery`() = withStore { root, key, store ->
+        val session = session()
+        val draftKey = persisted().key
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), draftKey))
+        val target = root.resolve(store.storageFileName(session, draftKey))
+        val marker = root.resolve(legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker")
+        val targetMarker = root.resolve(
+            target.name.replaceFirst("draft_v2_", "submitted_v2_").removeSuffix(".json.enc") + ".marker",
+        )
+        val unrelated = listOf(
+            store.legacyStorageFileName(desktopFileCacheAccountId(session(login = "bob")), draftKey),
+            store.legacyStorageFileName(desktopFileCacheAccountId(session), persisted(cardId = 91L).key),
+            store.storageFileName(session(login = "bob"), draftKey),
+        ).associateWith { "unrelated-unreadable" }
+        unrelated.forEach { (name, content) -> root.resolve(name).writeText(content) }
+        listOf(legacy, target, marker, targetMarker).forEach { it.writeText("unreadable") }
+        var failDeletion = true
+        val unavailable = DesktopDeckCardDraftStore(
+            root = root,
+            keyProvider = DesktopDeckDraftKeyProvider { error("No keyring access during explicit discard") },
+            deleteFile = { file ->
+                if (file == legacy && failDeletion) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+            },
+        )
+
+        assertFailsWith<DesktopDeckDraftRecoveryException> { store.load(session, draftKey) }
+        assertFailsWith<DesktopDeckDraftRecoveryException> { store.clear(session, draftKey) }
+        assertFailsWith<IllegalStateException> { unavailable.clear(session, draftKey, discardUnreadable = true) }
+        assertEquals("unreadable", legacy.readText())
+        failDeletion = false
+
+        unavailable.clear(session, draftKey, discardUnreadable = true)
+
+        assertEquals(unrelated, root.listFiles().orEmpty().associate { it.name to it.readText() })
+        val replacement = persisted(title = "Replacement")
+        store.save(session, replacement)
+        assertEquals(replacement, DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, draftKey))
     }
 
     @Test
