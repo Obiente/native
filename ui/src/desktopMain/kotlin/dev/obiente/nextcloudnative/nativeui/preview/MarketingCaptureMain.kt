@@ -19,7 +19,10 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.security.MessageDigest
-import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.add
@@ -36,6 +39,17 @@ private val captureManifestJson = Json {
 }
 
 fun main(arguments: Array<String>) {
+    Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { captureDispatcher ->
+        runBlocking(captureDispatcher) {
+            captureMarketingScreenshots(arguments, coroutineContext)
+        }
+    }
+}
+
+private suspend fun captureMarketingScreenshots(
+    arguments: Array<String>,
+    captureContext: CoroutineContext,
+) {
     require(arguments.isEmpty()) {
         "The capture registry owns every output path and accepts no arguments."
     }
@@ -85,6 +99,7 @@ fun main(arguments: Array<String>) {
                 variant = variant,
                 assets = assets,
                 typography = typography,
+                captureContext = captureContext,
             )
         }
         writeCaptureManifest(
@@ -128,7 +143,7 @@ fun main(arguments: Array<String>) {
     }
 }
 
-private fun capture(
+private suspend fun capture(
     output: Path,
     width: Int,
     height: Int,
@@ -136,6 +151,7 @@ private fun capture(
     variant: MarketingCaptureVariant,
     assets: MarketingCaptureAssets,
     typography: Typography,
+    captureContext: CoroutineContext,
 ) {
     Files.createDirectories(output.parent)
     val scenario = variant.scenario
@@ -148,7 +164,7 @@ private fun capture(
         width = width,
         height = height,
         density = density,
-        coroutineContext = Dispatchers.Unconfined,
+        coroutineContext = captureContext,
     ) {
         when {
             rawMediaCapture != null -> rawMediaCapture.Content(variant.theme.darkTheme, typography)
@@ -170,6 +186,7 @@ private fun capture(
         repeat(warmUpFrames) {
             scene.render().close()
         }
+        settleShellSwitcherCapture(scenario, scene)
         val rendered = scene.render()
         try {
             rawMediaCapture?.verify()

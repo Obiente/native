@@ -13,6 +13,7 @@ import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
@@ -20,8 +21,12 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -62,43 +67,6 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-
-internal fun talkMessageHistoryPath(
-    token: String,
-    olderCursor: Long?,
-    limit: Int,
-): String {
-    require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-        "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-    }
-    require(olderCursor == null || olderCursor >= 0L) {
-        "Talk history cursor must not be negative."
-    }
-    val encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8).replace("+", "%20")
-    return "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-        "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-        "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1"
-}
-
-internal const val NOTES_LIST_RELATIVE_PATH = "/index.php/apps/notes/api/v1/notes?exclude=content"
-
-internal fun <T> invokeOnSwingEventThread(action: () -> T): T {
-    if (SwingUtilities.isEventDispatchThread()) return action()
-    val outcome = AtomicReference<Result<T>>()
-    SwingUtilities.invokeAndWait { outcome.set(runCatching(action)) }
-    return outcome.get().getOrThrow()
-}
-
-internal fun notesDetailRelativePath(noteId: Long): String {
-    require(noteId >= 0L) { "The note ID is invalid." }
-    return "/index.php/apps/notes/api/v1/notes/$noteId"
-}
-
-internal fun notesConditionalHeaders(expectedEtag: String?): Map<String, String> =
-    expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-
-internal fun resolvedNoteEtag(responseEtag: String?, documentEtag: String?): String? =
-    responseEtag?.takeIf(String::isNotBlank) ?: documentEtag?.takeIf(String::isNotBlank)
 
 internal const val DIRECT_EDITING_INFO_RELATIVE_PATH =
     "/ocs/v2.php/apps/files/api/v1/directEditing?format=json"
@@ -387,7 +355,7 @@ internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
     require(
         Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
             !Files.isSymbolicLink(cacheRoot),
-    ) { "The selected location contains an invalid Nextcloud Native cache folder." }
+    ) { "The selected location contains an invalid nati.ve cache folder." }
 }
 
 internal fun hasInvalidDesktopVirtualFileCacheRoot(parent: Path): Boolean {
@@ -756,8 +724,8 @@ internal fun parseDesktopDocumentTemplates(
 internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
     require(request.path.isSafeDocumentLookupPath()) { "The document path is unsafe." }
     require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
+    require(request.editorId.isSafeDocumentCapabilityId()) {
+        "The document editor ID is invalid."
     }
     require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
     return listOf(
@@ -769,11 +737,6 @@ internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest)
             URLEncoder.encode(value, StandardCharsets.UTF_8)
     }
 }
-
-private val TRUSTED_DIRECT_EDITING_EDITOR_IDS = setOf(
-    OFFICE_DIRECT_EDITOR_ID,
-    WHITEBOARD_DIRECT_EDITOR_ID,
-)
 
 internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: String): String {
     require(candidate.isNotBlank() && candidate.none(Char::isISOControl)) {
@@ -794,17 +757,16 @@ internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: Stri
     ) {
         "Nextcloud returned a cross-origin direct-editing handoff."
     }
-    val routePrefix = server.rawPath.trimEnd('/') + "/index.php/apps/files/directEditing/"
+    val basePath = server.rawPath.trimEnd('/')
+    val routePrefix = listOf(
+        "$basePath/apps/files/directEditing/",
+        "$basePath/index.php/apps/files/directEditing/",
+    ).firstOrNull { prefix -> resolved.rawPath.startsWith(prefix) }.orEmpty()
     val rawPath = resolved.rawPath
     val token = rawPath.removePrefix(routePrefix)
     require(
-        rawPath.startsWith(routePrefix) &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
+        routePrefix.isNotEmpty() &&
+            isValidOfficeDirectEditingToken(token),
     ) {
         "Nextcloud returned an unexpected direct-editing handoff route."
     }
@@ -831,6 +793,27 @@ private fun desktopContractCacheDirectory(name: String): File {
         ?: File(System.getProperty("user.home"), ".cache")
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
+
+internal fun desktopPendingDynamicMutationDirectory(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    environment: Map<String, String> = System.getenv(),
+    userHome: File = File(System.getProperty("user.home")),
+): File = when {
+    osName.startsWith("Windows", ignoreCase = true) -> {
+        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, "AppData/Local")
+        File(localAppData, "Nextcloud Native/State/Pending Mutations")
+    }
+    osName.startsWith("Mac", ignoreCase = true) ->
+        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
+    else -> {
+        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, ".local/state")
+        File(stateRoot, "nextcloud-native/pending-mutations-v1")
+    }
+}.absoluteFile
 
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
@@ -863,6 +846,80 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
             destination.toPath(),
             StandardCopyOption.REPLACE_EXISTING,
         )
+    }
+}
+
+private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+    PosixFilePermission.OWNER_EXECUTE,
+)
+private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+)
+
+internal fun ensurePrivatePendingMutationDirectory(directory: File) {
+    Files.createDirectories(directory.toPath())
+    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
+}
+
+internal fun setPrivatePendingMutationFilePermissions(file: File) {
+    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
+}
+
+private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
+    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+        Files.setPosixFilePermissions(path, permissions)
+    }
+}
+
+private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
+    val directoryPath = directory.toPath()
+    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
+        Files.createTempFile(
+            directoryPath,
+            "$targetName-",
+            ".part",
+            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
+        )
+    } else {
+        Files.createTempFile(directoryPath, "$targetName-", ".part")
+    }
+}
+
+internal fun writePrivatePendingMutationFile(
+    directory: File,
+    target: File,
+    bytes: ByteArray,
+) {
+    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
+        "The pending mutation target must be inside its private directory."
+    }
+    ensurePrivatePendingMutationDirectory(directory)
+    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
+    try {
+        FileOutputStream(temporary.toFile()).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        try {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        setPrivatePendingMutationFilePermissions(target)
+    } finally {
+        Files.deleteIfExists(temporary)
     }
 }
 
@@ -917,6 +974,12 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
+internal class DesktopSessionPublicationGuard {
+    private val monitor = Any()
+
+    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
+}
+
 internal fun closeVirtualFileProviderForReplacement(
     provider: AutoCloseable?,
     detach: () -> Unit,
@@ -930,6 +993,8 @@ class DesktopNextcloudServices(
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
     providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
+    mutationRecoveryRoot: File = defaultDesktopDurableMutationRecoveryRoot(),
+    supportIntakeRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
     private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
@@ -942,14 +1007,27 @@ class DesktopNextcloudServices(
         requireNotNull(resolvedSupportDiagnosticsRoot),
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
+    private val durableMutationRecovery = DesktopDurableMutationRecoveryStore(mutationRecoveryRoot)
+    private val ownsTemporarySupportIntakeRoot = supportIntakeRoot == null && resolvedSupportDiagnosticsRoot == null
+    private val resolvedSupportIntakeRoot = supportIntakeRoot
+        ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
+        ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
+    private val sessionPublicationGuard = DesktopSessionPublicationGuard()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
     private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val supportIntake = JvmSupportIntake(
+        diagnostics = supportDiagnostics,
+        temporaryRoot = resolvedSupportIntakeRoot,
+        environment = desktopSupportDiagnosticsEnvironment(),
+        client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
+    )
     private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
+    private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -962,6 +1040,7 @@ class DesktopNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
     private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
+    private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
@@ -1603,15 +1682,15 @@ class DesktopNextcloudServices(
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
-                    val virtualFolderSession = loadSession()
-                    runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
-                        .onFailure { failure ->
-                            publishFileSyncRunFailure(
-                                virtualFolderSession?.let(::desktopFileCacheAccountId),
-                                DesktopFileSyncRunSource.Background,
-                                failure,
-                            )
-                        }
+                    reconcileDesktopBackgroundSession(
+                        ::loadSession, ::reconcileConfiguredVirtualFolders,
+                    ) { session, failure ->
+                        publishFileSyncRunFailure(
+                            session?.let(::desktopFileCacheAccountId),
+                            DesktopFileSyncRunSource.Background,
+                            failure,
+                        )
+                    }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
             }
@@ -1620,8 +1699,11 @@ class DesktopNextcloudServices(
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
-            supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
-            maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            supportedActions = setOf(
+                ExternalFileHandoffAction.OpenWith,
+                ExternalFileHandoffAction.Share,
+            ),
+            maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
         ),
     )
 
@@ -1639,7 +1721,7 @@ class DesktopNextcloudServices(
             (isLinuxDesktop() || isWindowsDesktop()) &&
             preferences.getBoolean(providerPreferenceKey, false) &&
             synchronized(virtualFileProviderLock) {
-                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId
+                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId && windowsCloudFilesAutomaticActivationAllowed(isWindowsDesktop(), windowsCloudFilesFailure)
             }
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
@@ -1751,7 +1833,7 @@ class DesktopNextcloudServices(
             providerActive = active,
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
-                windows -> "Nextcloud Native in File Explorer"
+                windows -> "nati.ve in File Explorer"
                 else -> null
             },
             providerLocationConfiguration = if (linux) {
@@ -2144,7 +2226,7 @@ class DesktopNextcloudServices(
         withContext(Dispatchers.IO) {
             val selectedFile = invokeOnSwingEventThread {
                 val chooser = JFileChooser().apply {
-                    dialogTitle = "Choose where Nextcloud Native appears"
+                    dialogTitle = "Choose where nati.ve appears"
                     fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
                     isAcceptAllFileFilterUsed = false
                     initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let {
@@ -2536,7 +2618,9 @@ class DesktopNextcloudServices(
         // Closing its backend while holding the same lock reverses that order and deadlocks.
         runCatching { providersToClose.first?.unmount() }
         runCatching { providersToClose.second?.close() }
+        supportIntake.close()
         supportDiagnostics.close()
+        if (ownsTemporarySupportIntakeRoot) resolvedSupportIntakeRoot.deleteRecursively()
         if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }
 
@@ -2628,6 +2712,7 @@ class DesktopNextcloudServices(
                         userId,
                         pairId,
                         onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
                         resetExhaustedFailures = true,
                     )
@@ -2680,6 +2765,7 @@ class DesktopNextcloudServices(
                         choice,
                         onProgress = { event -> publishFileSyncProgress(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                     )
                 } finally {
                     runCatching {
@@ -2695,6 +2781,52 @@ class DesktopNextcloudServices(
         }
     }
 
+    override suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
+                    )
+                }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Resolving ${resolutions.size} sync conflicts",
+                )
+                try {
+                    fileSyncEngine.resolveConflictsAndRun(
+                        session = session,
+                        userId = userId,
+                        pairId = pairId,
+                        resolutions = resolutions,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
+            }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve-batch", diagnosticFields, result)
+        }
+    }
+
     override suspend fun removeFileSyncPair(
         session: NextcloudSession,
         userId: String,
@@ -2705,7 +2837,7 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
-            fileSyncEngine.removePair(session, pairId)
+            fileSyncEngine.removePair(session, userId, pairId)
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
@@ -2815,6 +2947,7 @@ class DesktopNextcloudServices(
                 )
                 try {
                     var failures = 0
+                    var stopped = 0
                     var waitingForConditions = 0
                     initial.pairs.forEach { pair ->
                         if (isFileSyncPaused()) return@forEach
@@ -2831,6 +2964,7 @@ class DesktopNextcloudServices(
                                 userId,
                                 pair.id,
                                 onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                                onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                                 shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
                                 resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
                             )
@@ -2841,21 +2975,17 @@ class DesktopNextcloudServices(
                             return@forEach
                         }
                         if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                        if (result is FileSyncCenterActionResult.Stopped) stopped += 1
                         if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
                             waitingForConditions += 1
                         }
                     }
-                    if (failures == 0) {
-                        FileSyncCenterActionResult.Completed(
-                            if (waitingForConditions == 0) {
-                                "All desktop sync folders were checked."
-                            } else {
-                                "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
-                            },
-                        )
-                    } else {
-                        FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
-                    }
+                    desktopFileSyncBatchResult(
+                        failures,
+                        stopped,
+                        waitingForConditions,
+                        isFileSyncPaused(),
+                    )
                 } finally {
                     runCatching {
                         publishFileSyncTraySnapshot(
@@ -2938,7 +3068,7 @@ class DesktopNextcloudServices(
             failedCount = failed,
             message = when {
                 paused -> "Sync is paused"
-                conflicts + failed > 0 -> "Open Nextcloud Native to review sync problems"
+                conflicts + failed > 0 -> "Open nati.ve to review sync problems"
                 else -> null
             },
             accountLabel = loadSession()?.loginName,
@@ -2949,33 +3079,8 @@ class DesktopNextcloudServices(
     }
 
     private fun publishFileSyncProgress(accountId: String, event: DesktopFileSyncProgressEvent) {
-        if (event.stage == DesktopFileSyncProgressStage.Failed) {
-            supportDiagnostics.recordForAccountIdentity(
-                accountId,
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Sync,
-                    operation = "sync.item",
-                    outcome = "failed",
-                    message = event.failureMessage,
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("pair", event.pairId, SupportDiagnosticValuePrivacy.Identifier),
-                        SupportDiagnosticFieldDraft(
-                            "work",
-                            event.workId.toString(),
-                            SupportDiagnosticValuePrivacy.Identifier,
-                        ),
-                        SupportDiagnosticFieldDraft(
-                            "relative_path",
-                            event.relativePath,
-                            SupportDiagnosticValuePrivacy.RemotePath,
-                        ),
-                        SupportDiagnosticFieldDraft("operation_type", event.operation::class.simpleName.orEmpty()),
-                        SupportDiagnosticFieldDraft("completed_operations", event.completedOperations.toString()),
-                        SupportDiagnosticFieldDraft("total_operations", event.totalOperations.toString()),
-                    ),
-                ),
-            )
+        event.toSupportDiagnosticEventDraft()?.let { diagnostic ->
+            supportDiagnostics.recordForAccountIdentity(accountId, diagnostic)
         }
         val current = mutableFileSyncTraySnapshot.value
         val phase = when (event.stage) {
@@ -3015,6 +3120,10 @@ class DesktopNextcloudServices(
         )
     }
 
+    private fun publishFileSyncRunDiagnostic(accountId: String, event: DesktopFileSyncRunDiagnosticEvent) {
+        supportDiagnostics.recordForAccountIdentity(accountId, event.toSupportDiagnosticEventDraft())
+    }
+
     private fun publishFileSyncRunFailure(
         accountId: String?,
         source: DesktopFileSyncRunSource,
@@ -3051,26 +3160,15 @@ class DesktopNextcloudServices(
         fields: List<SupportDiagnosticFieldDraft>,
         result: FileSyncCenterActionResult,
     ) {
+        val diagnostic = result.toFileSyncActionDiagnosticSummary()
         supportDiagnostics.recordForAccountIdentity(
             accountId,
             SupportDiagnosticEventDraft(
-                severity = if (result is FileSyncCenterActionResult.Completed) {
-                    SupportDiagnosticSeverity.Info
-                } else {
-                    SupportDiagnosticSeverity.Warning
-                },
+                severity = diagnostic.severity,
                 component = SupportDiagnosticComponent.Sync,
                 operation = operation,
-                outcome = when (result) {
-                    is FileSyncCenterActionResult.Completed -> "completed"
-                    is FileSyncCenterActionResult.Rejected -> "rejected"
-                    is FileSyncCenterActionResult.Unsupported -> "unsupported"
-                },
-                message = when (result) {
-                    is FileSyncCenterActionResult.Completed -> null
-                    is FileSyncCenterActionResult.Rejected -> result.reason
-                    is FileSyncCenterActionResult.Unsupported -> result.reason
-                },
+                outcome = diagnostic.outcome,
+                message = diagnostic.message,
                 fields = fields,
             ),
         )
@@ -3186,7 +3284,7 @@ class DesktopNextcloudServices(
                 cached.readBytes().takeIf { publicContentSha256(it) == image.sha256 }
                     ?.let { return@withContext it }
             }
-            projectContentHttpClient.newCall(Request.Builder().url(image.url).get().build())
+            projectContentHttpClient.newCall(Request.Builder().url(canonicalProjectNewsImageRequestUrl(image.url)).get().build())
                 .execute().use { response ->
                     check(response.isSuccessful) {
                         "Project news image request failed (HTTP ${response.code})."
@@ -3302,7 +3400,7 @@ class DesktopNextcloudServices(
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
                         severity = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened,
+                            AppUpdateInstallResult.ConfirmationOpened, AppUpdateInstallResult.Restarting,
                             AppUpdateInstallResult.Installed,
                             -> SupportDiagnosticSeverity.Info
                             is AppUpdateInstallResult.Cancelled,
@@ -3312,20 +3410,19 @@ class DesktopNextcloudServices(
                         },
                         component = SupportDiagnosticComponent.Updates,
                         operation = "updates.install",
-                        outcome = when (result) {
-                            AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
-                            AppUpdateInstallResult.Installed -> "installed"
-                            is AppUpdateInstallResult.Cancelled -> "cancelled"
-                            is AppUpdateInstallResult.PermissionRequired -> "permission-required"
-                            is AppUpdateInstallResult.Rejected -> "rejected"
-                        },
+                        outcome = result.diagnosticOutcome(),
                         durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
                         message = when (result) {
                             is AppUpdateInstallResult.PermissionRequired -> result.message
                             is AppUpdateInstallResult.Rejected -> result.message
                             else -> null
                         },
-                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        fields = buildList {
+                            add(SupportDiagnosticFieldDraft("release", release.versionName))
+                            if (result is AppUpdateInstallResult.Rejected) {
+                                add(SupportDiagnosticFieldDraft("reason", result.diagnosticCode))
+                            }
+                        },
                     ),
                 )
                 result
@@ -3356,7 +3453,38 @@ class DesktopNextcloudServices(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
         reproductionSteps = reproductionSteps,
-        featureState = listOf(
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override fun supportDiagnosticsSubmissionStates() = supportIntake.states()
+
+    override suspend fun submitSupportDiagnostics(reproductionSteps: String) = supportIntake.submit(
+        reproductionSteps = reproductionSteps,
+        channel = appUpdateSupport().channel.name.lowercase(),
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
+
+    override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    override suspend fun deleteSubmittedSupportDiagnosticsReport(
+        recordId: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(recordId)
+
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        supportIntake.refreshCompletedReports()
+
+    override suspend fun sendSubmittedSupportDiagnosticsMessage(
+        recordId: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(recordId, message)
+    override suspend fun acknowledgeSubmittedSupportDiagnosticsReplyDelivery(recordId: String) = supportIntake.acknowledgeCompletedReportReplyDelivery(recordId)
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean =
+        supportIntake.markCompletedReportRead(recordId)
+
+    private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
+        listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
             SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
             SupportDiagnosticFieldDraft("start_on_login_supported", supportsStartOnLogin.toString()),
@@ -3366,8 +3494,7 @@ class DesktopNextcloudServices(
                 (windowsCloudFilesProvider != null || linuxVirtualFileSystem != null).toString(),
             ),
             SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
-        ),
-    )
+        )
 
     override suspend fun clearSupportDiagnostics(): Boolean = withContext(Dispatchers.IO) {
         supportDiagnostics.clear()
@@ -3385,6 +3512,25 @@ class DesktopNextcloudServices(
 
     override fun saveLastOpenedAppId(appId: String) {
         preferences.put(KEY_LAST_OPENED_APP, appId)
+    }
+
+    override suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
+
+    override suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
+
+    override suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMutationRecovery.clear(accountScope, kind, expectedEncoded)
     }
 
     override suspend fun loadCachedDynamicAppDiscovery(
@@ -3428,6 +3574,7 @@ class DesktopNextcloudServices(
                 StandardCopyOption.REPLACE_EXISTING,
             )
         }
+        Unit
     }
 
     private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
@@ -3435,48 +3582,142 @@ class DesktopNextcloudServices(
         return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
     }
 
+    override suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = withContext(Dispatchers.IO) {
+        val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
+            ?: return@withContext null
+        if (!target.exists()) return@withContext null
+        if (pendingDynamicMutationDirectory.isDirectory) {
+            ensurePrivatePendingMutationDirectory(pendingDynamicMutationDirectory)
+        }
+        check(
+            Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong(),
+        ) {
+            "The pending mutation marker is unreadable."
+        }
+        setPrivatePendingMutationFilePermissions(target)
+        val encoded = runCatching { target.readText() }.getOrElse { failure ->
+            throw IllegalStateException("The pending mutation marker could not be read.", failure)
+        }
+        requireNotNull(decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)) {
+            "The pending mutation marker is invalid."
+        }
+    }
+
+    override suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = requireNotNull(
+            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+        ) { "The pending dynamic mutation is invalid." }
+        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+            "The pending dynamic mutation identity is invalid."
+        }
+        writePrivatePendingMutationFile(
+            directory = pendingDynamicMutationDirectory,
+            target = target,
+            bytes = encoded.encodeToByteArray(),
+        )
+        Unit
+    }
+
+    override suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = withContext(Dispatchers.IO) {
+        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        }
+        Unit
+    }
+
+    private fun pendingDynamicMutationFile(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): File? {
+        if (!appId.isSafePendingMutationId() || !actionId.isSafePendingMutationId()) return null
+        if (!targetRecordId.isSafePendingMutationId()) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$actionId\n$targetRecordId".encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return File(
+            pendingDynamicMutationDirectory,
+            "${desktopFileCacheAccountId(session)}-$appId-$digest.json",
+        )
+    }
+
     override fun loadSession(): NextcloudSession? {
-        val server = preferences.get(KEY_SERVER, null) ?: return null
-        val login = preferences.get(KEY_LOGIN, null) ?: return null
-        val password = secretStore.load(desktopSessionSecretReference(server, login))
-            ?.decodeToString()
-            ?.takeIf(String::isNotBlank)
-            ?: return null
-        listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-        return NextcloudSession(server, login, password).also { session ->
-            supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
+        return sessionPublicationGuard.serialize {
+            val server = preferences.get(KEY_SERVER, null)
+            val login = preferences.get(KEY_LOGIN, null)
+            if (server == null || login == null) {
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+                return@serialize null
+            }
+            val password = secretStore.load(desktopSessionSecretReference(server, login))
+                ?.decodeToString()
+                ?.takeIf(String::isNotBlank)
+            if (password == null) {
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+                return@serialize null
+            }
+            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+            NextcloudSession(server, login, password).also { session ->
+                val accountIdentity = desktopFileCacheAccountId(session)
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            }
         }
     }
 
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        listOf(session.serverUrl, session.loginName, session.appPassword)
-            .forEach(supportDiagnostics::registerPrivateValue)
-        try {
-            secretStore.save(
-                reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-                username = session.loginName,
-                secret = session.appPassword.encodeToByteArray(),
-            )
-        } catch (failure: Throwable) {
-            recordSupportDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Authentication,
-                    operation = "credentials.save",
-                    outcome = "failed",
-                    code = if (failure is DesktopSecretStoreUnavailableException) {
-                        "DESKTOP_SECRET_STORE_UNAVAILABLE"
-                    } else {
-                        "DESKTOP_SECRET_STORE_FAILED"
-                    },
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
+        sessionPublicationGuard.serialize {
+            listOf(session.serverUrl, session.loginName, session.appPassword)
+                .forEach(supportDiagnostics::registerPrivateValue)
+            try {
+                secretStore.save(
+                    reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+                    username = session.loginName,
+                    secret = session.appPassword.encodeToByteArray(),
+                )
+            } catch (failure: Throwable) {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "credentials.save",
+                        outcome = "failed",
+                        code = if (failure is DesktopSecretStoreUnavailableException) {
+                            "DESKTOP_SECRET_STORE_UNAVAILABLE"
+                        } else {
+                            "DESKTOP_SECRET_STORE_FAILED"
+                        },
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+            preferences.put(KEY_SERVER, session.serverUrl)
+            preferences.put(KEY_LOGIN, session.loginName)
+            val accountIdentity = desktopFileCacheAccountId(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
         }
-        preferences.put(KEY_SERVER, session.serverUrl)
-        preferences.put(KEY_LOGIN, session.loginName)
-        supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -3489,7 +3730,7 @@ class DesktopNextcloudServices(
         }
         var cleared = false
         try {
-            val accountId = loadSession()?.let(::desktopFileCacheAccountId)
+            val accountId = desktopStoredSessionAccountId(preferences)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3596,9 +3837,7 @@ class DesktopNextcloudServices(
             val server = preferences.get(KEY_SERVER, null)
             val login = preferences.get(KEY_LOGIN, null)
             runCatching {
-                if (server != null && login != null) {
-                    secretStore.clear(desktopSessionSecretReference(server, login))
-                }
+                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
             }.onFailure { failure ->
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
@@ -3609,15 +3848,20 @@ class DesktopNextcloudServices(
                         exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
                 )
+                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
+                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
             }
-            preferences.remove(KEY_SERVER)
-            preferences.remove(KEY_LOGIN)
-            supportDiagnostics.setActiveAccountIdentity(null)
+            sessionPublicationGuard.serialize {
+                preferences.remove(KEY_SERVER)
+                preferences.remove(KEY_LOGIN)
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+            }
             cleared = true
         } finally {
             if (!cleared) {
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
-                if (loadSession() != null) startDesktopSyncLifecycle()
+                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
             }
         }
     }
@@ -3639,10 +3883,19 @@ class DesktopNextcloudServices(
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
+        discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key)
+        deckCardDrafts.clear(session, key, discardUnreadable)
     }
-
+    override suspend fun quarantineSubmittedDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.quarantineAfterSubmit(session, key)
+    }
+    override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
+        deckCardDrafts.discardAll()
+    }
     override fun openExternalUrl(url: String) {
         serviceScope.launch {
             runCatching { openExternalUrlNow(url) }
@@ -3671,8 +3924,19 @@ class DesktopNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
-            downloadFile(session, userId, file.path, maximumBytes)
+        return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
+            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                limitMessage = "The file exceeds the platform byte representation.",
+                requestHeaders = mapOf("If-Match" to expectedEtag),
+                handoffEtag = expectedEtag,
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -3692,62 +3956,17 @@ class DesktopNextcloudServices(
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "*/*")
-                    .header("OCS-APIRequest", "true")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordDesktopStreamingFailure(
-                        session = session,
-                        streamKind = "deck_attachment",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Opening the Deck attachment failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment is larger than the external handoff limit."
-                    }
-                    DesktopDetachedDownload(
-                        responseBody.byteStream().copyBoundedNetworkResponseTo(
-                            output = output,
-                            maxBytes = maximumBytes,
-                            onLimitExceeded = {
-                                error("The Deck attachment is larger than the external handoff limit.")
-                            },
-                            onNetworkReadFailure = { failure ->
-                                recordDesktopStreamingFailure(
-                                    session = session,
-                                    streamKind = "deck_attachment",
-                                    startedNanos = started,
-                                    attempt = networkAttempt,
-                                    failure = failure,
-                                )
-                            },
-                        ),
-                    )
-                }
-            }
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                accept = "*/*",
+                requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -3759,151 +3978,76 @@ class DesktopNextcloudServices(
         true
     }.getOrDefault(false)
 
-    override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeServerUrl(serverUrl)
-        val response = request("POST", "$baseUrl/index.php/login/v2")
-        check(response.status in 200..299) { "Nextcloud Login Flow v2 failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        val poll = json.getJSONObject("poll")
-        val pollEndpoint = poll.getString("endpoint")
-        val loginUrl = json.getString("login")
-        val relationships = validateLoginEndpointRelationships(baseUrl, loginUrl, pollEndpoint)
-        recordSupportDiagnostic(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Info,
-                component = SupportDiagnosticComponent.Authentication,
-                operation = "login.challenge",
-                outcome = "started",
-                fields = listOf(
-                    SupportDiagnosticFieldDraft(
-                        "login_origin_matches_entered",
-                        relationships.loginOriginMatchesEntered.toString(),
-                    ),
-                    SupportDiagnosticFieldDraft(
-                        "poll_origin_matches_entered",
-                        relationships.pollOriginMatchesEntered.toString(),
-                    ),
-                    SupportDiagnosticFieldDraft(
-                        "poll_fallback_available",
-                        (relationships.pollFallbackEndpoint != null).toString(),
-                    ),
-                ),
-            ),
+    override suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity,
+    ): LoginChallenge = withContext(Dispatchers.IO) {
+        val baseUrl = normalizeServerUrl(serverUrl, transportSecurity)
+        val effectiveTransport = loginTransportSecurity(baseUrl)
+        val response = request(
+            "POST",
+            "$baseUrl/index.php/login/v2",
+            maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
         )
-        LoginChallenge(
+        val interpretation = interpretLoginChallengeHttpResponse(
+            status = response.status,
+            body = response.text,
             enteredServerUrl = baseUrl,
-            pollEndpoint = pollEndpoint,
-            pollFallbackEndpoint = relationships.pollFallbackEndpoint,
-            token = poll.getString("token"),
-            loginUrl = loginUrl,
+            transportSecurity = effectiveTransport,
         )
+        recordSupportDiagnostic(interpretation.toStartedDiagnostic())
+        interpretation.challenge
     }
 
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         var networkFailure: JvmNetworkFailureDiagnostic? = null
-        fun poll(endpoint: String): HttpResponse {
-            networkFailure = null
-            return request(
-                "POST",
-                endpoint,
-                body = "token=" + encodeForm(challenge.token),
-                contentType = "application/x-www-form-urlencoded",
-                client = loginPollHttpClient,
-                onNetworkFailure = { networkFailure = it },
-            )
-        }
-        var usedFallback = challenge.token in loginPollFallbackTokens
-        val initialEndpoint = if (usedFallback) {
-            requireNotNull(challenge.pollFallbackEndpoint)
-        } else {
-            challenge.pollEndpoint
-        }
-        val response = try {
-            poll(initialEndpoint)
-        } catch (failure: Throwable) {
-            if (failure is CancellationException) throw failure
-            val initialResult = classifyLoginPollNetworkFailure(networkFailure)
-            val fallback = challenge.pollFallbackEndpoint
-            if (
-                initialResult is LoginPollResult.RetryablePreExchangeFailure &&
-                !usedFallback &&
-                fallback != null
-            ) {
-                runCatching {
-                    recordSupportDiagnostic(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Info,
-                            component = SupportDiagnosticComponent.Authentication,
-                            operation = "login.poll",
-                            outcome = "endpoint-fallback",
-                            fields = listOf(
-                                SupportDiagnosticFieldDraft("safe_to_retry", "true"),
-                                SupportDiagnosticFieldDraft("exchange_started", "false"),
-                            ),
-                        ),
-                    )
-                }
-                try {
-                    poll(fallback).also {
-                        usedFallback = true
-                        loginPollFallbackTokens += challenge.token
-                    }
-                } catch (fallbackFailure: Throwable) {
-                    if (fallbackFailure is CancellationException) throw fallbackFailure
-                    val result = classifyLoginPollNetworkFailure(networkFailure)
-                    result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                    return@withContext result
-                }
-            } else {
-                initialResult.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                return@withContext initialResult
-            }
-        }
-        if (response.status == 404) return@withContext LoginPollResult.Pending
-        if (response.status !in 200..299) {
-            val result = LoginPollResult.FatalFailure(
-                "Login approval failed (HTTP ${response.status}). Please try again.",
-                "HTTP:${response.status}",
-            )
-            result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-            return@withContext result
-        }
-        runCatching {
-            val json = JSONObject(response.text)
-            val resultServerUrl = normalizeServerUrl(json.getString("server"))
-            val loginName = json.getString("loginName")
-            val appPassword = json.getString("appPassword")
-            registerSupportDiagnosticPrivateValue(loginName)
-            registerSupportDiagnosticPrivateValue(appPassword)
+        val execution = executeLoginPollHttp(
+            challenge = challenge,
+            fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
+            poll = { endpoint ->
+                networkFailure = null
+                request(
+                    "POST",
+                    endpoint,
+                    body = "token=" + encodeForm(challenge.token),
+                    contentType = "application/x-www-form-urlencoded",
+                    client = loginPollHttpClient,
+                    maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
+                    diagnosticIgnoredHttpStatuses = setOf(404),
+                    onNetworkFailure = { networkFailure = it },
+                ).let { LoginPollHttpResponse(it.status, it.text) }
+            },
+            networkFailure = { networkFailure },
+        )
+        execution.selectedFallbackReason?.let { reason ->
+            loginPollFallbackTokens += challenge.token
             runCatching {
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Info,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "login.poll",
-                        outcome = "approved",
-                        fields = listOf(
-                            SupportDiagnosticFieldDraft(
-                                "result_origin_matches_entered",
-                                loginResultOriginMatchesEntered(challenge.enteredServerUrl, resultServerUrl).toString(),
-                            ),
-                            SupportDiagnosticFieldDraft(
-                                "poll_fallback_used",
-                                usedFallback.toString(),
-                            ),
-                        ),
-                    ),
-                )
+                recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason, execution.interpretation.result))
             }
-            LoginPollResult.Approved(NextcloudSession(resultServerUrl, loginName, appPassword))
-        }.getOrElse {
-            ambiguousLoginPollResponse("The server approved sign-in, but its one-time response was invalid.")
-                .also { result -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic) }
         }
+        val interpretation = execution.interpretation
+        val result = interpretation.result
+        when (result) {
+            LoginPollResult.Pending -> {
+                if (loginPollPendingTokens.add(challenge.token)) {
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
+                }
+            }
+            is LoginPollResult.Approved -> {
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
+            }
+            else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+        }
+        result
     }
 
     override fun finishLoginPolling(challenge: LoginChallenge) {
         loginPollFallbackTokens -= challenge.token
+        loginPollPendingTokens -= challenge.token
     }
 
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
@@ -3925,6 +4069,7 @@ class DesktopNextcloudServices(
                 theming?.optString("name")?.takeIf(String::isNotBlank),
                 theming?.optString("color")?.takeIf(String::isNotBlank),
                 navigation?.toAppEntries() ?: capabilities.toCapabilityEntries(),
+                navigation != null,
                 discoverRecognizeBridge(capabilities.toString()),
                 parseNextcloudFileSharingCapabilities(capabilities.toString()),
             )
@@ -4508,15 +4653,55 @@ class DesktopNextcloudServices(
             mutationExecutor = noRedirectFileMutationHttpExecutor,
             onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        handleDesktopFileVersionRestoreStatus(response.status) {
-            runCatching {
-                refreshRetainedFoldersAfterMutation(
-                    session,
-                    userId,
-                    accountId,
-                    file.path,
-                )
+        when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
+            FileVersionRestoreHttpResult.Restored -> {
+                runCatching {
+                    refreshRetainedFoldersAfterMutation(
+                        session,
+                        userId,
+                        accountId,
+                        file.path,
+                    )
+                }
             }
+            is FileVersionRestoreHttpResult.Rejected -> error(result.message)
+        }
+    }
+
+    override suspend fun handoffFileVersionToExternalApp(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        val fileId = requireMatchingFileVersion(file, version)
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        val historicalCopy = file.copy(
+            name = historicalFileCopyName(file.name, version.id),
+            size = version.sizeBytes,
+            etag = version.etag ?: "version-${version.id}",
+        )
+        val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
+        val specification = fileVersionContentRequest(userId, fileId, version.id)
+        return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (version.etag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                            "The historical version changed while it was being exported."
+                        }
+                    }
+                },
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -4527,17 +4712,7 @@ class DesktopNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        val utf8 = text.toByteArray(StandardCharsets.UTF_8)
-        require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
-            "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        require(expectedEtag.isNotBlank() && expectedEtag.none { it == '\r' || it == '\n' }) {
-            "A valid file version is required before saving."
-        }
-        val headers = buildMap {
-            put("Accept", "*/*")
-            put("If-Match", expectedEtag)
-        }
+        val specification = textFileDavSaveRequest(text, expectedEtag)
         val accountId = desktopFileCacheAccountId(session)
         fun queueAffectedMetadataRefresh() =
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
@@ -4545,26 +4720,26 @@ class DesktopNextcloudServices(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
             session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = headers,
+            rawBody = specification.body,
+            contentType = specification.contentType,
+            headers = specification.headers,
             mutationExecutor = fileMutationHttpExecutor,
             onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
-        check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
-        val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
+        val confirmation = confirmTextFileDavSave(response.status)
+        val etag = response.etag ?:
+            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
         runCatching {
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
                     path,
-                    NextcloudFileContent(utf8, "text/plain; charset=utf-8", it),
+                    NextcloudFileContent(specification.body, specification.contentType, it),
                 )
             }
         }
-        SavedTextFile(etag, response.status == 201)
+        SavedTextFile(etag, confirmation.created)
     }
 
     override suspend fun createTextFileIfAbsent(
@@ -4958,8 +5133,9 @@ class DesktopNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = request(
+        val conditionalInventory = request(
             method = "GET",
             url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
             session = session,
@@ -4968,9 +5144,22 @@ class DesktopNextcloudServices(
             maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
             client = noRedirectHttpClient,
         )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
+        val inventory = if (conditionalInventory.status == 304 && cachedCapabilities == null) {
+            request(
+                method = "GET",
+                url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
+                session = session,
+                ocsRequest = true,
+                maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
+                client = noRedirectHttpClient,
+            )
+        } else {
+            conditionalInventory.takeUnless { response -> response.status == 304 }
+        }
+        if (inventory != null) {
+            check(inventory.status in 200..299 && inventory.location == null) {
+                "Loading document editing capabilities failed (HTTP ${inventory.status})."
+            }
         }
         val capabilitiesResponse = request(
             method = "GET",
@@ -4983,13 +5172,11 @@ class DesktopNextcloudServices(
         check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
             "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
         }
-        NextcloudConditionalRead.Modified(
-            value = parseDesktopDocumentEditingCapabilities(
-                response.text,
-                supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text),
-            ),
-            responseEtag = response.etag,
-        )
+        val supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text)
+        val combined = inventory?.let { response ->
+            parseDesktopDocumentEditingCapabilities(response.text, supportsFileId)
+        } ?: requireNotNull(cachedCapabilities).copy(supportsFileId = supportsFileId)
+        NextcloudConditionalRead.Modified(combined, inventory?.etag ?: expectedEtag)
     }
 
     override suspend fun beginDocumentEditSession(
@@ -5083,10 +5270,30 @@ class DesktopNextcloudServices(
         }
 
     override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val result = loadNoteConditionally(session, noteId, expectedEtag = null)) {
-            is NextcloudConditionalRead.Modified -> result.value
-            NextcloudConditionalRead.NotModified -> error("An unconditional note read returned not modified.")
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
+
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
+        require(noteId >= 0L) { "The note ID is invalid." }
+        val response = request(
+            "GET",
+            session.serverUrl + notesDetailRelativePath(noteId),
+            session,
+        )
+        if (response.status == 404 || response.status == 410) {
+            return@withContext NextcloudNotePresence.Absent
+        }
+        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
+        val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+            "The note response is invalid."
+        }
+        NextcloudNotePresence.Present(note)
+    }
 
     override suspend fun loadNoteConditionally(
         session: NextcloudSession,
@@ -5133,7 +5340,7 @@ class DesktopNextcloudServices(
             session,
             body,
             "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -5171,9 +5378,7 @@ class DesktopNextcloudServices(
             plan.method.name,
             session.serverUrl + plan.relativePath,
             session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
@@ -5390,6 +5595,7 @@ class DesktopNextcloudServices(
         onAmbiguousMutationResult: () -> Unit = {},
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
+        diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -5415,13 +5621,14 @@ class DesktopNextcloudServices(
             val responseBody = response.body
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
-            check(contentLength <= readLimit || contentLength == -1L) {
-                "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
+            if (contentLength > readLimit && contentLength != -1L) {
+                throw NextcloudResponseTooLargeException(readLimit, response.code)
             }
             val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
-                runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
+                runCatching { responseBody.byteStream().readBounded(readLimit, response.code) }
+                    .getOrDefault(byteArrayOf())
             } else {
-                responseBody.byteStream().readBounded(readLimit)
+                responseBody.byteStream().readBounded(readLimit, response.code)
             }
             if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
                 bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
@@ -5455,7 +5662,7 @@ class DesktopNextcloudServices(
                     consume = ::consumeResponse,
                 )
             }
-            if (result.status !in 200..399) {
+            if (shouldRecordHttpStatusDiagnostic(result.status, diagnosticIgnoredHttpStatuses)) {
                 recordDesktopRequestDiagnostic(
                     session,
                     SupportDiagnosticEventDraft(
@@ -5572,7 +5779,7 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
+    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
         var total = 0L
@@ -5580,18 +5787,12 @@ class DesktopNextcloudServices(
             val read = read(buffer)
             if (read == -1) break
             total += read
-            check(total <= maxBytes) {
-                "The server response is larger than the allowed ${formatByteLimit(maxBytes)} limit."
+            if (total > maxBytes) {
+                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
             }
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun formatByteLimit(bytes: Long): String = when {
-        bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
-        bytes >= 1024 -> "${bytes / 1024} KiB"
-        else -> "$bytes bytes"
     }
 
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {
@@ -5657,12 +5858,12 @@ class DesktopNextcloudServices(
     private fun org.w3c.dom.Node.childCount(namespace: String, name: String): Int =
         (this as? org.w3c.dom.Element)?.getElementsByTagNameNS(namespace, name)?.length ?: 0
 
-    private fun normalizeServerUrl(value: String): String {
-        val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
-        val uri = URI(candidate)
-        require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "Enter a valid secure https:// server address." }
-        return candidate.trimEnd('/').removeSuffix("/index.php")
-    }
+    private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
+        if (serverUrl.startsWith("http://", ignoreCase = true)) {
+            LoginTransportSecurity.PlainHttp
+        } else {
+            LoginTransportSecurity.Tls
+        }
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

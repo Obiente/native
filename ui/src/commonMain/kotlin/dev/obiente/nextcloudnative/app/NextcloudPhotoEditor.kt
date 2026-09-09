@@ -63,9 +63,9 @@ fun NextcloudPhotoEditor(
     session: NextcloudSession,
     userId: String,
     onCancel: () -> Unit,
-    navigationRequest: NextcloudNativeNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
-    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var editHistory by remember(file.path) { mutableStateOf(PhotoEditHistory()) }
@@ -175,7 +175,7 @@ fun NextcloudPhotoEditor(
             onCancel()
         }
     }
-    LaunchedEffect(navigationRequest?.sequence, exportState.isSaving) {
+    LaunchedEffect(navigationRequest?.identity, exportState.isSaving) {
         navigationRequest?.let { request ->
             if (hasUnsavedChanges && !exportState.isSaving) {
                 confirmDiscard = true

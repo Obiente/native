@@ -353,6 +353,7 @@ class PantryLiveContractCompatibilityTest {
             records = itemRecords,
             navigationContext = itemDestination.pathParameterValues,
             collectionComplete = true,
+            authorityContext = authority,
         )
         val batchDelete = assertNotNull(
             collectionActions.batches.singleOrNull { plan ->
@@ -364,7 +365,7 @@ class PantryLiveContractCompatibilityTest {
         assertEquals(listOf("permanent"), batchDelete.fields.map { field -> field.id })
         assertEquals(
             mapOf(
-                "houseId" to "7",
+                "id" to "7",
                 "permanent" to "false",
                 "itemIds" to "[11,12]",
             ),
@@ -1003,6 +1004,7 @@ private fun DynamicAppDescriptor.unreachablePantryMutations(): Map<String, List<
         }
 
         val nativeResource = schema.resource(resource.id) ?: continue
+        val authorityContext = schema.pantryAuditHouseAuthority(navigationValues, recordBindingValues)
         val rendersCollectionToolbar = layouts.singleOrNull { layout ->
             layout.id == surface.layoutId
         }?.kind in setOf(LayoutKind.list, LayoutKind.grid)
@@ -1028,6 +1030,7 @@ private fun DynamicAppDescriptor.unreachablePantryMutations(): Map<String, List<
                 },
                 navigationContext = navigationValues,
                 collectionComplete = true,
+                authorityContext = authorityContext,
             )
             reachableActionIds += collectionCapabilities.commands.map { plan -> plan.action.id }
             collectionCapabilities.reorder?.let { plan -> reachableActionIds += plan.action.id }
@@ -1045,10 +1048,6 @@ private fun DynamicAppDescriptor.unreachablePantryMutations(): Map<String, List<
             responseFieldIds = responseFieldIds,
             recordId = "7",
             navigationValues = navigationValues + recordBindingValues,
-        )
-        val authorityContext = schema.pantryAuditHouseAuthority(
-            navigationValues = navigationValues,
-            recordBindingValues = recordBindingValues,
         )
         val stateVariants = listOf(
             baseRecordValues,

@@ -183,6 +183,32 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun preparedSubmissionKeepsTheConfirmedEventSnapshotAcrossLaterChanges() {
+        val root = createTempDirectory("support-diagnostics-confirmed-snapshot").toFile()
+        var now = 1_000_000L
+        val diagnostics = diagnostics(root) { now }
+        diagnostics.record(failureEvent("/srv/fixtures/confirmed.jpg").copy(operation = "sync.confirmed"))
+        val context = diagnostics.prepareSubmissionContext("The confirmed failure.", emptyList())
+
+        diagnostics.clear()
+        now += 1_000L
+        diagnostics.record(failureEvent("/srv/fixtures/later.jpg").copy(operation = "sync.later"))
+        val first = File(root, "confirmed-first.zip")
+        val second = File(root, "confirmed-second.zip")
+        diagnostics.writeBundleForSubmission(first, context)
+        diagnostics.writeBundleForSubmission(second, context)
+
+        ZipFile(first).use { zip ->
+            val events = zip.getInputStream(assertNotNull(zip.getEntry("events.jsonl")))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue("sync.confirmed" in events)
+            assertFalse("sync.later" in events)
+        }
+        assertEquals(first.readBytes().toList(), second.readBytes().toList())
+    }
+
+    @Test
     fun storageFailurePublishesARevisionAndDisablesExportState() {
         val root = createTempDirectory("support-diagnostics-storage-failure").toFile()
         val diagnostics = diagnostics(root)
@@ -378,7 +404,7 @@ class JvmSupportDiagnosticsTest {
         val root = createTempDirectory("support-diagnostics-export").toFile()
         val diagnostics = diagnostics(root)
         diagnostics.registerPrivateValue("https://cloud.example.test")
-        diagnostics.record(failureEvent("D:\\Fixtures\\Person\\Nextcloud Native\\private.jpg"))
+        diagnostics.record(failureEvent("D:\\Fixtures\\Person\\nati.ve\\private.jpg"))
         val destination = File(root, "support-report.zip")
 
         diagnostics.writeBundle(
@@ -388,7 +414,7 @@ class JvmSupportDiagnosticsTest {
                 SupportDiagnosticFieldDraft("virtual_files", "enabled"),
                 SupportDiagnosticFieldDraft(
                     "sync_root",
-                    "D:\\Fixtures\\Person\\Nextcloud Native",
+                    "D:\\Fixtures\\Person\\nati.ve",
                     SupportDiagnosticValuePrivacy.LocalPath,
                 ),
             ),
@@ -409,6 +435,7 @@ class JvmSupportDiagnosticsTest {
                 File(root, "redaction-key-v1").readText().trim(),
             ).forEach { privateValue -> assertFalse(privateValue in combined, privateValue) }
             assertTrue("Reports are never uploaded automatically" in combined)
+            assertTrue("one-time runtime snapshot of memory, buffers, uptime, threads" in combined)
             assertTrue("\"eventCount\":1" in combined)
             assertTrue("<local-path:" in combined)
             val manifest = JSONObject(

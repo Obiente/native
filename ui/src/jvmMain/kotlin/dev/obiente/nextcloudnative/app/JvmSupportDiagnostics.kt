@@ -22,10 +22,11 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-class JvmSupportDiagnostics(
+internal class JvmSupportDiagnostics(
     root: File,
     private val environment: SupportDiagnosticsEnvironment,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
+    private val runtimeSnapshotProvider: () -> SupportRuntimeSnapshot = ::captureJvmSupportRuntimeSnapshot,
     private val randomBytes: (Int) -> ByteArray = { size ->
         ByteArray(size).also(SecureRandom()::nextBytes)
     },
@@ -41,6 +42,8 @@ class JvmSupportDiagnostics(
     private var nextSequence = 1L
     private var storedEventBytes = 0L
     private var discardedHistoryBytes = 0L
+    private var capacityTruncationObserved = false
+    private var historyPresentAtStartup = historyFile.isFile && historyFile.length() > 0L
     private var activeAccountScope: String? = null
     private var storageAvailable = false
     private var batchPersistenceDeferred = false
@@ -90,6 +93,10 @@ class JvmSupportDiagnostics(
     fun revisions(): StateFlow<Long> = revision.asStateFlow()
 
     fun isStorageAvailable(): Boolean = synchronized(lock) { storageAvailable }
+
+    internal fun markCapacityTruncationObserved() = synchronized(lock) {
+        capacityTruncationObserved = true
+    }
 
     fun record(draft: SupportDiagnosticEventDraft) = recordWithScope(draft) { activeAccountScope }
 
@@ -203,6 +210,9 @@ class JvmSupportDiagnostics(
         runCatching {
             events.clear()
             storedEventBytes = 0L
+            discardedHistoryBytes = 0L
+            capacityTruncationObserved = false
+            historyPresentAtStartup = false
             persistHistory()
             publishRevision()
             true
@@ -216,22 +226,104 @@ class JvmSupportDiagnostics(
         destination: File,
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
-    ): File = synchronized(lock) {
+    ): File = writeBundleForSubmission(
+        destination,
+        prepareSubmissionContext(reproductionSteps, featureState),
+    ).archive
+
+    internal fun prepareSubmissionContext(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportSubmissionContext {
+        val runtimeSnapshot = runtimeSnapshotProvider()
+        return synchronized(lock) {
+            prepareSubmissionContextLocked(reproductionSteps, featureState, activeAccountScope, runtimeSnapshot)
+        }
+    }
+
+    internal fun prepareSubmissionContextForAccountIdentity(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountIdentity: String,
+    ): PreparedSupportSubmissionContext {
+        val runtimeSnapshot = runtimeSnapshotProvider()
+        return synchronized(lock) {
+            prepareSubmissionContextLocked(
+                reproductionSteps,
+                featureState,
+                accountScope(accountIdentity),
+                runtimeSnapshot,
+            )
+        }
+    }
+
+    private fun prepareSubmissionContextLocked(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountScope: String?,
+        runtimeSnapshot: SupportRuntimeSnapshot,
+    ): PreparedSupportSubmissionContext {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
-        val createdAt = nowEpochMillis().coerceAtLeast(0L)
-        discardedHistoryBytes += pruneEvents(createdAt)
+        val confirmedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
+        discardedHistoryBytes += pruneEvents(confirmedAtEpochMillis)
         if (discardedHistoryBytes > 0L) persistHistory()
-        val snapshot = visibleEvents()
+        val snapshot = visibleEvents(accountScope)
+        return PreparedSupportSubmissionContext(
+            sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            featureState = sanitizer.sanitizeFields(featureState),
+            confirmedAtEpochMillis = confirmedAtEpochMillis,
+            events = snapshot,
+            eventHistory = SupportDiagnosticHistorySnapshot(
+                includedEventCount = snapshot.size,
+                includedEventBytes = snapshot.sumOf(::encodedEventBytes),
+                capacityTruncationStatus = when {
+                    capacityTruncationObserved -> SupportDiagnosticHistoryTruncationStatus.Observed
+                    historyPresentAtStartup -> SupportDiagnosticHistoryTruncationStatus.UnknownAfterRestart
+                    else -> SupportDiagnosticHistoryTruncationStatus.NotObserved
+                },
+            ),
+            runtime = runtimeSnapshot,
+        )
+    }
+
+    internal fun writeBundleForSubmission(
+        destination: File,
+        context: PreparedSupportSubmissionContext,
+    ): PreparedSupportDiagnosticsBundle = synchronized(lock) {
+        require(context.featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        require(context.sanitizedReproductionSteps.orEmpty().length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
+        require(context.confirmedAtEpochMillis >= 0L)
+        require(context.events.size <= MAX_SUPPORT_DIAGNOSTIC_EVENTS)
+        require(context.eventHistory == null || context.eventHistory.includedEventCount == context.events.size)
+        require(
+            context.eventHistory == null ||
+                context.eventHistory.includedEventBytes == context.events.sumOf(::encodedEventBytes),
+        )
+        require(context.featureState.all { field ->
+            SUPPORT_DIAGNOSTIC_FIELD_NAME.matches(field.name) &&
+                field.value.length <= MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH &&
+                field.value.none(Char::isISOControl)
+        })
+        require(context.events.sumOf(::encodedEventBytes) <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
+        val createdAt = context.confirmedAtEpochMillis
+        val snapshot = context.events
+        val eventHistory = context.eventHistory ?: SupportDiagnosticHistorySnapshot(
+            includedEventCount = snapshot.size,
+            includedEventBytes = snapshot.sumOf(::encodedEventBytes),
+            capacityTruncationStatus = SupportDiagnosticHistoryTruncationStatus.UnknownAfterRestart,
+        )
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
-            reproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            reproductionSteps = context.sanitizedReproductionSteps,
             eventCount = snapshot.size,
             warningCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Warning },
             errorCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Error },
             components = snapshot.map { it.component }.distinct().sortedBy(Enum<*>::name),
-            featureState = sanitizer.sanitizeFields(featureState),
+            featureState = context.featureState,
+            eventHistory = eventHistory,
+            runtime = context.runtime?.withExplicitBufferAvailability() ?: unavailableSupportRuntimeSnapshot(),
         )
         val reportBytes = SUPPORT_JSON.encodeToString(report).encodeToByteArray()
         val eventBytes = snapshot.joinToString(separator = "\n", postfix = if (snapshot.isEmpty()) "" else "\n") {
@@ -260,7 +352,7 @@ class JvmSupportDiagnostics(
             "The bounded diagnostic report is unexpectedly large."
         }
         writeZipAtomically(destination, completeContent, createdAt)
-        destination
+        PreparedSupportDiagnosticsBundle(destination, context.sanitizedReproductionSteps)
     }
 
     private fun loadHistory() {
@@ -315,11 +407,13 @@ class JvmSupportDiagnostics(
             }
         }
         while (events.size > MAX_SUPPORT_DIAGNOSTIC_EVENTS) {
+            capacityTruncationObserved = true
             val eventBytes = encodedEventBytes(events.removeFirst())
             storedEventBytes -= eventBytes
             removedBytes += eventBytes
         }
         while (events.isNotEmpty() && storedEventBytes > MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES) {
+            capacityTruncationObserved = true
             val eventBytes = encodedEventBytes(events.removeFirst())
             storedEventBytes -= eventBytes
             removedBytes += eventBytes
@@ -349,9 +443,8 @@ class JvmSupportDiagnostics(
         require(historyFile.length() <= MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES)
     }
 
-    private fun visibleEvents(): List<SupportDiagnosticEvent> = events.filter { event ->
-        event.accountScope == null || event.accountScope == activeAccountScope
-    }
+    private fun visibleEvents(accountScope: String? = activeAccountScope): List<SupportDiagnosticEvent> =
+        events.filter { event -> event.accountScope == null || event.accountScope == accountScope }
 
     private fun accountScope(identity: String): String =
         "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
@@ -396,13 +489,28 @@ class JvmSupportDiagnostics(
     }
 }
 
+internal data class PreparedSupportDiagnosticsBundle(
+    val archive: File,
+    val sanitizedReproductionSteps: String?,
+)
+
+@Serializable
+internal data class PreparedSupportSubmissionContext(
+    val sanitizedReproductionSteps: String?,
+    val featureState: List<SupportDiagnosticField>,
+    val confirmedAtEpochMillis: Long,
+    val events: List<SupportDiagnosticEvent>,
+    val eventHistory: SupportDiagnosticHistorySnapshot? = null,
+    val runtime: SupportRuntimeSnapshot? = null,
+)
+
 fun Throwable.toSupportDiagnosticExceptionDraft(
     depth: Int = 0,
 ): SupportDiagnosticExceptionDraft = SupportDiagnosticExceptionDraft(
     type = javaClass.name,
     message = message,
     frames = stackTrace.take(MAX_JVM_SUPPORT_EXCEPTION_FRAMES).map { frame ->
-        SupportDiagnosticFrame(
+        boundedSupportDiagnosticFrame(
             declaringClass = frame.className,
             methodName = frame.methodName,
             fileName = frame.fileName,
@@ -414,7 +522,7 @@ fun Throwable.toSupportDiagnosticExceptionDraft(
         ?.toSupportDiagnosticExceptionDraft(depth + 1),
 )
 
-private fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
+internal fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
     SupportDiagnosticsEnvironment(
         appVersion = appVersion.safeEnvironmentValue(),
         packageVersion = packageVersion.safeEnvironmentValue(),
@@ -493,7 +601,7 @@ private fun moveAtomically(source: File, destination: File) {
 }
 
 private fun supportBundleReadme(): String = """
-    Nextcloud Native anonymized support report
+    nati.ve anonymized support report
 
     This archive was created locally after an explicit export request.
 
@@ -508,7 +616,8 @@ private fun supportBundleReadme(): String = """
     are anonymized, but you should still review that text before sharing the report.
 
     Files:
-    - report.json: app, platform, feature, and user-supplied reproduction context
+    - report.json: app, platform, feature, reproduction context, bounded event-history metadata, and
+      a one-time runtime snapshot of memory, buffers, uptime, threads, and garbage collection where available
     - events.jsonl: bounded structured application events in chronological order
     - manifest.json: byte size and SHA-256 digest for each report payload
 
@@ -524,7 +633,7 @@ private fun ByteArray.toHex(): String = joinToString("") { byte ->
 
 @Serializable
 private data class SupportBundleReport(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 2,
     val createdAtEpochMillis: Long,
     val environment: SupportDiagnosticsEnvironment,
     val reproductionSteps: String?,
@@ -533,6 +642,8 @@ private data class SupportBundleReport(
     val errorCount: Int,
     val components: List<SupportDiagnosticComponent>,
     val featureState: List<SupportDiagnosticField>,
+    val eventHistory: SupportDiagnosticHistorySnapshot,
+    val runtime: SupportRuntimeSnapshot,
 )
 
 @Serializable

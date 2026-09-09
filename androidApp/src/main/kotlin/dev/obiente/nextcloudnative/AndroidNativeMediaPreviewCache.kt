@@ -161,23 +161,6 @@ internal class AndroidNativeMediaPreviewCache(
             .forEach(File::delete)
     }
 
-    private fun publishAtomically(source: File, destination: File) {
-        try {
-            Files.move(
-                source.toPath(),
-                destination.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(
-                source.toPath(),
-                destination.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
-    }
-
     private companion object {
         val CACHE_LOCK = Any()
         val ACCOUNT_GENERATIONS = mutableMapOf<String, Long>()

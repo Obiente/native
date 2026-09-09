@@ -14,7 +14,9 @@ data class FileSyncPair(
     val remoteRootPath: String,
     val configuration: FileSyncConfiguration,
     val baselines: List<FileSyncBaseline> = emptyList(),
+    val contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
     val workItems: List<FileSyncWorkItem> = emptyList(),
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanup> = emptyList(),
     val nextWorkId: Long = 1,
     val lastScanEpochMillis: Long? = null,
 ) {
@@ -22,7 +24,6 @@ data class FileSyncPair(
         requireValidFileSyncPair(this)
     }
 }
-
 data class FileSyncCoordinatorState(
     val pairs: List<FileSyncPair> = emptyList(),
 ) {
@@ -86,6 +87,9 @@ data class FileSyncWorkItem(
     val attemptCount: Int = 0,
     val lastAttemptEpochMillis: Long? = null,
     val failureMessage: String? = null,
+    val contentMismatchVerified: Boolean = false,
+    val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpoint? = null,
 ) {
     init {
         require(id > 0)
@@ -97,6 +101,8 @@ data class FileSyncWorkItem(
         require(attemptCount in 0..MAX_FILE_SYNC_ATTEMPTS)
         require(lastAttemptEpochMillis == null || lastAttemptEpochMillis >= 0)
         require(failureMessage == null || failureMessage.isSafeSyncText(MAX_FILE_SYNC_FAILURE_LENGTH))
+        requireValidFileSyncContentMismatchEvidence(this)
+        requireValidFileSyncUploadCheckpoint(this)
         requireValidWorkState()
     }
 
@@ -184,18 +190,8 @@ fun removeFileSyncPair(
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
         "A sync pair cannot be removed while work is running."
     }
+    requireNoFileSyncUploadOwnership(pair)
     return state.copy(pairs = state.pairs.filterNot { it.id == pairId })
-}
-
-fun updateFileSyncPairConfiguration(
-    state: FileSyncCoordinatorState,
-    pairId: String,
-    configuration: FileSyncConfiguration,
-): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
-    require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
-        "Sync configuration cannot change while work is running."
-    }
-    pair.copy(configuration = configuration, workItems = emptyList())
 }
 
 /**
@@ -212,6 +208,9 @@ fun scanFileSyncPair(
     nowEpochMillis: Long,
     maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
     reservedNonExecutableWorkItems: Int = 0,
+    verifiedContentMismatches: List<FileSyncContentVerificationCandidate> = emptyList(),
+    verifiedContentMismatchHashes: Map<String, String> = emptyMap(),
+    contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
     require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
@@ -239,22 +238,33 @@ fun scanFileSyncPair(
     val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
     val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
+    val mismatchHashes = verifiedFileSyncContentMismatchHashes(
+        verifiedContentMismatches, verifiedContentMismatchHashes, localByPath, remoteByPath,
+    )
+    requireCurrentFileSyncContentVerificationProgress(
+        scopedLocalEntries, scopedRemoteEntries, verifiedContentMismatches, contentVerificationProgress,
+    )
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
     require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) {
         "The sync snapshot requires too many operations. Narrow the selected folders."
     }
-    fun stableExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
+    fun reconciledExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
         val path = operation.relativePath
-        return existingWorkByPath[path]?.takeIf { current ->
-            current.sameGeneration(operation, localByPath[path], remoteByPath[path], baselineByPath[path])
-        }
+        val current = existingWorkByPath[path] ?: return null
+        val local = localByPath[path]
+        val remote = remoteByPath[path]
+        val baseline = baselineByPath[path]
+        current.retainCommitInFlightUpload(local, remote)?.let { return it }
+        return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
+            ?.copy(observedLocal = local, observedRemote = remote)
+            ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)
     }
     val operationComparator = fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath)
     val sortedOperations = plan.operations.sortedWith { left, right ->
         operationComparator.compare(
-            stableExistingWork(left)?.operation ?: left,
-            stableExistingWork(right)?.operation ?: right,
+            reconciledExistingWork(left)?.operation ?: left,
+            reconciledExistingWork(right)?.operation ?: right,
         )
     }
     val selectedOperations = if (reservedNonExecutableWorkItems == 0) {
@@ -267,7 +277,7 @@ fun scanFileSyncPair(
         val retainedOther = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         val newSkipped = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         sortedOperations.forEach { operation ->
-            val existing = stableExistingWork(operation)
+            val existing = reconciledExistingWork(operation)
             val effectiveOperation = existing?.operation ?: operation
             val canRunAutomatically = effectiveOperation.isExecutable() &&
                 (existing == null || existing.canRunAutomatically())
@@ -295,7 +305,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        stableExistingWork(operation) ?: FileSyncWorkItem(
+        val retainedOrNew = reconciledExistingWork(operation) ?: FileSyncWorkItem(
             id = nextId.also {
                 require(it < Long.MAX_VALUE) { "The sync work ID space is exhausted." }
                 nextId += 1
@@ -313,6 +323,11 @@ fun scanFileSyncPair(
                 )
             },
         )
+        if (path in mismatchHashes) {
+            retainedOrNew.copy(contentMismatchVerified = true, contentMismatchLocalHash = mismatchHashes.getValue(path))
+        } else {
+            retainedOrNew
+        }
     }
     val structuralBaselines = scopedLocalEntries
         .asSequence()
@@ -344,6 +359,7 @@ fun scanFileSyncPair(
                 kind = SyncEntryKind.File,
                 localRevision = local.revision,
                 remoteEtag = remote.etag,
+                contentHash = local.contentHash,
             )
         }
         .toList()
@@ -356,6 +372,8 @@ fun scanFileSyncPair(
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
         workItems = work,
+        pendingUploadCleanups = retainFileSyncUploadOwnership(pair, work),
+        contentVerificationProgress = contentVerificationProgress,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
     )
@@ -422,31 +440,6 @@ fun resolveFileSyncDecision(
             decision = decision.copy(state = FileSyncDecisionState.Resolved(choice)),
         )
     }
-}
-
-fun claimNextFileSyncOperation(
-    state: FileSyncCoordinatorState,
-    pairId: String,
-    nowEpochMillis: Long,
-): FileSyncClaim {
-    require(nowEpochMillis >= 0)
-    val pair = state.requirePair(pairId)
-    require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
-        "Only one operation per sync pair may run at a time."
-    }
-    val next = pair.workItems.firstOrNull { it.state == FileSyncExecutionState.Ready }
-        ?: return FileSyncClaim(state, null)
-    require(next.attemptCount < MAX_FILE_SYNC_ATTEMPTS) { "The sync work item exceeded its retry limit." }
-    val updated = state.updatePair(pairId) { current ->
-        current.updateWork(next.id) { work ->
-            work.copy(
-                state = FileSyncExecutionState.Running,
-                attemptCount = work.attemptCount + 1,
-                lastAttemptEpochMillis = nowEpochMillis,
-            )
-        }
-    }
-    return FileSyncClaim(updated, FileSyncExecutionCommand(pairId, next.id, next.operation))
 }
 
 fun completeFileSyncOperation(
@@ -541,21 +534,6 @@ fun resetExhaustedFileSyncOperations(
     )
 }
 
-internal fun recoverInterruptedFileSyncWork(state: FileSyncCoordinatorState): FileSyncCoordinatorState =
-    state.copy(
-        pairs = state.pairs.map { pair ->
-            pair.copy(
-                workItems = pair.workItems.map { work ->
-                    if (work.state == FileSyncExecutionState.Running) {
-                        work.copy(state = FileSyncExecutionState.Ready)
-                    } else {
-                        work
-                    }
-                },
-            )
-        },
-    )
-
 private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSyncDecisionChoice> = when (reason) {
     FileSyncDecisionReason.FirstSyncCollision,
     FileSyncDecisionReason.SimultaneousEdit,
@@ -563,6 +541,10 @@ private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSy
         FileSyncDecisionChoice.UseLocal,
         FileSyncDecisionChoice.UseRemote,
         FileSyncDecisionChoice.KeepBoth,
+        FileSyncDecisionChoice.Skip,
+    )
+    FileSyncDecisionReason.UnverifiedLocalContent -> setOf(
+        FileSyncDecisionChoice.UseLocal,
         FileSyncDecisionChoice.Skip,
     )
     FileSyncDecisionReason.TypeChanged -> setOf(
@@ -584,6 +566,9 @@ private fun allowedFileSyncDecisions(
     configuration: FileSyncConfiguration,
 ): Set<FileSyncDecisionChoice> = allowedFileSyncDecisions(reason).filterTo(linkedSetOf()) { choice ->
     when (choice) {
+        FileSyncDecisionChoice.UseLocal ->
+            reason != FileSyncDecisionReason.UnverifiedLocalContent ||
+                configuration.direction != FileSyncDirection.DownloadOnly
         FileSyncDecisionChoice.PropagateDeletion -> when (reason) {
             FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
             FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.UploadOnly
@@ -661,13 +646,159 @@ private fun FileSyncWorkItem.sameGeneration(
     remote: RemoteSyncEntry?,
     baseline: FileSyncBaseline?,
 ): Boolean {
-    if (observedLocal != local || observedRemote != remote || observedBaseline != baseline) return false
+    if (
+        !observedLocal.hasSameGenerationAs(local) ||
+        !observedRemote.hasSameGenerationAs(remote) ||
+        observedBaseline != baseline
+    ) {
+        return false
+    }
     return when {
         planned is FileSyncOperation.NeedsDecision ->
             decision?.reason == planned.reason
         decision != null -> false
         else -> operation == planned
     }
+}
+
+/**
+ * Keeps a directional user choice when only its source advanced before execution.
+ *
+ * The destination and baseline must remain exactly as reviewed, and the source must retain its
+ * type. Destructive targets, keep-both, skip, and previously attempted work deliberately fall
+ * back to a fresh decision instead of inheriting stale intent.
+ */
+private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
+    planned: FileSyncOperation,
+    local: LocalSyncEntry?,
+    remote: RemoteSyncEntry?,
+    baseline: FileSyncBaseline?,
+): FileSyncWorkItem? {
+    if (
+        state != FileSyncExecutionState.Ready ||
+        attemptCount != 0 ||
+        failureMessage != null ||
+        observedBaseline != baseline
+    ) {
+        return null
+    }
+    val currentDecision = decision ?: return null
+    val choice = (currentDecision.state as? FileSyncDecisionState.Resolved)?.choice ?: return null
+
+    return when (choice) {
+        FileSyncDecisionChoice.UseLocal -> if (
+            (planned as? FileSyncOperation.NeedsDecision)?.reason != currentDecision.reason
+        ) {
+            null
+        } else {
+            local
+                ?.takeIf {
+                    observedLocal != null &&
+                        !it.hasSameGenerationAs(observedLocal) &&
+                        it.kind == observedLocal.kind &&
+                        remote.hasSameGenerationAs(observedRemote)
+                }
+                ?.let { latestLocal ->
+                    copy(
+                        observedLocal = latestLocal,
+                        operation = FileSyncOperation.Upload(relativePath, remote?.etag),
+                    )
+                }
+        }
+        FileSyncDecisionChoice.UseRemote -> if (
+            (planned as? FileSyncOperation.NeedsDecision)?.reason != currentDecision.reason
+        ) {
+            null
+        } else {
+            remote
+                ?.takeIf {
+                    observedRemote != null &&
+                        !it.hasSameGenerationAs(observedRemote) &&
+                        it.kind == observedRemote.kind &&
+                        local.hasSameGenerationAs(observedLocal)
+                }
+                ?.let { latestRemote ->
+                    copy(
+                        observedRemote = latestRemote,
+                        operation = FileSyncOperation.Download(relativePath, local?.revision),
+                    )
+                }
+        }
+        FileSyncDecisionChoice.RestoreMissing -> when (currentDecision.reason) {
+            FileSyncDecisionReason.LocalDeletion -> remote
+                ?.takeIf {
+                    planned.restoresMissingLocal(it.kind) &&
+                        local == null &&
+                        observedLocal == null &&
+                        observedRemote != null &&
+                        !it.hasSameGenerationAs(observedRemote) &&
+                        it.kind == observedRemote.kind
+                }
+                ?.let { latestRemote ->
+                    copy(
+                        observedRemote = latestRemote,
+                        operation = FileSyncOperation.Download(relativePath, expectedLocalRevision = null),
+                    )
+                }
+            FileSyncDecisionReason.RemoteDeletion -> local
+                ?.takeIf {
+                    planned.restoresMissingRemote(it.kind) &&
+                        remote == null &&
+                        observedRemote == null &&
+                        observedLocal != null &&
+                        !it.hasSameGenerationAs(observedLocal) &&
+                        it.kind == observedLocal.kind
+                }
+                ?.let { latestLocal ->
+                    copy(
+                        observedLocal = latestLocal,
+                        operation = FileSyncOperation.Upload(relativePath, expectedRemoteEtag = null),
+                    )
+                }
+            else -> null
+        }
+        FileSyncDecisionChoice.KeepBoth,
+        FileSyncDecisionChoice.PropagateDeletion,
+        FileSyncDecisionChoice.Skip,
+        -> null
+    }
+}
+
+private fun FileSyncOperation.restoresMissingLocal(sourceKind: SyncEntryKind): Boolean =
+    (this is FileSyncOperation.Download && expectedLocalRevision == null) ||
+        (this is FileSyncOperation.NeedsDecision &&
+            sourceKind == SyncEntryKind.Directory &&
+            reason == FileSyncDecisionReason.LocalDeletion)
+
+private fun FileSyncOperation.restoresMissingRemote(sourceKind: SyncEntryKind): Boolean =
+    (this is FileSyncOperation.Upload && expectedRemoteEtag == null) ||
+        (this is FileSyncOperation.NeedsDecision &&
+            sourceKind == SyncEntryKind.Directory &&
+            reason == FileSyncDecisionReason.RemoteDeletion)
+
+// Modification time is presentation metadata. Revision, ETag, size, and content identity remain
+// the durable generation guards while timestamps can be added or refreshed without resetting work.
+private fun LocalSyncEntry?.hasSameGenerationAs(other: LocalSyncEntry?): Boolean = when {
+    this == null -> other == null
+    other == null -> false
+    else ->
+        relativePath == other.relativePath &&
+            kind == other.kind &&
+            revision == other.revision &&
+            size == other.size &&
+            contentHash == other.contentHash &&
+            replacementAuthentication == other.replacementAuthentication
+}
+
+private fun RemoteSyncEntry?.hasSameGenerationAs(other: RemoteSyncEntry?): Boolean = when {
+    this == null -> other == null
+    other == null -> false
+    else ->
+        relativePath == other.relativePath &&
+            kind == other.kind &&
+            etag == other.etag &&
+            size == other.size &&
+            contentHash == other.contentHash
 }
 
 private fun FileSyncOperation.initialExecutionState(): FileSyncExecutionState = when (this) {
@@ -693,7 +824,7 @@ private fun FileSyncOperation.executionFootprint(): Set<String> = when (this) {
     else -> setOf(relativePath)
 }
 
-private fun FileSyncPair.updateWork(
+internal fun FileSyncPair.updateWork(
     workId: Long,
     update: (FileSyncWorkItem) -> FileSyncWorkItem,
 ): FileSyncPair {
@@ -706,10 +837,10 @@ private fun FileSyncPair.updateWork(
 private fun FileSyncPair.requireWork(workId: Long): FileSyncWorkItem =
     workItems.firstOrNull { it.id == workId } ?: error("The sync work item does not exist.")
 
-private fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
+internal fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
     pairs.firstOrNull { it.id == pairId } ?: error("The sync pair does not exist.")
 
-private fun FileSyncCoordinatorState.updatePair(
+internal fun FileSyncCoordinatorState.updatePair(
     pairId: String,
     update: (FileSyncPair) -> FileSyncPair,
 ): FileSyncCoordinatorState {
@@ -730,7 +861,9 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
         require(it.length <= MAX_FILE_SYNC_PATH_LENGTH)
     }
     require(pair.baselines.size <= MAX_FILE_SYNC_ENTRIES) { "The sync pair contains too many baselines." }
+    requireBoundedFileSyncContentVerificationProgress(pair.contentVerificationProgress)
     require(pair.workItems.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync pair contains too much work." }
+    requireValidFileSyncUploadOwnership(pair)
     requireUniqueCoordinatorPaths(pair.baselines.map(FileSyncBaseline::relativePath), "baseline")
     requireUniqueCoordinatorPaths(pair.workItems.map(FileSyncWorkItem::relativePath), "work")
     require(pair.workItems.map(FileSyncWorkItem::id).distinct().size == pair.workItems.size)
@@ -771,6 +904,10 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     require(work.relativePath.length <= MAX_FILE_SYNC_PATH_LENGTH)
     work.observedLocal?.let {
         require(it.revision.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))
+        require(
+            it.replacementAuthentication == null ||
+                it.replacementAuthentication.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH),
+        )
     }
     work.observedRemote?.let {
         require(it.etag.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))
@@ -800,8 +937,7 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     }
 }
 
-private fun String.syncDeviceLabel(): String =
-    lowercase().map { if (it.isLetterOrDigit()) it else '-' }
+private fun String.syncDeviceLabel(): String = lowercase().map { if (it.isLetterOrDigit()) it else '-' }
         .joinToString("").trim('-').take(24).ifBlank { "device" }
 
 private fun String.isSafeSyncText(maxLength: Int): Boolean =

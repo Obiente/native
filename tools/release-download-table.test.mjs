@@ -51,3 +51,12 @@ test("release download table replacement rejects a missing marker", () => {
     /do not contain a quick-download table/,
   );
 });
+
+test("release download table accepts branded macOS packages", () => {
+  const table = composeReleaseDownloadTable({
+    assetNames: ["nati.ve-1.2.3.dmg"],
+    repository: "Obiente/native",
+    tag: "v0.2.0-alpha.1",
+  });
+  assert.match(table, /\[DMG \(Intel\)\]\(https:\/\/github\.com\/Obiente\/native\/releases\/download\/v0\.2\.0-alpha\.1\/nati\.ve-1\.2\.3\.dmg\)/);
+});

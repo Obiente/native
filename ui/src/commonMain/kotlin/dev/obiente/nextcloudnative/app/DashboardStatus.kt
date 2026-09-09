@@ -132,6 +132,32 @@ internal fun dashboardItemsFetchResult(
     }
 }
 
+/**
+ * A missing Dashboard route means the optional server app is unavailable. Keep this deliberately
+ * narrow so authentication, permission, transport, and malformed-response failures remain visible.
+ */
+internal fun isDashboardApiUnavailable(response: NextcloudApiResponse): Boolean {
+    if (response.status == 404) return true
+    if (response.status !in 200..299) return false
+    return dashboardOcsStatusCode(response) == 404
+}
+
+internal fun DashboardItemsRequestPlan.v1FallbackRequest(
+    widgets: List<NativeDashboardWidget>,
+): NextcloudApiRequest? {
+    if (apiVersion != DashboardItemApiVersion.V2) return null
+    val selectedWidgets = widgets.filter { it.id in widgetIds }
+    if (selectedWidgets.mapTo(mutableSetOf(), NativeDashboardWidget::id) != widgetIds) return null
+    if (selectedWidgets.any { 1 !in it.itemApiVersions }) return null
+    return request.copy(relativePath = "/ocs/v2.php/apps/dashboard/api/v1/widget-items")
+}
+
+internal fun dashboardFallbackResponseBudget(reservedBytes: Long, firstResponseBytes: Long): Long {
+    require(reservedBytes > 0L)
+    require(firstResponseBytes in 0L..reservedBytes)
+    return reservedBytes - firstResponseBytes
+}
+
 enum class NativeUserPresence(val wireValue: String) {
     Online("online"),
     Away("away"),
@@ -686,7 +712,17 @@ internal fun DashboardResponseBudget.settleFailedRead(
     reservedBytes: Long,
     failure: Throwable,
 ) {
-    if (failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted) {
+    if (failure is DashboardFallbackReadFailure) {
+        val fallbackFailure = failure.cause
+        if (fallbackFailure is NextcloudApiReadFailure && !fallbackFailure.responseBodyMayHaveStarted) {
+            releaseUnused(reservedBytes, failure.priorResponseBytes)
+        }
+        return
+    }
+    if (
+        failure is DashboardV2RouteUnavailableException ||
+        failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted
+    ) {
         releaseFailed(reservedBytes)
     }
 }
@@ -750,8 +786,8 @@ private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashb
             title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
             subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
             link = item.optionalDashboardLink("link"),
-            iconUrl = item.optionalDashboardLink("iconUrl"),
-            overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
+            iconUrl = item.optionalDashboardIconLink("iconUrl"),
+            overlayIconUrl = item.optionalDashboardIconLink("overlayIconUrl"),
             sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
         )
     }
@@ -813,6 +849,9 @@ private fun JsonObject.optionalDashboardLink(name: String): String? {
     require(value.isSafeDashboardLink()) { "The dashboard $name is unsafe." }
     return value
 }
+
+private fun JsonObject.optionalDashboardIconLink(name: String): String? =
+    optionalDashboardText(name, MAX_DASHBOARD_LINK_LENGTH)?.takeIf(String::isSafeDashboardLink)
 
 private fun String.isSafeDashboardLink(): Boolean {
     if (any { it.isISOControl() || it.isWhitespace() } || '\\' in this || startsWith("//")) return false

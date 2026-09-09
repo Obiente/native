@@ -499,9 +499,13 @@ private fun Long.safeAdd(other: Long): Long {
     return this + other
 }
 
-const val DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES = 64L * 1024L * 1024L
+/**
+ * Streaming uploads are limited only by the signed byte count used by Kotlin and the platform.
+ * This is a representation boundary, not a product file-size policy.
+ */
+const val DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES = Long.MAX_VALUE
 const val MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS = 240
-const val MAX_LOCAL_UPLOAD_LIMIT_BYTES = 512L * 1024L * 1024L
+const val MAX_LOCAL_UPLOAD_LIMIT_BYTES = Long.MAX_VALUE
 
 private val MULTIPART_UPLOAD_METHODS = setOf(
     NextcloudApiMethod.POST,

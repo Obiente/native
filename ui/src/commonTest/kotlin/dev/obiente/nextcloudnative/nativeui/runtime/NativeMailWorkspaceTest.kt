@@ -12,6 +12,8 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicForm
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResource
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -26,6 +28,239 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NativeMailWorkspaceTest {
+    @Test
+    fun `mail paging starts within the shared prefetch window`() {
+        assertFalse(nativeMailShouldLoadMore(lastVisibleIndex = -1, totalItems = 0))
+        assertFalse(nativeMailShouldLoadMore(lastVisibleIndex = 6, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 7, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 9, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 0, totalItems = 1))
+    }
+
+    @Test
+    fun `mail search filters message metadata without changing the source list`() {
+        val messages = listOf(
+            mailItem(id = "release", sender = "Ada", subject = "Release candidate is ready"),
+            mailItem(id = "review", sender = "Mira", subject = "Design review notes"),
+        )
+
+        assertEquals(
+            listOf("release"),
+            nativeMailVisibleMessages(messages, "Ada release").map { it.record.id },
+        )
+        assertEquals(messages, nativeMailVisibleMessages(messages, ""))
+        assertTrue(nativeMailVisibleMessages(messages, "budget").isEmpty())
+        assertTrue(nativeMailSearchAllowsAutoPaging(""))
+        assertFalse(nativeMailSearchAllowsAutoPaging("Ada"))
+    }
+
+    @Test
+    fun `compact mail owns search only for message collections`() {
+        val messages = listOf(
+            mailItem(id = "release", sender = "Ada", subject = "Release candidate is ready"),
+            mailItem(id = "review", sender = "Mira", subject = "Design review notes"),
+        )
+        val folderResource = resource("mailboxes", "Mailboxes")
+        val folderRecord = NativeRecord("inbox", values = mapOf("name" to "Inbox"))
+        val folder = NativeMailWorkspaceItem(
+            resource = folderResource,
+            record = folderRecord,
+            presentation = nativeMailboxPresentation(folderResource, folderRecord),
+        )
+
+        assertTrue(nativeMailCompactSearchAvailable(messages, searchHandlerAvailable = true))
+        assertFalse(nativeMailCompactSearchAvailable(messages, searchHandlerAvailable = false))
+        assertFalse(nativeMailCompactSearchAvailable(listOf(folder), searchHandlerAvailable = true))
+        assertFalse(nativeMailCompactSearchAvailable(emptyList(), searchHandlerAvailable = true))
+        assertTrue(
+            nativeMailCompactSearchAvailable(
+                items = emptyList(),
+                searchHandlerAvailable = true,
+                query = "release",
+            ),
+        )
+    }
+
+    @Test
+    fun `active mail search remains clearable after a refresh shrinks the mailbox`() {
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 1, query = "release"))
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = false, messageCount = 0, query = "release"))
+        assertFalse(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 1, query = ""))
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 2, query = ""))
+    }
+
+    @Test
+    fun `mailbox stats enrich the selected mailbox instead of becoming mail content`() {
+        val mailboxes = ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+        )
+        val stats = ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+        )
+        val messages = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+        )
+        val inbox = NativeRecord(
+            id = "9",
+            values = mapOf("name" to "Inbox", "specialUse" to "inbox"),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = "mailboxes",
+            parentRecord = inbox,
+            relatedRecords = mapOf(
+                "mailboxes" to listOf(inbox),
+                "mailboxStats" to listOf(
+                    NativeRecord("stats-9", values = mapOf("total" to "84", "unread" to "7")),
+                ),
+            ),
+        )
+        val schema = schema(mailboxes, stats, messages)
+
+        assertEquals(NativeMailCollectionSummary(total = 84, unread = 7), context.nativeMailCollectionSummary(schema))
+        val plan = nativeMailWorkspacePlan(schema, messages, emptyList(), context, null)
+        assertEquals(84, plan.selectedContainer?.presentation?.totalCount)
+        assertEquals(7, plan.selectedContainer?.presentation?.unreadCount)
+        assertEquals(listOf("9"), plan.folders.map { item -> item.record.id })
+        assertTrue(plan.messages.isEmpty())
+    }
+
+    @Test
+    fun `complementary mailbox summary resources merge without accepting conflicts`() {
+        val totalStats = ResourceSpec("mailboxStats", "Mailbox stats", confidence = Confidence.verified)
+        val unreadStatus = ResourceSpec("mailboxStatus", "Mailbox status", confidence = Confidence.verified)
+        val schema = schema(totalStats, unreadStatus)
+
+        val complementary = NativeDatasetContext(
+            relatedRecords = mapOf(
+                totalStats.id to listOf(NativeRecord("total", values = mapOf("total" to "84"))),
+                unreadStatus.id to listOf(NativeRecord("unread", values = mapOf("unread" to "7"))),
+            ),
+        )
+        assertEquals(
+            NativeMailCollectionSummary(total = 84, unread = 7),
+            complementary.nativeMailCollectionSummary(schema),
+        )
+
+        val conflictingTotal = complementary.copy(
+            relatedRecords = complementary.relatedRecords + (
+                "mailboxStatistics" to listOf(NativeRecord("other-total", values = mapOf("total" to "85")))
+                ),
+        )
+        val schemaWithConflict = schema(
+            totalStats,
+            unreadStatus,
+            ResourceSpec("mailboxStatistics", "Mailbox statistics", confidence = Confidence.verified),
+        )
+        assertEquals(
+            NativeMailCollectionSummary(total = null, unread = 7),
+            conflictingTotal.nativeMailCollectionSummary(schemaWithConflict),
+        )
+    }
+
+    @Test
+    fun `loader identity exposes a generically named mailbox summary resource`() {
+        val mailboxInfo = ResourceSpec(
+            id = "mailboxInfo",
+            name = "Mailbox info",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("messageCount", "Message count", FieldKind.integer, required = false, readOnly = true),
+                FieldSpec("unseen", "Unseen", FieldKind.integer, required = false, readOnly = true),
+            ),
+        )
+        val relatedRecords = mapOf(
+            mailboxInfo.id to listOf(
+                NativeRecord("info", values = mapOf("messageCount" to "84", "unseen" to "7")),
+            ),
+        )
+        assertNull(
+            NativeDatasetContext(relatedRecords = relatedRecords)
+                .nativeMailCollectionSummary(schema(mailboxInfo)),
+        )
+        val context = NativeDatasetContext(
+            relatedRecords = relatedRecords,
+            mailCollectionSummaryResourceIds = setOf(mailboxInfo.id),
+        )
+
+        assertEquals(
+            NativeMailCollectionSummary(total = 84, unread = 7),
+            context.nativeMailCollectionSummary(schema(mailboxInfo)),
+        )
+    }
+
+    @Test
+    fun `message body keeps its proven mailbox selected and enriched`() {
+        val mailboxes = ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+        )
+        val stats = ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+        )
+        val messages = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+        )
+        val body = ResourceSpec(
+            id = "messageBody",
+            name = "Message body",
+            confidence = Confidence.verified,
+        )
+        val inbox = NativeRecord(
+            id = "9",
+            values = mapOf(
+                "name" to "Inbox",
+                "specialUse" to "inbox",
+                "accountId" to "personal",
+            ),
+        )
+        val message = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release candidate is ready",
+                "from" to "Ada <ada@example.test>",
+                "accountId" to "personal",
+                "mailboxId" to "9",
+            ),
+        )
+        val schema = schema(mailboxes, stats, messages, body)
+
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(NativeRecord("42-body", values = mapOf("body" to "Hello"))),
+            context = NativeDatasetContext(
+                parentResourceId = "messages",
+                parentRecord = message,
+                relatedRecords = mapOf(
+                    "mailboxes" to listOf(inbox),
+                    "messages" to listOf(message),
+                    "mailboxStats" to listOf(
+                        NativeRecord("stats-9", values = mapOf("total" to "84", "unread" to "2")),
+                    ),
+                ),
+            ),
+            selectedRecordId = message.id,
+            selectedRecordResourceId = messages.id,
+        )
+
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertEquals("9", plan.selectedContainer?.record?.id)
+        assertEquals(84, plan.selectedContainer?.presentation?.totalCount)
+        assertEquals(2, plan.selectedContainer?.presentation?.unreadCount)
+        assertEquals(listOf("9"), plan.folders.map { item -> item.record.id })
+    }
+
     @Test
     fun `semantic mail datasets become account mailbox and message panes`() {
         val account = resource("accounts", "Accounts")
@@ -367,7 +602,7 @@ class NativeMailWorkspaceTest {
         val context = NativeDatasetContext(
             parentResourceId = "messages",
             parentRecord = parentMessage,
-            relatedRecords = mapOf("messages" to listOf(parentMessage)),
+            relatedRecords = emptyMap(),
         )
         val plan = nativeMailWorkspacePlan(
             schema = schema,
@@ -392,6 +627,90 @@ class NativeMailWorkspaceTest {
         )
         assertEquals("42", detail?.record?.id)
         assertEquals("<p>The build is ready.</p>", detail?.presentation?.body)
+    }
+
+    @Test
+    fun `message detail does not require its envelope to remain in a related list cache`() {
+        val messages = resource("messages", "Messages")
+        val body = resource("body", "Message body")
+        val schema = schema(messages, body)
+        val parentMessage = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release checklist",
+                "from" to "Ada <ada@example.test>",
+                "mailboxId" to "9",
+            ),
+        )
+        val bodyRecord = NativeRecord(
+            id = "body-42",
+            values = mapOf("body" to "The build is ready."),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = messages.id,
+            parentRecord = parentMessage,
+            relatedRecords = emptyMap(),
+        )
+
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(bodyRecord),
+            context = context,
+            selectedRecordId = bodyRecord.id,
+            selectedRecordResourceId = body.id,
+        )
+        val detail = nativeMailWorkspaceDetailTarget(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(bodyRecord),
+            context = context,
+            selectedMessage = plan.selectedMessage,
+        )
+
+        assertTrue(plan.hasMailData)
+        assertEquals(listOf("42"), plan.messages.map { item -> item.record.id })
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertEquals("The build is ready.", detail?.presentation?.body)
+    }
+
+    @Test
+    fun `restored envelope snippet is not rendered as a loaded message body`() {
+        val messages = resource("messages", "Messages")
+        val body = resource("messageBody", "Message body")
+        val schema = schema(messages, body)
+        val envelope = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release checklist",
+                "from" to "Ada <ada@example.test>",
+                "text" to "Only the mailbox preview, not the loaded body.",
+            ),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = messages.id,
+            parentRecord = envelope,
+            relatedRecords = emptyMap(),
+        )
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = emptyList(),
+            context = context,
+            selectedRecordId = envelope.id,
+            selectedRecordResourceId = messages.id,
+        )
+
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertNull(
+            nativeMailWorkspaceDetailTarget(
+                schema = schema,
+                currentResource = body,
+                currentRecords = emptyList(),
+                context = context,
+                selectedMessage = plan.selectedMessage,
+            ),
+        )
     }
 
     @Test
@@ -721,6 +1040,34 @@ class NativeMailWorkspaceTest {
             accountId?.let { value -> put("accountId", value) }
         },
     )
+
+    private fun mailItem(
+        id: String,
+        sender: String,
+        subject: String,
+    ): NativeMailWorkspaceItem {
+        val resource = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("from", "From", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("subject", "Subject", FieldKind.string, required = false, readOnly = true),
+            ),
+        )
+        val record = NativeRecord(
+            id = id,
+            values = mapOf(
+                "from" to sender,
+                "subject" to subject,
+            ),
+        )
+        return NativeMailWorkspaceItem(
+            resource = resource,
+            record = record,
+            presentation = nativeMailboxPresentation(resource, record),
+        )
+    }
 
     private fun resource(id: String, name: String): ResourceSpec = ResourceSpec(
         id = id,

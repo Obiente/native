@@ -21,7 +21,6 @@ import {
   PhMagnifyingGlass as MagnifyingGlass,
   PhMoon as Moon,
   PhShieldCheck as ShieldCheck,
-  PhStar as Star,
   PhSquaresFour as SquaresFour,
   PhSun as Sun,
   PhWindowsLogo as WindowsLogo,
@@ -33,7 +32,11 @@ import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
 import { githubRepository } from "./generated/github-repository.js";
-import { fetchGithubRepository } from "../scripts/github-repository-data.mjs";
+import {
+  fetchGithubRepository,
+  shouldRefreshGithubRepository,
+} from "../scripts/github-repository-data.mjs";
+import { hydrationTheme } from "./hydration-state.js";
 import {
   guidePlatformHubForPath,
   guidePlatformHubs,
@@ -41,6 +44,8 @@ import {
 } from "./guide-platforms.js";
 import RoadmapDashboard from "./components/RoadmapDashboard.vue";
 import ArticleRoadmap from "./components/ArticleRoadmap.vue";
+import NativeHome from "./components/NativeHome.vue";
+import PageOutline from "./components/PageOutline.vue";
 
 const props = defineProps({
   initialPath: {
@@ -61,7 +66,7 @@ const props = defineProps({
   },
 });
 
-const githubUrl = "https://github.com/Obiente/nc-native";
+const githubUrl = "https://github.com/obiente/native";
 const currentGithubRepository = ref(githubRepository);
 const githubStarLabel = computed(() => `${new Intl.NumberFormat("en", {
   notation: "compact",
@@ -112,9 +117,7 @@ const downloadPlatforms = [
 const captureByScenario = new Map(
   marketingCaptures.map((capture) => [capture.scenario, capture]),
 );
-const initialTheme = typeof window === "undefined"
-  ? { preference: "system", system: "dark" }
-  : window.__NEXTCLOUD_NATIVE_THEME__ ?? { preference: "system", system: "dark" };
+const initialTheme = hydrationTheme;
 const themePreference = ref(initialTheme.preference);
 const systemTheme = ref(initialTheme.system);
 const resolvedTheme = computed(() =>
@@ -161,12 +164,18 @@ function cycleTheme() {
 }
 
 onMounted(() => {
-  void refreshGithubRepository();
-  repositoryRefreshTimer = window.setInterval(refreshGithubRepository, 5 * 60 * 1000);
-  document.addEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
+  if (shouldRefreshGithubRepository(window.location)) {
+    void refreshGithubRepository();
+    repositoryRefreshTimer = window.setInterval(refreshGithubRepository, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
+  }
 
-  const savedTheme = window.localStorage.getItem("nextcloud-native-theme");
-  if (themeOptions.includes(savedTheme)) themePreference.value = savedTheme;
+  try {
+    const savedTheme = window.localStorage.getItem("nextcloud-native-theme");
+    if (themeOptions.includes(savedTheme)) themePreference.value = savedTheme;
+  } catch {
+    themePreference.value = "system";
+  }
   themeMediaQuery = window.matchMedia("(prefers-color-scheme: light)");
   themeMediaListener = (event) => {
     systemTheme.value = event.matches ? "light" : "dark";
@@ -205,7 +214,11 @@ onBeforeUnmount(() => {
 
 watch(themePreference, (preference) => {
   if (typeof window !== "undefined") {
-    window.localStorage.setItem("nextcloud-native-theme", preference);
+    try {
+      window.localStorage.setItem("nextcloud-native-theme", preference);
+    } catch {
+      // Theme selection remains active for this page when storage is unavailable.
+    }
   }
 });
 watch(resolvedTheme, applyDocumentTheme);
@@ -222,13 +235,6 @@ function newsCapture(post) {
   return post.websiteImageDark ?? post.websiteImage;
 }
 
-const heroDesktopCapture = computed(() =>
-  homepageCapture(
-    "homepage-overview-desktop-dark",
-    "homepage-overview-desktop-light",
-    "desktop-home",
-  ),
-);
 const mobileHomeCapture = computed(() =>
   homepageCapture(
     "homepage-overview-mobile-dark",
@@ -283,10 +289,54 @@ const visibleGuideLibrary = computed(() =>
     ? guidesForPlatformHub(guides, currentGuidePlatformHub.value)
     : guides,
 );
+const guideSearch = ref("");
+const filteredGuideLibrary = computed(() => {
+  const terms = guideSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return visibleGuideLibrary.value.filter((guide) => {
+    const text = [guide.title, guide.description, guide.category, ...guide.platforms].join(" ").toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+});
 const isChangelog = computed(() => normalizedPath === "/changelog/");
 const isVisualQa = computed(() => normalizedPath === "/visual-qa/");
 const isHome = computed(() => normalizedPath === "/");
 const mobileNavOpen = ref(false);
+const siteHeader = ref(null);
+const projectMenu = ref(null);
+const mobileMenuTrigger = ref(null);
+const headerRaised = ref(false);
+
+function updateHeaderElevation() {
+  headerRaised.value = window.scrollY > 12;
+}
+
+function closeHeaderMenus() {
+  mobileNavOpen.value = false;
+  if (projectMenu.value) projectMenu.value.open = false;
+}
+
+function dismissHeaderMenus(event) {
+  if (!siteHeader.value?.contains(event.target)) closeHeaderMenus();
+}
+
+function onHeaderEscape() {
+  if (!mobileNavOpen.value) return;
+  mobileNavOpen.value = false;
+  nextTick(() => mobileMenuTrigger.value?.focus());
+}
+
+onMounted(() => {
+  updateHeaderElevation();
+  window.addEventListener("scroll", updateHeaderElevation, { passive: true });
+  document.addEventListener("pointerdown", dismissHeaderMenus);
+  document.addEventListener("focusin", dismissHeaderMenus);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", updateHeaderElevation);
+  document.removeEventListener("pointerdown", dismissHeaderMenus);
+  document.removeEventListener("focusin", dismissHeaderMenus);
+});
 const visualQaPlatform = ref("all");
 const visualQaPurpose = ref("all");
 const visualQaPullRequest = ref("all");
@@ -338,18 +388,61 @@ const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchDocuments = ref(docs);
 const searchLoaded = ref(false);
+const searchLoading = ref(false);
+const searchError = ref(false);
+const searchInput = ref(null);
+const searchTrigger = ref(null);
 
 async function openSearch() {
+  closeHeaderMenus();
   searchOpen.value = true;
-  if (searchLoaded.value || typeof window === "undefined") return;
+  await nextTick();
+  searchInput.value?.focus();
+  if (!searchLoaded.value) await loadSearchIndex();
+}
+
+async function loadSearchIndex() {
+  if (searchLoading.value || typeof window === "undefined") return;
+  searchLoading.value = true;
+  searchError.value = false;
 
   try {
     const response = await fetch("/search-index.json");
-    if (response.ok) {
-      searchDocuments.value = await response.json();
-    }
-  } finally {
+    if (!response.ok) throw new Error("Search index unavailable");
+    searchDocuments.value = await response.json();
     searchLoaded.value = true;
+  } catch {
+    // Keep bundled documentation searchable and allow a retry for the full index.
+    searchError.value = true;
+  } finally {
+    searchLoading.value = false;
+  }
+}
+
+function closeSearch() {
+  searchOpen.value = false;
+  nextTick(() => searchTrigger.value?.focus());
+}
+
+function trapSearchFocus(event) {
+  const focusable = [...event.currentTarget.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+  if (focusable.length === 0) {
+    event.preventDefault();
+    searchInput.value?.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !event.currentTarget.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
   }
 }
 
@@ -395,7 +488,7 @@ const nativePromises = [
   {
     icon: ShieldCheck,
     title: "It stops before it guesses",
-    body: "Originals are kept, conflicts are shown, and a write is withheld when the server contract is unclear.",
+    body: "The client avoids destructive writes, shows known conflicts, and withholds an action when the server contract is unclear.",
   },
 ];
 
@@ -446,15 +539,6 @@ const appFamilies = [
     captureFallback: "tables-insights-desktop",
   },
 ];
-const activeAppFamily = ref(0);
-const selectedAppFamily = computed(() => appFamilies[activeAppFamily.value]);
-const selectedAppCapture = computed(() =>
-  homepageCapture(
-    selectedAppFamily.value.captureDark,
-    selectedAppFamily.value.captureLight,
-    selectedAppFamily.value.captureFallback,
-  ),
-);
 
 const platforms = [
   {
@@ -494,7 +578,7 @@ const frequentlyAsked = [
   {
     question: "Is this a web wrapper?",
     answer:
-      "No. Nextcloud Native consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
+      "No. nati.ve consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
   },
   {
     question: "Can I keep normal folders and an Obsidian vault in sync?",
@@ -519,9 +603,29 @@ const frequentlyAsked = [
   {
     question: "Is this an official Nextcloud project?",
     answer:
-      "No. Nextcloud Native is an independent Obiente project, licensed under AGPL-3.0-or-later. It is not affiliated with, sponsored by or endorsed by Nextcloud GmbH.",
+      "No. nati.ve is an independent Obiente project, licensed under AGPL-3.0-or-later. It is not affiliated with, sponsored by or endorsed by Nextcloud GmbH.",
   },
 ];
+const downloadDialog = ref(null);
+function openDownloads() {
+  closeHeaderMenus();
+  downloadDialog.value?.showModal();
+}
+function closeDownloads() {
+  downloadDialog.value?.close();
+}
+function closeProjectMenu(event) {
+  event.currentTarget.open = false;
+  event.currentTarget.querySelector("summary")?.focus();
+}
+function onDownloadBackdropClick(event) {
+  if (event.target !== downloadDialog.value) return;
+  const bounds = downloadDialog.value.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDownloads();
+}
+onMounted(() => {
+  if (window.location.hash === "#download-chooser") openDownloads();
+});
 </script>
 
 <template>
@@ -532,22 +636,34 @@ const frequentlyAsked = [
   >
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <header class="site-header">
-      <a class="brand" href="/" aria-label="Nextcloud Native home">
-        <span class="brand-mark">
-          <img src="/cloud.svg" alt="" width="28" height="28" />
-        </span>
-        <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
+    <div class="site-header-frame" :class="{ 'is-raised': headerRaised }">
+    <header ref="siteHeader" class="site-header" @keydown.esc="onHeaderEscape">
+      <a class="brand" href="/" aria-label="nati.ve home">
+        <span class="native-brand-mark"><img :src="resolvedTheme === 'light' ? '/brand/native-mark.svg' : '/brand/native-mark-dark.svg'" alt="" width="38" height="38" /></span>
+        <span class="brand-copy"><strong>nati.ve</strong></span>
       </a>
 
       <nav class="desktop-nav" aria-label="Primary navigation">
-        <a href="/#experience">Experience</a>
+        <a href="/#product">Product</a>
         <a href="/#apps">Apps</a>
-        <a href="/#native">How it works</a>
-        <a href="/guides/">Guides</a>
-        <a href="/roadmap/">Roadmap</a>
-        <a href="/news/">Journal</a>
-        <a href="/#docs">Docs</a>
+        <a href="/guides/" :aria-current="isGuidesLanding || currentGuide ? 'page' : undefined">Guides</a>
+        <details ref="projectMenu" class="project-menu" :class="{ 'is-current': currentDoc || currentPost || isNewsIndex || isChangelog }" @keydown.esc.stop="closeProjectMenu">
+          <summary>Project <CaretDown :size="13" aria-hidden="true" /></summary>
+          <nav aria-label="Project resources" @click="closeHeaderMenus">
+            <a href="/#experience">Experience</a>
+            <a href="/#native">How it works</a>
+            <a href="/#docs">Documentation</a>
+            <a href="/roadmap/">Roadmap</a>
+            <a href="/news/">Journal</a>
+            <a href="/architecture/">Architecture</a>
+            <a href="/native-schema/">Native schema</a>
+            <a href="/dynamic-apps/">Dynamic apps</a>
+            <a href="/compatibility/">Compatibility</a>
+            <a href="/contributing/">Contributing</a>
+            <a href="/changelog/">Release notes</a>
+            <a :href="githubUrl" target="_blank" rel="noreferrer">Star on GitHub · {{ githubStarLabel }}</a>
+          </nav>
+        </details>
       </nav>
 
       <div class="header-actions">
@@ -562,6 +678,7 @@ const frequentlyAsked = [
           <span>{{ themeLabel }}</span>
         </button>
         <button
+          ref="searchTrigger"
           class="header-search"
           type="button"
           aria-label="Search guides and project documentation"
@@ -571,9 +688,10 @@ const frequentlyAsked = [
           <span>Search</span>
         </button>
         <button
+          ref="mobileMenuTrigger"
           class="mobile-menu-button"
           type="button"
-          aria-label="Toggle primary navigation"
+          :aria-label="mobileNavOpen ? 'Close primary navigation' : 'Open primary navigation'"
           aria-controls="mobile-site-navigation"
           :aria-expanded="mobileNavOpen"
           @click="mobileNavOpen = !mobileNavOpen"
@@ -581,10 +699,7 @@ const frequentlyAsked = [
           <X v-if="mobileNavOpen" :size="21" weight="bold" aria-hidden="true" />
           <Menu v-else :size="21" weight="bold" aria-hidden="true" />
         </button>
-        <a class="header-github" :href="githubUrl" target="_blank" rel="noreferrer">
-          <GithubLogo :size="20" weight="fill" aria-hidden="true" />
-          <span>GitHub</span>
-        </a>
+        <button type="button" class="native-button header-download" @click="openDownloads">Download</button>
       </div>
 
       <nav
@@ -602,6 +717,7 @@ const frequentlyAsked = [
           <a href="/roadmap/" @click="mobileNavOpen = false">Roadmap</a>
           <a href="/news/" @click="mobileNavOpen = false">Journal</a>
           <a href="/#docs" @click="mobileNavOpen = false">Docs</a>
+          <button type="button" @click="openDownloads">Downloads <ArrowRight :size="16" aria-hidden="true" /></button>
         </div>
         <div class="mobile-nav-tools">
           <button
@@ -620,13 +736,14 @@ const frequentlyAsked = [
         </div>
       </nav>
     </header>
+    </div>
 
     <div
       v-if="searchOpen"
       class="search-overlay"
-      role="presentation"
-      @click.self="searchOpen = false"
-      @keydown.esc="searchOpen = false"
+      @click.self="closeSearch"
+      @keydown.esc.stop.prevent="closeSearch"
+      @keydown.tab="trapSearchFocus"
     >
       <section class="search-panel" role="dialog" aria-modal="true" aria-labelledby="search-title">
         <div class="search-panel-header">
@@ -634,13 +751,15 @@ const frequentlyAsked = [
             <p class="eyebrow">Project knowledge</p>
             <h2 id="search-title">Search guides and documentation</h2>
           </div>
-          <button class="icon-button" type="button" aria-label="Close search" @click="searchOpen = false">
+          <button class="icon-button" type="button" aria-label="Close search" @click="closeSearch">
             <X :size="21" weight="bold" aria-hidden="true" />
           </button>
         </div>
         <label class="search-input">
+          <span class="sr-only">Search guides and project documentation</span>
           <MagnifyingGlass :size="21" weight="bold" aria-hidden="true" />
           <input
+            ref="searchInput"
             v-model="searchQuery"
             type="search"
             name="documentation-search"
@@ -648,104 +767,48 @@ const frequentlyAsked = [
             autocomplete="off"
           />
         </label>
-        <div class="search-results" aria-live="polite">
+        <div class="search-status" role="status">
+          <p v-if="searchLoading">Loading the guide and documentation library...</p>
+          <p v-else-if="searchError">The full search library could not load. Bundled documentation is still available. <button type="button" @click="loadSearchIndex">Try again</button></p>
+          <p v-else>{{ searchQuery.trim() ? `${searchResults.length} results` : 'Start with a guide or explore the project' }}</p>
+        </div>
+        <div class="search-results" :aria-busy="searchLoading">
           <a v-for="result in searchResults" :key="result.path" class="search-result" :href="result.path">
             <span>
+              <span class="search-result-kind">{{ result.contentType ?? 'Documentation' }}</span>
               <strong>{{ result.shortTitle }}</strong>
               <small>{{ result.description }}</small>
             </span>
             <ArrowRight :size="18" weight="bold" aria-hidden="true" />
           </a>
-          <p v-if="searchResults.length === 0" class="empty-search">
-            No matching project documentation found.
+          <p v-if="searchResults.length === 0 && !searchLoading" class="empty-search">
+            No matches found. Try an app name, platform, or workflow.
           </p>
         </div>
+        <div class="search-panel-footer"><span>Search guides, articles, and project documentation</span><span><kbd>Esc</kbd> to close</span></div>
       </section>
     </div>
 
+    <dialog id="download-chooser" ref="downloadDialog" class="native-download-dialog" aria-labelledby="download-title" @click="onDownloadBackdropClick" @keydown.esc.prevent="closeDownloads">
+      <div class="native-download-heading">
+        <div><p class="native-eyebrow">Try the alpha</p><h2 id="download-title">Choose your platform.</h2></div>
+        <button type="button" class="native-dialog-close" aria-label="Close downloads" autofocus @click="closeDownloads"><X :size="22" aria-hidden="true" /></button>
+      </div>
+      <p class="native-download-intro">Connect your existing Nextcloud account. Android, Linux and Windows builds are ready to try.</p>
+      <div class="native-download-list">
+        <a v-for="platform in downloadPlatforms" :id="`download-choice-${platform.id}`" :key="platform.id" :href="platform.href">
+          <component :is="platform.icon" :size="26" weight="fill" aria-hidden="true" />
+          <span><strong>{{ platform.name }}</strong><small>{{ platform.detail }}</small></span>
+          <b>{{ platform.format }}</b><ArrowRight :size="18" aria-hidden="true" />
+        </a>
+      </div>
+      <p class="native-download-note">Alpha software: keep another copy of important data. macOS is a packaging preview without sign-in; iOS is planned.</p>
+      <a class="native-text-link" href="https://github.com/obiente/native/releases" target="_blank" rel="noreferrer">Release notes and checksums <ArrowRight :size="17" aria-hidden="true" /></a>
+    </dialog>
+
     <main id="main">
-      <template v-if="isHome">
-        <div class="home-page">
-          <section class="product-hero section-width">
-            <div class="product-hero-copy">
-              <p class="eyebrow">An independent client by Obiente</p>
-              <h1>Your Nextcloud deserves <span>a real app.</span></h1>
-              <p class="hero-lede">
-                Test Files, Photos, Talk, Calendar, and installed-app workspaces in
-                the current Android, Linux, and Windows alpha builds.
-              </p>
-              <div class="hero-actions">
-                <a class="button button-primary" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">
-                  Get Nextcloud Native
-                  <ArrowRight :size="19" weight="bold" aria-hidden="true" />
-                </a>
-                <a class="button button-secondary" href="/#experience">See how it works</a>
-              </div>
-            </div>
-
-            <figure class="product-hero-visual">
-              <img
-                class="product-hero-desktop"
-                :src="heroDesktopCapture.websitePath"
-                alt="Nextcloud Native desktop home view with account status, recent files, activity, events, and photo backup"
-                :width="heroDesktopCapture.width"
-                :height="heroDesktopCapture.height"
-              />
-              <img
-                class="product-hero-mobile"
-                :src="mobileHomeCapture.websitePath"
-                alt="Nextcloud Native mobile home with files, conversations, events, and sync status"
-                :width="mobileHomeCapture.width"
-                :height="mobileHomeCapture.height"
-              />
-              <figcaption>
-                <span>The same account, shaped for desktop and mobile.</span>
-                <span class="capture-provenance">
-                  <ShieldCheck :size="15" weight="fill" aria-hidden="true" />
-                  Real native UI. Synthetic private data.
-                </span>
-              </figcaption>
-            </figure>
-
-            <div class="hero-foundation" aria-label="Availability and project details">
-              <div class="hero-foundation-platforms">
-                <div class="hero-availability">
-                  <p>Platform status</p>
-                  <ul>
-                    <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li class="platform-pending" aria-label="macOS preview"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">macOS</span></li>
-                    <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
-                    <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li class="platform-pending" aria-label="iOS unavailable"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">iOS</span></li>
-                  </ul>
-                </div>
-              </div>
-
-              <ul class="hero-trust">
-                <li>
-                  <Star :size="21" weight="fill" aria-hidden="true" />
-                  <span>
-                    <strong>{{ githubStarLabel }}</strong>
-                    <small>
-                      Support the project
-                      <a :href="githubUrl" target="_blank" rel="noreferrer">Star repository</a>
-                    </small>
-                  </span>
-                </li>
-              </ul>
-
-              <div class="hero-project-note">
-                <p class="maker-note">
-                  Built by <strong>Obiente</strong>. Independent and <span class="no-break">community-driven</span>.
-                </p>
-                <nav class="hero-release-links" aria-label="Project downloads and updates">
-                  <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">Packages on GitHub</a>
-                  <a href="/changelog/">Release notes <ArrowRight :size="14" weight="bold" aria-hidden="true" /></a>
-                </nav>
-              </div>
-            </div>
-          </section>
-
+      <NativeHome v-if="isHome" :theme="resolvedTheme" :app-families="appFamilies" @download="openDownloads">
+        <div class="native-home-content">
           <section id="downloads" class="download-section section-width" data-reveal>
             <div class="section-heading compact">
               <p class="eyebrow">Get the current build</p>
@@ -770,7 +833,7 @@ const frequentlyAsked = [
             </div>
             <p class="download-caveat">
               Alpha software: keep another copy of important data. Check the
-              <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
+              <a href="https://github.com/obiente/native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
               before installing.
             </p>
           </section>
@@ -780,7 +843,7 @@ const frequentlyAsked = [
               <p class="eyebrow">Everyday work</p>
               <h2>Open a file. Review a photo. Read a message.</h2>
               <p>
-                Nextcloud Native uses verified server APIs and the platform
+                nati.ve uses verified server APIs and the platform
                 integrations implemented for Android, Linux, and Windows. Capability
                 checks keep unavailable actions out of otherwise useful workspaces.
               </p>
@@ -796,84 +859,12 @@ const frequentlyAsked = [
             </div>
           </section>
 
-          <section id="apps" class="app-story" data-reveal>
-            <div class="section-width app-story-layout">
-              <div class="section-heading compact">
-                <p class="eyebrow">Your apps</p>
-                <h2>Each app keeps the shape that makes it useful.</h2>
-                <p>
-                  Mail is a mailbox, Deck is a board, Tables is a table, and
-                  Memories is a photo library. Shared native building blocks make
-                  navigation and actions predictable without flattening everything
-                  into a generic data screen.
-                </p>
-                <a class="text-link" href="/compatibility/">Explore the app model <ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
-              </div>
-
-              <div class="app-showcase">
-                <figure class="app-showcase-visual">
-                  <div class="app-showcase-meta">
-                    <span>
-                      <small>Product view</small>
-                      <strong>{{ selectedAppFamily.title }}</strong>
-                    </span>
-                    <span class="capture-provenance">
-                      <ShieldCheck :size="15" weight="fill" aria-hidden="true" />
-                      Real Compose UI
-                    </span>
-                  </div>
-                  <div
-                    class="app-showcase-capture"
-                    :style="{ aspectRatio: `${selectedAppCapture.width} / ${selectedAppCapture.height}` }"
-                  >
-                    <Transition name="capture-swap">
-                      <img
-                        :key="selectedAppCapture.scenario"
-                        :src="selectedAppCapture.websitePath"
-                        :alt="`${selectedAppFamily.title} shown in the real Nextcloud Native Compose interface with synthetic data`"
-                        :width="selectedAppCapture.width"
-                        :height="selectedAppCapture.height"
-                      />
-                    </Transition>
-                  </div>
-                  <figcaption>
-                    <span>{{ selectedAppFamily.apps }}</span>
-                    <span>Synthetic data, captured from the app.</span>
-                  </figcaption>
-                </figure>
-
-                <div class="app-family-list">
-                  <article
-                    v-for="(family, index) in appFamilies"
-                    :key="family.title"
-                    :class="{ active: activeAppFamily === index }"
-                  >
-                    <button
-                      type="button"
-                      :aria-expanded="activeAppFamily === index"
-                      @click="activeAppFamily = index"
-                    >
-                      <component :is="family.icon" :size="24" weight="duotone" aria-hidden="true" />
-                      <span>{{ family.title }}</span>
-                      <CaretDown :size="18" weight="bold" aria-hidden="true" />
-                    </button>
-                    <Transition name="accordion-detail">
-                      <div v-if="activeAppFamily === index" class="app-family-detail">
-                        <p>{{ family.body }}</p>
-                      </div>
-                    </Transition>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </section>
-
           <section id="native" class="native-method section-width" data-reveal>
             <div class="native-method-intro">
               <p class="eyebrow">How it works</p>
               <h2>Native is a behavior, not a coat of paint.</h2>
               <p>
-                Nextcloud Native reads verified capabilities and versioned contracts,
+                nati.ve reads verified capabilities and versioned contracts,
                 understands the work they represent, and chooses a useful native
                 interface. It never invents an endpoint or passes an embedded website
                 off as an app.
@@ -904,9 +895,9 @@ const frequentlyAsked = [
               <p class="eyebrow">Every device</p>
               <h2>Built for each device, not merely resized.</h2>
               <p>
-                Your data follows the same safety and sync rules everywhere. Each
-                platform still gets the layout, controls, lifecycle, and system
-                integration that belong there.
+                Supported builds apply the same core safety rules while each
+                platform keeps its own layout, controls, lifecycle, and available
+                system integration.
               </p>
             </div>
             <div class="platform-story-content">
@@ -914,7 +905,7 @@ const frequentlyAsked = [
                 <img
                   class="platform-story-desktop"
                   :src="platformDesktopCapture.websitePath"
-                  alt="Nextcloud Native Files on desktop with folders, photos, documents, and offline availability"
+                  alt="nati.ve Files on desktop with folders, photos, documents, and offline availability"
                   :width="platformDesktopCapture.width"
                   :height="platformDesktopCapture.height"
                   loading="lazy"
@@ -922,7 +913,7 @@ const frequentlyAsked = [
                 <img
                   class="platform-story-mobile"
                   :src="mobileHomeCapture.websitePath"
-                  alt="Nextcloud Native home on mobile"
+                  alt="nati.ve home on mobile"
                   :width="mobileHomeCapture.width"
                   :height="mobileHomeCapture.height"
                   loading="lazy"
@@ -959,7 +950,7 @@ const frequentlyAsked = [
                 <h2>Follow the whole task, not a list of controls.</h2>
                 <p>Every guide uses current synthetic captures from the real app and explains the safe result you should expect.</p>
               </div>
-              <a class="text-link" href="/guides/">All guides <ArrowRight :size="18" weight="bold" /></a>
+              <a class="text-link" href="/guides/">All guides <ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             </div>
             <div class="guide-home-grid">
               <a v-for="guide in guides" :key="guide.path" class="guide-home-card" :href="guide.path">
@@ -1009,7 +1000,7 @@ const frequentlyAsked = [
                 <p class="eyebrow">Journal</p>
                 <h2>Notes from building the client.</h2>
               </div>
-              <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
+              <a class="text-link" href="/news/">All project stories <ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             </div>
 
             <div class="journal-layout">
@@ -1073,20 +1064,20 @@ const frequentlyAsked = [
                 or bring a platform integration you care about.
               </p>
             </div>
-            <nav class="contribute-links" aria-label="Contribute to Nextcloud Native">
+            <nav class="contribute-links" aria-label="Contribute to nati.ve">
               <a href="/contributing/">Contribution guide <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
               <a :href="githubUrl" target="_blank" rel="noreferrer">Browse the source <GithubLogo :size="17" weight="fill" aria-hidden="true" /></a>
               <a :href="`${githubUrl}/issues`" target="_blank" rel="noreferrer">Open issues <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
             </nav>
           </section>
         </div>
-      </template>
+      </NativeHome>
 
       <section v-else-if="isGuidesLanding" class="guides-index section-width">
         <header class="guides-index-heading">
           <div>
             <p class="eyebrow">
-              {{ currentGuidePlatformHub ? `${currentGuidePlatformHub.device} guides` : "Nextcloud Native guides" }}
+              {{ currentGuidePlatformHub ? `${currentGuidePlatformHub.device} guides` : "nati.ve guides" }}
             </p>
             <h1>{{ currentGuidePlatformHub?.title ?? "Choose your platform, then finish a workflow." }}</h1>
             <p>
@@ -1096,7 +1087,7 @@ const frequentlyAsked = [
           <div class="guides-index-summary" aria-label="Guide library summary">
             <span><strong>{{ visibleGuideLibrary.length }}</strong> maintained guides</span>
             <span><strong>{{ visibleGuideLibrary.reduce((total, guide) => total + guide.steps.length, 0) }}</strong> illustrated steps</span>
-            <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+            <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Synthetic data in real Compose UI</span>
           </div>
         </header>
 
@@ -1121,9 +1112,18 @@ const frequentlyAsked = [
           </p>
         </aside>
 
-        <div class="guides-featured-grid">
+        <div class="guide-library-toolbar">
+          <label class="guide-library-search">
+            <MagnifyingGlass :size="20" aria-hidden="true" />
+            <span class="sr-only">Search this guide library</span>
+            <input v-model="guideSearch" type="search" placeholder="Find a workflow, app, or topic" />
+          </label>
+          <p role="status">{{ filteredGuideLibrary.length }} {{ filteredGuideLibrary.length === 1 ? 'guide' : 'guides' }}{{ guideSearch.trim() ? ' found' : ' to explore' }}</p>
+        </div>
+
+        <div v-if="filteredGuideLibrary.length" class="guides-featured-grid">
           <a
-            v-for="(guide, guideIndex) in visibleGuideLibrary"
+            v-for="(guide, guideIndex) in filteredGuideLibrary"
             :key="guide.path"
             class="guide-index-card"
             :href="guide.path"
@@ -1153,6 +1153,11 @@ const frequentlyAsked = [
               <strong>Open guide <ArrowRight :size="16" weight="bold" aria-hidden="true" /></strong>
             </div>
           </a>
+        </div>
+        <div v-else class="guide-library-empty">
+          <h2>No matching guides</h2>
+          <p>Try another topic or browse all the guides for this platform.</p>
+          <button type="button" class="native-button" @click="guideSearch = ''">Clear search</button>
         </div>
       </section>
 
@@ -1403,7 +1408,7 @@ const frequentlyAsked = [
                   </a>
                   <figcaption>
                     <span>{{ step.imageCaption }}</span>
-                    <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+                    <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" /> Synthetic data in real Compose UI</span>
                   </figcaption>
                 </figure>
                 <div class="markdown-body guide-step-body" v-html="step.html"></div>
@@ -1446,7 +1451,7 @@ const frequentlyAsked = [
         <article class="news-article">
           <a class="doc-back" href="/news/">Project news</a>
           <header class="doc-heading" data-reveal>
-            <p class="eyebrow">Product story</p>
+            <p class="eyebrow">Dated product story</p>
             <h1>{{ currentPost.title }}</h1>
             <p>{{ currentPost.description }}</p>
             <div class="page-record">
@@ -1481,12 +1486,13 @@ const frequentlyAsked = [
             />
             <figcaption>{{ currentPost.imageCaption }}</figcaption>
           </figure>
+          <PageOutline :headings="currentPost.headings" label="In this article" />
           <div class="markdown-body" data-reveal v-html="currentPost.html"></div>
           <ArticleRoadmap :slug="currentPost.path.split('/').filter(Boolean).at(-1)" />
           <aside class="article-related" aria-labelledby="article-related-title">
             <div>
               <p class="eyebrow">Continue exploring</p>
-              <h2 id="article-related-title">Related Nextcloud Native guides</h2>
+              <h2 id="article-related-title">Related product stories</h2>
             </div>
             <a v-for="post in relatedPosts" :key="post.path" :href="post.path">
               <span>{{ post.title }}</span>
@@ -1506,11 +1512,11 @@ const frequentlyAsked = [
 
       <section v-else-if="isNewsIndex" class="news-index section-width">
         <header class="doc-heading" data-reveal>
-          <p class="eyebrow">Nextcloud Native news</p>
+          <p class="eyebrow">nati.ve news</p>
           <h1>What your Nextcloud can do in one native client.</h1>
-          <p>Practical guides explain everyday workflows, the technology behind them, and the public roadmap for each area.</p>
+          <p>Dated product and design notes explain decisions made while building the client. Use current guides, compatibility notes, and release notes for support decisions.</p>
           <div class="page-record">
-            <span><strong>Stories</strong> {{ news.length }} maintained guides</span>
+            <span><strong>Stories</strong> {{ news.length }} dated articles</span>
             <span><strong>Latest review</strong> {{ news[0]?.lastUpdated }}</span>
             <a :href="`${githubUrl}/tree/main/website/content/news`" target="_blank" rel="noreferrer">
               Browse article sources
@@ -1553,7 +1559,7 @@ const frequentlyAsked = [
             <div class="page-record">
               <span><strong>Source</strong> {{ changelog.file }}</span>
               <span v-if="!changelog.available"><strong>Status</strong> Awaiting the first public release</span>
-              <a :href="`${githubUrl}/blob/main/${changelog.file}`" target="_blank" rel="noreferrer">
+              <a :href="`${githubUrl}/blob/main/CHANGELOG.md`" target="_blank" rel="noreferrer">
                 View source history
                 <GithubLogo :size="14" weight="fill" aria-hidden="true" />
               </a>
@@ -1576,13 +1582,21 @@ const frequentlyAsked = [
               :key="doc.path"
               :href="doc.path"
               :class="{ active: doc.path === currentDoc.path }"
+              :aria-current="doc.path === currentDoc.path ? 'page' : undefined"
             >
               {{ doc.shortTitle }}
             </a>
           </nav>
+          <PageOutline :headings="currentDoc.headings" :expanded="true" label="On this page" />
         </aside>
 
         <article class="doc-article">
+          <details class="doc-mobile-navigation">
+            <summary>Documentation <CaretDown :size="16" aria-hidden="true" /></summary>
+            <nav aria-label="Browse documentation">
+              <a v-for="doc in docs" :key="doc.path" :href="doc.path" :aria-current="doc.path === currentDoc.path ? 'page' : undefined">{{ doc.shortTitle }}</a>
+            </nav>
+          </details>
           <template v-if="currentDoc.path === '/roadmap/'">
             <header class="roadmap-route-heading" data-reveal>
               <p class="eyebrow">Product roadmap</p>
@@ -1598,7 +1612,7 @@ const frequentlyAsked = [
             </details>
           </template>
           <template v-else>
-            <a class="doc-back" href="/#docs">Nextcloud Native documentation</a>
+            <a class="doc-back" href="/#docs">nati.ve documentation</a>
             <header class="doc-heading" data-reveal>
               <p class="eyebrow">Repository documentation</p>
               <h1>{{ currentDoc.title }}</h1>
@@ -1612,6 +1626,7 @@ const frequentlyAsked = [
                 </a>
               </div>
             </header>
+            <PageOutline class="doc-inline-outline" :headings="currentDoc.headings" label="On this page" />
             <div class="markdown-body" data-reveal v-html="currentDoc.html"></div>
           </template>
         </article>
@@ -1625,23 +1640,37 @@ const frequentlyAsked = [
     </main>
 
     <footer class="site-footer section-width">
-      <a class="brand footer-brand" href="/">
-        <span class="brand-mark">
-          <img src="/cloud.svg" alt="" width="25" height="25" />
-        </span>
-        <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
-      </a>
-      <p>An independent AGPL-3.0-or-later project by Obiente.</p>
-      <div class="footer-links">
-        <a :href="githubUrl">GitHub</a>
-        <a href="/guides/">Guides</a>
-        <a href="/roadmap/">Roadmap</a>
-        <a href="/news/">Journal</a>
-        <a href="/changelog/">Changelog</a>
-        <a href="/visual-qa/">Visual QA</a>
-        <a href="/security/">Security</a>
-        <a :href="`${githubUrl}/blob/main/LICENSE`">License</a>
+      <div class="footer-identity">
+        <a class="brand footer-brand" href="/">
+          <span class="native-brand-mark"><img :src="resolvedTheme === 'light' ? '/brand/native-mark.svg' : '/brand/native-mark-dark.svg'" alt="" width="38" height="38" /></span>
+          <span class="brand-copy"><strong>nati.ve</strong></span>
+        </a>
+        <p>Your Nextcloud, in a native workspace.</p>
       </div>
+      <nav class="footer-directory" aria-label="Footer navigation">
+        <div>
+          <h2>Explore</h2>
+          <a href="/#apps">Native apps</a>
+          <a href="/#downloads">Downloads</a>
+          <a href="/guides/">Guides</a>
+          <a href="/compatibility/">Compatibility</a>
+        </div>
+        <div>
+          <h2>Project</h2>
+          <a href="/architecture/">Documentation</a>
+          <a href="/roadmap/">Roadmap</a>
+          <a href="/news/">Journal</a>
+          <a href="/changelog/">Changelog</a>
+        </div>
+        <div>
+          <h2>Get involved</h2>
+          <a :href="githubUrl">GitHub</a>
+          <a href="/contributing/">Contributing</a>
+          <a href="/security/">Security</a>
+          <a :href="`${githubUrl}/blob/main/LICENSE`">License</a>
+        </div>
+      </nav>
+      <p class="footer-legal">An independent AGPL-3.0-or-later project by Obiente.</p>
     </footer>
   </div>
 </template>

@@ -13,10 +13,11 @@ tag="$4"
 channel="$5"
 version_name="$6"
 version_code="$7"
+max_android_apk_bytes=268435456
 
 [[ -f "$manifest" ]]
 [[ -f "$apk" ]]
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ "$tag" =~ ^(v0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*|nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8})$ ]]
 [[ "$channel" == "prerelease-v1" || "$channel" == "nightly-v1" ]]
 [[ -n "$version_name" && "$version_name" != *$'\n'* ]]
@@ -25,8 +26,13 @@ version_code="$7"
 apk_name="$(basename "$apk")"
 apk_size="$(stat --format='%s' "$apk")"
 apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
-apk_url="https://github.com/${repository}/releases/download/${tag}/${apk_name}"
-release_notes_url="https://github.com/${repository}/releases/tag/${tag}"
+[[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
+jq -en \
+    --argjson apk_size "$apk_size" \
+    --argjson maximum "$max_android_apk_bytes" \
+    '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
+apk_url="https://github.com/${release_url_repository}/releases/download/${tag}/${apk_name}"
+release_notes_url="https://github.com/${release_url_repository}/releases/tag/${tag}"
 
 jq -e \
     --arg channel "$channel" \
@@ -36,7 +42,13 @@ jq -e \
     --argjson apk_size "$apk_size" \
     --arg apk_sha256 "$apk_sha256" \
     --arg release_notes_url "$release_notes_url" \
+    --argjson maximum_apk_size "$max_android_apk_bytes" \
     '
+      keys == [
+        "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+        "packageName", "releaseNotesUrl", "schemaVersion",
+        "signingCertificateSha256Digests", "versionCode", "versionName"
+      ] and
       .schemaVersion == 1 and
       .channel == $channel and
       .versionName == $version_name and
@@ -44,6 +56,7 @@ jq -e \
       .packageName == "dev.obiente.nextcloudnative" and
       .minimumAndroidSdk == 26 and
       .apkUrl == $apk_url and
+      (.apkSize | type == "number" and . > 0 and . <= $maximum_apk_size and floor == .) and
       .apkSize == $apk_size and
       .apkSha256 == $apk_sha256 and
       .releaseNotesUrl == $release_notes_url and

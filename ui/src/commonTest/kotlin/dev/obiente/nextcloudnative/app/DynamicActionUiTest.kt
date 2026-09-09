@@ -92,6 +92,65 @@ class DynamicActionUiTest {
     }
 
     @Test
+    fun `verified create can target the exact active singleton route across schema resource identities`() {
+        val create = action(
+            "create-team",
+            ActionIntent.create,
+            ActionRisk.mutating,
+            HttpMethod.POST,
+        ).copy(
+            resourceId = "create-team-body",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/chores/api/v1.0/team",
+                operationId = "create-team",
+                bodyFieldNames = listOf("name"),
+                requiredBodyFieldNames = listOf("name"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val form = view(
+            id = "create-team.form",
+            resourceId = create.resourceId,
+            component = NativeComponent.form,
+            sourceActionId = create.id,
+        ).copy(confidence = Confidence.verified)
+        val read = action(
+            "get-team",
+            ActionIntent.read,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(
+            resourceId = "team-response",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/chores/api/v1.0/team",
+                operationId = "get-team",
+            ),
+        )
+        val active = view(
+            id = "get-team.detail",
+            resourceId = read.resourceId,
+            component = NativeComponent.detail,
+            sourceActionId = read.id,
+        )
+
+        assertTrue(dynamicRootFormTargetsActiveSurface(create, form, active, read, null))
+        assertFalse(
+            dynamicRootFormTargetsActiveSurface(
+                create.copy(binding = create.binding.copy(path = "/apps/chores/api/v1.0/teams")),
+                form,
+                active,
+                read,
+                null,
+            ),
+        )
+        assertFalse(dynamicRootFormTargetsActiveSurface(create, form, active, read, "trash"))
+    }
+
+    @Test
     fun `verified upload targets only its active read surface with complete bindings`() {
         val upload = action(
             "upload-image",
@@ -169,6 +228,72 @@ class DynamicActionUiTest {
                 activeReadAction = read,
                 plannedBindingValues = mapOf("houseId" to "house-7"),
                 selectedRecordResourceId = "houses",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `verified execute with a fully bound body targets its selected collection record`() {
+        val accept = action(
+            "accept-invitation",
+            ActionIntent.execute,
+            ActionRisk.mutating,
+            HttpMethod.POST,
+        ).copy(
+            resourceId = "invitations",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/account/invitations/accept",
+                operationId = "accept-invitation",
+                bodyFieldNames = listOf("teamId"),
+                requiredBodyFieldNames = listOf("teamId"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val form = view(
+            id = "accept-invitation.form",
+            resourceId = "invitations",
+            component = NativeComponent.form,
+            sourceActionId = accept.id,
+        ).copy(confidence = Confidence.verified)
+        val active = view(
+            id = "invitations.list",
+            resourceId = "invitations",
+            component = NativeComponent.collectionList,
+            sourceActionId = "list-invitations",
+        )
+        val read = action(
+            "list-invitations",
+            ActionIntent.list,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(resourceId = "invitations", confidence = Confidence.verified)
+
+        assertTrue(
+            dynamicContextualFormTargetsActiveSurface(
+                action = accept,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = mapOf("teamId" to "42"),
+                selectedRecordResourceId = "invitations",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = accept,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = emptyMap(),
+                selectedRecordResourceId = "invitations",
                 selectedCollectionState = null,
                 hasEditableFileField = false,
                 uniqueTargetResource = true,

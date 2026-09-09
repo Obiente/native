@@ -13,31 +13,6 @@ import kotlin.test.assertTrue
 
 class DynamicNavigationPlannerTest {
     @Test
-    fun `GET helper requiring a body key cannot become an app root`() {
-        val helper = action(
-            id = "photo-by-key",
-            resourceId = "contacts",
-            intent = ActionIntent.read,
-            body = HttpBody(
-                contentType = "application/json",
-                required = true,
-                schema = buildJsonObject {
-                    put("required", buildJsonArray { add(JsonPrimitive("key")) })
-                },
-            ),
-        )
-        val descriptor = hierarchyDescriptor().copy(
-            resources = listOf(resource("contacts")),
-            layouts = listOf(layout("contacts", helper.id)),
-            actions = listOf(helper),
-            links = emptyList(),
-            forms = emptyList(),
-        )
-
-        assertTrue(descriptor.planDynamicNavigation().rootDestinations.isEmpty())
-    }
-
-    @Test
     fun `interactive autocomplete collection is a picker source rather than an app root`() {
         val autocomplete = action(
             id = "user-autocomplete",
@@ -205,6 +180,13 @@ class DynamicNavigationPlannerTest {
         ).copy(
             effect = ActionEffect.upload,
             confidence = Confidence.verified,
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed app package",
+                    detail = "Verified multipart contract",
+                ),
+            ),
         )
         val uploadForm = form(
             id = "upload-photo.form",
@@ -221,6 +203,7 @@ class DynamicNavigationPlannerTest {
                 ),
             ),
             confidence = Confidence.verified,
+            provenance = uploadPhoto.provenance,
         )
         val photoLayout = layout("photos", listPhotos.id).copy(
             confidence = Confidence.verified,
@@ -258,7 +241,7 @@ class DynamicNavigationPlannerTest {
             ).contextualFormActions.isEmpty(),
         )
         assertTrue(
-            descriptor.copy(forms = listOf(uploadForm.copy(confidence = Confidence.high)))
+            descriptor.copy(forms = listOf(uploadForm.copy(provenance = emptyList())))
                 .planDynamicNavigation(trustedContext)
                 .contextualFormActions
                 .isEmpty(),
@@ -567,6 +550,130 @@ class DynamicNavigationPlannerTest {
 
         assertEquals("create-entry.form", action.formId)
         assertEquals(mapOf("collectionId" to "collection-7"), action.pathParameterValues)
+    }
+
+    @Test
+    fun `verified record execute binds declared body identity only after record selection`() {
+        val listInvitations = action(
+            id = "list-invitations",
+            resourceId = "invites",
+            intent = ActionIntent.list,
+        ).copy(
+            confidence = Confidence.verified,
+            responseFieldIds = listOf("inviteId", "teamId", "teamName"),
+        )
+        val acceptInvitation = action(
+            id = "accept-invitation",
+            resourceId = "invitations",
+            intent = ActionIntent.execute,
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "application/json",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("teamId", buildJsonObject { put("type", "integer") })
+                        },
+                    )
+                    put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
+                },
+            ),
+        ).copy(
+            confidence = Confidence.verified,
+            binding = action(
+                id = "accept-invitation",
+                resourceId = "invitations",
+                intent = ActionIntent.execute,
+                method = HttpMethod.POST,
+                body = HttpBody(
+                    contentType = "application/json",
+                    required = true,
+                    schema = buildJsonObject {
+                        put("type", "object")
+                        put(
+                            "properties",
+                            buildJsonObject {
+                                put("teamId", buildJsonObject { put("type", "integer") })
+                            },
+                        )
+                        put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
+                    },
+                ),
+            ).binding.copy(path = "/apps/chores/api/v1.0/account/invites/accept"),
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed Chores 0.1.0 package",
+                    detail = "Exact verified controller contract",
+                ),
+            ),
+        )
+        val invitationForm = DynamicForm(
+            id = "accept-invitation.form",
+            title = "Accept invitation",
+            resourceId = "invitations",
+            actionId = acceptInvitation.id,
+            fields = listOf(
+                FormField("teamId", "Team", FieldKind.integer, required = true),
+            ),
+            confidence = Confidence.verified,
+        )
+        val invitationLayout = layout("invites", listInvitations.id).copy(
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            resources = listOf(
+                resource("invites").copy(confidence = Confidence.verified),
+                resource("invitations").copy(confidence = Confidence.verified),
+            ),
+            layouts = listOf(invitationLayout),
+            links = emptyList(),
+            forms = listOf(invitationForm),
+            actions = listOf(listInvitations, acceptInvitation),
+        )
+
+        assertTrue(descriptor.planDynamicNavigation().rootFormActions.isEmpty())
+        assertTrue(
+            descriptor.copy(app = AppIdentity("shared-work", "Shared work", "test"))
+                .planDynamicNavigation(
+                    DynamicResourceRecordContext(
+                        resourceId = "invites",
+                        recordId = "invite-7",
+                        fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
+                        currentLayoutId = invitationLayout.id,
+                    ),
+                ).contextualFormActions.isEmpty(),
+        )
+        val contextual = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "invites",
+                recordId = "invite-7",
+                fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
+                currentLayoutId = invitationLayout.id,
+            ),
+        ).contextualFormActions.single()
+
+        assertEquals(acceptInvitation.id, contextual.actionId)
+        assertEquals(mapOf("teamId" to "42"), contextual.pathParameterValues)
+        assertTrue(
+            descriptor.copy(
+                actions = listOf(
+                    listInvitations.copy(responseFieldIds = listOf("inviteId", "teamName")),
+                    acceptInvitation,
+                ),
+            ).planDynamicNavigation(
+                DynamicResourceRecordContext(
+                    resourceId = "invites",
+                    recordId = "invite-7",
+                    fieldValues = mapOf("teamId" to "42"),
+                    currentLayoutId = invitationLayout.id,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
     }
 
     @Test

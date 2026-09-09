@@ -230,79 +230,6 @@ fun groupwareDavDetailRequest(objectHref: String): GroupwareDavRequest = Groupwa
     maximumResponseBytes = DAV_OBJECT_RESPONSE_BYTES,
 )
 
-enum class GroupwareDavMutation {
-    Create,
-    Update,
-    Delete,
-}
-
-data class GroupwareDavMutationSpec(
-    val kind: GroupwareDavKind,
-    val mutation: GroupwareDavMutation,
-    val objectHref: String,
-    val etag: String? = null,
-    val content: String? = null,
-)
-
-/**
- * Builds conflict-safe DAV writes without executing them. Updates and deletes require an ETag;
- * creates use If-None-Match so an opaque server resource can never be overwritten accidentally.
- */
-fun GroupwareDavMutationSpec.toGroupwareDavRequest(): GroupwareDavRequest {
-    val href = objectHref.requireSafeDavHref()
-    val expectedSuffix = if (kind == GroupwareDavKind.Contact) ".vcf" else ".ics"
-    require(href.substringBefore('?').endsWith(expectedSuffix, ignoreCase = true)) {
-        "The DAV object extension does not match its content kind."
-    }
-    val safeEtag = etag?.takeIf {
-        it.isNotBlank() && it.length <= MAX_DAV_ETAG_LENGTH && it.none(Char::isISOControl)
-    }
-    val headers = when (mutation) {
-        GroupwareDavMutation.Create -> {
-            require(etag == null) { "A new DAV object cannot carry an existing ETag." }
-            mapOf("If-None-Match" to "*")
-        }
-        GroupwareDavMutation.Update, GroupwareDavMutation.Delete -> {
-            require(safeEtag != null) { "An ETag is required for conflict-safe DAV changes." }
-            mapOf("If-Match" to safeEtag)
-        }
-    }
-    val body = when (mutation) {
-        GroupwareDavMutation.Delete -> {
-            require(content == null) { "A DAV delete request cannot include object content." }
-            null
-        }
-        GroupwareDavMutation.Create, GroupwareDavMutation.Update -> {
-            val value = requireNotNull(content) { "DAV object content is required." }
-            require(value.encodeToByteArray().size <= MAX_DAV_OBJECT_BYTES && '\u0000' !in value) {
-                "The DAV object content is invalid or too large."
-            }
-            val requiredMarkers = when (kind) {
-                GroupwareDavKind.Contact -> listOf("BEGIN:VCARD", "END:VCARD")
-                GroupwareDavKind.Event -> listOf("BEGIN:VCALENDAR", "BEGIN:VEVENT", "END:VEVENT", "END:VCALENDAR")
-                GroupwareDavKind.Task -> listOf("BEGIN:VCALENDAR", "BEGIN:VTODO", "END:VTODO", "END:VCALENDAR")
-            }
-            require(requiredMarkers.all { marker -> marker in value.uppercase() }) {
-                "The DAV object content does not match its declared kind."
-            }
-            value.encodeToByteArray()
-        }
-    }
-    return GroupwareDavRequest(
-        method = when (mutation) {
-            GroupwareDavMutation.Create, GroupwareDavMutation.Update -> "PUT"
-            GroupwareDavMutation.Delete -> "DELETE"
-        },
-        relativePath = href,
-        contentType = body?.let {
-            if (kind == GroupwareDavKind.Contact) "text/vcard; charset=utf-8" else "text/calendar; charset=utf-8"
-        },
-        body = body,
-        headers = headers,
-        maximumResponseBytes = DAV_MUTATION_RESPONSE_BYTES,
-    )
-}
-
 private fun addressBookQueryBody(maxResults: Int): String = """
     <?xml version="1.0" encoding="UTF-8"?>
     <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
@@ -345,17 +272,26 @@ fun groupwareAddressBookHomeHref(userId: String): String {
     return "/remote.php/dav/addressbooks/users/${userId.encodeDavPathSegment()}/"
 }
 
-fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> {
+fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VEVENT")
+
+fun parseGroupwareTaskCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VTODO")
+
+private fun parseGroupwareCalendarsForComponent(
+    response: NextcloudApiResponse,
+    componentName: String,
+): List<GroupwareCalendar> {
     require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
     return xml.xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
             ?: return@mapNotNull null
         if (!block.containsXmlElement("calendar")) return@mapNotNull null
-        val supportsEvents = block.xmlOpeningTags("comp").any { component ->
-            component.xmlAttribute("name")?.equals("VEVENT", ignoreCase = true) == true
+        val supportsComponent = block.xmlOpeningTags("comp").any { component ->
+            component.xmlAttribute("name")?.equals(componentName, ignoreCase = true) == true
         }
-        if (!supportsEvents) return@mapNotNull null
+        if (!supportsComponent) return@mapNotNull null
         val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
         GroupwareCalendar(
             href = href.requireSafeDavHref(),
@@ -423,7 +359,7 @@ fun parseGroupwareContact(
         CalendarProperty(declaration, line.substring(separator + 1))
     }
     fun property(name: String): CalendarProperty? = properties(name).firstOrNull()
-    val fallbackName = property("N")?.value?.split(';')?.filter(String::isNotBlank)
+    val fallbackName = property("N")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
         ?.joinToString(" ")?.decodeCalendarText()
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
@@ -438,8 +374,13 @@ fun parseGroupwareContact(
         emails = properties("EMAIL").map { it.value.trim() }.filter(String::isNotBlank).distinct(),
         phones = properties("TEL").map { it.value.trim().decodeCalendarText() }
             .filter(String::isNotBlank).distinct(),
-        organization = property("ORG")?.value?.decodeCalendarText()?.trimEnd(';')?.takeIf(String::isNotBlank),
-        address = property("ADR")?.value?.split(';')?.filter(String::isNotBlank)
+        organization = property("ORG")?.value
+            ?.splitUnescapedCalendarComponents(';')
+            ?.dropLastWhile(String::isEmpty)
+            ?.joinToString(";")
+            ?.decodeCalendarText()
+            ?.takeIf(String::isNotBlank),
+        address = property("ADR")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
             ?.joinToString(", ")?.decodeCalendarText()?.takeIf(String::isNotBlank),
         birthday = property("BDAY")?.value?.trim()?.takeIf(String::isNotBlank),
         notes = property("NOTE")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
@@ -458,6 +399,9 @@ fun createGroupwareContactContent(
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The contact id is invalid." }
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     return buildList {
         add("BEGIN:VCARD")
         add("VERSION:4.0")
@@ -483,6 +427,9 @@ fun updateGroupwareContactContent(
     notes: String?,
 ): String {
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     val lines = contact.rawVCard.unfoldCalendarLines().toMutableList()
     fun replaceSingle(name: String, replacement: String?, removeAdditional: Boolean = true) {
         val indexes = lines.indices.filter { index ->
@@ -519,6 +466,11 @@ fun updateGroupwareContactContent(
     return lines.joinToString("\r\n", postfix = "\r\n")
 }
 
+internal fun groupwareContactEmailIsSingleValue(email: String): Boolean =
+    email.none { character ->
+        character.isISOControl() || character == '\u2028' || character == '\u2029'
+    }
+
 fun parseGroupwareCalendarEvents(
     calendarHref: String,
     response: NextcloudApiResponse,
@@ -528,7 +480,7 @@ fun parseGroupwareCalendarEvents(
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: return@flatMap emptyList()
         val calendar = block.xmlText("calendar-data")?.decodeXmlEntities() ?: return@flatMap emptyList()
-        parseGroupwareCalendarEventComponents(
+        parseGroupwareCalendarEventsFromContent(
             calendarHref = calendarHref,
             href = href,
             etag = block.xmlText("getetag")?.decodeXmlEntities()?.trim(),
@@ -543,12 +495,11 @@ fun parseGroupwareCalendarEvent(
     etag: String?,
     content: String,
 ): GroupwareCalendarEvent? {
-    val lines = content.unfoldCalendarLines()
-    val component = lines.calendarEventComponents().firstOrNull() ?: return null
-    return parseGroupwareCalendarEventComponent(calendarHref, href, etag, content, component)
+    val components = parseGroupwareCalendarEventsFromContent(calendarHref, href, etag, content)
+    return components.firstOrNull { event -> event.recurrenceId == null } ?: components.firstOrNull()
 }
 
-private fun parseGroupwareCalendarEventComponents(
+internal fun parseGroupwareCalendarEventsFromContent(
     calendarHref: String,
     href: String,
     etag: String?,
@@ -665,7 +616,7 @@ fun expandGroupwareCalendarEvents(
                 result += master.copy(
                     start = occurrenceStart,
                     end = master.end?.shiftCalendarValue(master.start, occurrenceStart),
-                    recurrenceId = occurrenceStart,
+                    recurrenceId = occurrenceStart.takeIf { it != master.start },
                     isGeneratedOccurrence = occurrenceStart != master.start,
                 )
             }
@@ -863,20 +814,7 @@ private fun calendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     else -> 31
 }
 
-private fun List<String>.calendarEventComponents(): List<List<String>> {
-    val result = mutableListOf<List<String>>()
-    var start = -1
-    forEachIndexed { index, line ->
-        when {
-            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index + 1
-            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
-                result += subList(start, index)
-                start = -1
-            }
-        }
-    }
-    return result
-}
+private fun List<String>.calendarEventComponents(): List<List<String>> = calendarComponentLines("VEVENT")
 
 private const val MAX_CALENDAR_OCCURRENCES = 50_000
 private val CALENDAR_WEEK_DAYS = setOf("MO", "TU", "WE", "TH", "FR", "SA", "SU")
@@ -929,13 +867,15 @@ fun updateGroupwareCalendarEventContent(
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
-    val eventStart = original.indexOfFirst { it.equals("BEGIN:VEVENT", ignoreCase = true) }
-    val eventEnd = original.indexOfFirst { it.equals("END:VEVENT", ignoreCase = true) }
-    if (eventStart < 0 || eventEnd <= eventStart) {
-        return createGroupwareCalendarEventContent(
-            event.uid, title, start, end, allDay, location, description, recurrenceRule,
-        )
+    val eventRange = original.calendarComponentRanges("VEVENT").firstOrNull { range ->
+        val component = original.subList(range.first + 1, range.last)
+        val uid = component.calendarPropertyValue("UID")
+            ?: event.href.substringAfterLast('/').substringBeforeLast('.')
+        uid == event.uid && component.calendarPropertyValue("RECURRENCE-ID") == event.recurrenceId
     }
+    requireNotNull(eventRange) { "The selected calendar event component could not be found." }
+    val eventStart = eventRange.first
+    var eventEnd = eventRange.last
     val replacements = linkedMapOf(
         "DTSTART" to "DTSTART${if (allDay) ";VALUE=DATE" else ""}:$start",
         "DTEND" to end?.let { "DTEND${if (allDay) ";VALUE=DATE" else ""}:$it" },
@@ -945,15 +885,17 @@ fun updateGroupwareCalendarEventContent(
         "RRULE" to recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { "RRULE:$it" },
     )
     replacements.forEach { (name, replacement) ->
-        val index = (eventStart + 1 until eventEnd).firstOrNull { lineIndex ->
-            original[lineIndex].substringBefore(':').substringBefore(';').equals(name, ignoreCase = true)
-        }
+        val index = original.directCalendarPropertyIndex(eventStart, eventEnd, name)
         when {
             index != null && replacement != null -> original[index] = replacement
-            index != null -> original.removeAt(index)
-            replacement != null -> original.add(original.indexOfFirst {
-                it.equals("END:VEVENT", ignoreCase = true)
-            }, replacement)
+            index != null -> {
+                original.removeAt(index)
+                eventEnd -= 1
+            }
+            replacement != null -> {
+                original.add(eventEnd, replacement)
+                eventEnd += 1
+            }
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
@@ -1036,9 +978,9 @@ private val SUPPORTED_CALENDAR_RECURRENCE_FIELDS = setOf(
     "WKST",
 )
 
-private data class CalendarProperty(val declaration: String, val value: String)
+internal data class CalendarProperty(val declaration: String, val value: String)
 
-private fun String.unfoldCalendarLines(): List<String> {
+internal fun String.unfoldCalendarLines(): List<String> {
     val result = mutableListOf<String>()
     replace("\r\n", "\n").replace('\r', '\n').split('\n').forEach { line ->
         if ((line.startsWith(' ') || line.startsWith('\t')) && result.isNotEmpty()) {
@@ -1050,15 +992,51 @@ private fun String.unfoldCalendarLines(): List<String> {
     return result
 }
 
-private fun String.escapeCalendarText(): String = replace("\\", "\\\\")
+internal fun String.normalizeGroupwareTextLineEndings(): String =
+    replace("\r\n", "\n").replace('\r', '\n')
+
+internal fun String.escapeCalendarText(): String = normalizeGroupwareTextLineEndings()
+    .replace("\\", "\\\\")
     .replace("\n", "\\n")
     .replace(",", "\\,")
     .replace(";", "\\;")
 
-private fun String.decodeCalendarText(): String = replace("\\n", "\n", ignoreCase = true)
-    .replace("\\,", ",")
-    .replace("\\;", ";")
-    .replace("\\\\", "\\")
+internal fun String.decodeCalendarText(): String = buildString(length) {
+    var index = 0
+    while (index < this@decodeCalendarText.length) {
+        val character = this@decodeCalendarText[index]
+        if (character != '\\' || index == this@decodeCalendarText.lastIndex) {
+            append(character)
+            index += 1
+            continue
+        }
+        val escaped = this@decodeCalendarText[index + 1]
+        when (escaped) {
+            'n', 'N' -> append('\n')
+            '\\', ',', ';' -> append(escaped)
+            else -> {
+                append('\\')
+                append(escaped)
+            }
+        }
+        index += 2
+    }
+}
+
+private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
+    val components = mutableListOf<String>()
+    var componentStart = 0
+    var precedingBackslashes = 0
+    forEachIndexed { index, character ->
+        if (character == delimiter && precedingBackslashes % 2 == 0) {
+            components += substring(componentStart, index)
+            componentStart = index + 1
+        }
+        precedingBackslashes = if (character == '\\') precedingBackslashes + 1 else 0
+    }
+    components += substring(componentStart)
+    return components
+}
 
 private fun String.isCalendarDateValue(allDay: Boolean): Boolean =
     if (allDay) length == 8 && all(Char::isDigit)
@@ -1089,7 +1067,7 @@ private fun String.decodePercentEncoding(): String {
     return bytes.toByteArray().decodeToString()
 }
 
-private fun String.xmlElements(localName: String): List<String> {
+internal fun String.xmlElements(localName: String): List<String> {
     val results = mutableListOf<String>()
     var cursor = 0
     while (cursor < length) {
@@ -1127,7 +1105,7 @@ private fun String.xmlElements(localName: String): List<String> {
     return results
 }
 
-private fun String.xmlText(localName: String): String? = xmlElements(localName).firstOrNull()?.let { element ->
+internal fun String.xmlText(localName: String): String? = xmlElements(localName).firstOrNull()?.let { element ->
     val openingEnd = element.indexOf('>')
     val closingStart = element.lastIndexOf("</")
     if (openingEnd >= 0 && closingStart > openingEnd) element.substring(openingEnd + 1, closingStart) else null
@@ -1190,7 +1168,7 @@ private fun String.xmlOpeningTags(localName: String): List<String> {
     return tags
 }
 
-private fun String.decodeXmlEntities(): String {
+internal fun String.decodeXmlEntities(): String {
     val numeric = buildString(length) {
         var cursor = 0
         while (cursor < this@decodeXmlEntities.length) {
@@ -1234,7 +1212,7 @@ private fun StringBuilder.appendCodePoint(codePoint: Int) {
     }
 }
 
-private fun String.requireSafeDavHref(): String {
+internal fun String.requireSafeDavHref(): String {
     val normalized = lowercase()
     require(
         startsWith("/remote.php/dav/") &&
@@ -1246,7 +1224,7 @@ private fun String.requireSafeDavHref(): String {
     return this
 }
 
-private fun String.escapeDavXml(): String = buildString(length) {
+internal fun String.escapeDavXml(): String = buildString(length) {
     for (character in this@escapeDavXml) {
         append(
             when (character) {
@@ -1273,15 +1251,12 @@ private const val MAX_DAV_SYNC_LIMIT = 1_000
 private const val MAX_DAV_SYNC_PAGES = 100
 private const val MAX_DAV_SYNC_TOKEN_LENGTH = 4_096
 private const val MAX_DAV_HREF_LENGTH = 4_096
-private const val MAX_DAV_ETAG_LENGTH = 1_024
 private const val MAX_CALENDAR_RECURRENCE_RULE_LENGTH = 1_024
-private const val MAX_DAV_OBJECT_BYTES = 1 * 1024 * 1024
 private const val DAV_DISCOVERY_RESPONSE_BYTES = 1L * 1024L * 1024L
 private const val DAV_COLLECTION_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_QUERY_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_SYNC_RESPONSE_BYTES = 4L * 1024L * 1024L
-private const val DAV_OBJECT_RESPONSE_BYTES = 1L * 1024L * 1024L
-private const val DAV_MUTATION_RESPONSE_BYTES = 256L * 1024L
+private const val DAV_OBJECT_RESPONSE_BYTES = 4L * 1024L * 1024L
 
 private val PRINCIPAL_DISCOVERY_BODY = """
     <?xml version="1.0" encoding="UTF-8"?>

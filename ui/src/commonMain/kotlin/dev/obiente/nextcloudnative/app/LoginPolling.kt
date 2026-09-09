@@ -41,3 +41,28 @@ internal fun loginPollRetryDelayMillis(consecutiveFailures: Int): Long {
     }
     return delayMillis
 }
+
+fun loginPollPendingDiagnostic(usedFallback: Boolean): SupportDiagnosticEventDraft =
+    SupportDiagnosticEventDraft(
+        severity = SupportDiagnosticSeverity.Info,
+        component = SupportDiagnosticComponent.Authentication,
+        operation = "login.poll",
+        outcome = "pending",
+        code = "HTTP:404",
+        fields = listOf(
+            SupportDiagnosticFieldDraft(
+                "endpoint_role",
+                if (usedFallback) "fallback" else "primary",
+            ),
+            SupportDiagnosticFieldDraft("protocol_state", "awaiting-browser-approval"),
+        ),
+    )
+
+fun shouldRecordHttpStatusDiagnostic(
+    status: Int,
+    ignoredStatuses: Set<Int> = emptySet(),
+): Boolean {
+    require(status in 100..599)
+    require(ignoredStatuses.all { it in 100..599 })
+    return status !in 200..399 && status !in ignoredStatuses
+}

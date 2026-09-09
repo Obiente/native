@@ -102,6 +102,10 @@ test("downloads use stable channel URLs and a privacy-safe live GitHub star coun
   assert.match(nginx, /proxy_cache_use_stale[^;]*http_403/);
   assert.doesNotMatch(nginx, /proxy_cache_valid any/);
   assert.doesNotMatch(nginx, /proxy_cache_background_update on/);
+  assert.match(nginx, /absolute_redirect off/);
+  assert.match(nginx, /gzip on/);
+  assert.match(nginx, /gzip_proxied any/);
+  assert.match(nginx, /default_type application\/manifest\+json/);
   assert.match(dockerfile, /NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1/);
   assert.match(dockerfile, /COPY website\/nginx\.conf \/etc\/nginx\/templates\/default\.conf\.template/);
   assert.match(app, /fetchGithubRepository/);

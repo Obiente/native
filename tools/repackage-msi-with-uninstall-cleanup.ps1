@@ -189,3 +189,5 @@ $rebuilt = @(Get-ChildItem -LiteralPath $PackageDirectory -Filter "*.msi" -File)
 if ($rebuilt.Count -ne 1) {
     throw "Expected exactly one rebuilt MSI package, found $($rebuilt.Count)."
 }
+
+& (Join-Path $PSScriptRoot "set-windows-package-display-name.ps1") -Package $rebuilt[0].FullName

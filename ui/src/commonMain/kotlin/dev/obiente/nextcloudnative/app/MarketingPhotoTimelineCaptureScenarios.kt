@@ -67,7 +67,7 @@ internal fun MarketingPhotoTimelineFailureScenario(
                         MarketingCaptureScenario.PhotoTimelineRevalidationErrorMobile ->
                             "Could not check for newer photos. Your saved timeline is still available."
                         MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile ->
-                            "Could not return to the newest photos. This older window is still available."
+                            "Could not load the newest photos. The photos shown here are still available."
                         MarketingCaptureScenario.PhotoTimelineRawRetryMobile ->
                             "Some RAW photos could not be loaded. " +
                                 "They will be retried without hiding other photos."

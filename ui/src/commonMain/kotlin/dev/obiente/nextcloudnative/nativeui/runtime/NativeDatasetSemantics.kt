@@ -192,6 +192,7 @@ internal fun validateNativeCellEdit(field: FieldSpec, value: String): String? {
 data class NativeDatasetContext(
     val parentResourceId: String? = null,
     val parentRecord: NativeRecord? = null,
+    val currentUserId: String? = null,
     /**
      * Exact values already resolved by descriptor-driven navigation.
      *
@@ -201,6 +202,18 @@ data class NativeDatasetContext(
     val bindingValues: Map<String, String> = emptyMap(),
     val relatedRecords: Map<String, List<NativeRecord>> = emptyMap(),
     val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
+    /** Resources proven by navigation semantics to contain mailbox collection counts. */
+    val mailCollectionSummaryResourceIds: Set<String> = emptySet(),
+    /** Stable adaptive collection identity shared by a collection and its adjacent detail pane. */
+    val collectionSearchScopeKey: String? = null,
+    /** Exact typed choices projected from an already-verified active record or embedded relation. */
+    val fieldChoices: Map<String, List<NativeFieldChoice>> = emptyMap(),
+)
+
+data class NativeFieldChoice(
+    val value: String,
+    val label: String,
+    val supportingText: String? = null,
 )
 
 data class NativeRelatedRecordPaging(
@@ -208,6 +221,7 @@ data class NativeRelatedRecordPaging(
     val error: String? = null,
     val discardedChoiceCount: Int = 0,
     val loadMore: (() -> Unit)? = null,
+    val retry: (() -> Unit)? = null,
     val returnToFirstPage: (() -> Unit)? = null,
 ) {
     init {

@@ -38,8 +38,8 @@ const baseOptions = {
       ].join("\n"),
     ),
   ],
-  repository: "Obiente/nc-native",
-  sourceRunUrl: "https://github.com/Obiente/nc-native/actions/runs/123456",
+  repository: "obiente/native",
+  sourceRunUrl: "https://github.com/obiente/native/actions/runs/123456",
   sourceSha,
   tag: "nightly-20260731-1543-run358-01234567",
 };
@@ -47,6 +47,7 @@ const baseOptions = {
 test("nightly notes are useful, traceable, and omit internal fragments", () => {
   const notes = composeNightlyReleaseNotes(baseOptions);
 
+  assert.ok(notes.startsWith(`# nati.ve ${baseOptions.tag}\n`));
   assert.match(notes, /## Current development highlights/);
   assert.match(notes, /cumulative and are not limited to changes since the previous nightly/);
   assert.match(
@@ -83,7 +84,7 @@ test("nightly notes disclose the unsigned Windows installation path", () => {
   );
   assert.match(
     notes,
-    /gh attestation verify <downloaded-msi> --repo Obiente\/nc-native/,
+    /gh attestation verify <downloaded-msi> --repo obiente\/native/,
   );
 });
 

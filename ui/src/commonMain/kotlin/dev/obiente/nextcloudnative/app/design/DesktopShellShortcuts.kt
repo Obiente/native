@@ -1,5 +1,10 @@
 package dev.obiente.nextcloudnative.app.design
 
+import dev.obiente.nextcloudnative.app.canonicalAppWorkspaceId
+
+internal fun desktopAppIdsMatch(appId: String, activeAppId: String?): Boolean =
+    activeAppId != null && canonicalAppWorkspaceId(appId) == canonicalAppWorkspaceId(activeAppId)
+
 enum class NextcloudDesktopShortcutKey {
     One,
     Two,

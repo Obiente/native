@@ -4,10 +4,28 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class LoginPollingTest {
+    @Test
+    fun `pending diagnostic identifies protocol state without endpoint data`() {
+        val primary = loginPollPendingDiagnostic(usedFallback = false)
+        val fallback = loginPollPendingDiagnostic(usedFallback = true)
+
+        assertEquals("pending", primary.outcome)
+        assertEquals("HTTP:404", primary.code)
+        assertEquals("primary", primary.fields.single { it.name == "endpoint_role" }.value)
+        assertEquals("fallback", fallback.fields.single { it.name == "endpoint_role" }.value)
+        assertEquals("awaiting-browser-approval", primary.fields.single { it.name == "protocol_state" }.value)
+        assertNull(primary.message)
+        assertNull(primary.exception)
+        assertTrue(!shouldRecordHttpStatusDiagnostic(404, setOf(404)))
+        assertTrue(shouldRecordHttpStatusDiagnostic(401, setOf(404)))
+        assertTrue(shouldRecordHttpStatusDiagnostic(500))
+    }
+
     @Test
     fun transientDnsFailuresRetryWithoutLosingTheApprovalWindow() = runBlocking {
         val session = NextcloudSession("https://cloud.example.com", "person", "secret")

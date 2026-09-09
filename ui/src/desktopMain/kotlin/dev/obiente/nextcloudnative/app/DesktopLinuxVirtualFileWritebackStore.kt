@@ -339,7 +339,7 @@ internal class DesktopLinuxVirtualFileWritebackStore(
     }
 
     private companion object {
-        const val MAX_WRITEBACK_BYTES = 256L * 1024L * 1024L * 1024L
+        const val MAX_WRITEBACK_BYTES = Long.MAX_VALUE
         const val MAX_MANIFEST_BYTES = 64 * 1024
     }
 }

@@ -189,6 +189,68 @@ class DesktopStartOnLoginTest {
     }
 
     @Test
+    fun linuxForegroundLaunchReplacesAServiceFromAnotherBuild() {
+        val root = createTempDirectory("nextcloud-native-startup-foreground-refresh").toFile()
+        val configHome = File(root, ".config")
+        val service = File(configHome, "systemd/user/nextcloud-native.service").apply {
+            parentFile.mkdirs()
+        }
+        val staleLauncher = File(root, "development/NextcloudNative").apply {
+            parentFile.mkdirs()
+            writeText("development launcher")
+        }
+        val installedLauncher = File(root, "installed/NextcloudNative").apply {
+            parentFile.mkdirs()
+            writeText("installed launcher")
+        }
+        service.writeText(
+            """
+                [Service]
+                ExecStart=${systemdExecArgument(staleLauncher.absolutePath)} --background --service
+            """.trimIndent() + "\n",
+        )
+        val commands = mutableListOf<List<String>>()
+        var forwarded = false
+
+        assertTrue(
+            handoffLinuxForegroundLaunchToUserService(
+                osName = "Linux",
+                userHome = root,
+                linuxConfigHome = configHome,
+                launcherPath = installedLauncher.absolutePath,
+                processRunner = { command ->
+                    commands += command
+                    0
+                },
+                activationForwarder = {
+                    forwarded = true
+                    true
+                },
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                listOf("systemctl", "--user", "stop", "nextcloud-native.service"),
+                listOf("systemctl", "--user", "daemon-reload"),
+                listOf("systemctl", "--user", "start", "nextcloud-native.service"),
+            ),
+            commands,
+        )
+        assertTrue(
+            service.readText().contains(
+                "ExecStart=${systemdExecArgument(installedLauncher.absolutePath)} --background --service",
+            ),
+        )
+        assertTrue(
+            File(configHome, "autostart/nextcloud-native.desktop").readText().contains(
+                "Exec=${desktopEntryExecArgument(installedLauncher.absolutePath)} --autostart",
+            ),
+        )
+        assertTrue(forwarded)
+    }
+
+    @Test
     fun explicitQuitStopsTheConfiguredUserServiceWithoutWaitingForItself() {
         val root = createTempDirectory("nextcloud-native-startup-explicit-quit").toFile()
         File(root, ".config/systemd/user").mkdirs()

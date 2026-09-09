@@ -38,10 +38,9 @@ fun buildFileSearchDavRequest(
               <oc:owner-id/><oc:owner-display-name/><nc:has-preview/>
             </d:prop></d:select>
             <d:from><d:scope><d:href>$scope</d:href><d:depth>infinity</d:depth></d:scope></d:from>
-            <d:where><d:or>
+            <d:where>
               <d:like><d:prop><d:displayname/></d:prop><d:literal>$literal</d:literal></d:like>
-              <d:like><d:prop><d:getcontenttype/></d:prop><d:literal>$literal</d:literal></d:like>
-            </d:or></d:where>
+            </d:where>
             <d:orderby><d:order><d:prop><d:displayname/></d:prop><d:ascending/></d:order></d:orderby>
             <d:limit><d:nresults>$maximumResults</d:nresults></d:limit>
           </d:basicsearch>

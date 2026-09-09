@@ -21,9 +21,10 @@ internal data class AppWorkspaceNavigationMemory<T>(
         appId: String,
         initialState: T,
         maximumRememberedApps: Int = MAX_REMEMBERED_APP_WORKSPACES,
+        restoreRememberedState: Boolean = true,
     ): AppWorkspaceNavigationSwitch<T> {
         require(appId.isNotBlank()) { "An app workspace ID is required." }
-        val restoredState = lastStateByApp[appId] ?: initialState
+        val restoredState = lastStateByApp[appId].takeIf { restoreRememberedState } ?: initialState
         val remembered = ((lastStateByApp - appId) + (appId to restoredState))
             .entries
             .toList()

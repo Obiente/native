@@ -11,6 +11,15 @@ enum class ThemePreference {
     Dark,
 }
 
+enum class DurableMutationRecoveryKind(val storageKey: String) {
+    Calendar("calendar-v1"),
+    Contacts("contacts-v1"),
+    Tasks("tasks-v1"),
+    NoteDeletion("note-deletion-v1"),
+}
+
+internal const val MAX_DURABLE_MUTATION_RECOVERY_BYTES = 1024 * 1024
+
 enum class PlatformCapability {
     Notifications,
     Camera,
@@ -49,6 +58,29 @@ data class LoginChallenge(
     val pollFallbackEndpoint: String?,
     val token: String,
     val loginUrl: String,
+    val transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+)
+
+enum class LoginTransportSecurity {
+    Tls,
+    PlainHttp,
+}
+
+internal fun serverAddressUsesPlainHttp(value: String): Boolean =
+    value.trim().startsWith("http://", ignoreCase = true)
+
+data class ServerCertificateReview(
+    val serverOrigin: String,
+    val serverDisplayName: String,
+    val subject: String,
+    val issuer: String,
+    val sha256Fingerprint: String,
+    val validFrom: String,
+    val validUntil: String,
+)
+
+data class TrustedServerCertificate(
+    val sha256Fingerprint: String,
 )
 
 sealed interface LoginPollResult {
@@ -78,6 +110,7 @@ data class NextcloudServerInfo(
     val themeName: String?,
     val themeColor: String?,
     val apps: List<NextcloudAppEntry>,
+    val appsAuthoritative: Boolean = true,
     val recognizeBridge: RecognizeBridgeDiscovery = RecognizeBridgeDiscovery.NotAdvertised,
     val fileSharing: NextcloudFileSharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
 )
@@ -376,6 +409,11 @@ data class NextcloudNote(
     val isShared: Boolean = false,
 )
 
+sealed interface NextcloudNotePresence {
+    data class Present(val note: NextcloudNote) : NextcloudNotePresence
+    data object Absent : NextcloudNotePresence
+}
+
 sealed interface NextcloudConditionalRead<out T> {
     data class Modified<T>(
         val value: T,
@@ -397,7 +435,7 @@ data class NextcloudPerson(
     val backend: String,
 )
 
-interface NextcloudPlatformServices {
+interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -476,6 +514,9 @@ interface NextcloudPlatformServices {
     /** True only when this platform can execute durable local-folder/remote-folder sync pairs. */
     val supportsBidirectionalFileSync: Boolean get() = false
 
+    /** True only when authenticated same-origin web content can be isolated and rendered in-app. */
+    val supportsEmbeddedNextcloudWebApp: Boolean get() = false
+
     /** Native handoff is opt-in; unsupported platforms must never imply that an action was launched. */
     val externalFileHandoffSupport: ExternalFileHandoffSupport
         get() = ExternalFileHandoffSupport.Unsupported("External file handoff is not supported on this platform.")
@@ -521,6 +562,42 @@ interface NextcloudPlatformServices {
             "Anonymized support reports are unavailable on this platform.",
         )
 
+    /** Current explicit support submission. No implementation may start one automatically. */
+    fun supportDiagnosticsSubmissionStates(): Flow<SupportDiagnosticsSubmissionState> =
+        flowOf(SupportDiagnosticsSubmissionState.Unsupported("Direct support submission is unavailable on this platform."))
+
+    /** Packages and submits the reviewed report after the UI confirmation step. */
+    suspend fun submitSupportDiagnostics(reproductionSteps: String) = Unit
+
+    /** Retries only a retained, idempotent submission after reconciliation. */
+    suspend fun retrySupportDiagnosticsSubmission() = Unit
+
+    /** Cancels packaging or upload and removes its app-private temporary archive. */
+    suspend fun cancelSupportDiagnosticsSubmission(): Boolean = false
+
+    /** Deletes one retained submitted report after an explicit user confirmation. */
+    suspend fun deleteSubmittedSupportDiagnosticsReport(recordId: String): SupportDiagnosticsDeletionResult =
+        SupportDiagnosticsDeletionResult.Unsupported(
+            "Deleting submitted support reports is unavailable on this platform.",
+        )
+
+    /** Refreshes private report statuses and conversations using their retained capabilities. */
+    suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        SupportDiagnosticsConversationResult.Unsupported(
+            "Private support conversations are unavailable on this platform.",
+        )
+
+    /** Sends one reporter reply through the retained private report capability. */
+    suspend fun sendSubmittedSupportDiagnosticsMessage(
+        recordId: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = SupportDiagnosticsConversationResult.Unsupported(
+        "Private support conversations are unavailable on this platform.",
+    )
+    suspend fun acknowledgeSubmittedSupportDiagnosticsReplyDelivery(recordId: String): Boolean = false
+    /** Acknowledges the currently visible status and maintainer messages on this device. */
+    suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean = false
+
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false
 
@@ -542,6 +619,29 @@ interface NextcloudPlatformServices {
 
     fun saveLastOpenedAppId(appId: String)
 
+    /**
+     * Loads one account-scoped mutation intent from app-private durable storage.
+     *
+     * Callers persist the intent before contacting the server and clear it only after an
+     * authoritative response or a follow-up read proves the postcondition.
+     */
+    suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = null
+
+    suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = false
+
+    suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = false
+
     /** Loads an account-scoped verified app contract without any cached user records. */
     suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -554,29 +654,38 @@ interface NextcloudPlatformServices {
         discovery: DynamicDescriptorDiscovery,
     ) = Unit
 
+    /** Loads one exact account/app/action/record mutation staged before a non-idempotent send. */
+    suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = null
+
+    /** Durably stages exact validated request values before transport may observe the mutation. */
+    suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ): Unit = throw UnsupportedOperationException(
+        "Crash-safe dynamic mutation staging is not supported on this platform.",
+    )
+
+    /** Clears a staged mutation only after success or an authoritative rejected outcome. */
+    suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = Unit
+
     fun loadSession(): NextcloudSession?
 
     suspend fun saveSession(session: NextcloudSession)
 
     suspend fun clearSession()
-
-    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
-    suspend fun loadDeckCardDraft(
-        session: NextcloudSession,
-        key: DeckCardDraftKey,
-    ): PersistedDeckCardDraft? = null
-
-    /** Persists one bounded Deck editor draft without storing account credentials in its key. */
-    suspend fun saveDeckCardDraft(
-        session: NextcloudSession,
-        draft: PersistedDeckCardDraft,
-    ) = Unit
-
-    /** Clears a draft after an explicit cancel or a confirmed successful server mutation. */
-    suspend fun clearDeckCardDraft(
-        session: NextcloudSession,
-        key: DeckCardDraftKey,
-    ) = Unit
 
     fun openExternalUrl(url: String)
 
@@ -613,7 +722,25 @@ interface NextcloudPlatformServices {
             ?: "Deck attachment handoff is not supported on this platform.",
     )
 
-    suspend fun beginLogin(serverUrl: String): LoginChallenge
+    suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+    ): LoginChallenge
+
+    /** Returns a review only when a platform can safely offer explicit certificate trust. */
+    suspend fun inspectServerCertificateFailure(
+        serverUrl: String,
+        failure: Throwable,
+    ): ServerCertificateReview? = null
+
+    /** Revalidates and persists the exact reviewed certificate for its HTTPS origin. */
+    suspend fun trustServerCertificate(review: ServerCertificateReview) {
+        error("Explicit server certificate trust is not supported on this platform.")
+    }
+
+    fun trustedServerCertificate(serverUrl: String): TrustedServerCertificate? = null
+
+    fun removeTrustedServerCertificate(serverUrl: String): Boolean = false
 
     suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult
 
@@ -822,6 +949,16 @@ interface NextcloudPlatformServices {
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
     suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
 
+    /** Lists durable share-sheet uploads that still need progress or user review. */
+    suspend fun loadIncomingShareRecoveries(
+        session: NextcloudSession,
+        userId: String,
+        cursor: String?,
+    ): IncomingShareRecoveryPage = IncomingShareRecoveryPage()
+
+    /** Opens the platform-owned recovery surface for one durable share-sheet upload. */
+    fun openIncomingShareRecovery(requestId: String) = Unit
+
     suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery = MediaSyncFolderDiscovery(
         support = MediaSyncFolderDiscoverySupport.Unsupported,
         suggestions = emptyList(),
@@ -877,6 +1014,29 @@ interface NextcloudPlatformServices {
     ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
         "Folder sync conflict review is not available on this platform.",
     )
+
+    /** Resolves one validated conflict batch and runs the resulting guarded work once. */
+    suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult {
+        require(resolutions.isNotEmpty() && resolutions.size <= MAX_FILE_SYNC_CONFLICT_BATCH)
+        if (resolutions.size == 1) {
+            val resolution = resolutions.single()
+            return resolveFileSyncConflict(
+                session,
+                userId,
+                pairId,
+                resolution.workId,
+                resolution.choice,
+            )
+        }
+        return FileSyncCenterActionResult.Unsupported(
+            "Atomic folder sync conflict batches are not available on this platform.",
+        )
+    }
 
     suspend fun removeFileSyncPair(
         session: NextcloudSession,
@@ -1028,7 +1188,7 @@ interface NextcloudPlatformServices {
         session: NextcloudSession,
         userId: String,
         path: String,
-        maxBytes: Long = DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
+        maxBytes: Long = MAX_IN_MEMORY_FILE_CONTENT_BYTES,
     ): NextcloudFileContent
 
     /**
@@ -1306,12 +1466,14 @@ interface NextcloudPlatformServices {
     /**
      * Reads the server-wide direct-editing inventory without creating an edit token.
      *
-     * Implementations should preserve the response ETag so repeated discovery can use a
-     * conditional request. A token-producing document open is a separate explicit action.
+     * The editor inventory and core file-ID capability have independent validators. Implementations
+     * may conditionally read the inventory only when they can combine a 304 with the supplied cached
+     * value and a fresh core-capabilities response. A token-producing document open is separate.
      */
     suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String? = null,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities? = null,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
         NextcloudConditionalRead.Modified(
             NextcloudDocumentEditingCapabilities.Unavailable,
@@ -1344,6 +1506,12 @@ interface NextcloudPlatformServices {
         NextcloudConditionalRead.Modified(listNotes(session), responseEtag = null)
 
     suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote
+
+    /** Returns [Absent] only when an authoritative detail request answers 404 or 410. */
+    suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = NextcloudNotePresence.Present(loadNote(session, noteId))
 
     suspend fun loadNoteConditionally(
         session: NextcloudSession,
@@ -1458,31 +1626,11 @@ interface NextcloudPlatformServices {
     suspend fun revokeSession(session: NextcloudSession)
 }
 
-/**
- * Read-only handle for one immutable remote file generation.
- *
- * Closing the handle is idempotent from the caller's perspective. Platform implementations own
- * the synchronization needed to reject new reads and cancel an active request.
- */
-class NextcloudFileRangeSession(
-    val size: Long,
-    private val readBlock: suspend (offset: Long, length: Int) -> ByteArray,
-    private val closeBlock: () -> Unit = {},
-) : AutoCloseable {
-    init {
-        require(size > 0L) { "A file range session must have a positive size." }
-    }
-
-    suspend fun read(offset: Long, length: Int): ByteArray = readBlock(offset, length)
-
-    override fun close() = closeBlock()
-}
-
 const val DEFAULT_PREVIEW_DIMENSION = 512
 const val MIN_PREVIEW_DIMENSION = 32
 const val MAX_PREVIEW_DIMENSION = 2048
-const val DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES = 64L * 1024L * 1024L
-const val MAX_OFFLINE_FILE_BYTES = 512L * 1024L * 1024L
+/** Safety budget for APIs that intentionally return a detached ByteArray, never a transfer limit. */
+const val MAX_IN_MEMORY_FILE_CONTENT_BYTES = 64L * 1024L * 1024L
 const val MAX_EDITABLE_TEXT_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_ACTIVITY_LIMIT = 50
 const val DEFAULT_TALK_MESSAGE_PAGE_SIZE = 100
@@ -1491,38 +1639,6 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
-const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
-
-fun requireSafeFileRangeEtag(value: String): String {
-    require(value == value.trim() && value.isNotEmpty() && value.length <= MAX_FILE_RANGE_ETAG_LENGTH) {
-        "A safe current strong ETag is required for a file range read."
-    }
-    if (value.first() == '"' || value.last() == '"') {
-        require(
-            value.length >= 2 &&
-                value.first() == '"' &&
-                value.last() == '"' &&
-                value.substring(1, value.lastIndex).all(::isHttpEntityTagCharacter),
-        ) {
-            "A safe current strong ETag is required for a file range read."
-        }
-        return value
-    }
-    require(
-        value != "*" &&
-            value.length <= MAX_FILE_RANGE_ETAG_LENGTH - 2 &&
-            value.all(::isHttpEntityTagCharacter),
-    ) {
-        "A safe current strong ETag is required for a file range read."
-    }
-    return "\"$value\""
-}
-
-private fun isHttpEntityTagCharacter(character: Char): Boolean =
-    character.code == 0x21 ||
-        character.code in 0x23..0x7E ||
-        character.code in 0x80..0xFF
-
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {
         "Dynamic API paths must be relative to the connected Nextcloud server."
@@ -1540,7 +1656,7 @@ fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     val maximumAllowedResponse = if (
         relativePath.matches(Regex("^/index\\.php/apps/memories/api/image/decodable/[1-9][0-9]*$"))
     ) {
-        DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES
+        MAX_IN_MEMORY_FILE_CONTENT_BYTES
     } else {
         MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES
     }
@@ -1584,6 +1700,12 @@ fun buildNextcloudFileUrl(serverUrl: String, userId: String, path: String): Stri
         }
         .joinToString("/") { encodeUrlPathSegment(it) }
     return serverUrl.trimEnd('/') + "/remote.php/dav/files/$encodedUserId/" + encodedPath
+}
+
+fun buildNextcloudChunkUploadUrl(serverUrl: String, userId: String, uploadId: String): String {
+    require(isValidNextcloudChunkUploadId(uploadId)) { "The chunk upload ID is invalid." }
+    return serverUrl.trimEnd('/') + "/remote.php/dav/uploads/" +
+        encodeUrlPathSegment(userId) + "/" + encodeUrlPathSegment(uploadId)
 }
 
 private fun encodeUrlPathSegment(value: String): String = encodeUrlComponent(value)

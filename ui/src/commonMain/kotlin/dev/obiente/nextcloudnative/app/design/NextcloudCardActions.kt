@@ -63,7 +63,7 @@ fun NextcloudCardOverflow(
     Box(modifier) {
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls) 40.dp else 48.dp),
         ) {
             Icon(NextcloudIcons.More, contentDescription = "Actions for $itemLabel")
         }
@@ -71,14 +71,14 @@ fun NextcloudCardOverflow(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
             modifier = Modifier.semantics {
-                contentDescription = "Record actions for $itemLabel"
+                contentDescription = "Actions for $itemLabel"
             },
         ) {
             actions.forEach { action ->
                 DropdownMenuItem(
-                    modifier = action.semanticId?.let { semanticId ->
+                    modifier = action.semanticId?.let {
                         Modifier.semantics(mergeDescendants = true) {
-                            contentDescription = "Run record action $semanticId"
+                            contentDescription = action.label
                         }
                     } ?: Modifier.semantics(mergeDescendants = true) {},
                     text = {

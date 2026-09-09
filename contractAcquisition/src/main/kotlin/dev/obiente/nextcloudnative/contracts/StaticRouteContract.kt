@@ -34,6 +34,9 @@ internal fun synthesizeReadOnlyRouteContract(
         }
         .map { (_, bytes) -> bytes.decodeToString() }
         .toList()
+    val controllerSourcesByName = controllerSources.mapNotNull { source ->
+        parseControllerHeader(source)?.name?.removeSuffix("Controller")?.normalizedPhpName()?.let { it to source }
+    }.toMap()
     val controllerHeaders = controllerSources
         .mapNotNull(::parseControllerHeader)
         .associateBy { header -> header.name.normalizedPhpName() }
@@ -58,7 +61,6 @@ internal fun synthesizeReadOnlyRouteContract(
     routeGroups.take(MAX_STATIC_ROUTE_COUNT).forEach { route ->
         if (route.verb !in STATIC_ROUTE_VERBS) return@forEach
         val controller = controllers[route.controller.normalizedPhpName()] ?: return@forEach
-        if (route.method.normalizedPhpName() !in controller.methods) return@forEach
         var routePath = route.url
         route.requirements.forEach { (name, requirement) ->
             val fixed = requirement.fixedRequirementPathSegmentOrNull(name)
@@ -77,6 +79,42 @@ internal fun synthesizeReadOnlyRouteContract(
         val prefix = if (route.ocs) "/ocs/v2.php/apps/$appId" else "/apps/$appId"
         val fullPath = (prefix + routePath).replaceDoubleSlashes()
         val fullPathPlaceholders = fullPath.pathPlaceholders() ?: return@forEach
+        val verifiedExactWrite = verifiedChoresWrite(
+            appId = appId,
+            appVersion = appVersion,
+            route = route,
+            fullPath = fullPath,
+            controller = controller,
+            controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
+        ) ?: verifiedBudgetAccountWrite(
+            appId = appId,
+            appVersion = appVersion,
+            route = route,
+            fullPath = fullPath,
+            controller = controller,
+            controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
+        ) ?: verifiedMusicPlaylistWrite(
+            appId = appId,
+            appVersion = appVersion,
+            route = route,
+            fullPath = fullPath,
+            controller = controller,
+            controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
+        )
+        val verifiedChoresResponseSchema = verifiedChoresResponseSchema(
+            appId = appId,
+            appVersion = appVersion,
+            route = route,
+            fullPath = fullPath,
+            controller = controller,
+            controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
+        )
+        if (
+            route.method.normalizedPhpName() !in controller.methods &&
+            verifiedExactWrite == null
+        ) {
+            return@forEach
+        }
         val editableSettingsWrite = route.verb in EDITABLE_SETTINGS_VERBS &&
             fullPath.isEditableSettingsPath() &&
             fullPath.pathPlaceholders()?.isEmpty() == true &&
@@ -129,7 +167,7 @@ internal fun synthesizeReadOnlyRouteContract(
             !editableSettingsWrite &&
             settingsSetter == null &&
             !operationalRefreshWrite &&
-            crudWrite == null
+            crudWrite == null && verifiedExactWrite == null
         ) {
             return@forEach
         }
@@ -173,11 +211,13 @@ internal fun synthesizeReadOnlyRouteContract(
             route.method.normalizedPhpName() in COLLECTION_READ_METHODS ||
                 fullPath.isLikelyPluralCollectionPath()
             )
-        val itemSchema = JSONObject().put("type", "object").put("additionalProperties", true)
-        val responseSchema = if (collection) {
-            JSONObject().put("type", "array").put("items", itemSchema)
-        } else {
-            itemSchema
+        val responseSchema = verifiedChoresResponseSchema ?: run {
+            val itemSchema = JSONObject().put("type", "object").put("additionalProperties", true)
+            if (collection) {
+                JSONObject().put("type", "array").put("items", itemSchema)
+            } else {
+                itemSchema
+            }
         }
         val operationId = listOf(
             if (route.ocs) "ocs" else "route",
@@ -188,7 +228,8 @@ internal fun synthesizeReadOnlyRouteContract(
             .put("operationId", operationId)
             .put(
                 "summary",
-                settingsSetter?.fieldId?.let { "Change ${it.humanizedPhpName()}" }
+                verifiedExactWrite?.label
+                    ?: settingsSetter?.fieldId?.let { "Change ${it.humanizedPhpName()}" }
                     ?: route.method.humanizedPhpName(),
             )
             .put("parameters", parameters)
@@ -207,12 +248,18 @@ internal fun synthesizeReadOnlyRouteContract(
                         ),
                 ),
             )
+        verifiedRecordCursorField(
+            appId = appId,
+            appVersion = appVersion,
+            fullPath = fullPath,
+            operationId = operationId,
+        )?.let { fieldId -> operation.put(RECORD_CURSOR_FIELD_EXTENSION, fieldId) }
         if (operationalRefreshWrite) {
             operation.put(OPERATIONAL_ACTION_EXTENSION, "refresh")
         }
-        if (crudWrite != null) {
+        if (crudWrite != null || verifiedExactWrite != null) {
             operation.put(VERIFIED_CRUD_EXTENSION, true)
-            route.scalarWorkflowResourceId(fullPath)?.let { resourceId ->
+            (verifiedExactWrite?.resourceId ?: route.scalarWorkflowResourceId(fullPath))?.let { resourceId ->
                 operation.put(RESOURCE_ID_EXTENSION, resourceId)
             }
         }
@@ -262,6 +309,19 @@ internal fun synthesizeReadOnlyRouteContract(
                             ),
                         ),
                 )
+        } else if (verifiedExactWrite?.bodySchema != null) {
+            operation.put(
+                "requestBody",
+                JSONObject()
+                    .put("required", verifiedExactWrite.required)
+                    .put(
+                        "content",
+                        JSONObject().put(
+                            "application/json",
+                            JSONObject().put("schema", verifiedExactWrite.bodySchema),
+                        ),
+                    ),
+            )
         } else if (crudWrite?.bodyParameters?.isNotEmpty() == true) {
             val properties = JSONObject()
             val required = JSONArray()
@@ -546,14 +606,27 @@ internal const val VERIFIED_READ_ROUTE_EXTENSION = "x-nextcloud-native-verified-
 internal const val VERIFIED_STATIC_WRITE_EXTENSION = "x-nextcloud-native-verified-static-write"
 internal const val FALLBACK_FOR_OPERATION_EXTENSION = "x-nextcloud-native-fallback-for-operation-id"
 internal const val READ_FALLBACKS_EXTENSION = "x-nextcloud-native-read-fallback-operation-ids"
+internal const val RECORD_CURSOR_FIELD_EXTENSION = "x-nextcloud-native-record-cursor-field"
 internal const val OPERATIONAL_ACTION_EXTENSION = "x-nextcloud-native-operational-action"
 internal const val VERIFIED_CRUD_EXTENSION = "x-nextcloud-native-verified-crud"
+
+private fun verifiedRecordCursorField(
+    appId: String,
+    appVersion: String,
+    fullPath: String,
+    operationId: String,
+): String? = "dateInt".takeIf {
+    appId == "mail" &&
+        appVersion == "5.10.9" &&
+        fullPath == "/apps/mail/api/messages" &&
+        operationId == "route.messages.index"
+}
 
 private val SEMANTIC_PATH_NOISE = setOf(
     "api", "apps", "indexphp", "ocs", "ocsv1php", "ocsv2php", "list", "index", "getall", "findall",
 )
 
-private data class StaticRoute(
+internal data class StaticRoute(
     val controller: String,
     val method: String,
     val url: String,
@@ -562,7 +635,7 @@ private data class StaticRoute(
     val requirements: Map<String, String>,
 )
 
-private data class StaticApiController(
+internal data class StaticApiController(
     val name: String,
     val methods: Set<String>,
     val singleParameters: Map<String, StaticPhpParameter>,
@@ -573,7 +646,7 @@ private data class StaticApiController(
     val normalizedName: String = name.removeSuffix("Controller").normalizedPhpName()
 }
 
-private data class StaticPhpParameter(
+internal data class StaticPhpParameter(
     val name: String,
     val type: String,
     val required: Boolean = true,
@@ -588,6 +661,282 @@ private data class StaticSettingsSetter(
 private data class StaticCrudWrite(
     val bodyParameters: List<StaticPhpParameter>,
 )
+
+private fun isVerifiedChoresController(
+    appId: String,
+    appVersion: String,
+    controller: StaticApiController,
+    controllerSource: String?,
+): Boolean =
+    appId == "chores" && appVersion == "0.1.0" &&
+        controller.normalizedName == "api" && controllerSource != null &&
+        controllerSource.sha256() == CHORES_0_1_0_API_CONTROLLER_SHA256
+
+/**
+ * Declares the exact identities and invitation bindings serialized by the pinned Chores
+ * controller. These response shapes are coupled to the same signed-source digest as the write
+ * adapter so record values can authorize mutations only while both sides of the contract match.
+ */
+private fun verifiedChoresResponseSchema(
+    appId: String,
+    appVersion: String,
+    route: StaticRoute,
+    fullPath: String,
+    controller: StaticApiController,
+    controllerSource: String?,
+): JSONObject? {
+    if (route.verb != "GET" || !isVerifiedChoresController(
+            appId = appId,
+            appVersion = appVersion,
+            controller = controller,
+            controllerSource = controllerSource,
+        )
+    ) {
+        return null
+    }
+    val inviteSchema = closedObjectSchema(
+        properties = mapOf(
+            "inviteId" to stringSchema(title = "Invitation"),
+            "teamId" to integerSchema(title = "Team"),
+            "teamName" to stringSchema(title = "Team name"),
+            "userId" to stringSchema(title = "User"),
+        ),
+        required = listOf("inviteId", "teamId", "teamName", "userId"),
+    )
+    return when (fullPath) {
+        "/apps/chores/api/v1.0/team",
+        "/apps/chores/api/v1.0/account/team",
+        -> closedObjectSchema(
+            properties = mapOf(
+                "id" to integerSchema(title = "Team"),
+                "name" to stringSchema(title = "Team name"),
+                "owner" to stringSchema(title = "Owner"),
+                "members" to JSONObject()
+                    .put("type", "array")
+                    .put(
+                        "items",
+                        closedObjectSchema(
+                            properties = mapOf(
+                                "team_id" to integerSchema(title = "Team"),
+                                "member" to stringSchema(title = "Member"),
+                                "displayName" to stringSchema(title = "Display name"),
+                                "points" to integerSchema(title = "Points"),
+                            ),
+                            required = listOf("team_id", "member", "displayName", "points"),
+                        ),
+                    ),
+                "invites" to JSONObject().put("type", "array").put("items", inviteSchema),
+            ),
+            required = listOf("id", "name", "owner", "members", "invites"),
+        )
+        "/apps/chores/api/v1.0/account/invites" ->
+            JSONObject().put("type", "array").put("items", inviteSchema)
+        "/apps/chores/api/v1.0/team/{teamId}/chores" ->
+            JSONObject().put(
+                "type",
+                "array",
+            ).put(
+                "items",
+                closedObjectSchema(
+                    properties = mapOf(
+                        "id" to integerSchema(title = "Chore"),
+                        "name" to stringSchema(title = "Chore name"),
+                        "assignee" to nullableStringSchema(title = "Assignee"),
+                        "points" to integerSchema(title = "Points"),
+                        "due" to stringSchema(title = "Due", format = "date-time"),
+                        "repeat" to choresRepeatScheduleSchema(),
+                    ),
+                    required = listOf("id", "name", "points", "due", "repeat"),
+                ),
+            )
+        "/apps/chores/api/v1.0/team/{teamId}/work" ->
+            JSONObject().put(
+                "type",
+                "array",
+            ).put(
+                "items",
+                closedObjectSchema(
+                    properties = mapOf(
+                        "id" to stringSchema(title = "Completion id", format = "uuid"),
+                        "work_time" to stringSchema(title = "Completed at", format = "date-time"),
+                        "chore_id" to integerSchema(title = "Chore"),
+                        "member" to stringSchema(title = "Member"),
+                    ),
+                    required = listOf("id", "work_time", "chore_id", "member"),
+                ),
+            )
+        else -> null
+    }
+}
+
+/**
+ * Imports the mutation shapes from the exact signed Chores 0.1.0 controller audited alongside its
+ * web client. These routes hide their JSON inputs behind IRequest, so the general scalar verifier
+ * correctly rejects them. Pinning the controller digest keeps this exception fail-closed: a future
+ * Chores release must be audited before its changed write contract becomes callable.
+ */
+private fun verifiedChoresWrite(
+    appId: String,
+    appVersion: String,
+    route: StaticRoute,
+    fullPath: String,
+    controller: StaticApiController,
+    controllerSource: String?,
+): VerifiedExactWrite? {
+    if (!isVerifiedChoresController(appId, appVersion, controller, controllerSource)) {
+        return null
+    }
+    return when (route.verb to fullPath) {
+        "POST" to "/apps/chores/api/v1.0/team" -> VerifiedExactWrite(
+            label = "Create team",
+            resourceId = "team",
+            bodySchema = closedObjectSchema(
+                properties = mapOf("name" to stringSchema(title = "Team name")),
+                required = listOf("name"),
+            ),
+        )
+        "POST" to "/apps/chores/api/v1.0/team/{teamId}/invites" -> VerifiedExactWrite(
+            label = "Invite member",
+            resourceId = "team",
+            bodySchema = closedObjectSchema(
+                properties = mapOf("userId" to stringSchema(title = "Nextcloud user")),
+                required = listOf("userId"),
+            ),
+        )
+        "POST" to "/apps/chores/api/v1.0/account/invites/accept" -> VerifiedExactWrite(
+            label = "Accept invitation",
+            resourceId = "invitations",
+            bodySchema = closedObjectSchema(
+                properties = mapOf("teamId" to JSONObject().put("type", "integer").put("title", "Team")),
+                required = listOf("teamId"),
+            ),
+        )
+        "POST" to "/apps/chores/api/v1.0/team/{teamId}/chores" -> VerifiedExactWrite(
+            label = "Add chore",
+            resourceId = "chores",
+            bodySchema = closedObjectSchema(
+                properties = mapOf(
+                    "chores" to JSONObject()
+                        .put("type", "array")
+                        .put("format", "nextcloud-repeatable-object-array")
+                        .put("minItems", 1)
+                        .put("maxItems", 1)
+                        .put(
+                            "items",
+                            closedObjectSchema(
+                                properties = mapOf(
+                                    "name" to stringSchema(title = "Chore name"),
+                                    "points" to JSONObject().put("type", "integer").put("minimum", 1)
+                                        .put("maximum", 6).put("title", "Points (1-6)"),
+                                    "due" to stringSchema(title = "Due", format = "date-time"),
+                                    "repeat" to choresRepeatScheduleSchema(),
+                                ),
+                                required = listOf("name", "points", "due", "repeat"),
+                            ),
+                        ),
+                ),
+                required = listOf("chores"),
+            ),
+        )
+        "PATCH" to "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}" -> VerifiedExactWrite(
+            label = "Edit chore",
+            resourceId = "chores",
+            bodySchema = closedObjectSchema(
+                properties = mapOf(
+                    "name" to stringSchema(title = "Chore name"),
+                    "assignee" to stringSchema(title = "Assignee", format = "nextcloud-user-id"),
+                    "points" to JSONObject().put("type", "integer").put("minimum", 0).put("title", "Points"),
+                    "due" to stringSchema(title = "Due", format = "date-time"),
+                    "repeat" to choresRepeatScheduleSchema(),
+                ),
+                required = emptyList(),
+            ),
+            required = false,
+        )
+        "POST" to "/apps/chores/api/v1.0/team/{teamId}/work" -> VerifiedExactWrite(
+            label = "Mark as done",
+            resourceId = "chores",
+            bodySchema = closedObjectSchema(
+                properties = mapOf(
+                    "work" to JSONObject()
+                        .put("type", "array")
+                        .put("format", "nextcloud-repeatable-object-array")
+                        .put("minItems", 1)
+                        .put("maxItems", 1)
+                        .put(
+                            "items",
+                            closedObjectSchema(
+                                properties = mapOf(
+                                    "id" to stringSchema(title = "Completion id", format = "uuid"),
+                                    "work_time" to stringSchema(title = "Completed at", format = "date-time"),
+                                    "chore_id" to JSONObject().put("type", "integer").put("title", "Chore"),
+                                    "member" to stringSchema(title = "Member"),
+                                ),
+                                required = listOf("id", "work_time", "chore_id", "member"),
+                            ),
+                        ),
+                ),
+                required = listOf("work"),
+            ),
+        )
+        "DELETE" to "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}" ->
+            VerifiedExactWrite(
+                label = "Remove member",
+                resourceId = "team",
+                bodySchema = null,
+                required = false,
+            )
+        else -> null
+    }
+}
+
+internal fun closedObjectSchema(
+    properties: Map<String, JSONObject>,
+    required: List<String>,
+): JSONObject = JSONObject()
+    .put("type", "object")
+    .put("additionalProperties", false)
+    .put("properties", JSONObject(properties))
+    .also { schema ->
+        if (required.isNotEmpty()) schema.put("required", JSONArray(required))
+    }
+
+private fun integerSchema(title: String): JSONObject = JSONObject()
+    .put("type", "integer")
+    .put("title", title)
+
+private fun nullableStringSchema(title: String): JSONObject = JSONObject()
+    .put("type", JSONArray().put("string").put("null"))
+    .put("title", title)
+
+private fun choresRepeatScheduleSchema(): JSONObject {
+    val choices = linkedMapOf(
+        "s:1:-" to "Does not repeat",
+        "o:1" to "On demand",
+        "d:1" to "Every day",
+        "d:2" to "Every 2 days",
+        "d:3" to "Every 3 days",
+        "d:4" to "Every 4 days",
+        "d:5" to "Every 5 days",
+        "d:6" to "Every 6 days",
+        "w:1" to "Every week",
+        "w:2" to "Every 2 weeks",
+        "w:3" to "Every 3 weeks",
+        "w:4" to "Every 4 weeks",
+        "m:1" to "Every month",
+        "m:2" to "Every 2 months",
+        "m:3" to "Every 3 months",
+        "m:4" to "Every 4 months",
+        "m:6" to "Every 6 months",
+        "m:12" to "Every year",
+    )
+    return stringSchema(title = "Repeat")
+        .put("enum", JSONArray(choices.keys))
+        .put("x-nextcloud-native-enum-labels", JSONObject(choices))
+}
+
+private const val CHORES_0_1_0_API_CONTROLLER_SHA256 =
+    "146286dcb68bddd025e0a47e7edc134fbc94f0e9f594e9030663bb0f217f3cc6"
 
 /**
  * Proves only conventional scalar CRUD signatures. Every route placeholder and every required
@@ -1299,7 +1648,7 @@ private fun String.isSafeStaticJsonReturnType(): Boolean {
     return !endsWith("Response") && this !in STATIC_NON_DATA_RETURN_TYPES
 }
 
-private fun String.normalizedPhpName(): String = lowercase().filter(Char::isLetterOrDigit)
+internal fun String.normalizedPhpName(): String = lowercase().filter(Char::isLetterOrDigit)
 
 private fun String.humanizedPhpName(): String = buildString(length + 4) {
     this@humanizedPhpName.forEachIndexed { index, character ->

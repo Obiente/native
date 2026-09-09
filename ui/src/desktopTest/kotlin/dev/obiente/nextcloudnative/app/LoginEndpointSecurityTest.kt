@@ -22,14 +22,42 @@ class LoginEndpointSecurityTest {
     }
 
     @Test
-    fun sameOriginAdvertisedPollingPathIsPreserved() {
+    fun sameOriginPrettyPollingPathGetsEnteredBasePathCompatibilityEndpoint() {
         val relationships = validateLoginEndpointRelationships(
             enteredServerUrl = "https://cloud.example.com/nextcloud",
             loginUrl = "https://cloud.example.com/nextcloud/login",
             pollEndpoint = "https://cloud.example.com/custom/poll",
         )
 
+        assertEquals(
+            "https://cloud.example.com/nextcloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
+    }
+
+    @Test
+    fun canonicalPollingPathDoesNotCreateASecondEndpoint() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "https://cloud.example.com/nextcloud",
+            loginUrl = "https://cloud.example.com/nextcloud/login",
+            pollEndpoint = "https://cloud.example.com/nextcloud/index.php/login/v2/poll",
+        )
+
         assertEquals(null, relationships.pollFallbackEndpoint)
+    }
+
+    @Test
+    fun encodedBasePathIsPreservedInCompatibilityEndpoint() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "https://cloud.example.com/next%20cloud",
+            loginUrl = "https://cloud.example.com/next%20cloud/login",
+            pollEndpoint = "https://cloud.example.com/custom/poll",
+        )
+
+        assertEquals(
+            "https://cloud.example.com/next%20cloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
     }
 
     @Test
@@ -46,6 +74,64 @@ class LoginEndpointSecurityTest {
                 enteredServerUrl = "https://cloud.example.com",
                 loginUrl = "https://person@cloud.example.com/login",
                 pollEndpoint = "https://cloud.example.com/poll",
+            )
+        }
+    }
+
+    @Test
+    fun explicitlyEnteredPlainHttpIsLimitedToTheEnteredOrigin() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "http://cloud.home.test:8080/nextcloud",
+            loginUrl = "http://cloud.home.test:8080/nextcloud/login",
+            pollEndpoint = "http://cloud.home.test:8080/nextcloud/login/v2/poll",
+        )
+
+        assertTrue(relationships.loginOriginMatchesEntered)
+        assertTrue(relationships.pollOriginMatchesEntered)
+        assertEquals(
+            "http://cloud.home.test:8080/nextcloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
+        assertTrue(serverAddressUsesPlainHttp(" HTTP://cloud.home.test "))
+        assertFalse(serverAddressUsesPlainHttp("cloud.home.test"))
+
+        assertFailsWith<IllegalArgumentException> {
+            validateLoginEndpointRelationships(
+                enteredServerUrl = "http://cloud.home.test",
+                loginUrl = "http://other.home.test/login",
+                pollEndpoint = "http://cloud.home.test/login/v2/poll",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateLoginEndpointRelationships(
+                enteredServerUrl = "https://cloud.example.com",
+                loginUrl = "https://cloud.example.com/login",
+                pollEndpoint = "http://cloud.example.com/login/v2/poll",
+            )
+        }
+    }
+
+    @Test
+    fun plainHttpMayUpgradeAdvertisedEndpointsToHttps() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "http://cloud.home.test",
+            loginUrl = "https://identity.example.test/login",
+            pollEndpoint = "https://cloud.home.test/login/v2/poll",
+        )
+
+        assertFalse(relationships.loginOriginMatchesEntered)
+        assertFalse(relationships.pollOriginMatchesEntered)
+        assertEquals("http://cloud.home.test/index.php/login/v2/poll", relationships.pollFallbackEndpoint)
+        assertFalse(
+            loginResultOriginMatchesEntered(
+                "http://cloud.home.test",
+                "https://cloud.example.test",
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            loginResultOriginMatchesEntered(
+                "http://cloud.home.test",
+                "http://other.home.test",
             )
         }
     }

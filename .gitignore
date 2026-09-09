@@ -17,6 +17,8 @@
 .env
 .env.*
 !.env.example
+/integration/nextcloud-demo/.state/
+/integration/nextcloud-demo/reports/
 *.jks
 *.keystore
 *.p12
@@ -43,6 +45,7 @@ Thumbs.db
 /website/dist-indexnow/
 /website/dist-ssr/
 /website/.npm-cache/
+/.npm-cache/
 /website/src/generated/
 /website/public/search-index.json
 /website/public/obiente-avatar.png

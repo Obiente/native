@@ -77,11 +77,13 @@ data class FileOfflineJob(
     val attemptCount: Int,
     val enqueuedAtEpochMillis: Long,
     val failureMessage: String? = null,
+    val retryNotBeforeEpochMillis: Long? = null,
 ) {
     init {
         require(id > 0L)
         require(attemptCount >= 0)
         require(enqueuedAtEpochMillis >= 0L)
+        require(retryNotBeforeEpochMillis == null || retryNotBeforeEpochMillis >= 0L)
         require(expectedRemoteEtag == null || expectedRemoteEtag.isNotBlank())
         require(expectedLocalRevision == null || expectedLocalRevision.isNotBlank())
         require(failureMessage == null || failureMessage.length <= MAX_OFFLINE_FAILURE_LENGTH)
@@ -170,7 +172,9 @@ fun planFileOfflineRequest(
 fun markFileOfflineJobRunning(
     current: FileOfflineQueueState,
     jobId: Long,
+    nowEpochMillis: Long,
 ): FileOfflineQueueState = current.updateJob(jobId) { job ->
+    require(nowEpochMillis >= 0L)
     require(job.status in setOf(
         FileOfflineJobStatus.Queued,
         FileOfflineJobStatus.WaitingForNetwork,
@@ -181,14 +185,29 @@ fun markFileOfflineJobRunning(
     if (job.status == FileOfflineJobStatus.Running) {
         job
     } else {
-        job.copy(status = FileOfflineJobStatus.Running, attemptCount = job.attemptCount + 1, failureMessage = null)
+        require(job.retryNotBeforeEpochMillis == null || nowEpochMillis >= job.retryNotBeforeEpochMillis) {
+            "Offline work cannot start before its server retry deadline."
+        }
+        job.copy(
+            status = FileOfflineJobStatus.Running,
+            attemptCount = job.attemptCount + 1,
+            failureMessage = null,
+            retryNotBeforeEpochMillis = null,
+        )
     }
 }
 
 sealed interface FileOfflineJobResult {
     data class Downloaded(val localRevision: String, val remoteEtag: String) : FileOfflineJobResult
     data object LocalRemoved : FileOfflineJobResult
-    data class RetryableFailure(val message: String) : FileOfflineJobResult
+    data class RetryableFailure(
+        val message: String,
+        val retryNotBeforeEpochMillis: Long? = null,
+    ) : FileOfflineJobResult {
+        init {
+            require(retryNotBeforeEpochMillis == null || retryNotBeforeEpochMillis >= 0L)
+        }
+    }
     data class PermanentFailure(val message: String) : FileOfflineJobResult
     data class NeedsAttention(val reason: FileSyncDecisionReason, val message: String) : FileOfflineJobResult
 }
@@ -230,7 +249,11 @@ fun recordFileOfflineJobResult(
             )
         }
         is FileOfflineJobResult.RetryableFailure -> current.updateJob(jobId) {
-            it.copy(status = FileOfflineJobStatus.WaitingForNetwork, failureMessage = result.message.requireFailure())
+            it.copy(
+                status = FileOfflineJobStatus.WaitingForNetwork,
+                failureMessage = result.message.requireFailure(),
+                retryNotBeforeEpochMillis = result.retryNotBeforeEpochMillis,
+            )
         }
         is FileOfflineJobResult.PermanentFailure -> current.updateJob(jobId) {
             it.copy(status = FileOfflineJobStatus.Failed, failureMessage = result.message.requireFailure())

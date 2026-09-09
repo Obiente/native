@@ -9,8 +9,9 @@ import kotlinx.serialization.json.Json
  * Strict, versioned persistence for the transport-neutral sync coordinator.
  *
  * Platform stores must atomically publish these bytes. Credentials, absolute local paths, and file
- * contents are deliberately absent. Work persisted as running is restored as ready because an
- * interrupted executor has not supplied a verified completion result.
+ * contents are deliberately absent. Work persisted as running is restored as failed because an
+ * interrupted executor has not supplied a verified completion result. A fresh scan reconciles the
+ * postcondition before the retry policy can make that work executable again.
  */
 fun encodeFileSyncCoordinatorSnapshot(state: FileSyncCoordinatorState): ByteArray {
     val validated = FileSyncCoordinatorState(state.pairs)
@@ -39,7 +40,7 @@ fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorStat
 }
 
 internal fun encodeFileSyncPairRecord(pair: FileSyncPair): ByteArray {
-    require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
+    require(pair.baselines.isEmpty() && pair.contentVerificationProgress.isEmpty() && pair.workItems.isEmpty())
     return syncCoordinatorJson.encodeToString(pair.toSnapshot()).encodeToByteArray().also { encoded ->
         require(encoded.size <= MAX_FILE_SYNC_PAIR_RECORD_BYTES) { "The sync pair record is too large." }
     }
@@ -51,6 +52,21 @@ internal fun decodeFileSyncPairRecord(bytes: ByteArray): FileSyncPair {
     return syncCoordinatorJson.decodeFromString<FileSyncPairSnapshotV1>(text).toDomain().also { pair ->
         require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
     }
+}
+
+internal fun encodeFileSyncContentVerificationProgressRecord(
+    progress: FileSyncContentVerificationProgress,
+): ByteArray = syncCoordinatorJson.encodeToString(progress.toSnapshot()).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync verification record is too large." }
+}
+
+internal fun decodeFileSyncContentVerificationProgressRecord(
+    bytes: ByteArray,
+): FileSyncContentVerificationProgress {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    return syncCoordinatorJson
+        .decodeFromString<FileSyncContentVerificationProgressSnapshotV1>(strictSyncRecordText(bytes))
+        .toDomain()
 }
 
 internal fun encodeFileSyncBaselineRecord(baseline: FileSyncBaseline): ByteArray =
@@ -71,6 +87,40 @@ internal fun encodeFileSyncWorkRecord(work: FileSyncWorkItem): ByteArray =
 internal fun decodeFileSyncWorkRecord(bytes: ByteArray): FileSyncWorkItem {
     require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
     return syncCoordinatorJson.decodeFromString<FileSyncWorkSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
+}
+
+fun encodeFileSyncPendingUploadCleanupRecord(
+    cleanup: FileSyncPendingUploadCleanup,
+): ByteArray = syncCoordinatorJson.encodeToString(
+    FileSyncPendingUploadCleanupSnapshotV1(
+        cleanup.uploadId,
+        cleanup.relativePath,
+        cleanup.assembledStageEtag,
+        cleanup.replacementBackupEtag,
+        cleanup.expectedStageSizeBytes,
+        cleanup.expectedStageContentHash,
+        cleanup.publicationInFlight,
+    ),
+).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
+}
+
+fun decodeFileSyncPendingUploadCleanupRecord(
+    bytes: ByteArray,
+): FileSyncPendingUploadCleanup {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    val snapshot = syncCoordinatorJson.decodeFromString<FileSyncPendingUploadCleanupSnapshotV1>(
+        strictSyncRecordText(bytes),
+    )
+    return FileSyncPendingUploadCleanup(
+        snapshot.uploadId,
+        snapshot.relativePath,
+        snapshot.assembledStageEtag,
+        snapshot.replacementBackupEtag,
+        snapshot.expectedStageSizeBytes,
+        snapshot.expectedStageContentHash,
+        snapshot.publicationInFlight,
+    )
 }
 
 private fun strictSyncRecordText(bytes: ByteArray): String = bytes.decodeToString().also { text ->
@@ -99,9 +149,32 @@ private data class FileSyncPairSnapshotV1(
     val ignoredPatterns: List<String> = emptyList(),
     val priorityPatterns: List<String> = emptyList(),
     val baselines: List<FileSyncBaselineSnapshotV1>,
+    val contentVerificationProgress: List<FileSyncContentVerificationProgressSnapshotV1> = emptyList(),
     val workItems: List<FileSyncWorkSnapshotV1>,
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanupSnapshotV1> = emptyList(),
     val nextWorkId: Long,
     val lastScanEpochMillis: Long?,
+)
+
+@Serializable
+private data class FileSyncPendingUploadCleanupSnapshotV1(
+    val uploadId: String,
+    val relativePath: String,
+    val assembledStageEtag: String? = null,
+    val replacementBackupEtag: String? = null,
+    val expectedStageSizeBytes: Long? = null,
+    val expectedStageContentHash: String? = null,
+    val publicationInFlight: Boolean = false,
+)
+
+@Serializable
+private data class FileSyncContentVerificationProgressSnapshotV1(
+    val relativePath: String,
+    val localRevision: String,
+    val remoteEtag: String,
+    val expectedSizeBytes: Long,
+    val verifiedBytes: Long,
+    val aggregateHash: String,
 )
 
 @Serializable
@@ -110,6 +183,7 @@ private data class FileSyncBaselineSnapshotV1(
     val kind: String,
     val localRevision: String?,
     val remoteEtag: String?,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -119,6 +193,10 @@ private data class LocalSyncEntrySnapshotV1(
     val revision: String,
     val size: Long?,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
+    val contentIdentityUnverified: Boolean = false,
+    val replacementContentIdentityUnavailable: Boolean = false,
+    val replacementAuthentication: String? = null,
 )
 
 @Serializable
@@ -128,6 +206,7 @@ private data class RemoteSyncEntrySnapshotV1(
     val etag: String,
     val size: Long?,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
 )
 
 @Serializable
@@ -143,6 +222,23 @@ private data class FileSyncWorkSnapshotV1(
     val attemptCount: Int,
     val lastAttemptEpochMillis: Long?,
     val failureMessage: String?,
+    val contentMismatchVerified: Boolean = false,
+    val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpointSnapshotV1? = null,
+)
+
+@Serializable
+private data class FileSyncUploadCheckpointSnapshotV1(
+    val uploadId: String,
+    val localRevision: String,
+    val sizeBytes: Long,
+    val chunkBytes: Long,
+    val chunkCount: Int,
+    val uploadedChunks: Int,
+    val commitInFlight: Boolean,
+    val assembledStageEtag: String? = null,
+    val contentRevision: String? = null,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -178,7 +274,23 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
     ignoredPatterns = configuration.ignoredPatterns,
     priorityPatterns = configuration.priorityRules.map(FileSyncPriorityRule::pattern),
     baselines = baselines.sortedBy(FileSyncBaseline::relativePath).map(FileSyncBaseline::toSnapshot),
+    contentVerificationProgress = contentVerificationProgress
+        .sortedBy { it.candidate.relativePath }
+        .map(FileSyncContentVerificationProgress::toSnapshot),
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
+    pendingUploadCleanups = pendingUploadCleanups
+        .sortedBy(FileSyncPendingUploadCleanup::uploadId)
+        .map {
+            FileSyncPendingUploadCleanupSnapshotV1(
+                it.uploadId,
+                it.relativePath,
+                it.assembledStageEtag,
+                it.replacementBackupEtag,
+                it.expectedStageSizeBytes,
+                it.expectedStageContentHash,
+                it.publicationInFlight,
+            )
+        },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -200,9 +312,37 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
         priorityRules = priorityPatterns.map(::FileSyncPriorityRule),
     ),
     baselines = baselines.map(FileSyncBaselineSnapshotV1::toDomain),
+    contentVerificationProgress = contentVerificationProgress
+        .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
+    pendingUploadCleanups = pendingUploadCleanups.map {
+        FileSyncPendingUploadCleanup(
+            it.uploadId,
+            it.relativePath,
+            it.assembledStageEtag,
+            it.replacementBackupEtag,
+            it.expectedStageSizeBytes,
+            it.expectedStageContentHash,
+            it.publicationInFlight,
+        )
+    },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
+)
+
+private fun FileSyncContentVerificationProgress.toSnapshot() = FileSyncContentVerificationProgressSnapshotV1(
+    relativePath = candidate.relativePath,
+    localRevision = candidate.localRevision,
+    remoteEtag = candidate.remoteEtag,
+    expectedSizeBytes = requireNotNull(candidate.expectedSizeBytes),
+    verifiedBytes = verifiedBytes,
+    aggregateHash = aggregateHash,
+)
+
+private fun FileSyncContentVerificationProgressSnapshotV1.toDomain() = FileSyncContentVerificationProgress(
+    candidate = FileSyncContentVerificationCandidate(relativePath, localRevision, remoteEtag, expectedSizeBytes),
+    verifiedBytes = verifiedBytes,
+    aggregateHash = aggregateHash,
 )
 
 private fun FileSyncBaseline.toSnapshot(): FileSyncBaselineSnapshotV1 = FileSyncBaselineSnapshotV1(
@@ -210,6 +350,7 @@ private fun FileSyncBaseline.toSnapshot(): FileSyncBaselineSnapshotV1 = FileSync
     kind = kind.name,
     localRevision = localRevision,
     remoteEtag = remoteEtag,
+    contentHash = contentHash,
 )
 
 private fun FileSyncBaselineSnapshotV1.toDomain(): FileSyncBaseline = FileSyncBaseline(
@@ -217,6 +358,7 @@ private fun FileSyncBaselineSnapshotV1.toDomain(): FileSyncBaseline = FileSyncBa
     kind = enumValueOf(kind),
     localRevision = localRevision,
     remoteEtag = remoteEtag,
+    contentHash = contentHash,
 )
 
 private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEntrySnapshotV1(
@@ -225,6 +367,10 @@ private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEnt
     revision = revision,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
+    replacementContentIdentityUnavailable = replacementContentIdentityUnavailable,
+    replacementAuthentication = replacementAuthentication,
 )
 
 private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry(
@@ -233,6 +379,10 @@ private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry
     revision = revision,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
+    replacementContentIdentityUnavailable = replacementContentIdentityUnavailable,
+    replacementAuthentication = replacementAuthentication,
 )
 
 private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSyncEntrySnapshotV1(
@@ -241,6 +391,7 @@ private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSync
     etag = etag,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun RemoteSyncEntrySnapshotV1.toDomain(): RemoteSyncEntry = RemoteSyncEntry(
@@ -249,6 +400,7 @@ private fun RemoteSyncEntrySnapshotV1.toDomain(): RemoteSyncEntry = RemoteSyncEn
     etag = etag,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWorkSnapshotV1(
@@ -263,6 +415,9 @@ private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWork
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
+    contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toSnapshot(),
 )
 
 private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkItem(
@@ -277,6 +432,35 @@ private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkIt
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
+    contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toDomain(),
+)
+
+private fun FileSyncUploadCheckpoint.toSnapshot() = FileSyncUploadCheckpointSnapshotV1(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
+    assembledStageEtag,
+    contentRevision,
+    contentHash,
+)
+
+private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckpoint(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
+    assembledStageEtag,
+    contentRevision ?: localRevision,
+    contentHash,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

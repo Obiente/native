@@ -1,23 +1,28 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AsyncJvmSupportDiagnostics
+import dev.obiente.nextcloudnative.app.JvmSupportIntake
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
+import dev.obiente.nextcloudnative.app.boundedSupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
+import dev.obiente.nextcloudnative.app.runWithCleanupBeforeHandoff
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import kotlin.system.exitProcess
 
 private val UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED = AtomicBoolean(false)
@@ -62,17 +67,47 @@ internal object AndroidSupportDiagnostics {
         val appContext = context.applicationContext ?: context
         instance ?: AsyncJvmSupportDiagnostics(
             root = File(appContext.filesDir, "support-diagnostics"),
-            environment = SupportDiagnosticsEnvironment(
-                appVersion = BuildConfig.VERSION_NAME,
-                packageVersion = BuildConfig.VERSION_CODE.toString(),
-                platform = "Android",
-                operatingSystemVersion = android.os.Build.VERSION.RELEASE.orEmpty(),
-                architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
-            ),
+            environment = androidSupportDiagnosticsEnvironment(),
             workerName = "nextcloud-support-diagnostics",
         ).also { instance = it }
     }
 }
+
+/**
+ * Owns the one durable support-submission state machine for this Android process.
+ *
+ * Activities, workers, and providers each create their own service facade, but they all operate on
+ * the same no-backup directory. Sharing the coordinator prevents a replacement facade from
+ * restoring or mutating that directory while an earlier facade is still packaging or uploading.
+ */
+internal object AndroidSupportIntakeCoordinator {
+    @Volatile
+    private var instance: JvmSupportIntake? = null
+
+    fun get(
+        context: Context,
+        diagnostics: AsyncJvmSupportDiagnostics,
+        client: OkHttpClient,
+    ): JvmSupportIntake = instance ?: synchronized(this) {
+        val appContext = context.applicationContext ?: context
+        instance ?: JvmSupportIntake(
+            diagnostics = diagnostics,
+            temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
+            environment = androidSupportDiagnosticsEnvironment(),
+            client = client.newBuilder().retryOnConnectionFailure(false).build(),
+            supportMutationsAllowed = appContext.cloudMutationGate(),
+        ).also { instance = it }
+    }
+}
+
+internal fun androidSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
+    boundedSupportDiagnosticsEnvironment(
+        appVersion = BuildConfig.VERSION_NAME,
+        packageVersion = BuildConfig.VERSION_CODE.toString(),
+        platform = "Android",
+        operatingSystemVersion = android.os.Build.VERSION.RELEASE.orEmpty(),
+        architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+    )
 
 internal class AndroidSupportBundleExporter(
     private val context: Context,
@@ -84,9 +119,9 @@ internal class AndroidSupportBundleExporter(
         featureState: List<SupportDiagnosticFieldDraft>,
     ): SupportDiagnosticsExportResult {
         val host = activity ?: return SupportDiagnosticsExportResult.Unsupported(
-            "Open Nextcloud Native before exporting a diagnostic report.",
+            "Open nati.ve before exporting a diagnostic report.",
         )
-        val archive = runCatching {
+        val archive = runCatchingPreservingCancellation {
             withContext(Dispatchers.IO) {
                 val exportDirectory = File(context.cacheDir, SUPPORT_BUNDLE_CACHE_DIRECTORY)
                 require(exportDirectory.isDirectory || exportDirectory.mkdirs()) {
@@ -104,28 +139,30 @@ internal class AndroidSupportBundleExporter(
                 failure.message?.take(240) ?: "Could not create the diagnostic report.",
             )
         }
-        return runCatching {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.sharedfiles",
-                archive,
-            )
-            withContext(Dispatchers.Main.immediate) {
-                host.startActivity(
-                    Intent.createChooser(
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = SUPPORT_BUNDLE_MIME_TYPE
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            clipData = ClipData.newRawUri("Anonymized support report", uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        },
-                        "Save or share diagnostic report",
-                    ),
+        return runCatchingPreservingCancellation {
+            runWithCleanupBeforeHandoff(cleanup = { archive.delete() }) { markHandedOff ->
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.sharedfiles",
+                    archive,
                 )
+                withContext(Dispatchers.Main.immediate) {
+                    host.startActivity(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = SUPPORT_BUNDLE_MIME_TYPE
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                clipData = ClipData.newRawUri("Anonymized support report", uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            },
+                            "Save or share diagnostic report",
+                        ),
+                    )
+                    markHandedOff()
+                }
+                SupportDiagnosticsExportResult.Exported("Android share sheet")
             }
-            SupportDiagnosticsExportResult.Exported("Android share sheet")
         }.getOrElse { failure ->
-            archive.delete()
             SupportDiagnosticsExportResult.Failed(
                 failure.message?.take(240) ?: "Could not open the Android share sheet.",
             )

@@ -501,6 +501,15 @@ class SignedAppStoreContractAcquirerTest {
         )
         assertEquals(setOf("get"), collection.keySet())
         assertEquals(setOf("delete"), item.keySet())
+        val unverifiedTeamSchema = paths.getJSONObject("/apps/chores/api/v1.0/team")
+            .getJSONObject("get")
+            .getJSONObject("responses")
+            .getJSONObject("200")
+            .getJSONObject("content")
+            .getJSONObject("application/json")
+            .getJSONObject("schema")
+        assertTrue(unverifiedTeamSchema.getBoolean("additionalProperties"))
+        assertFalse(unverifiedTeamSchema.has("properties"))
         assertTrue(item.getJSONObject("delete").getBoolean(VERIFIED_CRUD_EXTENSION))
         assertFalse(item.getJSONObject("delete").has("requestBody"))
         assertEquals(
@@ -899,6 +908,7 @@ class SignedAppStoreContractAcquirerTest {
             .getBoolean(VERIFIED_READ_ROUTE_EXTENSION))
         val messageFallback = paths.getJSONObject("/apps/mail/api/messages").getJSONObject("get")
         assertTrue(messageFallback.getBoolean(VERIFIED_READ_ROUTE_EXTENSION))
+        assertEquals("dateInt", messageFallback.getString(RECORD_CURSOR_FIELD_EXTENSION))
         val messageParameters = messageFallback.getJSONArray("parameters")
         assertEquals(
             listOf("mailboxId", "cursor", "filter", "limit", "view", "v", "OCS-APIRequest"),
@@ -1314,7 +1324,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = "signed-package-without-openapi"))
             server.enqueue(MockResponse(body = appInfo("cospend", "4.0.2")))
             server.enqueue(MockResponse(body = githubTree("openapi-client.json")))
-            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","paths":{}}"""))
+            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","servers":[{"url":"/apps/cospend"}],"paths":{}}"""))
             val acquirer = SignedAppStoreContractAcquirer(
                 httpClient = OkHttpClient(),
                 appStoreBaseUrl = server.url("api/v1").toString(),
@@ -1470,6 +1480,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = """
                 openapi: 3.0.1
                 info: { title: Example, version: 1.0.0 }
+                servers: [{ url: /apps/cospend }]
                 components:
                   schemas:
                     Recipe:
@@ -1537,7 +1548,7 @@ class SignedAppStoreContractAcquirerTest {
             server.enqueue(MockResponse(body = "signed-package-without-openapi"))
             server.enqueue(MockResponse(body = appInfo("cospend", "4.0.3")))
             server.enqueue(MockResponse(body = githubTree("openapi.json")))
-            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","paths":{}}"""))
+            server.enqueue(MockResponse(body = """{"openapi":"3.1.0","servers":[{"url":"/apps/cospend"}],"paths":{}}"""))
             val acquirer = SignedAppStoreContractAcquirer(
                 httpClient = OkHttpClient(),
                 appStoreBaseUrl = server.url("api/v1").toString(),
@@ -1767,9 +1778,8 @@ class SignedAppStoreContractAcquirerTest {
 
     private fun openApiYaml(version: String, path: String): String = """
         openapi: 3.0.1
-        info:
-          title: Example
-          version: $version
+        info: { title: Example, version: $version }
+        servers: [{ url: /apps/cospend }]
         paths:
           $path:
             get:

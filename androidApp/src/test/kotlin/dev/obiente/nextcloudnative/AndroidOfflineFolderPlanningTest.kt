@@ -24,6 +24,17 @@ class AndroidOfflineFolderPlanningTest {
     }
 
     @Test
+    fun defaultOfflinePlanAcceptsFilesBeyondTheFormerAggregateBudget() {
+        val size = 12L * 1024L * 1024L * 1024L
+        val inventory = planAndroidOfflineFolder(directory("Vault")) {
+            listOf(file("Vault/archive.bin", size, "\"archive\""))
+        }
+
+        assertEquals(size, inventory.totalBytes)
+        assertEquals(size, inventory.files.single().size)
+    }
+
+    @Test
     fun rejectsEscapingDuplicateAndUnversionedResponses() {
         assertFailsWith<IllegalArgumentException> {
             planAndroidOfflineFolder(directory("Vault")) {

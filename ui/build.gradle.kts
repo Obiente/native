@@ -227,6 +227,10 @@ kotlin {
             implementation("net.java.dev.jna:jna:5.19.1")
             implementation("net.java.dev.jna:jna-platform:5.19.1")
         }
+        val desktopTest by getting
+        desktopTest.dependencies {
+            implementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+        }
     }
 }
 
@@ -253,9 +257,15 @@ compose.desktop {
         nativeDistributions {
             modules("jdk.security.auth")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
-            packageName = "NextcloudNative"
+            // Preserve Windows/Linux launcher paths used by existing integrations.
+            packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
             packageVersion = ncDesktopPackageVersion
-            description = "One native client for your complete Nextcloud account"
+            // Windows uses the launcher description as its friendly process name.
+            description = if (System.getProperty("os.name").startsWith("Windows")) {
+                "nati.ve"
+            } else {
+                "One native client for your complete Nextcloud account"
+            }
             vendor = "Obiente"
             copyright = "Copyright 2026 Obiente"
             licenseFile.set(rootProject.file("LICENSE"))
@@ -268,12 +278,14 @@ compose.desktop {
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/nextcloud-native.ico"))
                 menu = true
-                menuGroup = "Nextcloud Native"
+                menuGroup = "nati.ve"
                 shortcut = true
                 perUserInstall = true
                 upgradeUuid = "81237d85-c511-47a7-b8dc-c87a5f5c5823"
             }
             macOS {
+                packageName = "nati.ve"
+                dockName = "nati.ve"
                 packageVersion = ncMacosPackageVersion
             }
         }
@@ -316,6 +328,7 @@ val repackageRpmWithMetadata by tasks.registering(Exec::class) {
 val repackageMsiWithUninstallCleanup by tasks.registering(Exec::class) {
     dependsOn(stageWindowsShellAssets)
     inputs.file(rootProject.file("tools/repackage-msi-with-uninstall-cleanup.ps1"))
+    inputs.file(rootProject.file("tools/set-windows-package-display-name.ps1"))
     doNotTrackState("Rebuilds the packageMsi artifact with an uninstall cleanup action.")
     onlyIf {
         System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
@@ -401,6 +414,40 @@ tasks.register<JavaExec>("captureFileSyncTrayVisualQa") {
     )
     workingDir(rootProject.projectDir)
 }
+
+fun registerFileSyncWorkspaceVisualQa(name: String, width: Int, height: Int, fileName: String) =
+    tasks.register<JavaExec>(name) {
+        group = "verification"
+        description = "Captures the responsive folder-sync workspace with isolated conflicts."
+        dependsOn(desktopCaptureCompilation.compileTaskProvider)
+        classpath(
+            desktopCaptureCompilation.output.allOutputs,
+            desktopCaptureCompilation.runtimeDependencyFiles,
+        )
+        mainClass.set(
+            "dev.obiente.nextcloudnative.nativeui.preview.FileSyncWorkspaceVisualQaMainKt",
+        )
+        environment(
+            "NEXTCLOUD_NATIVE_FILESYNC_QA_OUTPUT",
+            layout.buildDirectory.file("visual-qa/$fileName").get().asFile.absolutePath,
+        )
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_WIDTH", width.toString())
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_HEIGHT", height.toString())
+        workingDir(rootProject.projectDir)
+    }
+
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspaceDesktopVisualQa",
+    width = 1_180,
+    height = 800,
+    fileName = "filesync-workspace-desktop.png",
+)
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspacePhoneVisualQa",
+    width = 420,
+    height = 860,
+    fileName = "filesync-workspace-phone.png",
+)
 
 tasks.register<JavaExec>("captureDesktopBackgroundSettingsVisualQa") {
     group = "verification"

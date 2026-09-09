@@ -27,6 +27,8 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_directory"' EXIT
 
 bash tools/test-text-hygiene.sh
+bash tools/test-kotlin-architecture.sh
+bash tools/check-kotlin-architecture.sh
 rustc --edition=2021 tools/text-hygiene.rs \
     -o "$temporary_directory/text-hygiene"
 printf '%s\0' "${candidate_files[@]}" |
@@ -54,10 +56,14 @@ done
 bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-build-jvm-criteria.sh
 node tools/changelog-fragments.mjs validate
+node tools/check-markdown-links.mjs
+node --test tools/check-markdown-links.test.mjs
 node --test tools/changelog-fragments.test.mjs
+node --test tools/legacy-update-manifest-compatibility.test.mjs
 node --test tools/nightly-release-notes.test.mjs
 node --test tools/release-download-table.test.mjs
 bash tools/test-desktop-package-version.sh
+bash tools/test-release-repository.sh
 bash tools/test-android-update-manifest-assets.sh
 bash tools/test-nightly-release-workflow.sh
 bash tools/test-marketing-capture-workflow.sh

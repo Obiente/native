@@ -9,6 +9,23 @@ import kotlinx.coroutines.runBlocking
 
 class DesktopSupportDiagnosticsTest {
     @Test
+    fun externalEnvironmentValuesAreBoundedBeforeDiagnosticsStartup() {
+        val oversized = "x".repeat(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH + 1)
+        val environment = desktopSupportDiagnosticsEnvironment(
+            appVersion = "nightly\u0000build",
+            packageVersion = oversized,
+            platform = "Linux",
+            operatingSystemVersion = oversized,
+            architecture = "amd64\nprivate",
+        )
+
+        assertTrue(environment.appVersion.none(Char::isISOControl))
+        assertTrue(environment.architecture.none(Char::isISOControl))
+        assertTrue(environment.packageVersion.length <= MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH)
+        assertTrue(environment.operatingSystemVersion.length <= MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH)
+    }
+
+    @Test
     fun invalidDestinationIsReturnedAsAnExportFailure() = runBlocking {
         val root = createTempDirectory("desktop-support-export").toFile()
         val diagnostics = AsyncJvmSupportDiagnostics(

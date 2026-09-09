@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -77,6 +80,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -86,6 +90,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
@@ -117,7 +122,6 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffo
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
@@ -126,14 +130,12 @@ import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.accountAvatarContentDescription
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudTypography
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
-import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
@@ -143,8 +145,12 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.planDynamicNavigation
 import dev.obiente.nextcloudnative.nativeui.model.preferredSemanticContextualChild
@@ -155,12 +161,26 @@ import dev.obiente.nextcloudnative.nativeui.model.resolveDynamicRecordReadParame
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
 import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeInlineEditorNavigation
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeInlineEditorNavigation
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCreateMutationMatchKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresCompletionPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeCreateMutationPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.executeNativeChoresInvitationAccept
+import dev.obiente.nextcloudnative.nativeui.runtime.isNativeChoresInvitationAcceptAction
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptRecoveryPlan
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWorkspaceNavigationItem
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailWorkspaceContext
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailContainerRecord
@@ -168,6 +188,9 @@ import dev.obiente.nextcloudnative.nativeui.runtime.hasNativeMailWorkspaceSemant
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceUsesTeamContext
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
@@ -189,7 +212,9 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 import dev.obiente.nextcloudnative.nativeui.runtime.settingsFormPrefillView
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -200,6 +225,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -208,309 +234,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeSource
-
-internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
-
-@Serializable
-internal sealed interface Screen {
-    @Serializable
-    data object Root : Screen
-    @Serializable
-    data object Search : Screen
-    @Serializable
-    data class Files(val path: String) : Screen
-    @Serializable
-    data object Media : Screen
-    @Serializable
-    data class PersonMedia(val person: NextcloudPerson) : Screen
-    @Serializable
-    data object Talk : Screen
-    @Serializable
-    data object Notes : Screen
-    @Serializable
-    data object Dashboard : Screen
-    @Serializable
-    data object UserStatus : Screen
-    @Serializable
-    data object Calendar : Screen
-    @Serializable
-    data object Contacts : Screen
-    @Serializable
-    data object Deck : Screen
-    @Serializable
-    data object AdminApps : Screen
-    @Serializable
-    data object OfflineCenter : Screen
-    @Serializable
-    data object Transfers : Screen
-    @Serializable
-    data object ProjectNews : Screen
-    @Serializable
-    data class ProjectNewsArticleView(val article: ProjectNewsArticle) : Screen
-    @Serializable
-    data class Chat(val room: TalkRoom) : Screen
-    @Serializable
-    data class NoteEditor(val note: NextcloudNote) : Screen
-    @Serializable
-    data class AppInfo(
-        val app: NextcloudAppEntry,
-        val navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
-        val lastKnownServerVersion: String? = null,
-        val lastKnownInstalledAppVersion: String? = null,
-    ) : Screen
-    @Serializable
-    data class MediaViewer(
-        val navigationKey: String,
-        val selectedIndex: Int,
-        val selectedSourceIndex: Int,
-        val returnTo: Screen,
-    ) : Screen
-    @Serializable
-    data class FileInfo(
-        val file: NextcloudFile,
-        val parentPath: String,
-        val showVersions: Boolean = false,
-    ) : Screen
-    @Serializable
-    data class DocumentPreview(val file: NextcloudFile, val parentPath: String) : Screen
-    @Serializable
-    data class TextEditor(val file: NextcloudFile, val parentPath: String) : Screen
-}
-
-/** Top-level destinations retain global navigation; focused editors and detail views stay immersive. */
-internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
-    Screen.Root,
-    Screen.Search,
-    is Screen.Files,
-    Screen.Media,
-    Screen.Talk,
-    Screen.Notes,
-    Screen.Dashboard,
-    Screen.UserStatus,
-    Screen.Calendar,
-    Screen.Contacts,
-    Screen.Deck,
-    Screen.AdminApps,
-    Screen.OfflineCenter,
-    Screen.Transfers,
-    Screen.ProjectNews,
-    is Screen.AppInfo,
-    -> true
-
-    is Screen.PersonMedia,
-    is Screen.ProjectNewsArticleView,
-    is Screen.Chat,
-    is Screen.NoteEditor,
-    is Screen.MediaViewer,
-    is Screen.FileInfo,
-    is Screen.DocumentPreview,
-    is Screen.TextEditor,
-    -> false
-}
-
-internal enum class RootDestinationContent {
-    HomeWorkspace,
-    FolderSync,
-    Apps,
-    Activity,
-    Settings,
-}
-
-internal fun rootDestinationContent(
-    destination: NextcloudDestination,
-): RootDestinationContent = when (destination) {
-    NextcloudDestination.Home -> RootDestinationContent.HomeWorkspace
-    NextcloudDestination.FolderSync -> RootDestinationContent.FolderSync
-    NextcloudDestination.Apps -> RootDestinationContent.Apps
-    NextcloudDestination.Activity -> RootDestinationContent.Activity
-    NextcloudDestination.Settings -> RootDestinationContent.Settings
-}
-
-private val navigationStateJson = Json {
-    ignoreUnknownKeys = true
-    encodeDefaults = true
-}
-
-@Serializable
-internal data class SavedScreen(
-    val kind: String,
-    val path: String? = null,
-    val appId: String? = null,
-    val appName: String? = null,
-    val appNavigation: SavedDynamicAppNavigationState? = null,
-    val serverVersion: String? = null,
-    val installedAppVersion: String? = null,
-    val conversationToken: String? = null,
-    val routeLabel: String? = null,
-    val noteId: Long? = null,
-)
-
-@Serializable
-internal data class SavedDynamicAppNavigationState(
-    val selectedViewId: String? = null,
-    val selectedRecordId: String? = null,
-    val selectedRecordResourceId: String? = null,
-    val pathParameterValues: Map<String, String> = emptyMap(),
-    val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
-)
-
-internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
-    Screen.Root -> SavedScreen("root")
-    Screen.Search -> SavedScreen("search")
-    is Screen.Files -> SavedScreen("files", path = path.take(MAX_SAVED_FILE_PATH_CHARS))
-    Screen.Media, is Screen.PersonMedia, is Screen.MediaViewer -> SavedScreen("media")
-    Screen.Talk -> SavedScreen("talk")
-    is Screen.Chat -> SavedScreen(
-        kind = "chat",
-        conversationToken = room.token.takeIf { token ->
-            token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS)
-        },
-        routeLabel = room.displayName.filterNot(Char::isISOControl)
-            .take(MAX_SAVED_ROUTE_LABEL_CHARS)
-            .takeIf(String::isNotBlank),
-    )
-    Screen.Notes -> SavedScreen("notes")
-    is Screen.NoteEditor -> SavedScreen(
-        kind = "note-editor",
-        noteId = note.id.takeIf { it >= 0L },
-    )
-    Screen.Dashboard -> SavedScreen("dashboard")
-    Screen.UserStatus -> SavedScreen("user-status")
-    Screen.Calendar -> SavedScreen("calendar")
-    Screen.Contacts -> SavedScreen("contacts")
-    Screen.Deck -> SavedScreen("deck")
-    Screen.AdminApps -> SavedScreen("admin-apps")
-    Screen.OfflineCenter -> SavedScreen("offline-center")
-    Screen.Transfers -> SavedScreen("transfers")
-    Screen.ProjectNews, is Screen.ProjectNewsArticleView -> SavedScreen("project-news")
-    is Screen.AppInfo -> SavedScreen(
-        kind = "app-info",
-        appId = app.id.take(MAX_SAVED_APP_ID_CHARS),
-        appName = app.name.take(MAX_SAVED_APP_NAME_CHARS),
-        appNavigation = navigation.toSavedDynamicAppNavigationState(),
-        serverVersion = lastKnownServerVersion?.take(MAX_SAVED_VERSION_CHARS),
-        installedAppVersion = lastKnownInstalledAppVersion?.take(MAX_SAVED_VERSION_CHARS),
-    )
-    is Screen.FileInfo -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-    is Screen.DocumentPreview -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-    is Screen.TextEditor -> SavedScreen("files", path = parentPath.take(MAX_SAVED_FILE_PATH_CHARS))
-}
-
-internal fun SavedScreen.toScreen(): Screen = when (kind) {
-    "root" -> Screen.Root
-    "search" -> Screen.Search
-    "files" -> Screen.Files(path.orEmpty().take(MAX_SAVED_FILE_PATH_CHARS))
-    "media" -> Screen.Media
-    "talk" -> Screen.Talk
-    "chat" -> conversationToken
-        ?.takeIf { token -> token.isSafeSavedDynamicNavigationValue(MAX_SAVED_TALK_TOKEN_CHARS) }
-        ?.let { token ->
-            Screen.Chat(
-                TalkRoom(
-                    token = token,
-                    displayName = routeLabel?.filterNot(Char::isISOControl)
-                        ?.take(MAX_SAVED_ROUTE_LABEL_CHARS)
-                        ?.takeIf(String::isNotBlank)
-                        ?: "Conversation",
-                    lastMessage = null,
-                    unreadMessages = 0,
-                ),
-            )
-        }
-        ?: Screen.Talk
-    "notes" -> Screen.Notes
-    "note-editor" -> noteId?.takeIf { it >= 0L }?.let { restoredId ->
-        Screen.NoteEditor(
-            NextcloudNote(
-                id = restoredId,
-                title = "",
-                modified = 0L,
-                category = "",
-                favorite = false,
-                readOnly = true,
-                content = null,
-                etag = null,
-            ),
-        )
-    } ?: Screen.Notes
-    "dashboard" -> Screen.Dashboard
-    "user-status" -> Screen.UserStatus
-    "calendar" -> Screen.Calendar
-    "contacts" -> Screen.Contacts
-    "deck" -> Screen.Deck
-    "admin-apps" -> Screen.AdminApps
-    "offline-center" -> Screen.OfflineCenter
-    "transfers" -> Screen.Transfers
-    "project-news" -> Screen.ProjectNews
-    "app-info" -> {
-        val restoredAppId = appId?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) }
-        if (restoredAppId == null) {
-            Screen.Root
-        } else {
-            Screen.AppInfo(
-                app = NextcloudAppEntry(
-                    id = restoredAppId,
-                    name = appName?.filterNot(Char::isISOControl)?.take(MAX_SAVED_APP_NAME_CHARS)
-                        ?.takeIf(String::isNotBlank) ?: restoredAppId,
-                    href = null,
-                ),
-                navigation = appNavigation?.toDynamicAppNavigationState() ?: DynamicAppNavigationState(),
-                lastKnownServerVersion = serverVersion?.take(MAX_SAVED_VERSION_CHARS),
-                lastKnownInstalledAppVersion = installedAppVersion?.take(MAX_SAVED_VERSION_CHARS),
-            )
-        }
-    }
-    else -> Screen.Root
-}
-
-private val screenSaver = Saver<Screen, String>(
-    save = { screen -> navigationStateJson.encodeToString(screen.toSavedScreen()) },
-    restore = { encoded ->
-        runCatching { navigationStateJson.decodeFromString<SavedScreen>(encoded).toScreen() }
-            .getOrDefault(Screen.Root)
-    },
-)
-
-@Serializable
-private data class SavedAppWorkspaceNavigation(
-    val activeAppId: String? = null,
-    val lastScreenByApp: Map<String, SavedScreen> = emptyMap(),
-)
-
-private val appWorkspaceNavigationSaver = Saver<AppWorkspaceNavigationMemory<Screen>, String>(
-    save = { memory ->
-        navigationStateJson.encodeToString(
-            SavedAppWorkspaceNavigation(
-                activeAppId = memory.activeAppId,
-                lastScreenByApp = memory.lastStateByApp.mapValues { (_, screen) -> screen.toSavedScreen() },
-            ),
-        )
-    },
-    restore = { encoded ->
-        runCatching {
-            navigationStateJson.decodeFromString<SavedAppWorkspaceNavigation>(encoded)
-        }.map { saved ->
-            AppWorkspaceNavigationMemory(
-                activeAppId = saved.activeAppId
-                    ?.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS) },
-                lastStateByApp = saved.lastScreenByApp.entries
-                    .filter { (appId, _) ->
-                        appId.isSafeSavedDynamicNavigationValue(MAX_SAVED_APP_ID_CHARS)
-                    }
-                    .toList()
-                    .takeLast(MAX_REMEMBERED_APP_WORKSPACES)
-                    .associate { (appId, savedScreen) -> appId to savedScreen.toScreen() },
-            )
-        }.getOrDefault(AppWorkspaceNavigationMemory())
-    },
-)
-
-private const val MAX_SAVED_FILE_PATH_CHARS = 2_048
-private const val MAX_SAVED_APP_ID_CHARS = 128
-private const val MAX_SAVED_APP_NAME_CHARS = 256
-private const val MAX_SAVED_VERSION_CHARS = 128
-private const val MAX_SAVED_TALK_TOKEN_CHARS = 256
-private const val MAX_SAVED_ROUTE_LABEL_CHARS = 256
 
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,
@@ -579,263 +302,6 @@ internal fun NativeAppSchema.forDynamicContractVersion(
     )
 }
 
-internal data class DynamicFormRelationCacheKey(
-    val resourceId: String,
-    val actionId: String,
-    val bindingValues: Map<String, String>,
-)
-
-internal data class DynamicFormRelationLoadRequest(
-    val plan: DynamicFormRelationLoadPlan,
-    val cacheKey: DynamicFormRelationCacheKey,
-)
-
-internal data class DynamicFormRelationContinuation(
-    val spec: DynamicPaginationSpec,
-    val nextPageNumber: Int,
-    val nextRequestValue: String,
-    val loadedRecordCount: Int,
-)
-
-private data class DynamicFormRelationLoadResult(
-    val records: List<NativeRecord>,
-    val pagination: DynamicPaginationSpec?,
-)
-
-internal data class DynamicFormRelationCacheState(
-    val recordsByKey: Map<DynamicFormRelationCacheKey, List<NativeRecord>> = emptyMap(),
-    val continuationsByKey: Map<DynamicFormRelationCacheKey, DynamicFormRelationContinuation> = emptyMap(),
-    val discardedRecordCountsByKey: Map<DynamicFormRelationCacheKey, Int> = emptyMap(),
-    val failedKeys: Set<DynamicFormRelationCacheKey> = emptySet(),
-) {
-    fun pendingRequests(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
-        request.cacheKey !in recordsByKey && request.cacheKey !in failedKeys
-    }
-
-    fun relatedRecords(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): Map<String, List<NativeRecord>> = requests.mapNotNull { request ->
-        recordsByKey[request.cacheKey]?.let { records -> request.plan.resourceId to records }
-    }.toMap()
-
-    fun datasetRelatedRecords(
-        genericRecords: Map<String, List<NativeRecord>>,
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): Map<String, List<NativeRecord>> {
-        val scopedResourceIds = requests.mapTo(hashSetOf()) { request -> request.plan.resourceId }
-        return genericRecords.filterKeys { resourceId -> resourceId !in scopedResourceIds } +
-            relatedRecords(requests)
-    }
-
-    fun failedRequests(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): List<DynamicFormRelationLoadRequest> = requests.filter { request ->
-        request.cacheKey in failedKeys
-    }
-
-    fun loadSucceeded(
-        request: DynamicFormRelationLoadRequest,
-        records: List<NativeRecord>,
-        pagination: DynamicPaginationSpec? = null,
-    ): DynamicFormRelationCacheState {
-        val distinctRecords = records.distinctBy(NativeRecord::id)
-        val discardedRecordCount =
-            (distinctRecords.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
-        val boundedRecords = distinctRecords.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
-        val continuation = pagination?.nextDynamicFormRelationContinuation(
-            lastPage = records,
-            loadedRecordCount = records.size,
-        )
-        return copy(
-            recordsByKey = recordsByKey.putBounded(request.cacheKey, boundedRecords),
-            continuationsByKey = if (continuation == null) {
-                continuationsByKey - request.cacheKey
-            } else {
-                continuationsByKey.putBounded(request.cacheKey, continuation)
-            },
-            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
-                discardedRecordCountsByKey - request.cacheKey
-            } else {
-                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
-            },
-            failedKeys = failedKeys - request.cacheKey,
-        )
-    }
-
-    fun appendPageSucceeded(
-        request: DynamicFormRelationLoadRequest,
-        page: List<NativeRecord>,
-    ): DynamicFormRelationCacheState {
-        val current = recordsByKey[request.cacheKey].orEmpty()
-        val activeContinuation = continuationsByKey[request.cacheKey] ?: return this
-        val currentIds = current.mapTo(hashSetOf(), NativeRecord::id)
-        val novelRecords = page.distinctBy(NativeRecord::id)
-            .filterNot { record -> record.id in currentIds }
-        val unboundedWindow = current + novelRecords
-        val discardedFromWindow =
-            (unboundedWindow.size - MAX_DYNAMIC_FORM_RELATION_RECORDS).coerceAtLeast(0)
-        val merged = unboundedWindow.takeLast(MAX_DYNAMIC_FORM_RELATION_RECORDS)
-        val nextContinuation = activeContinuation.spec.nextDynamicFormRelationContinuation(
-            lastPage = page,
-            loadedRecordCount = activeContinuation.loadedRecordCount + page.size,
-            novelRecordCount = novelRecords.size,
-            nextPageNumber = activeContinuation.nextPageNumber + 1,
-        )
-        val discardedRecordCount =
-            ((discardedRecordCountsByKey[request.cacheKey] ?: 0).toLong() + discardedFromWindow)
-                .coerceAtMost(Int.MAX_VALUE.toLong())
-                .toInt()
-        return copy(
-            recordsByKey = recordsByKey.putBounded(request.cacheKey, merged),
-            continuationsByKey = if (nextContinuation == null) {
-                continuationsByKey - request.cacheKey
-            } else {
-                continuationsByKey.putBounded(request.cacheKey, nextContinuation)
-            },
-            discardedRecordCountsByKey = if (discardedRecordCount == 0) {
-                discardedRecordCountsByKey - request.cacheKey
-            } else {
-                discardedRecordCountsByKey.putBounded(request.cacheKey, discardedRecordCount)
-            },
-        )
-    }
-
-    fun continuation(
-        request: DynamicFormRelationLoadRequest,
-    ): DynamicFormRelationContinuation? = continuationsByKey[request.cacheKey]
-
-    fun discardedRecordCount(request: DynamicFormRelationLoadRequest): Int =
-        discardedRecordCountsByKey[request.cacheKey] ?: 0
-
-    fun loadFailed(
-        request: DynamicFormRelationLoadRequest,
-    ): DynamicFormRelationCacheState = copy(
-        recordsByKey = recordsByKey - request.cacheKey,
-        continuationsByKey = continuationsByKey - request.cacheKey,
-        discardedRecordCountsByKey = discardedRecordCountsByKey - request.cacheKey,
-        failedKeys = (failedKeys + request.cacheKey)
-            .toList()
-            .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-            .toSet(),
-    )
-
-    fun retry(
-        requests: List<DynamicFormRelationLoadRequest>,
-    ): DynamicFormRelationCacheState {
-        val retryKeys = requests.mapTo(hashSetOf(), DynamicFormRelationLoadRequest::cacheKey)
-        return copy(failedKeys = failedKeys - retryKeys)
-    }
-}
-
-private fun DynamicPaginationSpec.nextDynamicFormRelationContinuation(
-    lastPage: List<NativeRecord>,
-    loadedRecordCount: Int,
-    novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
-): DynamicFormRelationContinuation? {
-    if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicFormRelationContinuation(this, nextPageNumber, nextValue, loadedRecordCount)
-}
-
-private suspend fun loadInitialDynamicFormRelationRecords(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    descriptor: DynamicAppDescriptor,
-    request: DynamicFormRelationLoadRequest,
-    values: Map<String, String>,
-    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
-): DynamicFormRelationLoadResult {
-    val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
-        ?: error("This relation has no declared load action.")
-    val boundValues = dynamicFormRelationRuntimeValues(request, values)
-    return DynamicFormRelationLoadResult(
-        records = loadDynamicRecords(
-            services = services,
-            session = session,
-            descriptor = descriptor,
-            actionId = action.id,
-            values = boundValues,
-            runtimeContext = boundValues,
-            cachePolicy = cachePolicy,
-        ),
-        pagination = action.dynamicPaginationSpec(),
-    )
-}
-
-internal fun dynamicFormRelationRuntimeValues(
-    request: DynamicFormRelationLoadRequest,
-    availableValues: Map<String, String>,
-    additionalValues: Map<String, String> = emptyMap(),
-): Map<String, String> =
-    availableValues + request.cacheKey.bindingValues + additionalValues
-
-internal fun dynamicFormRelationLoadRequests(
-    schema: NativeAppSchema,
-    formView: ViewSpec,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
-    schema = schema,
-    plans = dynamicFormRelationLoadPlans(
-        schema = schema,
-        formView = formView,
-        availableValues = availableValues,
-    ),
-    availableValues = availableValues,
-)
-
-internal fun dynamicCollectionBatchRelationLoadRequests(
-    schema: NativeAppSchema,
-    childResourceId: String,
-    relatedFieldIds: Set<String>,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = dynamicRelationLoadRequests(
-    schema = schema,
-    plans = dynamicRelationLoadPlans(
-        schema = schema,
-        childResourceId = childResourceId,
-        editableFieldIds = relatedFieldIds,
-        availableValues = availableValues,
-    ),
-    availableValues = availableValues,
-)
-
-private fun dynamicRelationLoadRequests(
-    schema: NativeAppSchema,
-    plans: List<DynamicFormRelationLoadPlan>,
-    availableValues: Map<String, String>,
-): List<DynamicFormRelationLoadRequest> = plans.mapNotNull { plan ->
-    val action = schema.action(plan.actionId) ?: return@mapNotNull null
-    val bindingNames = (
-        action.binding.pathParameterNames +
-            action.binding.requiredPathParameterNames +
-            action.binding.queryParameterNames +
-            action.binding.requiredQueryParameterNames
-        ).distinct()
-    if (bindingNames.size > MAX_DYNAMIC_FORM_RELATION_BINDINGS) return@mapNotNull null
-    val bindingValues = dynamicFormRelationBindingValues(action, availableValues)
-    DynamicFormRelationLoadRequest(
-        plan = plan,
-        cacheKey = DynamicFormRelationCacheKey(
-            resourceId = plan.resourceId,
-            actionId = plan.actionId,
-            bindingValues = bindingValues,
-        ),
-    )
-}
-
-private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
-    ((this - key) + (key to value))
-        .entries
-        .toList()
-        .takeLast(MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES)
-        .associate(Map.Entry<K, V>::toPair)
-
-private const val MAX_DYNAMIC_FORM_RELATION_BINDINGS = 32
-private const val MAX_DYNAMIC_FORM_RELATION_CACHE_SCOPES = 16
-internal const val MAX_DYNAMIC_FORM_RELATION_RECORDS = 500
 private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
 private class PhotoTimelineUiState {
@@ -936,7 +402,7 @@ private class PhotoFolderViewportUiState(
     var browseState by mutableStateOf(initialBrowseState)
 }
 
-private val nativeAppIds = setOf(
+internal val nativeAppIds = setOf(
     "files",
     "photos",
     "memories",
@@ -963,6 +429,65 @@ data class NextcloudNativeNavigationRequest(
     }
 }
 
+sealed interface NextcloudPendingNavigationRequest {
+    val identity: String
+
+    data class Native(val request: NextcloudNativeNavigationRequest) : NextcloudPendingNavigationRequest {
+        override val identity: String = "native:${request.sequence}"
+    }
+
+    data class IncomingLink(val request: NextcloudNativeLinkRequest) : NextcloudPendingNavigationRequest {
+        override val identity: String = "link:${request.sequence}"
+    }
+}
+
+private enum class NextcloudLinkSource {
+    InApp,
+    OperatingSystem,
+}
+
+private enum class NextcloudLinkNavigationResult {
+    Completed,
+    NeedsUserDecision,
+    Superseded,
+}
+
+private data class NextcloudLinkNavigationFailure(
+    val message: String,
+    val retryLink: String? = null,
+    val browserUrl: String? = null,
+    val incomingRequestSequence: Long? = null,
+)
+
+private val nextcloudLinkNavigationFailureSaver = listSaver<NextcloudLinkNavigationFailure?, Any>(
+    save = { failure ->
+        if (failure == null) {
+            emptyList()
+        } else {
+            listOf(
+                failure.message,
+                failure.retryLink.orEmpty(),
+                failure.retryLink != null,
+                failure.browserUrl.orEmpty(),
+                failure.browserUrl != null,
+                failure.incomingRequestSequence ?: 0L,
+            )
+        }
+    },
+    restore = { saved ->
+        if (saved.isEmpty()) {
+            null
+        } else {
+            NextcloudLinkNavigationFailure(
+                message = saved[0] as String,
+                retryLink = (saved[1] as String).takeIf { saved[2] as Boolean },
+                browserUrl = (saved[3] as String).takeIf { saved[4] as Boolean },
+                incomingRequestSequence = (saved[5] as Long).takeIf { it > 0L },
+            )
+        }
+    },
+)
+
 @Composable
 fun NextcloudNativeApp(
     services: NextcloudPlatformServices,
@@ -971,6 +496,10 @@ fun NextcloudNativeApp(
     platformCapabilityRefreshRequest: Long = 0L,
     navigationRequest: NextcloudNativeNavigationRequest? = null,
     onNavigationRequestHandled: (Long) -> Unit = {},
+    linkRequest: NextcloudNativeLinkRequest? = null,
+    onLinkRequestHandled: (Long) -> Unit = {},
+    linkQueueOverflowEvent: Long = 0L,
+    onLinkQueueOverflowHandled: (Long) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
@@ -1005,15 +534,42 @@ fun NextcloudNativeApp(
 
     NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
-            var session by remember { mutableStateOf(services.loadSession()) }
-            if (session == null) {
+            var sessionLoadAttempt by remember { mutableStateOf(0) }
+            val sessionLoad = remember(services, sessionLoadAttempt) {
+                loadNextcloudSessionSafely(services::loadSession)
+            }
+            var session by remember(services, sessionLoadAttempt) {
+                mutableStateOf((sessionLoad as? NextcloudSessionLoadState.Loaded)?.session)
+            }
+            val signInAgain = {
+                scope.launch {
+                    try {
+                        services.clearSession()
+                        sessionLoadAttempt += 1
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (_: NextcloudSessionStorageUnavailableException) {
+                        // Keep the recoverable storage screen visible when cleanup could not be queued safely.
+                    }
+                }
+                Unit
+            }
+            if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
+                SecureSessionStorageUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
+                LegacySessionMigrationUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
                         services = services,
                         platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                        onContinueToSignIn = {
-                            handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest
-                        },
+                        onContinueToSignIn = { handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest },
                     )
                 } else {
                     LoginScreen(
@@ -1037,6 +593,8 @@ fun NextcloudNativeApp(
                         handledNavigationRequestSequence = maxOf(handledNavigationRequestSequence, sequence)
                         onNavigationRequestHandled(sequence)
                     },
+                    linkRequest = linkRequest,
+                    onLinkRequestHandled = onLinkRequestHandled,
                     onAppUpdateReviewHandled = { request ->
                         handledAppUpdateReviewRequest = maxOf(handledAppUpdateReviewRequest, request)
                     },
@@ -1048,6 +606,23 @@ fun NextcloudNativeApp(
                     onLoggedOut = {
                         services.clearSession()
                         session = null
+                    },
+                )
+            }
+            if (linkQueueOverflowEvent > 0L) {
+                AlertDialog(
+                    onDismissRequest = { onLinkQueueOverflowHandled(linkQueueOverflowEvent) },
+                    title = { Text("Some links are still waiting") },
+                    text = {
+                        Text(
+                            "Too many links were opened at once to keep all of them safely. " +
+                                "Finish the pending links, then open the skipped link again.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { onLinkQueueOverflowHandled(linkQueueOverflowEvent) }) {
+                            Text("OK")
+                        }
                     },
                 )
             }
@@ -1089,6 +664,13 @@ fun NextcloudNativeMarketingCapture(
                 ),
             ) {
                 when (scenario) {
+                    MarketingCaptureScenario.SharedControlsDesktop,
+                    MarketingCaptureScenario.SharedControlsMobile,
+                    -> MarketingSharedControlsScenario(scenario)
+                    MarketingCaptureScenario.ShellCompactDesktop,
+                    MarketingCaptureScenario.ShellAppSwitcherMobile,
+                    MarketingCaptureScenario.ShellTablet,
+                    -> MarketingShellCaptureScenario(scenario, assets)
                     MarketingCaptureScenario.HomepageOverviewDesktopDark,
                     MarketingCaptureScenario.HomepageOverviewDesktopLight,
                     MarketingCaptureScenario.HomepageOverviewMobileDark,
@@ -1168,6 +750,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TablesViewsMobile,
                     MarketingCaptureScenario.TablesSharesMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.InlineRecordEditDesktop,
+                    MarketingCaptureScenario.InlineRecordEditMobile,
+                    -> MarketingInlineRecordEditShell(scenario, fixture, assets)
                     MarketingCaptureScenario.AppsWorkspaceDesktopDark,
                     MarketingCaptureScenario.AppsWorkspaceDesktopLight,
                     -> MarketingAppsWorkspaceScenario(fixture, assets)
@@ -1176,11 +761,14 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.CalendarWorkspaceMobileDark,
                     MarketingCaptureScenario.CalendarWorkspaceMobileLight,
                     MarketingCaptureScenario.CalendarMonthMobile,
+                    MarketingCaptureScenario.CalendarWeekMobile,
+                    MarketingCaptureScenario.CalendarWeekDesktop,
                     MarketingCaptureScenario.CalendarEventEditorMobile,
                     MarketingCaptureScenario.CalendarEventEditorDesktop,
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
+                    MarketingCaptureScenario.MailMessageBodyMobile,
                     MarketingCaptureScenario.MailWorkspaceLoadingMobile,
                     MarketingCaptureScenario.MailWorkspaceEmptyMobile,
                     MarketingCaptureScenario.MailWorkspaceErrorDesktop,
@@ -1278,7 +866,7 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.DeckBoardMobile,
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
                     MarketingCaptureScenario.HomepagePlanningDesktopLight,
-                    -> MarketingDeckBoardScenario()
+                    -> MarketingDeckBoardScenario(scenario)
                     MarketingCaptureScenario.GuideAndroidGettingStartedHome,
                     MarketingCaptureScenario.GuideAndroidGettingStartedFiles,
                     MarketingCaptureScenario.GuideAndroidGettingStartedCalendar,
@@ -1341,6 +929,8 @@ private fun MarketingDesktopConversationsScenario(
         selected = NextcloudDestination.Apps,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
+        activeAppId = "spreed",
+        desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
     ) {
         NextcloudDesktopMasterDetail(
             masterWidthDp = 340,
@@ -1376,8 +966,7 @@ private fun MarketingDesktopStartupSettingsScenario(
         selected = NextcloudDestination.Settings,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
-    ) {
-        DesktopSettingsWorkspace(
+    ) { DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = fixture.displayName,
                 cloudName = fixture.cloudName,
@@ -1387,15 +976,14 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.DesktopApp,
+            visibleSections = visibleSettingsSections(true, false, true),
+            selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
         ) { section ->
             when (section) {
                 SettingsWorkspaceSection.DesktopApp -> {
-                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = true,
-                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
-                        onEnabledChanged = {},
+                    SettingsDesktopAppSectionContent(
+                        preferences = settingsDesktopPreferences(true, true),
+                        onPreferenceChanged = { _, _ -> },
                     )
                 }
                 else -> SettingsActionCard(
@@ -1418,8 +1006,121 @@ private fun LoginScreen(
     var connecting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var certificateReview by remember { mutableStateOf<ServerCertificateReview?>(null) }
+    var trustedCertificate by remember { mutableStateOf<TrustedServerCertificate?>(null) }
+    var trustingCertificate by remember { mutableStateOf(false) }
+    var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
     val scope = rememberCoroutineScope()
+    fun startLogin(
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+        certificateJustApproved: String? = null,
+    ) {
+        connecting = true
+        error = null
+        status = "Contacting your server..."
+        scope.launch {
+            try {
+                val challenge = services.beginLogin(serverUrl, transportSecurity)
+                services.openLoginUrl(challenge.loginUrl)
+                status = "Finish signing in in your browser, then return here."
+                val started = TimeSource.Monotonic.markNow()
+                val authenticated = try {
+                    pollLoginUntilApproved(
+                        poll = { services.pollLogin(challenge) },
+                        waitBeforeNextPoll = { delayMillis, awaitNetwork ->
+                            if (awaitNetwork) services.awaitLoginNetworkAvailability()
+                            delay(delayMillis)
+                        },
+                        hasTimedOut = { started.elapsedNow() >= 5.minutes },
+                        onStatus = { status = it },
+                    )
+                } finally {
+                    services.finishLoginPolling(challenge)
+                }
+                onLoggedIn(authenticated)
+                supportDrafts.clearDrafts()
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Throwable) {
+                val reviewResult = if (certificateJustApproved == null) {
+                    runCatching { services.inspectServerCertificateFailure(serverUrl, failure) }
+                } else {
+                    Result.success(null)
+                }
+                val review = reviewResult.getOrNull()
+                if (review != null) {
+                    certificateReview = review
+                    error = null
+                } else {
+                    error = reviewResult.exceptionOrNull()?.message
+                        ?: failure.message
+                        ?: if (certificateJustApproved != null) {
+                            "The server still rejected the approved certificate. Review the server certificate and try again."
+                        } else {
+                            "Could not connect to this server."
+                        }
+                }
+                connecting = false
+                status = null
+            }
+        }
+    }
+
+    if (confirmPlainHttp) {
+        AlertDialog(
+            onDismissRequest = { confirmPlainHttp = false },
+            title = { Text("Connect without encryption?") },
+            text = {
+                Text(
+                    "This server uses plain HTTP. Your sign-in token, app password, files, messages, " +
+                        "and all other Nextcloud data can be read or changed by anyone able to observe " +
+                        "the network path. Continue only for a server you reach through a trusted local " +
+                        "network or a VPN such as WireGuard. HTTPS is strongly recommended.",
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPlainHttp = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmPlainHttp = false
+                        startLogin(LoginTransportSecurity.PlainHttp)
+                    },
+                ) { Text("Connect without encryption") }
+            },
+        )
+    }
+
+    certificateReview?.let { review ->
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = null,
+            confirmLabel = "Trust and connect",
+            onDismiss = { certificateReview = null },
+            onConfirm = {
+                trustingCertificate = true
+                scope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
+                            certificateReview = null
+                            trustingCertificate = false
+                            startLogin(certificateJustApproved = review.sha256Fingerprint)
+                        }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            error = failure.message ?: "The certificate could not be trusted."
+                            certificateReview = null
+                            trustingCertificate = false
+                        }
+                }
+            },
+        )
+    }
 
     if (showDiagnostics) {
         AlertDialog(
@@ -1432,7 +1133,7 @@ private fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services)
+                    SupportDiagnosticsSettingsCard(services, supportDrafts)
                 }
             },
             confirmButton = {
@@ -1450,64 +1151,51 @@ private fun LoginScreen(
                 color = NextcloudTheme.colors.appIconContainer,
                 shape = RoundedCornerShape(NextcloudRadii.Medium),
             ) {
-                Icon(
-                    NextcloudIcons.Cloud,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(14.dp).size(34.dp),
+                dev.obiente.nextcloudnative.app.design.NativeBrandMark(
+                    modifier = Modifier.size(64.dp),
                 )
             }
-            Text("Nextcloud Native", style = MaterialTheme.typography.headlineLarge)
+            Text("nati.ve", style = MaterialTheme.typography.headlineLarge)
             Text(
-                "Your cloud, in one native app.",
+                "Your cloud, natively.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedTextField(
                 value = serverUrl,
-                onValueChange = { serverUrl = it },
+                onValueChange = { value ->
+                    serverUrl = value
+                    trustedCertificate = services.trustedServerCertificate(value)
+                },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Server address") },
                 placeholder = { Text("https://cloud.example.com") },
                 singleLine = true,
                 enabled = !connecting,
             )
+            trustedCertificate?.let { certificate ->
+                TrustedCertificateSettings(
+                    certificate = certificate,
+                    error = null,
+                    onRemove = {
+                        if (services.removeTrustedServerCertificate(serverUrl)) {
+                            trustedCertificate = null
+                        } else {
+                            error = "The certificate trust could not be removed."
+                        }
+                    },
+                )
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             Button(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 enabled = serverUrl.isNotBlank() && !connecting,
                 onClick = {
-                    connecting = true
-                    error = null
-                    status = "Contacting your server..."
-                    scope.launch {
-                        runCatching {
-                            val challenge = services.beginLogin(serverUrl)
-                            services.openLoginUrl(challenge.loginUrl)
-                            status = "Finish signing in in your browser, then return here."
-                            val started = TimeSource.Monotonic.markNow()
-                            try {
-                                pollLoginUntilApproved(
-                                    poll = { services.pollLogin(challenge) },
-                                    waitBeforeNextPoll = { delayMillis, awaitNetwork ->
-                                        if (awaitNetwork) services.awaitLoginNetworkAvailability()
-                                        delay(delayMillis)
-                                    },
-                                    hasTimedOut = { started.elapsedNow() >= 5.minutes },
-                                    onStatus = { status = it },
-                                )
-                            } finally {
-                                services.finishLoginPolling(challenge)
-                            }
-                        }.mapCatching { authenticated ->
-                            onLoggedIn(authenticated)
-                        }.onFailure { failure ->
-                            if (failure is CancellationException) throw failure
-                            error = failure.message ?: "Could not connect to this server."
-                            connecting = false
-                            status = null
-                        }
+                    if (serverAddressUsesPlainHttp(serverUrl)) {
+                        confirmPlainHttp = true
+                    } else {
+                        startLogin()
                     }
                 },
             ) {
@@ -1536,6 +1224,8 @@ private fun AuthenticatedApp(
     navigationRequest: NextcloudNativeNavigationRequest?,
     handledNavigationRequestSequence: Long,
     onNavigationRequestHandled: (Long) -> Unit,
+    linkRequest: NextcloudNativeLinkRequest?,
+    onLinkRequestHandled: (Long) -> Unit,
     onAppUpdateReviewHandled: (Long) -> Unit,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
@@ -1566,12 +1256,58 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
+    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
+    val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
+    val loadedAppPins = remember(appPinsAccountScope) {
+        appPinsRepository.loadWithProvenance(appPinsAccountScope)
+    }
+    var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
+    var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
+        mutableStateOf(loadedAppPins.storageAuthoritative)
+    }
+    var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
+    val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
+        if (!appPinsStorageAuthoritative) {
+            return@togglePinnedApp "Pinned apps cannot be changed because their saved settings could not be read. Restart the app and try again."
+        }
+        val updated = runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }
+            .getOrElse {
+                return@togglePinnedApp "You can pin up to $MAX_APP_WORKSPACE_PINS installed apps. Unpin one first."
+            }
+        if (appPinsRepository.save(appPinsAccountScope, updated)) {
+            pinnedAppIds = updated
+            appPinsStorageAuthoritative = true
+            appPinsPersistenceError = null
+            null
+        } else {
+            "Pinned apps could not be saved on this device. Try again."
+        }
+    }
     var memoriesLivePhotoCapability by remember(session) {
         mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
     }
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
+    var certificateReview by remember(session) { mutableStateOf<ServerCertificateReview?>(null) }
+    var certificateReviewFailure by remember(session) { mutableStateOf<String?>(null) }
+    var certificateTrustError by remember(session) { mutableStateOf<String?>(null) }
+    var trustingCertificate by remember(session) { mutableStateOf(false) }
+    var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
+    val certificateScope = rememberCoroutineScope()
+    var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
+    val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    var linkNavigationFailure by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        stateSaver = nextcloudLinkNavigationFailureSaver,
+    ) {
+        mutableStateOf<NextcloudLinkNavigationFailure?>(null)
+    }
+    val linkNavigationScope = rememberCoroutineScope()
+    var linkNavigationJob by remember(session) { mutableStateOf<Job?>(null) }
+    var linkNavigationGeneration by remember(session) { mutableStateOf(0L) }
     var fileLayout by rememberSaveable(stateSaver = enumSaver<FileLayout>()) { mutableStateOf(FileLayout.List) }
     var photoBrowserState by rememberSaveable(
         session.serverUrl,
@@ -1602,8 +1338,43 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
-    var pendingEditorNavigationRequest by remember(session) {
-        mutableStateOf<NextcloudNativeNavigationRequest?>(null)
+    val supportSubmissionState by remember(services) {
+        services.supportDiagnosticsSubmissionStates()
+    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
+    val submittedSupportReports = (supportSubmissionState as? SupportDiagnosticsSubmissionState.Submitted)
+        ?.reports
+        .orEmpty()
+    val submittedSupportReportCodes = submittedSupportReports.map { report -> report.supportCode }
+    DeckCardDraftRecoveryPreparationEffect(services, session)
+    LaunchedEffect(services, submittedSupportReportCodes) {
+        if (submittedSupportReportCodes.isEmpty()) return@LaunchedEffect
+        while (currentCoroutineContext().isActive) {
+            services.refreshSubmittedSupportDiagnosticsReports()
+            delay(SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS)
+        }
+    }
+    val pendingEditorNavigationRequests = remember(session) {
+        mutableStateListOf<NextcloudPendingNavigationRequest>()
+    }
+    var pendingEditorLinkNavigationSequence by remember(session) { mutableStateOf<Long?>(null) }
+    val pendingEditorNavigationRequest = pendingEditorNavigationRequests
+        .firstOrNull()
+        ?.takeUnless { pendingEditorLinkNavigationSequence != null }
+
+    fun queueEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        if (pendingEditorNavigationRequests.none { queued -> queued.identity == request.identity }) {
+            pendingEditorNavigationRequests += request
+        }
+    }
+
+    fun removeEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        pendingEditorNavigationRequests.removeAll { queued -> queued.identity == request.identity }
+    }
+
+    fun releasePendingEditorLinkNavigation(sequence: Long) {
+        if (pendingEditorLinkNavigationSequence == sequence) {
+            pendingEditorLinkNavigationSequence = null
+        }
     }
 
     fun leaveAppWorkspace() {
@@ -1611,6 +1382,17 @@ private fun AuthenticatedApp(
     }
 
     fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { applyNavigationRequest(request) },
+                cancel = {
+                    onNavigationRequestHandled(request.sequence)
+                    pendingEditorNavigationRequests.removeAll { it.identity == NextcloudPendingNavigationRequest.Native(request).identity }
+                },
+            )) return
+        if (groupwareMutationInProgress) {
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
+            return
+        }
         leaveAppWorkspace()
         when (request.route) {
             NextcloudNativeRoute.Home -> {
@@ -1633,23 +1415,33 @@ private fun AuthenticatedApp(
             }
         }
         onNavigationRequestHandled(request.sequence)
-        pendingEditorNavigationRequest = null
+        pendingEditorNavigationRequests.removeAll { queued ->
+            queued is NextcloudPendingNavigationRequest.Native &&
+                queued.request.sequence == request.sequence
+        }
     }
 
     fun cancelNavigationRequest(request: NextcloudNativeNavigationRequest) {
         onNavigationRequestHandled(request.sequence)
-        if (pendingEditorNavigationRequest?.sequence == request.sequence) {
-            pendingEditorNavigationRequest = null
+        pendingEditorNavigationRequests.removeAll { queued ->
+            queued is NextcloudPendingNavigationRequest.Native &&
+                queued.request.sequence == request.sequence
         }
     }
 
-    LaunchedEffect(appUpdateReviewRequest) {
-        if (appUpdateReviewRequest > 0) {
-            leaveAppWorkspace()
-            screen = Screen.Root
-            destination = NextcloudDestination.Settings
-            onAppUpdateReviewHandled(appUpdateReviewRequest)
+    LaunchedEffect(appUpdateReviewRequest, groupwareMutationInProgress) {
+        if (appUpdateReviewRequest > 0 && !groupwareMutationInProgress) {
+            inlineEditorNavigation.navigate {
+                leaveAppWorkspace()
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+                onAppUpdateReviewHandled(appUpdateReviewRequest)
+            }
         }
+    }
+
+    LaunchedEffect(groupwareMutationInProgress) {
+        if (groupwareMutationInProgress) linkNavigationJob?.cancel()
     }
 
     LaunchedEffect(navigationRequest?.sequence, screen) {
@@ -1659,9 +1451,12 @@ private fun AuthenticatedApp(
         if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
-            screen is Screen.MediaViewer
+            screen is Screen.MediaViewer ||
+            screen is Screen.Calendar ||
+            screen is Screen.Contacts ||
+            screen is Screen.Tasks
         ) {
-            pendingEditorNavigationRequest = request
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
         } else {
             applyNavigationRequest(request)
         }
@@ -1669,9 +1464,77 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(session, discoveryAttempt) {
         discoveryError = null
-        runCatching { services.loadServerInfo(session) }
-            .onSuccess { serverInfo = it }
-            .onFailure { discoveryError = it.message ?: "Could not load server details." }
+        val discoveryResult = runCatching { services.loadServerInfo(session) }
+        val discovered = discoveryResult.getOrNull()
+        if (discovered != null) {
+            serverInfo = discovered
+            val reconciled = reconciledAppWorkspacePinsForDiscovery(
+                appIds = pinnedAppIds,
+                installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                appsAuthoritative = discovered.appsAuthoritative,
+            )
+            if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
+                pinnedAppIds = reconciled
+                appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                    null
+                } else {
+                    "Unavailable pins were removed for this session, but the change could not be saved on this device."
+                }
+            }
+            return@LaunchedEffect
+        }
+        val failure = requireNotNull(discoveryResult.exceptionOrNull())
+        if (failure is CancellationException) throw failure
+        val reviewResult = runCatching {
+            services.inspectServerCertificateFailure(session.serverUrl, failure)
+        }
+        reviewResult.exceptionOrNull()?.let { inspectionFailure ->
+            if (inspectionFailure is CancellationException) throw inspectionFailure
+        }
+        val review = reviewResult.getOrNull()
+        if (review != null) {
+            certificateReview = review
+            certificateReviewFailure = failure.message ?: "Could not load server details."
+            certificateTrustError = null
+        } else {
+            discoveryError = reviewResult.exceptionOrNull()?.message
+                ?: failure.message
+                ?: "Could not load server details."
+        }
+    }
+
+    certificateReview?.let { review ->
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = certificateTrustError,
+            confirmLabel = "Trust and retry",
+            onDismiss = {
+                certificateReview = null
+                discoveryError = certificateReviewFailure ?: "Could not load server details."
+                certificateReviewFailure = null
+                certificateTrustError = null
+            },
+            onConfirm = {
+                trustingCertificate = true
+                certificateTrustError = null
+                certificateScope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            certificateReview = null
+                            certificateReviewFailure = null
+                            trustingCertificate = false
+                            certificateRecoveryAttempt += 1
+                            discoveryAttempt += 1
+                        }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            certificateTrustError = failure.message ?: "The certificate could not be trusted."
+                            trustingCertificate = false
+                        }
+                }
+            },
+        )
     }
 
     LaunchedEffect(session, serverInfo?.apps) {
@@ -1689,7 +1552,13 @@ private fun AuthenticatedApp(
         }
     }
 
-    fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
+    fun openApp(
+        app: NextcloudAppEntry,
+        from: NextcloudDestination,
+        restoreRememberedState: Boolean = true,
+    ) {
+        if (inlineEditorNavigation.intercept({ openApp(app, from, restoreRememberedState) })) return
+        if (groupwareMutationInProgress) return
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
         lastOpenedAppId = app.id
@@ -1705,6 +1574,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
@@ -1721,13 +1591,19 @@ private fun AuthenticatedApp(
         } else {
             val switched = appWorkspaceNavigation
                 .retainCurrent(screen)
-                .switchTo(app.id, initialScreen)
+                .switchTo(
+                    appId = app.id,
+                    initialState = initialScreen,
+                    restoreRememberedState = restoreRememberedState,
+                )
             appWorkspaceNavigation = switched.memory
             screen = switched.restoredState
         }
     }
 
     fun openSearch() {
+        if (inlineEditorNavigation.intercept(::openSearch)) return
+        if (groupwareMutationInProgress) return
         returnDestination = destination
         leaveAppWorkspace()
         screen = Screen.Search
@@ -1770,7 +1646,318 @@ private fun AuthenticatedApp(
         )
     }
 
+    fun showLinkFailure(
+        message: String,
+        retryLink: String? = null,
+        browserUrl: String? = null,
+        incomingRequestSequence: Long? = null,
+    ) {
+        linkNavigationFailure = NextcloudLinkNavigationFailure(
+            message = message,
+            retryLink = retryLink,
+            browserUrl = browserUrl,
+            incomingRequestSequence = incomingRequestSequence,
+        )
+    }
+
+    fun openBrowserForLink(
+        browserUrl: String,
+        incomingRequestSequence: Long?,
+    ): NextcloudLinkNavigationResult = runCatching {
+        services.openExternalUrl(browserUrl)
+    }.fold(
+        onSuccess = { NextcloudLinkNavigationResult.Completed },
+        onFailure = {
+            showLinkFailure(
+                message = "A web browser could not be opened. Check your installed apps and try again.",
+                browserUrl = browserUrl,
+                incomingRequestSequence = incomingRequestSequence,
+            )
+            NextcloudLinkNavigationResult.NeedsUserDecision
+        },
+    )
+
+    fun navigateToResolvedFile(file: NextcloudFile) {
+        returnDestination = destination
+        leaveAppWorkspace()
+        if (file.isDirectory) {
+            screen = Screen.Files(file.path)
+            return
+        }
+        val parentPath = file.path.substringBeforeLast('/', "")
+        val filesScreen = Screen.Files(parentPath)
+        val document = describeDocument(file)
+        screen = when {
+            file.isEditableText() -> Screen.TextEditor(file, parentPath)
+            document.method == DocumentPreviewMethod.ServerRaster ->
+                Screen.DocumentPreview(file, parentPath)
+            file.canOpenInMediaViewer() -> mediaViewerScreen(listOf(file), file, filesScreen)
+            else -> Screen.FileInfo(file, parentPath)
+        }
+    }
+
+    suspend fun navigateNextcloudLink(
+        rawLink: String,
+        source: NextcloudLinkSource,
+        incomingRequestSequence: Long? = null,
+        isCurrent: () -> Boolean = { true },
+    ): NextcloudLinkNavigationResult {
+        if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
+        when (val target = nextcloudLinkDestination(session, rawLink)) {
+            is NextcloudLinkDestination.Home -> {
+                leaveAppWorkspace()
+                screen = Screen.Root
+                destination = NextcloudDestination.Home
+                return NextcloudLinkNavigationResult.Completed
+            }
+            is NextcloudLinkDestination.FilesPath -> {
+                returnDestination = destination
+                leaveAppWorkspace()
+                screen = Screen.Files(target.value)
+                return NextcloudLinkNavigationResult.Completed
+            }
+            is NextcloudLinkDestination.FileId -> {
+                val userId = serverInfo?.userId
+                if (userId == null) {
+                    showLinkFailure(
+                        message = if (discoveryError == null) {
+                            "Your Nextcloud account is still loading. Try this link again."
+                        } else {
+                            "Your Nextcloud account details could not be loaded. Check your connection and try again."
+                        },
+                        retryLink = rawLink,
+                        browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
+                    )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
+                }
+                var resolutionFailed = false
+                val resolved = try {
+                    services.resolveFilesById(session, userId, listOf(target.value))[target.value]
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (_: Exception) {
+                    resolutionFailed = true
+                    null
+                }
+                if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
+                if (resolved == null) {
+                    services.recordSupportDiagnostic(
+                        SupportDiagnosticEventDraft(
+                            severity = if (resolutionFailed) {
+                                SupportDiagnosticSeverity.Error
+                            } else {
+                                SupportDiagnosticSeverity.Warning
+                            },
+                            component = SupportDiagnosticComponent.Files,
+                            operation = "link.resolve",
+                            outcome = "failed",
+                            code = if (resolutionFailed) {
+                                "FILE_LINK_RESOLUTION_FAILED"
+                            } else {
+                                "FILE_LINK_NOT_FOUND"
+                            },
+                            fields = listOf(
+                                SupportDiagnosticFieldDraft(
+                                    name = "source",
+                                    value = source.name.lowercase(),
+                                ),
+                            ),
+                        ),
+                    )
+                    showLinkFailure(
+                        message = if (resolutionFailed) {
+                            "The file could not be loaded. Check your connection and try again."
+                        } else {
+                            "This file could not be found in your current Nextcloud account."
+                        },
+                        retryLink = rawLink,
+                        browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
+                    )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
+                } else {
+                    navigateToResolvedFile(resolved)
+                    return NextcloudLinkNavigationResult.Completed
+                }
+            }
+            is NextcloudLinkDestination.App -> {
+                if (serverInfo == null && discoveryError == null) {
+                    snapshotFlow { serverInfo to discoveryError }
+                        .first { (info, error) -> info != null || error != null }
+                    if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
+                }
+                val app = serverInfo?.apps?.firstOrNull { installed -> installed.id == target.appId }
+                if (app != null) {
+                    openApp(app, destination, restoreRememberedState = false)
+                    return NextcloudLinkNavigationResult.Completed
+                } else if (serverInfo == null) {
+                    showLinkFailure(
+                        message = "Your installed Nextcloud apps could not be loaded. Check your connection and try again.",
+                        retryLink = rawLink,
+                        browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
+                    )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
+                } else if (source == NextcloudLinkSource.InApp) {
+                    return openBrowserForLink(target.browserUrl, incomingRequestSequence)
+                } else {
+                    showLinkFailure(
+                        message = "This link does not have a native destination in the current account.",
+                        browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
+                    )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
+                }
+            }
+            is NextcloudLinkDestination.Browser -> if (source == NextcloudLinkSource.InApp) {
+                return openBrowserForLink(target.browserUrl, incomingRequestSequence)
+            } else {
+                showLinkFailure(
+                    message = if (target.sameAccount) {
+                        "This Nextcloud link does not have a native destination yet."
+                    } else {
+                        "This link does not belong to the current Nextcloud account."
+                    },
+                    browserUrl = target.browserUrl,
+                    incomingRequestSequence = incomingRequestSequence,
+                )
+                return NextcloudLinkNavigationResult.NeedsUserDecision
+            }
+            is NextcloudLinkDestination.Rejected -> {
+                showLinkFailure(
+                    message = target.message,
+                    incomingRequestSequence = incomingRequestSequence,
+                )
+                return NextcloudLinkNavigationResult.NeedsUserDecision
+            }
+        }
+    }
+
+    fun launchNextcloudLinkNavigation(
+        rawLink: String,
+        source: NextcloudLinkSource,
+        incomingRequestSequence: Long? = null,
+        onFinished: () -> Unit = {},
+        onCancelled: () -> Unit = {},
+    ) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { launchNextcloudLinkNavigation(rawLink, source, incomingRequestSequence, onFinished, onCancelled) },
+                cancel = onCancelled,
+            )) return
+        val originScreen = screen
+        val originDestination = destination
+        val generation = linkNavigationGeneration + 1L
+        check(generation > linkNavigationGeneration) { "The link navigation sequence is exhausted." }
+        linkNavigationGeneration = generation
+        linkNavigationJob?.cancel()
+        linkNavigationFailure = null
+        val job = linkNavigationScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = navigateNextcloudLink(rawLink, source, incomingRequestSequence) {
+                    linkNavigationGeneration == generation &&
+                        screen == originScreen &&
+                        destination == originDestination &&
+                        !groupwareMutationInProgress && !inlineEditorNavigation.active
+                }
+                when (result) {
+                    NextcloudLinkNavigationResult.Completed -> onFinished()
+                    NextcloudLinkNavigationResult.NeedsUserDecision -> Unit
+                    NextcloudLinkNavigationResult.Superseded -> onCancelled()
+                }
+            } catch (cancelled: CancellationException) {
+                onCancelled()
+                throw cancelled
+            } finally {
+                if (linkNavigationGeneration == generation) linkNavigationJob = null
+            }
+        }
+        linkNavigationJob = job
+        job.start()
+    }
+
+    fun applyPendingNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        when (request) {
+            is NextcloudPendingNavigationRequest.Native -> applyNavigationRequest(request.request)
+            is NextcloudPendingNavigationRequest.IncomingLink -> {
+                removeEditorNavigationRequest(request)
+                pendingEditorLinkNavigationSequence = request.request.sequence
+                launchNextcloudLinkNavigation(
+                    rawLink = request.request.url,
+                    source = NextcloudLinkSource.OperatingSystem,
+                    incomingRequestSequence = request.request.sequence,
+                    onFinished = {
+                        onLinkRequestHandled(request.request.sequence)
+                        releasePendingEditorLinkNavigation(request.request.sequence)
+                    },
+                    onCancelled = {
+                        onLinkRequestHandled(request.request.sequence)
+                        releasePendingEditorLinkNavigation(request.request.sequence)
+                    },
+                )
+            }
+        }
+    }
+
+    fun cancelPendingNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        when (request) {
+            is NextcloudPendingNavigationRequest.Native -> cancelNavigationRequest(request.request)
+            is NextcloudPendingNavigationRequest.IncomingLink -> {
+                onLinkRequestHandled(request.request.sequence)
+                removeEditorNavigationRequest(request)
+            }
+        }
+    }
+
+    LaunchedEffect(pendingEditorNavigationRequest?.identity, screen, groupwareMutationInProgress) {
+        val request = pendingEditorNavigationRequest ?: return@LaunchedEffect
+        if (!screen.requiresPendingNavigationGuard(groupwareMutationInProgress)) {
+            applyPendingNavigationRequest(request)
+        }
+    }
+
+    LaunchedEffect(linkRequest?.sequence, serverInfo?.userId, discoveryError) {
+        val request = linkRequest ?: return@LaunchedEffect
+        if (linkNavigationFailure?.incomingRequestSequence == request.sequence) {
+            return@LaunchedEffect
+        }
+        val target = nextcloudLinkDestination(session, request.url)
+        val needsServerInfo = target is NextcloudLinkDestination.FileId ||
+            target is NextcloudLinkDestination.App
+        if (needsServerInfo && serverInfo == null && discoveryError == null) {
+            return@LaunchedEffect
+        }
+        if (pendingEditorLinkNavigationSequence == request.sequence) {
+            launchNextcloudLinkNavigation(
+                rawLink = request.url,
+                source = NextcloudLinkSource.OperatingSystem,
+                incomingRequestSequence = request.sequence,
+                onFinished = {
+                    onLinkRequestHandled(request.sequence)
+                    releasePendingEditorLinkNavigation(request.sequence)
+                },
+                onCancelled = {
+                    onLinkRequestHandled(request.sequence)
+                    releasePendingEditorLinkNavigation(request.sequence)
+                },
+            )
+        } else if (screen.requiresPendingNavigationGuard(groupwareMutationInProgress)) {
+            linkNavigationJob?.cancel()
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.IncomingLink(request))
+        } else {
+            launchNextcloudLinkNavigation(
+                rawLink = request.url,
+                source = NextcloudLinkSource.OperatingSystem,
+                incomingRequestSequence = request.sequence,
+                onFinished = { onLinkRequestHandled(request.sequence) },
+                onCancelled = { onLinkRequestHandled(request.sequence) },
+            )
+        }
+    }
+
     fun navigateBack() {
+        if (inlineEditorNavigation.intercept(::navigateBack)) return
+        if (groupwareMutationInProgress) return
         when (val current = screen) {
             Screen.Root -> destination = NextcloudDestination.Home
             is Screen.Files -> {
@@ -1790,6 +1977,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Tasks,
             Screen.Deck,
             is Screen.AppInfo,
             -> {
@@ -1828,7 +2016,7 @@ private fun AuthenticatedApp(
     }
 
     PlatformBackHandler(
-        enabled = when (screen) {
+        enabled = !groupwareMutationInProgress && when (screen) {
             is Screen.NoteEditor, is Screen.TextEditor -> false
             Screen.Root -> destination != NextcloudDestination.Home
             else -> true
@@ -1836,23 +2024,96 @@ private fun AuthenticatedApp(
         onBack = ::navigateBack,
     )
 
-    val desktopIdentity = serverInfo?.let { info ->
-        val shortcutAppIds = listOf(
-            listOf("files"),
-            listOf("photos", "memories"),
-            listOf("talk", "spreed"),
-            listOf("calendar"),
+    linkNavigationFailure?.let { failure ->
+        fun acknowledgeFailedIncomingLink() {
+            failure.incomingRequestSequence?.let(onLinkRequestHandled)
+            failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
+        }
+
+        AlertDialog(
+            onDismissRequest = {
+                acknowledgeFailedIncomingLink()
+                linkNavigationFailure = null
+            },
+            title = { Text("Could not open link") },
+            text = { Text(failure.message) },
+            confirmButton = {
+                val retryLink = failure.retryLink
+                if (retryLink != null) {
+                    TextButton(
+                        onClick = {
+                            linkNavigationFailure = null
+                            val target = nextcloudLinkDestination(session, retryLink)
+                            val needsAccountDiscovery = serverInfo == null &&
+                                failure.incomingRequestSequence != null &&
+                                (target is NextcloudLinkDestination.FileId ||
+                                    target is NextcloudLinkDestination.App)
+                            if (needsAccountDiscovery) {
+                                discoveryAttempt += 1
+                            } else {
+                                launchNextcloudLinkNavigation(
+                                    retryLink,
+                                    NextcloudLinkSource.OperatingSystem,
+                                    incomingRequestSequence = failure.incomingRequestSequence,
+                                    onFinished = {
+                                        failure.incomingRequestSequence?.let(onLinkRequestHandled)
+                                        failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
+                                    },
+                                    onCancelled = {
+                                        failure.incomingRequestSequence?.let(onLinkRequestHandled)
+                                        failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
+                                    },
+                                )
+                            }
+                        },
+                    ) {
+                        Text("Try again")
+                    }
+                } else {
+                    TextButton(onClick = {
+                        acknowledgeFailedIncomingLink()
+                        linkNavigationFailure = null
+                    }) {
+                        Text("OK")
+                    }
+                }
+            },
+            dismissButton = failure.browserUrl?.let { browserUrl ->
+                {
+                    TextButton(
+                        onClick = {
+                            runCatching { services.openExternalUrl(browserUrl) }
+                                .onSuccess {
+                                    acknowledgeFailedIncomingLink()
+                                    linkNavigationFailure = null
+                                }
+                                .onFailure {
+                                    linkNavigationFailure = failure.copy(
+                                        message = "A web browser could not be opened. Check your installed apps and try again.",
+                                    )
+                                }
+                        },
+                    ) {
+                        Text("Open in browser")
+                    }
+                }
+            },
         )
+    }
+
+    val desktopIdentity = serverInfo?.let { info ->
         NextcloudDesktopIdentity(
+            accountScopeKey = remember(session) { previewCacheDigest(session) },
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
             connectionLabel = "Connected",
             serverVersion = info.version,
-            shortcuts = shortcutAppIds.mapNotNull { candidateIds ->
-                info.apps.firstOrNull { app -> app.id in candidateIds }?.let { app ->
+            availableApps = info.apps.map { NextcloudDesktopSidebarApp(it.id, it.name) },
+            shortcuts = pinnedAppIds.mapNotNull { pinnedId ->
+                info.apps.firstOrNull { app -> canonicalAppWorkspaceId(app.id) == pinnedId }?.let { app ->
                     NextcloudDesktopSidebarApp(id = app.id, label = app.name)
                 }
-            },
+            }.take(4),
             recentApp = info.apps.firstOrNull { app -> app.id == lastOpenedAppId }
                 ?.let { app -> NextcloudDesktopSidebarApp(app.id, app.name) },
             syncSummary = if (services.supportsRecursiveFileOfflineStorage) {
@@ -1868,8 +2129,13 @@ private fun AuthenticatedApp(
                 RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
                     services = services,
                     session = session,
+                    recoveryAttempt = certificateRecoveryAttempt,
                     installedApps = serverInfo?.apps.orEmpty(),
+                    pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
+                    onOpenLink = { link ->
+                        launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
+                    },
                     onOpenStatus = serverInfo?.apps
                         ?.firstOrNull { it.id == "user_status" }
                         ?.let { statusApp ->
@@ -1890,6 +2156,9 @@ private fun AuthenticatedApp(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     lastOpenedAppId = lastOpenedAppId,
+                    pinnedAppIds = pinnedAppIds,
+                    pinnedAppsError = appPinsPersistenceError,
+                    onTogglePinnedApp = togglePinnedApp,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
                     onSearch = ::openSearch,
@@ -1905,6 +2174,9 @@ private fun AuthenticatedApp(
                     onOpenFilesPath = { parentPath ->
                         returnDestination = NextcloudDestination.Activity
                         screen = Screen.Files(parentPath)
+                    },
+                    onOpenLink = { link ->
+                        launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
                     },
                 )
                 RootDestinationContent.Settings -> SettingsScreen(
@@ -1999,6 +2271,7 @@ private fun AuthenticatedApp(
                     FileMenuAction.EditText -> if (file.isEditableText()) {
                         screen = Screen.TextEditor(file, current.path)
                     }
+                    FileMenuAction.EditWith -> screen = Screen.DocumentPreview(file, current.path)
                     else -> Unit
                 }
             },
@@ -2021,8 +2294,7 @@ private fun AuthenticatedApp(
                             openApp(app, returnDestination)
                         } else {
                             selection.entry.resourceUrl?.let { resource ->
-                                val absolute = if (resource.startsWith("/")) session.serverUrl.trimEnd('/') + resource else resource
-                                services.openExternalUrl(absolute)
+                                launchNextcloudLinkNavigation(resource, NextcloudLinkSource.InApp)
                             }
                         }
                     }
@@ -2032,8 +2304,13 @@ private fun AuthenticatedApp(
         Screen.Dashboard -> NativeDashboardScreen(
             services = services,
             session = session,
+            recoveryAttempt = certificateRecoveryAttempt,
             installedApps = serverInfo?.apps.orEmpty(),
+            pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
+            onOpenLink = { link ->
+                launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
+            },
             onOpenStatus = serverInfo?.apps
                 ?.firstOrNull { it.id == "user_status" }
                 ?.let { statusApp ->
@@ -2051,13 +2328,28 @@ private fun AuthenticatedApp(
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Contacts -> NativeGroupwareContactsScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
+        Screen.Tasks -> NativeGroupwareTasksScreen(
+            services, session, serverInfo?.userId ?: session.loginName, ::navigateBack,
+            pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
+            ::cancelPendingNavigationRequest, linkNavigationJob != null,
+        ) { groupwareMutationInProgress = it }
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -2122,6 +2414,8 @@ private fun AuthenticatedApp(
             session = session,
             onBack = ::navigateBack,
             onOpenNote = { screen = Screen.NoteEditor(it) },
+            navigationCommitInProgress = linkNavigationJob != null,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.NoteEditor -> NextcloudNoteEditor(
             services = services,
@@ -2129,8 +2423,10 @@ private fun AuthenticatedApp(
             note = current.note,
             onBack = ::navigateBack,
             navigationRequest = pendingEditorNavigationRequest,
-            onNavigationConfirmed = ::applyNavigationRequest,
-            onNavigationCancelled = ::cancelNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.Chat -> ChatScreen(
             services = services,
@@ -2151,6 +2447,7 @@ private fun AuthenticatedApp(
             AppInfoScreen(
                 services = services,
                 session = session,
+                currentUserId = serverInfo?.userId ?: session.loginName,
                 app = current.app,
                 serverVersion = resumePlan.serverVersion,
                 installedAppVersionHint = resumePlan.installedAppVersionHint,
@@ -2228,8 +2525,8 @@ private fun AuthenticatedApp(
                         screen = current.returnTo
                     },
                     navigationRequest = pendingEditorNavigationRequest,
-                    onNavigationConfirmed = ::applyNavigationRequest,
-                    onNavigationCancelled = ::cancelNavigationRequest,
+                    onNavigationConfirmed = ::applyPendingNavigationRequest,
+                    onNavigationCancelled = ::cancelPendingNavigationRequest,
                     sourceMembers = snapshot.sourceMembers,
                 )
             }
@@ -2265,25 +2562,50 @@ private fun AuthenticatedApp(
             file = current.file,
             onBack = ::navigateBack,
             navigationRequest = pendingEditorNavigationRequest,
-            onNavigationConfirmed = ::applyNavigationRequest,
-            onNavigationCancelled = ::cancelNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
         )
         }
     }
+    CompositionLocalProvider(LocalNativeInlineEditorNavigation provides inlineEditorNavigation) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
     ) {
+        val supportUpdates = submittedSupportReports.filter { report ->
+            report.statusChanged || report.unreadMaintainerMessages > 0
+        }
+        if (supportUpdates.isNotEmpty() && (screen != Screen.Root || destination != NextcloudDestination.Settings)) {
+            SupportUpdateAvailableBanner(
+                reports = supportUpdates,
+                enabled = !groupwareMutationInProgress,
+                onReview = {
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
+                    }
+                },
+            )
+        }
         val availableUpdate = (appUpdateResult as? AppUpdateCheckResult.Available)
             ?.takeIf { screen != Screen.Root || destination != NextcloudDestination.Settings }
         availableUpdate?.let { update ->
             AppUpdateAvailableBanner(
                 release = update.release,
+                enabled = !groupwareMutationInProgress,
                 onReview = {
-                    leaveAppWorkspace()
-                    screen = Screen.Root
-                    destination = NextcloudDestination.Settings
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
+                    }
                 },
             )
         }
@@ -2297,16 +2619,23 @@ private fun AuthenticatedApp(
                     } else {
                         NextcloudDesktopWorkspaceKind.AppWorkspace
                     },
-                    onSelected = {
-                        leaveAppWorkspace()
-                        destination = it
-                        screen = Screen.Root
+                    navigationEnabled = !groupwareMutationInProgress,
+                    onSelected = { selected ->
+                        inlineEditorNavigation.navigate {
+                            if (!groupwareMutationInProgress) {
+                                leaveAppWorkspace()
+                                destination = selected
+                                screen = Screen.Root
+                            }
+                        }
                     },
                     identity = desktopIdentity,
                     activeAppId = appWorkspaceNavigation.activeAppId,
                     onOpenApp = { appId ->
-                        serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
-                            openApp(app, destination)
+                        if (!groupwareMutationInProgress) {
+                            serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
+                                openApp(app, destination)
+                            }
                         }
                     },
                     content = {
@@ -2333,42 +2662,14 @@ private fun AuthenticatedApp(
         }
     }
 }
-
-@Composable
-private fun AppUpdateAvailableBanner(
-    release: AppUpdateRelease,
-    onReview: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    if (release is AndroidDirectRelease) {
-                        "Review the certificate-verified APK before installing."
-                    } else {
-                        "Review the downloaded package before opening the system installer."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onReview) { Text("Review update") }
-        }
-    }
 }
 
 @Composable
-private fun RootShell(
+internal fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
+    navigationEnabled: Boolean = true,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit = {},
@@ -2384,39 +2685,19 @@ private fun RootShell(
                 onOpenApp = onOpenApp,
                 activeAppId = activeAppId,
                 workspaceKind = desktopWorkspaceKind,
+                navigationEnabled = navigationEnabled,
                 content = content,
             )
         } else {
-            val layout = resolveNextcloudRootShellLayout(
-                presentation = presentation,
-                availableWidthDp = maxWidth.value.toInt(),
-                destination = selected,
+            dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell(
+                selected = selected,
+                onSelected = onSelected,
+                identity = identity,
+                activeAppId = activeAppId,
+                onOpenApp = onOpenApp,
+                navigationEnabled = navigationEnabled,
+                content = content,
             )
-            when (layout.navigationStyle) {
-                NextcloudNavigationStyle.BottomBar -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-                        NextcloudBottomNavigation(selected = selected, onSelected = onSelected)
-                    }
-                }
-
-                NextcloudNavigationStyle.CompactRail,
-                NextcloudNavigationStyle.ExpandedSidebar,
-                -> {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        NextcloudNavigationRail(selected = selected, onSelected = onSelected)
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.TopCenter,
-                        ) {
-                            val maxContentWidth = requireNotNull(layout.contentMaximumWidthDp).dp
-                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = maxContentWidth)) {
-                                content()
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -2426,6 +2707,9 @@ private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String>,
+    pinnedAppsError: String?,
+    onTogglePinnedApp: (String) -> String?,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
@@ -2435,6 +2719,9 @@ private fun AppsScreen(
         serverInfo = serverInfo,
         error = error,
         lastOpenedAppId = lastOpenedAppId,
+        pinnedAppIds = pinnedAppIds,
+        pinnedAppsError = pinnedAppsError,
+        onTogglePinnedApp = onTogglePinnedApp,
         onRetry = onRetry,
         onSettings = onSettings,
         onSearch = onSearch,
@@ -2566,6 +2853,7 @@ private fun AdminAppsScreen(
 private fun AppInfoScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     app: NextcloudAppEntry,
     serverVersion: String?,
     installedAppVersionHint: String?,
@@ -2577,9 +2865,27 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
+    if (isOfficeWorkspaceAppId(app.id)) {
+        OfficeWorkspaceScreen(
+            services = services,
+            session = session,
+            userId = currentUserId,
+            onExit = onBack,
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
+    var discoveryProgress by remember(app.id, session) {
+        mutableStateOf(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+                "Checking the saved workspace",
+            ),
+        )
+    }
 
     fun retryDiscoveryAndServerInfo() {
         discoveryAttempt += 1
@@ -2594,6 +2900,10 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
+        discoveryProgress = DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+            "Checking the saved workspace",
+        )
         val persistedDiscovery = if (cachedDiscovery == null) {
             services.loadCachedDynamicAppDiscovery(session, app.id)
         } else {
@@ -2626,6 +2936,7 @@ private fun AppInfoScreen(
                 serverVersion = serverVersion,
                 installedAppVersionHint = installedAppVersionHint,
                 serverVersionVerified = serverVersionVerified,
+                onProgress = { progress -> discoveryProgress = progress },
             )
         }
             .onSuccess { candidate ->
@@ -2679,7 +2990,7 @@ private fun AppInfoScreen(
             if (discoveryError == null) {
                 DynamicAppOpeningState(
                     appName = app.name,
-                    message = "Opening your workspace",
+                    message = discoveryProgress.message,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -2696,6 +3007,7 @@ private fun AppInfoScreen(
             DynamicDiscoveredAppScreen(
                 services = services,
                 session = session,
+                currentUserId = currentUserId,
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
@@ -2735,6 +3047,7 @@ private fun DynamicAppOpeningState(
 private fun DynamicDiscoveredAppScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
@@ -2742,6 +3055,7 @@ private fun DynamicDiscoveredAppScreen(
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     val descriptor = discovery.descriptor
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
@@ -2751,6 +3065,9 @@ private fun DynamicDiscoveredAppScreen(
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
         schema.views.firstOrNull { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }?.id
+            ?: schema.views.firstOrNull { view ->
+                nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+            }?.id
             ?: preferredNativeMusicLandingViewId(rootDestinations, schema)
             ?: rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
@@ -2805,6 +3122,14 @@ private fun DynamicDiscoveredAppScreen(
     var renderedScreenCacheKey by remember(descriptor) { mutableStateOf<DynamicScreenCacheKey?>(null) }
     var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
     var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var mailCollectionSummaryError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var trackedMailCollectionSummaryResourceIds by remember(descriptor) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    var trackedMailCollectionSummaryDestinations by remember(descriptor) {
+        mutableStateOf<List<DynamicNavigationDestination>>(emptyList())
+    }
+    var completedMailCollectionSummaryLoadAttempt by remember(descriptor) { mutableStateOf(-1) }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
@@ -2852,6 +3177,14 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var retainedChoresTeamRecord by remember(descriptor) { mutableStateOf<NativeRecord?>(null) }
+    var openedDefaultChores by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf(restoredNavigation.hasPersistedDynamicLocation())
+    }
     val hasRestoredMailLocation = restoredNavigation.selectedViewId != null ||
         restoredNavigation.selectedRecord != null ||
         restoredNavigation.history.isNotEmpty()
@@ -3081,6 +3414,13 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         val view = selectedView ?: return@LaunchedEffect
+        val retainedMailPagination = retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = paginationState?.viewId,
+            selectedView = view,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
         if (loadAttempt > 0) {
             // Some app controllers acknowledge a mutation just before the corresponding GET
             // projection becomes visible. Debounce the forced authoritative reload so that an
@@ -3088,7 +3428,7 @@ private fun DynamicDiscoveredAppScreen(
             delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
             currentCoroutineContext().ensureActive()
         }
-        if (!screenCacheAllowed) recordsByResourceId = emptyMap()
+        if (!screenCacheAllowed && retainedMailPagination == null) recordsByResourceId = emptyMap()
         val cacheKey = dynamicScreenCacheKey(
             session = session,
             appId = descriptor.app.id,
@@ -3118,9 +3458,11 @@ private fun DynamicDiscoveredAppScreen(
                 dynamicRefreshError = message
             }
         }
-        paginationState = null
-        loadingMore = false
-        loadMoreError = null
+        if (retainedMailPagination == null) {
+            paginationState = null
+            loadingMore = false
+            loadMoreError = null
+        }
         try {
         if (view.component == NativeComponent.form) {
             val values = formRelationValues
@@ -3158,6 +3500,11 @@ private fun DynamicDiscoveredAppScreen(
                             records = result.records,
                             pagination = result.pagination,
                         )
+                    }
+                    formRelationPageErrors = if (result?.partialFailureMessage == null) {
+                        formRelationPageErrors - request.cacheKey
+                    } else {
+                        formRelationPageErrors.putBounded(request.cacheKey, result.partialFailureMessage)
                     }
                 }
                 formRelationCache = updatedRelationCache
@@ -3220,25 +3567,38 @@ private fun DynamicDiscoveredAppScreen(
             null
         }
         if (freshSnapshot != null) {
-            recordsByResourceId = freshSnapshot.relatedRecords
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = freshSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(freshSnapshot.records)
-            paginationState = freshSnapshot.pagination?.let { checkpoint ->
-                descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                    ?.dynamicPaginationSpec()
-                    ?.let { spec ->
-                        DynamicPaginationState(
-                            viewId = view.id,
-                            spec = spec,
-                            nextPageNumber = checkpoint.nextPageNumber,
-                            nextRequestValue = checkpoint.nextRequestValue,
-                        )
-                    }
+            if (retainedMailPagination == null) {
+                paginationState = freshSnapshot.pagination?.let { checkpoint ->
+                    descriptor.resolvedDynamicPaginationSpec(
+                        actionId = view.sourceActionId,
+                        boundValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
+                            selectedPathParameterValues,
+                    )
+                        ?.let { spec ->
+                            DynamicPaginationState(
+                                viewId = view.id,
+                                spec = spec,
+                                nextPageNumber = checkpoint.nextPageNumber,
+                                nextRequestValue = checkpoint.nextRequestValue,
+                            )
+                        }
+                }
             }
             return@LaunchedEffect
         }
         val staleSnapshot = if (loadAttempt == 0) sharedDynamicNativeMemoryCache.screen(cacheKey) else null
         if (staleSnapshot != null) {
-            recordsByResourceId = staleSnapshot.relatedRecords
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = staleSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(staleSnapshot.records)
         }
         val composite = view.compositeDataGrid
@@ -3252,7 +3612,7 @@ private fun DynamicDiscoveredAppScreen(
                         composite.rowResourceId to composite.rowSourceActionId,
                     ).map { (resourceId, actionId) ->
                         async {
-                            resourceId to loadDynamicRecords(
+                            resourceId to loadDynamicRecordsWithOutcome(
                                 services = services,
                                 session = session,
                                 descriptor = descriptor,
@@ -3267,15 +3627,25 @@ private fun DynamicDiscoveredAppScreen(
                 currentCoroutineContext().ensureActive()
                 loaded
             }.onSuccess { loaded ->
-                val updatedRecords = recordsByResourceId + loaded.toMap()
-                val rows = loaded.first { (resourceId, _) -> resourceId == composite.rowResourceId }.second
+                val loadedRecords = preferredDynamicCompositeRefreshRecords(
+                    loaded = loaded,
+                    staleRecordsByResourceId = staleSnapshot?.relatedRecords,
+                )
+                val partialFailure = loaded.firstNotNullOfOrNull { (_, outcome) ->
+                    outcome.partialFailureMessage
+                }
+                val updatedRecords = recordsByResourceId + loadedRecords
+                val rows = loadedRecords.getValue(composite.rowResourceId)
                 recordsByResourceId = updatedRecords
                 viewState = NativeScreenState.Ready(rows)
+                dynamicRefreshError = partialFailure
                 mutationReconciliationGeneration += 1
-                sharedDynamicNativeMemoryCache.storeScreen(
-                    cacheKey,
-                    DynamicScreenSnapshot(rows, updatedRecords),
-                )
+                if (partialFailure == null) {
+                    sharedDynamicNativeMemoryCache.storeScreen(
+                        cacheKey,
+                        DynamicScreenSnapshot(rows, updatedRecords),
+                    )
+                }
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
                 if (staleSnapshot != null) {
@@ -3303,7 +3673,7 @@ private fun DynamicDiscoveredAppScreen(
         if (staleSnapshot == null) showLoading()
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
-            val records = loadDynamicRecords(
+            val outcome = loadDynamicRecordsWithOutcome(
                 services = services,
                 session = session,
                 descriptor = descriptor,
@@ -3313,35 +3683,57 @@ private fun DynamicDiscoveredAppScreen(
                 cachePolicy = dynamicReadCachePolicy,
             )
             currentCoroutineContext().ensureActive()
-            records
-        }.onSuccess { records ->
-            val updatedRecords = recordsByResourceId + (view.resourceId to records)
-            val nextPagination = descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                ?.dynamicPaginationSpec()
-                ?.toDynamicPaginationState(view.id, records)
-            recordsByResourceId = updatedRecords
-            viewState = NativeScreenState.Ready(records)
-            mutationReconciliationGeneration += 1
-            records.firstOrNull()?.let { authoritative ->
-                if (
-                    view.component == NativeComponent.detail &&
-                    selectedRecord?.id == authoritative.id
-                ) {
-                    // Promote the freshly loaded server record over the sparse list stub. This
-                    // gives contextual actions a declared identity and prefills edit forms with
-                    // the complete current recipe.
-                    selectedRecord = authoritative
-                }
+            outcome
+        }.onSuccess { outcome ->
+            val records = outcome.records
+            val paginationSpec = if (outcome.partialFailureMessage == null) {
+                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId, values)
+            } else {
+                null
             }
-            paginationState = nextPagination
-            sharedDynamicNativeMemoryCache.storeScreen(
-                cacheKey,
-                DynamicScreenSnapshot(
-                    records = records,
-                    relatedRecords = updatedRecords,
-                    pagination = nextPagination?.toCheckpoint(),
-                ),
+            val paginationFailure = paginationSpec?.continuationFailureMessage(records)
+            val displayFailure = outcome.partialFailureMessage ?: paginationFailure
+            val presentedRecords = preferredDynamicPartialRefreshRecords(
+                freshRecords = records,
+                staleRecords = staleSnapshot?.records,
+                partialFailureMessage = displayFailure,
             )
+            val updatedRecords = recordsByResourceId + (view.resourceId to presentedRecords)
+            val nextPagination = if (displayFailure == null) {
+                paginationSpec?.toDynamicPaginationState(view.id, presentedRecords)
+            } else {
+                null
+            }
+            recordsByResourceId = updatedRecords
+            viewState = NativeScreenState.Ready(presentedRecords)
+            dynamicRefreshError = displayFailure
+            mutationReconciliationGeneration += 1
+            records.firstOrNull()
+                ?.takeIf { displayFailure == null }
+                ?.let { authoritative ->
+                    if (
+                        view.component == NativeComponent.detail &&
+                        selectedRecord?.id == authoritative.id
+                    ) {
+                        // Promote the freshly loaded server record over the sparse list stub. This
+                        // gives contextual actions a declared identity and prefills edit forms with
+                        // the complete current recipe.
+                        selectedRecord = authoritative
+                    }
+                }
+            if (retainedMailPagination == null) {
+                paginationState = nextPagination
+            }
+            if (displayFailure == null) {
+                sharedDynamicNativeMemoryCache.storeScreen(
+                    cacheKey,
+                    DynamicScreenSnapshot(
+                        records = records,
+                        relatedRecords = updatedRecords,
+                        pagination = nextPagination?.toCheckpoint(),
+                    ),
+                )
+            }
         }.onFailure { failure ->
             if (failure is CancellationException) throw failure
             if (staleSnapshot != null) {
@@ -3472,6 +3864,45 @@ private fun DynamicDiscoveredAppScreen(
             val loading = request.cacheKey in loadingFormRelationPageKeys
             val discardedRecordCount = formRelationCache.discardedRecordCount(request)
             val error = formRelationPageErrors[request.cacheKey]
+            val reloadInitialPage = {
+                if (request.cacheKey !in loadingFormRelationPageKeys) {
+                    loadingFormRelationPageKeys += request.cacheKey
+                    formRelationPageErrors -= request.cacheKey
+                    formRelationPageScope.launch {
+                        runCatching {
+                            loadInitialDynamicFormRelationRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                request = request,
+                                values = formRelationValues,
+                                cachePolicy = dynamicReadCachePolicy,
+                            )
+                        }.onSuccess { result ->
+                            formRelationCache = formRelationCache.loadSucceeded(
+                                request = request,
+                                records = result.records,
+                                pagination = result.pagination,
+                            )
+                            formRelationPageErrors = if (result.partialFailureMessage == null) {
+                                formRelationPageErrors - request.cacheKey
+                            } else {
+                                formRelationPageErrors.putBounded(
+                                    request.cacheKey,
+                                    result.partialFailureMessage,
+                                )
+                            }
+                        }.onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            formRelationPageErrors = formRelationPageErrors.putBounded(
+                                request.cacheKey,
+                                failure.message ?: "Could not reload choices.",
+                            )
+                        }
+                        loadingFormRelationPageKeys -= request.cacheKey
+                    }
+                }
+            }
             if (
                 continuation == null &&
                 error == null &&
@@ -3527,40 +3958,15 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     }
                 },
-                returnToFirstPage = discardedRecordCount.takeIf { count -> count > 0 && !loading }?.let {
-                    {
-                        if (request.cacheKey !in loadingFormRelationPageKeys) {
-                            loadingFormRelationPageKeys += request.cacheKey
-                            formRelationPageErrors -= request.cacheKey
-                            formRelationPageScope.launch {
-                                runCatching {
-                                    loadInitialDynamicFormRelationRecords(
-                                        services = services,
-                                        session = session,
-                                        descriptor = descriptor,
-                                        request = request,
-                                        values = formRelationValues,
-                                        cachePolicy = dynamicReadCachePolicy,
-                                    )
-                                }.onSuccess { result ->
-                                    formRelationCache = formRelationCache.loadSucceeded(
-                                        request = request,
-                                        records = result.records,
-                                        pagination = result.pagination,
-                                    )
-                                    formRelationPageErrors -= request.cacheKey
-                                }.onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    formRelationPageErrors = formRelationPageErrors.putBounded(
-                                        request.cacheKey,
-                                        failure.message ?: "Could not return to the first choices.",
-                                    )
-                                }
-                                loadingFormRelationPageKeys -= request.cacheKey
-                            }
-                        }
-                    }
+                retry = reloadInitialPage.takeIf {
+                    shouldOfferInitialDynamicRelationRetry(
+                        hasContinuation = continuation != null,
+                        loading = loading,
+                        error = error,
+                        discardedRecordCount = discardedRecordCount,
+                    )
                 },
+                returnToFirstPage = reloadInitialPage.takeIf { discardedRecordCount > 0 && !loading },
             )
         }.toMap()
     }
@@ -3574,6 +3980,162 @@ private fun DynamicDiscoveredAppScreen(
             versionStatus = discovery.versionStatus,
             onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
         )
+    }
+    val pendingMutationStore = remember(services, session, descriptor, schema) {
+        object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
+                services.loadPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                services.savePendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                    values = values,
+                )
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                val invitationAccept = nativeChoresInvitationAcceptPostcondition(key, values)
+                if (invitationAccept != null) {
+                    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                    if (schema.action(invitationAccept.actionId)?.takeIf { action ->
+                        isNativeChoresInvitationAcceptAction(schema, action)
+                    } == null) return false
+                    val read = schema.action(invitationAccept.readActionId)?.takeIf { action ->
+                        action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.binding.path == "/apps/chores/api/v1.0/account/invites" &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        invitationAccept.satisfiedBy(
+                            loadDynamicRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                actionId = read.id,
+                                values = emptyMap(),
+                                runtimeContext = emptyMap(),
+                                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                            ),
+                        )
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
+                val createPostcondition = nativeCreateMutationPostcondition(key, values)
+                if (createPostcondition != null) {
+                    val create = schema.action(createPostcondition.actionId)?.takeIf { action ->
+                        action.intent == ActionIntent.create &&
+                            action.binding.method == HttpMethod.POST &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    val read = schema.action(createPostcondition.readActionId)?.takeIf { action ->
+                            action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    val validRoutePair = when (createPostcondition.matchKind) {
+                        NativeCreateMutationMatchKind.NewRecord ->
+                            read.binding.path.substringBefore('?').trimEnd('/') ==
+                                create.binding.path.substringBefore('?').trimEnd('/')
+                        NativeCreateMutationMatchKind.NestedRecord ->
+                            schema.app.id == "chores" && schema.app.version == "0.1.0" &&
+                                create.binding.path ==
+                                "/apps/chores/api/v1.0/team/{teamId}/invites" &&
+                                create.binding.bodyFieldNames == listOf("userId") &&
+                                read.binding.path == "/apps/chores/api/v1.0/team" &&
+                                createPostcondition.nestedCollectionFieldId == "invites" &&
+                                createPostcondition.parentRecordId ==
+                                createPostcondition.bindingValues["teamId"]
+                    }
+                    if (!validRoutePair) return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = read.id,
+                            values = createPostcondition.bindingValues,
+                            runtimeContext = createPostcondition.bindingValues,
+                            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                        ).any(createPostcondition::matches)
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
+                if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                val postcondition = nativeChoresCompletionPostcondition(key, values) ?: return false
+                val commandActionId = key.actionId.removePrefix(
+                    "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:",
+                )
+                val command = schema.action(commandActionId)?.takeIf { action ->
+                    action.binding.method == HttpMethod.POST &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+                } ?: return false
+                if (key.actionId != "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:${command.id}") return false
+                val history = descriptor.actions.singleOrNull { action ->
+                    action.binding.method == HttpMethod.GET &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        "id" in action.responseFieldIds &&
+                        action.provenance.any { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
+                } ?: return false
+                delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                return runCatching {
+                    loadDynamicRecords(
+                        services = services,
+                        session = session,
+                        descriptor = descriptor,
+                        actionId = history.id,
+                        values = mapOf("teamId" to postcondition.teamId),
+                        runtimeContext = mapOf("teamId" to postcondition.teamId),
+                        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                    ).any { record ->
+                        record.actionSafeIdentity && record.values["id"] == postcondition.completionId
+                    }
+                }.getOrElse { failure ->
+                    if (failure is CancellationException) throw failure
+                    false
+                }
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                services.clearPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+            }
+        }
     }
     val collectionBatchRelationLoader = remember(services, session, descriptor, schema) {
         NativeCollectionBatchRelationLoader { request ->
@@ -3632,7 +4194,13 @@ private fun DynamicDiscoveredAppScreen(
                                         )
                                         .relatedRecords(listOf(relationRequest))[relatedResourceId]
                                         .orEmpty()
-                                    Triple(relatedResourceId, boundedRecords, null)
+                                    Triple(
+                                        relatedResourceId,
+                                        boundedRecords,
+                                        result.partialFailureMessage?.take(
+                                            MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH,
+                                        ),
+                                    )
                                 },
                                 onFailure = { failure ->
                                     if (failure is CancellationException) throw failure
@@ -3689,8 +4257,148 @@ private fun DynamicDiscoveredAppScreen(
             visitedStates = visitedStates,
         )
     }
+    val retainedChoresTeamContext = remember(schema, retainedChoresTeamRecord) {
+        val teamRecord = retainedChoresTeamRecord ?: return@remember null
+        val teamView = schema.views.singleOrNull { view ->
+            nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+        } ?: return@remember null
+        DynamicResourceRecordContext(
+            resourceId = teamView.resourceId,
+            recordId = teamRecord.id,
+            fieldValues = teamRecord.values,
+            actionSafeIdentity = teamRecord.actionSafeIdentity,
+            actionBindingProvenanceValid = teamRecord.actionBindingProvenanceValid,
+            currentLayoutId = teamView.id,
+        )
+    }
+    val retainedChoresTeamActionValues = remember(
+        descriptor,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        if (
+            retainedChoresTeamContext == null ||
+            !nativeChoresWorkspaceUsesTeamContext(nativeChoresWorkspaceKind(schema, selectedView))
+        ) {
+            emptyMap()
+        } else {
+            descriptor.planDynamicNavigation(retainedChoresTeamContext)
+                .contextualFormActions
+                .flatMap { action -> action.pathParameterValues.entries }
+                .groupBy(Map.Entry<String, String>::key)
+                .mapNotNull { (name, entries) ->
+                    entries.map(Map.Entry<String, String>::value)
+                        .distinct()
+                        .singleOrNull()
+                        ?.let { value -> name to value }
+                }
+                .toMap()
+        }
+    }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
+    }
+    val formActionContext = remember(
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        retainedChoresFormActionContext(
+            workspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+            retainedTeamContext = retainedChoresTeamContext,
+            currentRecordContext = recordContext,
+        )
+    }
+    val formActionNavigationPlan = remember(descriptor, formActionContext) {
+        descriptor.planDynamicNavigation(formActionContext)
+    }
+    val mailCollectionSummaryDestinations = remember(
+        recordContext,
+        navigationPlan.contextualChildDestinations,
+    ) {
+        val context = recordContext ?: return@remember emptyList()
+        navigationPlan.contextualChildDestinations.filter { destination ->
+            isDynamicMailboxCollectionSummaryDestination(schema, context.resourceId, destination)
+        }
+    }
+    LaunchedEffect(
+        descriptor,
+        selectedScreenIdentity,
+        mailCollectionSummaryDestinations,
+        loadAttempt,
+    ) {
+        val retainedMailboxCollection = retainedMailCollectionSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+        val retainingAdjacentMailbox = mailCollectionSummaryDestinations.isEmpty() &&
+            retainedMailboxCollection != null
+        if (
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = retainingAdjacentMailbox,
+                loadAttempt = loadAttempt,
+                completedLoadAttempt = completedMailCollectionSummaryLoadAttempt,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        val activeSummaryDestinations = if (retainingAdjacentMailbox) {
+            trackedMailCollectionSummaryDestinations
+        } else {
+            mailCollectionSummaryDestinations.also { destinations ->
+                trackedMailCollectionSummaryDestinations = destinations
+            }
+        }
+        mailCollectionSummaryError = null
+        val summaryResourceIds = activeSummaryDestinations
+            .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
+        val preparation = prepareDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            previouslyTrackedResourceIds = trackedMailCollectionSummaryResourceIds,
+            currentResourceIds = summaryResourceIds,
+        )
+        recordsByResourceId = preparation.recordsByResourceId
+        trackedMailCollectionSummaryResourceIds = preparation.trackedResourceIds
+        if (activeSummaryDestinations.isEmpty()) {
+            completedMailCollectionSummaryLoadAttempt = loadAttempt
+            return@LaunchedEffect
+        }
+        val loaded = coroutineScope {
+            activeSummaryDestinations.map { destination ->
+                async {
+                    runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = destination.actionId,
+                            values = destination.pathParameterValues,
+                            runtimeContext = destination.pathParameterValues,
+                            cachePolicy = dynamicReadCachePolicy,
+                        )
+                    }.fold(
+                        onSuccess = { records ->
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, records)
+                        },
+                        onFailure = { failure ->
+                            if (failure is CancellationException) throw failure
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, failed = true)
+                        },
+                    )
+                }
+            }.awaitAll()
+        }
+        currentCoroutineContext().ensureActive()
+        val outcome = reconcileDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            results = loaded,
+        )
+        recordsByResourceId = outcome.recordsByResourceId
+        mailCollectionSummaryError = outcome.errorMessage
+        completedMailCollectionSummaryLoadAttempt = loadAttempt
     }
     val contextDetailResolution = remember(descriptor, schema, recordContext) {
         val context = recordContext ?: return@remember null
@@ -3771,12 +4479,81 @@ private fun DynamicDiscoveredAppScreen(
                         selectedRecordResourceId.isDynamicMessageResource() &&
                             destination.resourceId.isMailNavigationAncestor()
                     }
+                    .filterNot { destination ->
+                        isDynamicMailboxCollectionSummaryDestination(
+                            schema,
+                            selectedRecordResourceId.orEmpty(),
+                            destination,
+                        )
+                    }
                     .forEach { destination ->
                     schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> add(destination to view) }
                 }
             }
         }
     }
+    val choresNavigationDestinations = remember(
+        descriptor,
+        schema,
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+        selectedPathParameterValues,
+    ) {
+        if (schema.app.id != "chores") {
+            emptyList()
+        } else {
+            val unvisitedPlan = descriptor.planDynamicNavigation(
+                retainedChoresNavigationContext(
+                    retainedTeamContext = retainedChoresTeamContext,
+                    currentRecordContext = recordContext,
+                )?.copy(visitedStates = emptySet()),
+            )
+            val order = listOf(
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Invitations,
+            )
+            order.mapNotNull { kind ->
+                val view = schema.views.firstOrNull { candidate ->
+                    nativeChoresWorkspaceKind(schema, candidate) == kind
+                } ?: return@mapNotNull null
+                val planned = (
+                    unvisitedPlan.rootDestinations + unvisitedPlan.contextualChildDestinations
+                    ).firstOrNull { destination -> destination.layoutId == view.id }
+                if (
+                    kind in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History) &&
+                    planned == null && view.id != selectedView.id
+                ) {
+                    return@mapNotNull null
+                }
+                (planned ?: DynamicNavigationDestination(
+                    layoutId = view.id,
+                    label = view.title,
+                    resourceId = view.resourceId,
+                    actionId = view.sourceActionId,
+                    pathParameterValues = selectedPathParameterValues,
+                )) to view
+            }
+        }
+    }
+    val choresNavigationItems = remember(choresNavigationDestinations, selectedView.id) {
+        choresNavigationDestinations.map { (_, view) ->
+            val kind = requireNotNull(nativeChoresWorkspaceKind(schema, view))
+            NativeWorkspaceNavigationItem(
+                id = view.id,
+                label = when (kind) {
+                    NativeChoresWorkspaceKind.Chores -> "All chores"
+                    NativeChoresWorkspaceKind.History -> "History"
+                    NativeChoresWorkspaceKind.Team -> "Team"
+                    NativeChoresWorkspaceKind.Invitations -> "Invitations"
+                },
+                selected = view.id == selectedView.id,
+            )
+        }
+    }
+    val choresWorkspaceActive = nativeChoresWorkspaceKind(schema, selectedView) != null
     // Every verified read destination belongs in the adaptive, scrollable navigator. Keeping
     // technical or trash collections in the small header popup makes them unreachable on compact
     // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
@@ -3799,21 +4576,32 @@ private fun DynamicDiscoveredAppScreen(
     }
     val actionViews = remember(
         descriptor,
-        navigationPlan,
+        formActionNavigationPlan,
+        formActionContext,
         schema,
         selectedRecord,
         selectedView.resourceId,
         selectedCollectionState,
     ) {
         val planned = buildList {
-            addAll(if (selectedRecord == null) {
-                navigationPlan.rootFormActions.filter { action ->
-                    action.resourceId == selectedView.resourceId &&
-                        selectedCollectionState == null
+            addAll(if (formActionContext == null) {
+                formActionNavigationPlan.rootFormActions.filter { action ->
+                    val spec = schema.action(action.actionId)
+                        ?: return@filter false
+                    val formView = schema.views.singleOrNull { candidate ->
+                        candidate.id == action.formId
+                    } ?: return@filter false
+                    dynamicRootFormTargetsActiveSurface(
+                        action = spec,
+                        formView = formView,
+                        activeView = selectedView,
+                        activeReadAction = schema.action(selectedView.sourceActionId),
+                        selectedCollectionState = selectedCollectionState,
+                    )
                 }
             } else {
-                val currentResourceId = selectedRecordResourceId.orEmpty()
-                navigationPlan.contextualFormActions.filter { action ->
+                val currentResourceId = formActionContext.resourceId
+                formActionNavigationPlan.contextualFormActions.filter { action ->
                     val spec = schema.action(action.actionId)
                         ?: return@filter false
                     val formView = schema.views.singleOrNull { candidate ->
@@ -3870,14 +4658,10 @@ private fun DynamicDiscoveredAppScreen(
             "$label|$route"
         }
     }
-    val primaryCreateAction = remember(actionViews, schema) {
-        actionViews
-            .filter { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
-            .minByOrNull { (action, _) -> dynamicQuickActionPriority(schema.action(action.actionId)) }
+    val collectionCreateControl = remember(session, schema, selectedView.id, selectedRecord, selectedPathParameterValues) {
+        dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl()
     }
-    val overflowActionViews = remember(actionViews, primaryCreateAction) {
-        actionViews.filterNot { candidate -> candidate == primaryCreateAction }
-    }
+    val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
@@ -3889,17 +4673,41 @@ private fun DynamicDiscoveredAppScreen(
     }
     val dynamicActionScope = rememberCoroutineScope()
 
-    val activePagination = paginationState?.takeIf { pagination -> pagination.viewId == selectedView.id }
+    val adjacentMailPaginationSnapshot = paginationState?.let { pagination ->
+        retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = pagination.viewId,
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+    }
+    val activePagination = paginationState?.takeIf { pagination ->
+        pagination.viewId == selectedView.id || adjacentMailPaginationSnapshot != null
+    }
     val onLoadMore = activePagination?.let { pagination ->
         {
             if (!loadingMore) {
                 loadingMore = true
                 loadMoreError = null
-                val pagingView = selectedView
-                val existingRecords = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
-                val pagingSelection = selectedScreenIdentity
-                val pagingPathParameters = selectedPathParameterValues.toMap()
-                val pagingCacheable = screenCacheAllowed
+                val pagingView = schema.views.single { view -> view.id == pagination.viewId }
+                val pagingRecord = adjacentMailPaginationSnapshot?.record ?: selectedRecord
+                val pagingRecordResourceId = adjacentMailPaginationSnapshot?.recordResourceId
+                    ?: selectedRecordResourceId
+                val pagingSelection = dynamicScreenSelectionIdentity(
+                    resourceId = pagingRecordResourceId,
+                    recordId = pagingRecord?.id,
+                    recordScope = pagingRecord?.dynamicScreenCacheScope().orEmpty(),
+                )
+                val pagingPathParameters = adjacentMailPaginationSnapshot?.pathParameterValues
+                    ?: selectedPathParameterValues.toMap()
+                val pagingCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
+                    nativeMailScreenCacheScopeIsSafe(schema, pagingRecordResourceId, pagingRecord)
+                val existingRecords = recordsByResourceId[pagingView.resourceId].orEmpty().ifEmpty {
+                    (viewState as? NativeScreenState.Ready)?.records.orEmpty()
+                        .takeIf { pagingView.id == selectedView.id }
+                        .orEmpty()
+                }
                 val pagingRequestIdentity = dynamicPaginationRequestIdentity(
                     session = session,
                     appId = descriptor.app.id,
@@ -3909,23 +4717,35 @@ private fun DynamicDiscoveredAppScreen(
                     pathParameters = pagingPathParameters,
                     cacheable = pagingCacheable,
                 )
-                val pagingRuntimeValues = selectedRecord?.toDynamicRuntimeValues().orEmpty().toMap()
+                val pagingRuntimeValues = pagingRecord?.toDynamicRuntimeValues().orEmpty().toMap()
                 val values = pagingRuntimeValues +
                     pagingPathParameters +
                     (pagination.spec.parameterName to pagination.nextRequestValue)
                 fun isPagingRequestCurrent(): Boolean {
-                    val activeView = schema.views.firstOrNull { view -> view.id == selectedViewId }
+                    val currentView = schema.views.firstOrNull { view -> view.id == selectedViewId }
                         ?: return false
-                    val activeRecord = selectedRecord
+                    val retainedSnapshot = retainedMailPaginationSnapshot(
+                        hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                        paginationViewId = pagination.viewId,
+                        selectedView = currentView,
+                        selectedRecordResourceId = selectedRecordResourceId,
+                        navigationHistory = navigationHistory,
+                    )
+                    val activeView = if (retainedSnapshot == null) currentView else pagingView
+                    val activeRecord = retainedSnapshot?.record ?: selectedRecord
+                    val activeRecordResourceId = retainedSnapshot?.recordResourceId
+                        ?: selectedRecordResourceId
+                    val activePathParameters = retainedSnapshot?.pathParameterValues
+                        ?: selectedPathParameterValues
                     val activeSelection = dynamicScreenSelectionIdentity(
-                        resourceId = selectedRecordResourceId,
+                        resourceId = activeRecordResourceId,
                         recordId = activeRecord?.id,
                         recordScope = activeRecord?.dynamicScreenCacheScope().orEmpty(),
                     )
                     val activeCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
                         nativeMailScreenCacheScopeIsSafe(
                             schema,
-                            selectedRecordResourceId,
+                            activeRecordResourceId,
                             activeRecord,
                         )
                     val activeIdentity = dynamicPaginationRequestIdentity(
@@ -3934,7 +4754,7 @@ private fun DynamicDiscoveredAppScreen(
                         viewId = activeView.id,
                         resourceId = activeView.resourceId,
                         selection = activeSelection,
-                        pathParameters = selectedPathParameterValues,
+                        pathParameters = activePathParameters,
                         cacheable = activeCacheable,
                     )
                     return pagingRequestIdentity.isCurrentDynamicPaginationRequest(activeIdentity)
@@ -3960,9 +4780,22 @@ private fun DynamicDiscoveredAppScreen(
                             .filterNot { record ->
                                 record.dynamicPaginationRecordIdentity(pagingView.resourceId) in existingIdentities
                             }
+                        val continuationFailure = pagination.spec.continuationFailureMessage(
+                            lastPage = pageRecords,
+                            loadedRecordCount = existingRecords.size + novelRecords.size,
+                            novelRecordCount = novelRecords.size,
+                            nextPageNumber = pagination.nextPageNumber + 1,
+                        )
+                        if (continuationFailure != null) {
+                            loadMoreError = continuationFailure
+                            loadingMore = false
+                            return@onSuccess
+                        }
                         val mergedRecords = existingRecords + novelRecords
                         val updatedRecords = recordsByResourceId + (pagingView.resourceId to mergedRecords)
-                        viewState = NativeScreenState.Ready(mergedRecords)
+                        if (selectedViewId == pagingView.id) {
+                            viewState = NativeScreenState.Ready(mergedRecords)
+                        }
                         val nextPagination = pagination.spec.toDynamicPaginationState(
                             viewId = pagingView.id,
                             lastPage = pageRecords,
@@ -4016,6 +4849,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun selectDynamicRecord(record: NativeRecord) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicRecord(record) }) == true) return
         rememberCurrentLocation()
         val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
         val inheritedParameters = inheritDynamicParentParameters(
@@ -4054,8 +4888,10 @@ private fun DynamicDiscoveredAppScreen(
             parentResourceId = selectedParentResourceId,
             destinations = nextPlan.contextualChildDestinations,
         )
-        val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
-            nextPlan.contextualChildDestinations,
+        val showDestinationMenu = shouldOpenDynamicContextDestinationMenu(
+            destinations = nextPlan.contextualChildDestinations,
+            primaryContentTarget = primaryContentTarget,
+            preferredCollectionChild = preferredCollectionChild,
         )
         val nextViewId = if (showDestinationMenu) {
             selectedViewId
@@ -4101,6 +4937,59 @@ private fun DynamicDiscoveredAppScreen(
     LaunchedEffect(
         descriptor,
         selectedView.id,
+        loadAttempt,
+    ) {
+        val kind = nativeChoresWorkspaceKind(schema, selectedView)
+        if (
+            kind !in setOf(
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        // Cached Team content remains useful to paint, but it never authorizes a write. Clear the
+        // retained authority on Team and child entry until this exact force-network read succeeds.
+        retainedChoresTeamRecord = null
+        val teamView = schema.views.singleOrNull { candidate ->
+            nativeChoresWorkspaceKind(schema, candidate) == NativeChoresWorkspaceKind.Team &&
+                candidate.sourceActionId.isNotBlank()
+        } ?: return@LaunchedEffect
+        runCatching {
+            loadDynamicRecords(
+                services = services,
+                session = session,
+                descriptor = descriptor,
+                actionId = teamView.sourceActionId,
+                values = emptyMap(),
+                runtimeContext = emptyMap(),
+                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+            )
+        }.onSuccess { records ->
+            currentCoroutineContext().ensureActive()
+            val team = records.singleOrNull()?.takeIf { record ->
+                record.actionSafeIdentity && record.actionBindingProvenanceValid
+            }
+            retainedChoresTeamRecord = team
+            recordsByResourceId = recordsByResourceId + (teamView.resourceId to records)
+            if (
+                kind == NativeChoresWorkspaceKind.Team &&
+                records.size == 1 &&
+                selectedRecord == null &&
+                !openedDefaultChores
+            ) {
+                openedDefaultChores = true
+                selectDynamicRecord(records.single())
+            }
+        }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
+        }
+    }
+
+    LaunchedEffect(
+        descriptor,
+        selectedView.id,
         viewState,
         automaticMailLandingStage,
     ) {
@@ -4123,6 +5012,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun navigateWithinDynamicApp() {
+        if (inlineEditorNavigation?.intercept(::navigateWithinDynamicApp) == true) return
         val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
             selectedRecordResourceId.orEmpty(),
         )
@@ -4191,8 +5081,10 @@ private fun DynamicDiscoveredAppScreen(
         action: dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicAction(action, view) }) == true) return
         actionMenuExpanded = false
         val actionSpec = schema.action(action.actionId)
+        if (actionSpec?.intent == ActionIntent.create) return
         val editableFieldCount = actionSpec?.let { spec ->
             schema.resource(spec.resourceId)?.let { resource ->
                 editableNativeFields(resource, spec).size
@@ -4208,10 +5100,30 @@ private fun DynamicDiscoveredAppScreen(
             }?.value ?: selectedRecord?.id ?: schema.resource(actionSpec.resourceId)?.name ?: "item"
             directActionError = null
             directActionFailureState = null
+            val invitationRecoveryRequired = isNativeChoresInvitationAcceptAction(schema, actionSpec)
+            val invitationRecoveryPlan = if (invitationRecoveryRequired) {
+                val activeRead = schema.action(selectedView.sourceActionId)
+                val record = selectedRecord
+                if (activeRead != null && record != null) {
+                    nativeChoresInvitationAcceptRecoveryPlan(
+                        schema = schema,
+                        activeReadAction = activeRead,
+                        action = actionSpec,
+                        record = record,
+                        values = action.pathParameterValues,
+                    )
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
             pendingDirectAction = PendingDynamicDirectAction(
                 action = actionSpec,
                 values = action.pathParameterValues,
                 targetLabel = label,
+                invitationAcceptRecoveryPlan = invitationRecoveryPlan,
+                durableRecoveryRequired = invitationRecoveryRequired,
             )
             return
         }
@@ -4224,6 +5136,7 @@ private fun DynamicDiscoveredAppScreen(
         destination: DynamicNavigationDestination,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectCollectionDestination(destination, view) }) == true) return
         actionMenuExpanded = false
         contextualMenuOpen = false
         val selection = planDynamicCollectionDestinationSelection(
@@ -4240,6 +5153,25 @@ private fun DynamicDiscoveredAppScreen(
         }
         selectedPathParameterValues = selection.pathParameterValues
         selectedViewId = view.id
+    }
+
+    fun selectChoresDestination(viewId: String) {
+        if (inlineEditorNavigation?.intercept({ selectChoresDestination(viewId) }) == true) return
+        val (destination, view) = choresNavigationDestinations
+            .firstOrNull { (_, candidate) -> candidate.id == viewId }
+            ?: return
+        actionMenuExpanded = false
+        contextualMenuOpen = false
+        if (nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team) {
+            selectedRecord = null
+            selectedRecordResourceId = null
+            navigationHistory = emptyList()
+        }
+        selectedPathParameterValues = destination.pathParameterValues
+        selectedViewId = view.id
+        paginationState = null
+        loadingMore = false
+        loadMoreError = null
     }
 
     val hasCollectionHierarchyBack = navigationHistory.isNotEmpty() || selectedRecord != null
@@ -4370,11 +5302,14 @@ private fun DynamicDiscoveredAppScreen(
                     selectedRecordResourceId != selectedView.resourceId
             }
         val activeContentTitle = when {
+            choresWorkspaceActive -> descriptor.app.name
             showContextDestinationMenu -> selectedRecord?.dynamicContextLabel().orEmpty()
             nestedObjectTitle != null -> nestedObjectTitle
             else -> activeSectionLabel
         }.ifBlank { descriptor.app.name }
-        val activeContentSubtitle = if (showContextDestinationMenu) {
+        val activeContentSubtitle = if (choresWorkspaceActive) {
+            null
+        } else if (showContextDestinationMenu) {
             "Choose a section"
         } else if (nestedObjectTitle != null) {
             activeSectionLabel.takeUnless { label ->
@@ -4386,12 +5321,13 @@ private fun DynamicDiscoveredAppScreen(
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
-        val hasHeaderActions = overflowActionViews.isNotEmpty() ||
+        val hasHeaderActions = collectionCreateControl.action != null ||
+            overflowActionViews.isNotEmpty() ||
             secondaryNavigationDestinations.isNotEmpty()
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
-            mode = if (musicWorkspaceIntent == null) {
+            mode = if (musicWorkspaceIntent == null && !choresWorkspaceActive) {
                 collectionNavigationMode
             } else {
                 NextcloudCollectionNavigationMode.Hidden
@@ -4420,64 +5356,17 @@ private fun DynamicDiscoveredAppScreen(
             },
             headerActions = {
                 if (!showContextDestinationMenu && hasHeaderActions) {
-                    Box {
-                        IconButton(onClick = { actionMenuExpanded = true }) {
-                            Icon(NextcloudIcons.More, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = actionMenuExpanded,
-                            onDismissRequest = { actionMenuExpanded = false },
-                        ) {
-                            overflowActionViews.forEach { (action, view) ->
-                                val actionSpec = schema.action(action.actionId)
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            actionSpec?.let { spec ->
-                                                dynamicHeaderActionLabel(
-                                                    spec,
-                                                    view.dynamicActionLabel(),
-                                                )
-                                            } ?: view.dynamicActionLabel(),
-                                        )
-                                    },
-                                    onClick = { selectDynamicAction(action, view) },
-                                )
-                            }
-                            if (
-                                overflowActionViews.isNotEmpty() &&
-                                secondaryNavigationDestinations.isNotEmpty()
-                            ) {
-                                HorizontalDivider()
-                            }
-                            secondaryNavigationDestinations.forEach { (destination, view) ->
-                                val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
-                                val duplicate = secondaryNavigationDestinations.count {
-                                        (candidate, _) ->
-                                    candidate.label.dynamicUiLabel(descriptor.app.name)
-                                        .equals(baseLabel, ignoreCase = true)
-                                } > 1
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            dynamicSecondaryDestinationLabel(
-                                                destinationLabel = baseLabel,
-                                                resourceLabel = schema.resource(view.resourceId)?.name
-                                                    ?: view.resourceId,
-                                                duplicate = duplicate,
-                                            ),
-                                        )
-                                    },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Open $baseLabel"
-                                    },
-                                    onClick = {
-                                        selectCollectionDestination(destination, view)
-                                    },
-                                )
-                            }
-                        }
-                    }
+                    DynamicCollectionHeaderActions(
+                        schema = schema,
+                        appName = descriptor.app.name,
+                        createControl = collectionCreateControl,
+                        overflowActions = overflowActionViews,
+                        secondaryDestinations = secondaryNavigationDestinations,
+                        menuExpanded = actionMenuExpanded,
+                        onMenuExpandedChange = { actionMenuExpanded = it },
+                        onActionSelected = ::selectDynamicAction,
+                        onDestinationSelected = ::selectCollectionDestination,
+                    )
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -4560,11 +5449,23 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             val rendererDatasetContext = NativeDatasetContext(
-                parentResourceId = selectedRecordResourceId,
-                parentRecord = selectedRecord,
-                bindingValues = datasetBindingValues,
+                parentResourceId = selectedRecordResourceId
+                    ?: retainedChoresTeamContext?.resourceId,
+                parentRecord = selectedRecord ?: retainedChoresTeamRecord,
+                currentUserId = currentUserId,
+                bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
+                mailCollectionSummaryResourceIds = trackedMailCollectionSummaryResourceIds,
+                collectionSearchScopeKey = nativeMailCollectionScopeKey(
+                    hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                    selectedView = selectedView,
+                    selectedRecordResourceId = selectedRecordResourceId,
+                    selectedRecord = selectedRecord,
+                    selectedPathParameterValues = selectedPathParameterValues,
+                    navigationHistory = navigationHistory,
+                ),
+                fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
                 val records = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
@@ -4610,6 +5511,8 @@ private fun DynamicDiscoveredAppScreen(
                     showSelectedRecordDetail = showFallbackRecordDetail,
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
+                    pendingMutationStore = pendingMutationStore,
+                    collectionCreateControl = collectionCreateControl,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,
@@ -4633,7 +5536,10 @@ private fun DynamicDiscoveredAppScreen(
                             leaveMutatedSurface = false,
                         )
                     },
-                    showCollectionCreateAction = selectedCollectionState == null,
+                    showCollectionCreateAction = showDynamicCollectionCreateAction(
+                        collectionState = selectedCollectionState,
+                        choresWorkspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+                    ),
                     onOpenLink = services::openExternalUrl,
                     imageLoader = imageLoader,
                     audioPlayer = audioSourceCapability?.let {
@@ -4648,9 +5554,17 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     },
                     mediaArtworkResolver = mediaArtworkResolver,
-                    onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
+                    onLoadMore = onLoadMore.takeUnless {
+                        showFallbackRecordDetail && adjacentMailPaginationSnapshot == null
+                    },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
+                    workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
+                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
+                        ::selectChoresDestination
+                    } else {
+                        null
+                    },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -4662,16 +5576,19 @@ private fun DynamicDiscoveredAppScreen(
                     NativeMusicAdaptiveNavigationLayout(
                         intent = musicWorkspaceIntent,
                         onDestinationSelected = { destination ->
-                            val selection = selectNativeMusicRoot(destination)
-                            navigationHistory = emptyList()
-                            selectedRecord = selection.selectedRecord
-                            selectedRecordResourceId = selection.selectedRecordResourceId
-                            selectedPathParameterValues = selection.pathParameterValues
-                            selectedViewId = selection.viewId
-                            contextualMenuOpen = false
-                            paginationState = null
-                            loadingMore = false
-                            loadMoreError = null
+                            val navigate = {
+                                val selection = selectNativeMusicRoot(destination)
+                                navigationHistory = emptyList()
+                                selectedRecord = selection.selectedRecord
+                                selectedRecordResourceId = selection.selectedRecordResourceId
+                                selectedPathParameterValues = selection.pathParameterValues
+                                selectedViewId = selection.viewId
+                                contextualMenuOpen = false
+                                paginationState = null
+                                loadingMore = false
+                                loadMoreError = null
+                            }
+                            if (inlineEditorNavigation == null) navigate() else inlineEditorNavigation.navigate(navigate)
                         },
                         modifier = Modifier.fillMaxSize(),
                         content = dynamicScreenContent,
@@ -4682,7 +5599,7 @@ private fun DynamicDiscoveredAppScreen(
                         modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
                     )
                 }
-                dynamicRefreshError?.let { message ->
+                (dynamicRefreshError ?: mailCollectionSummaryError)?.let { message ->
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -4701,7 +5618,9 @@ private fun DynamicDiscoveredAppScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                            TextButton(onClick = {
+                                inlineEditorNavigation?.refresh { loadAttempt += 1 } ?: run { loadAttempt += 1 }
+                            }) { Text("Retry") }
                         }
                     }
                 }
@@ -4750,6 +5669,8 @@ private fun DynamicDiscoveredAppScreen(
     }
     pendingDirectAction?.let { pending ->
         val outcomeUnknown = directActionFailureState?.requiresReconciliation == true
+        val durableRecoveryUnavailable = pending.durableRecoveryRequired &&
+            pending.invitationAcceptRecoveryPlan == null
         AlertDialog(
             onDismissRequest = {
                 if (!directActionRunning) {
@@ -4762,6 +5683,8 @@ private fun DynamicDiscoveredAppScreen(
                 Text(
                     if (outcomeUnknown) {
                         "${dynamicHeaderActionLabel(pending.action, pending.action.label)} result unknown"
+                    } else if (durableRecoveryUnavailable) {
+                        "Refresh invitations"
                     } else {
                         dynamicDirectActionTitle(pending.action, pending.targetLabel)
                     },
@@ -4773,6 +5696,11 @@ private fun DynamicDiscoveredAppScreen(
                         Text(
                             "The server may already have completed this action. The view is being refreshed " +
                                 "to reconcile the result. Review the refreshed state before trying again.",
+                        )
+                    } else if (durableRecoveryUnavailable) {
+                        Text(
+                            "Refresh invitations before accepting this item. Its verified identity " +
+                                "is not available for crash-safe recovery yet.",
                         )
                     } else {
                         Text(dynamicDirectActionDescription(pending.action))
@@ -4799,7 +5727,7 @@ private fun DynamicDiscoveredAppScreen(
                 }
             },
             confirmButton = {
-                if (directActionFailureState?.retryAllowed != false) {
+                if (directActionFailureState?.retryAllowed != false && !durableRecoveryUnavailable) {
                     Button(
                         enabled = !directActionRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -4808,15 +5736,20 @@ private fun DynamicDiscoveredAppScreen(
                             directActionError = null
                             directActionFailureState = null
                             dynamicActionScope.launch {
-                                when (
-                                    val result = executor.execute(
-                                        NativeActionRequest.Submit(
-                                            action = pending.action,
-                                            values = pending.values,
-                                            confirmed = true,
-                                        ),
+                                val request = NativeActionRequest.Submit(
+                                    action = pending.action,
+                                    values = pending.values,
+                                    confirmed = true,
+                                )
+                                val executionResult = pending.invitationAcceptRecoveryPlan?.let { plan ->
+                                    executeNativeChoresInvitationAccept(
+                                        plan = plan,
+                                        request = request,
+                                        actionExecutor = executor,
+                                        pendingMutationStore = pendingMutationStore,
                                     )
-                                ) {
+                                } ?: executor.execute(request)
+                                when (val result = executionResult) {
                                     is NativeActionExecutionResult.Success -> {
                                         pendingDirectAction = null
                                         reconcileSuccessfulMutation(
@@ -4879,23 +5812,24 @@ internal fun DynamicAppChromeHeader(
     onContractInfo: () -> Unit,
     trailingContent: @Composable () -> Unit = {},
 ) {
+    var moreExpanded by remember { mutableStateOf(false) }
     ScreenHeader(
         title = title,
         subtitle = subtitle,
         onBack = onBack,
         compact = compact,
-        trailingContent = trailingContent,
-    )
-    if (!compact) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onContractInfo) {
-                Text("Contract info")
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                trailingContent()
+                NextcloudCardOverflow(
+                    itemLabel = title,
+                    actions = listOf(NextcloudCardAction(label = "App compatibility details", onClick = onContractInfo)),
+                    expanded = moreExpanded,
+                    onExpandedChange = { moreExpanded = it },
+                )
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -5116,13 +6050,17 @@ internal fun NativeAudioMiniPlayer(
                 }
             }
             engineState.error?.let { error ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     error,
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (engineState.status == NativeAudioEngineStatus.Error) TextButton(onClick = onTogglePlayback) { Text("Retry playback") }
+                }
             }
         }
     }
@@ -5293,6 +6231,9 @@ internal data class DynamicAppNavigationState(
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
+internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
+    selectedViewId != null || selectedRecord != null || history.isNotEmpty()
+
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
     val savedRecordId = selectedRecord?.id?.takeIf { value ->
@@ -5411,7 +6352,7 @@ private fun Map<String, String>.toSavedDynamicNavigationParameters(): Map<String
     return toMap()
 }
 
-private fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
+internal fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
     isNotBlank() && length <= maximumChars && none(Char::isISOControl)
 
 internal const val MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY = 16
@@ -5441,6 +6382,118 @@ private data class DynamicPaginationState(
     val nextRequestValue: String,
 )
 
+internal fun retainedMailPaginationSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    paginationViewId: String?,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
+    if (paginationViewId == null) return null
+    return retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = hasMailWorkspaceSemantics,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )?.takeIf { snapshot -> snapshot.viewId == paginationViewId }
+}
+
+internal fun retainedMailCollectionSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
+    if (
+        !hasMailWorkspaceSemantics ||
+        selectedView.component != NativeComponent.detail ||
+        !selectedRecordResourceId.isDynamicMessageResource()
+    ) {
+        return null
+    }
+    return navigationHistory.findLast(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+}
+
+internal fun nativeMailCollectionScopeKey(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    selectedRecord: NativeRecord?,
+    selectedPathParameterValues: Map<String, String>,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): String? {
+    if (!hasMailWorkspaceSemantics) return null
+    val retained = retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = true,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )
+    val scope = retained ?: DynamicNavigationSnapshot(
+        viewId = selectedView.id,
+        resourceId = selectedView.resourceId,
+        record = selectedRecord,
+        recordResourceId = selectedRecordResourceId,
+        pathParameterValues = selectedPathParameterValues,
+    ).takeIf(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+        ?: return null
+    return buildString {
+        append(scope.viewId)
+        append('\u0000')
+        append(scope.recordResourceId)
+        append('\u0000')
+        append(scope.record?.id)
+        scope.record?.dynamicScreenCacheScope().orEmpty().toSortedMap().forEach { (name, value) ->
+            append('\u0000')
+            append(name)
+            append('=')
+            append(value)
+        }
+        scope.pathParameterValues.toSortedMap().forEach { (name, value) ->
+            append('\u0000')
+            append(name)
+            append('=')
+            append(value)
+        }
+    }
+}
+
+private fun DynamicNavigationSnapshot.isNativeMailboxCollectionSnapshot(): Boolean =
+    resourceId.isDynamicMessageResource() &&
+        record != null &&
+        recordResourceId != null &&
+        !recordResourceId.isDynamicMessageResource()
+
+internal fun preferredDynamicPartialRefreshRecords(
+    freshRecords: List<NativeRecord>,
+    staleRecords: List<NativeRecord>?,
+    partialFailureMessage: String?,
+): List<NativeRecord> = staleRecords
+    ?.takeIf { records -> partialFailureMessage != null && records.isNotEmpty() }
+    ?: freshRecords
+
+internal fun preferredDynamicCompositeRefreshRecords(
+    loaded: List<Pair<String, DynamicRecordLoadOutcome>>,
+    staleRecordsByResourceId: Map<String, List<NativeRecord>>?,
+): Map<String, List<NativeRecord>> = loaded.associate { (resourceId, outcome) ->
+    resourceId to preferredDynamicPartialRefreshRecords(
+        freshRecords = outcome.records,
+        staleRecords = staleRecordsByResourceId?.get(resourceId),
+        partialFailureMessage = outcome.partialFailureMessage,
+    )
+}
+
+internal fun mergeDynamicRelatedRecordsPreservingResource(
+    currentRecords: Map<String, List<NativeRecord>>,
+    incomingRecords: Map<String, List<NativeRecord>>,
+    preservedResourceId: String?,
+): Map<String, List<NativeRecord>> {
+    if (preservedResourceId == null) return incomingRecords
+    val preservedRecords = currentRecords[preservedResourceId]
+        ?: return currentRecords + incomingRecords
+    return currentRecords + incomingRecords + (preservedResourceId to preservedRecords)
+}
+
 private fun DynamicPaginationState.toCheckpoint(): DynamicPaginationCheckpoint = DynamicPaginationCheckpoint(
     nextPageNumber = nextPageNumber,
     nextRequestValue = nextRequestValue,
@@ -5451,20 +6504,12 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     lastPage: List<NativeRecord>,
     loadedRecordCount: Int = lastPage.size,
     novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
+    nextPageNumber: Int? = null,
 ): DynamicPaginationState? {
     if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicPaginationState(viewId, this, nextPageNumber, nextValue)
-}
-
-private fun String.dynamicUiLabel(appName: String): String {
-    val cleaned = removePrefix("API ").removePrefix("Api ").removePrefix("api ").trim()
-    return when {
-        cleaned.equals("general", ignoreCase = true) -> appName
-        cleaned.equals("prefs", ignoreCase = true) -> "Preferences"
-        else -> cleaned
-    }
+    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
+    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
 }
 
 private fun String.dynamicResourceWords(): Set<String> = lowercase()
@@ -5510,9 +6555,125 @@ internal fun primaryDynamicContentDestination(
                     )
                 }
             }
+        parentWords.any { it in setOf("team", "teams", "household", "households") } ->
+            destinations.firstOrNull { destination ->
+                destination.resourceId.dynamicResourceWords().any { word ->
+                    word in setOf("assignment", "assignments", "chore", "chores", "duty", "duties")
+                }
+            }
         else -> null
     }
 }
+
+internal fun shouldOpenDynamicContextDestinationMenu(
+    destinations: List<DynamicNavigationDestination>,
+    primaryContentTarget: DynamicNavigationDestination?,
+    preferredCollectionChild: DynamicNavigationDestination?,
+): Boolean = primaryContentTarget == null &&
+    preferredCollectionChild == null &&
+    shouldShowDynamicContextDestinationMenu(destinations)
+
+internal fun isDynamicMailboxCollectionSummaryDestination(
+    schema: NativeAppSchema,
+    parentResourceId: String,
+    destination: DynamicNavigationDestination,
+): Boolean {
+    val parentWords = parentResourceId.dynamicNavigationResourceWords().toSet()
+    if (parentWords.none { word -> word in setOf("folder", "folders", "mailbox", "mailboxes") }) {
+        return false
+    }
+    val destinationWords = sequenceOf(
+        destination.resourceId,
+        destination.label,
+        destination.actionId,
+    ).flatMap { value -> value.dynamicNavigationResourceWords().asSequence() }.toSet()
+    val summaryNamed = destinationWords.any { word ->
+        word in setOf("stat", "stats", "statistics", "status", "summary")
+    }
+    if (!summaryNamed) return false
+    val summaryResource = schema.resource(destination.resourceId) ?: return false
+    return summaryResource.fields.any { field ->
+        sequenceOf(field.id, field.label)
+            .map(String::normalizedMailboxSummaryFieldName)
+            .any { fieldName -> fieldName in DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES }
+    }
+}
+
+internal fun replaceDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    loadedSummaries: Map<String, List<NativeRecord>>,
+): Map<String, List<NativeRecord>> =
+    (recordsByResourceId - summaryResourceIds) + loadedSummaries.filterKeys(summaryResourceIds::contains)
+
+internal data class DynamicMailboxCollectionSummaryPreparation(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val trackedResourceIds: Set<String>,
+)
+
+internal fun shouldRetainDynamicMailboxSummaryState(
+    retainingAdjacentMailbox: Boolean,
+    loadAttempt: Int,
+    completedLoadAttempt: Int,
+): Boolean = retainingAdjacentMailbox && loadAttempt == completedLoadAttempt
+
+internal fun prepareDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    previouslyTrackedResourceIds: Set<String>,
+    currentResourceIds: Set<String>,
+): DynamicMailboxCollectionSummaryPreparation = DynamicMailboxCollectionSummaryPreparation(
+    recordsByResourceId = recordsByResourceId - (previouslyTrackedResourceIds + currentResourceIds),
+    trackedResourceIds = currentResourceIds.toSet(),
+)
+
+internal data class DynamicMailboxCollectionSummaryResult(
+    val resourceId: String,
+    val records: List<NativeRecord> = emptyList(),
+    val failed: Boolean = false,
+)
+
+internal data class DynamicMailboxCollectionSummaryOutcome(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val errorMessage: String?,
+)
+
+internal fun reconcileDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    results: List<DynamicMailboxCollectionSummaryResult>,
+): DynamicMailboxCollectionSummaryOutcome {
+    val loadedSummaries = results
+        .filterNot(DynamicMailboxCollectionSummaryResult::failed)
+        .filter { result -> result.records.isNotEmpty() }
+        .associate { result -> result.resourceId to result.records }
+    return DynamicMailboxCollectionSummaryOutcome(
+        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            loadedSummaries = loadedSummaries,
+        ),
+        errorMessage = DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR.takeIf {
+            results.any(DynamicMailboxCollectionSummaryResult::failed)
+        },
+    )
+}
+
+private fun String.normalizedMailboxSummaryFieldName(): String =
+    lowercase().filter(Char::isLetterOrDigit)
+
+private val DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES = setOf(
+    "total",
+    "totalmessages",
+    "messagecount",
+    "messagescount",
+    "unread",
+    "unseen",
+    "unreadcount",
+    "unseenmessages",
+)
+
+private const val DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR =
+    "Could not load mailbox counts. The mailbox is still available."
 
 private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().any { word ->
     word in setOf(
@@ -5850,11 +7011,6 @@ private fun ViewSpec.dynamicNavigationLabel(appName: String): String {
     return if (cleaned.equals("general", ignoreCase = true)) appName else cleaned
 }
 
-private fun ViewSpec.dynamicActionLabel(): String = title
-    .replace(Regex("^\\[api\\s+v?[0-9.]+]\\s*", RegexOption.IGNORE_CASE), "")
-    .trim()
-    .replaceFirstChar { character -> character.titlecase() }
-
 private fun ViewSpec.dynamicActionMenuKey(): String = dynamicActionLabel()
     .lowercase()
     .replace(" a ", " ")
@@ -5989,6 +7145,7 @@ private fun ActivityScreen(
     onApps: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenFilesPath: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
 ) {
     var selectedServerFilterId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("all") }
     var serverFilters by remember(session, activityInstalled) {
@@ -6042,7 +7199,7 @@ private fun ActivityScreen(
         when {
             action.filesParentPath != null -> onOpenFilesPath(action.filesParentPath)
             app != null -> onOpenApp(app)
-            action.sameOriginUrl != null -> services.openExternalUrl(action.sameOriginUrl)
+            action.sameOriginUrl != null -> onOpenLink(action.sameOriginUrl)
         }
     }
 
@@ -6572,7 +7729,7 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled -> handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -6605,7 +7762,8 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled ->
+                                handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -7559,117 +8717,12 @@ private fun FileGridTile(
     }
 }
 
-@Composable
-internal fun FileActionMenu(
-    file: NextcloudFile,
-    offlineAvailability: FileOfflineAvailability,
-    offlineStorageSupported: Boolean,
-    fileSharing: NextcloudFileSharingCapabilities,
-    externalHandoffCapability: ExternalFileHandoffCapability?,
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onAction: (FileMenuAction) -> Unit,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        planFilesScreenActions(
-            file = file,
-            support = FileActionSupport(
-                sharing = fileSharing.apiEnabled,
-                externalSharing = ExternalFileHandoffAction.Share in
-                    externalHandoffCapability?.supportedActions.orEmpty(),
-                offlineStorage = offlineStorageSupported,
-                platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumExternalFileBytes = externalHandoffCapability?.maximumFileBytes,
-            ),
-            offlineState = offlineAvailability.toFileActionOfflineState(),
-        ).actions.forEach { action ->
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(action.label)
-                        action.disabledReason?.let { reason ->
-                            Text(
-                                reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = fileActionIcon(action.action),
-                        contentDescription = null,
-                        tint = if (action.tone == FileActionTone.Destructive) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                },
-                enabled = action.enabled,
-                onClick = {
-                    onDismiss()
-                    onAction(action.action)
-                },
-            )
-        }
-    }
-}
-
-private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) {
-    FileMenuAction.Open -> NextcloudIcons.FolderOpen
-    FileMenuAction.Preview -> NextcloudIcons.Image
-    FileMenuAction.OpenWith -> NextcloudIcons.File
-    FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.Rename -> NextcloudIcons.Edit
-    FileMenuAction.AddFavorite -> NextcloudIcons.FavoriteBorder
-    FileMenuAction.RemoveFavorite -> NextcloudIcons.Favorite
-    FileMenuAction.Details -> NextcloudIcons.Info
-    FileMenuAction.VersionHistory -> NextcloudIcons.Refresh
-    FileMenuAction.Download -> NextcloudIcons.Cloud
-    FileMenuAction.Move -> NextcloudIcons.FolderOpen
-    FileMenuAction.Copy -> NextcloudIcons.File
-    FileMenuAction.Share -> NextcloudIcons.People
-    FileMenuAction.SendCopy -> NextcloudIcons.Cloud
-    FileMenuAction.MakeAvailableOffline, FileMenuAction.RemoveOffline -> NextcloudIcons.CheckCircle
-    FileMenuAction.Delete -> NextcloudIcons.Error
-}
-
 private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18
 private const val PHOTO_FOLDER_INITIAL_BACKUP_STATUS_ITEMS = 24
 
 @Composable
-internal fun PhotoTimelineFailureNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-    actionLabel: String = "Retry",
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text(actionLabel)
-            }
-        }
-    }
+internal fun PhotoTimelineFailureNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier, actionLabel: String = "Retry") {
+    RetainedContentNotice(message, onRetry, modifier, actionLabel)
 }
 
 @Composable
@@ -7724,35 +8777,8 @@ private fun PhotoTimelineViewModeControl(
 }
 
 @Composable
-private fun PhotoFolderStaleNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = "Could not refresh photo folders. Showing saved folder content. $message",
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text("Retry")
-            }
-        }
-    }
+private fun PhotoFolderStaleNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice("Could not refresh photo folders. Showing saved folder content. $message", onRetry, modifier)
 }
 
 @Composable
@@ -10587,9 +11613,10 @@ private fun TextEditorScreen(
     userId: String,
     file: NextcloudFile,
     onBack: () -> Unit,
-    navigationRequest: NextcloudNativeNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
-    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    navigationCommitInProgress: Boolean = false,
 ) {
     val descriptor = remember(file) { describeDocument(file) }
     val isMarkdown = descriptor.kind == DocumentKind.Markdown
@@ -10643,12 +11670,17 @@ private fun TextEditorScreen(
     }
 
     fun requestBack() {
-        if (saving) return
+        if (saving || navigationCommitInProgress) return
         if (dirty) confirmDiscard = true else onBack()
     }
-    LaunchedEffect(navigationRequest?.sequence, saving) {
+    fun discardDraft() {
+        draft = originalText.orEmpty()
+        saveError = null
+        savedMessage = null
+    }
+    LaunchedEffect(navigationRequest?.identity, saving, navigationCommitInProgress) {
         navigationRequest?.let { request ->
-            if (!saving) {
+            if (!saving && !navigationCommitInProgress) {
                 if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
             }
         }
@@ -10680,7 +11712,7 @@ private fun TextEditorScreen(
                         },
                     )
                     Button(
-                        enabled = dirty && !saving && !etag.isNullOrBlank(),
+                        enabled = dirty && !saving && !navigationCommitInProgress && !etag.isNullOrBlank(),
                         onClick = { confirmSave = true },
                     ) {
                         Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -10785,7 +11817,7 @@ private fun TextEditorScreen(
                             bottom = NextcloudSpacing.Large,
                         ),
                         textStyle = MaterialTheme.typography.bodyMedium,
-                        enabled = !saving,
+                        enabled = !saving && !navigationCommitInProgress,
                     )
                 }
             }
@@ -10843,6 +11875,7 @@ private fun TextEditorScreen(
             confirmButton = {
                 Button(onClick = {
                     confirmDiscard = false
+                    discardDraft()
                     navigationRequest?.let(onNavigationConfirmed) ?: onBack()
                 }) { Text("Discard") }
             },
@@ -10855,7 +11888,7 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
-private object TalkWorkspaceMemoryCache {
+internal object TalkWorkspaceMemoryCache {
     private val rooms = linkedMapOf<String, List<TalkRoom>>()
     private val messages = linkedMapOf<String, List<TalkMessage>>()
 
@@ -10972,179 +12005,6 @@ private fun TalkScreen(
     }
 }
 
-@Composable
-private fun ChatScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    userId: String,
-    room: TalkRoom,
-    onBack: () -> Unit,
-    onOpenAttachment: (NextcloudFile) -> Unit,
-) {
-    var messages by remember(session, room.token) {
-        mutableStateOf(TalkWorkspaceMemoryCache.messages(session, room.token))
-    }
-    var olderCursor by remember(room.token) { mutableStateOf<Long?>(null) }
-    var hasMoreHistory by remember(room.token) { mutableStateOf(false) }
-    var loadingEarlier by remember(room.token) { mutableStateOf(false) }
-    var historyError by remember(room.token) { mutableStateOf<String?>(null) }
-    var draft by rememberSaveable(session.serverUrl, session.loginName, room.token) { mutableStateOf("") }
-    var error by remember(room.token) { mutableStateOf<String?>(null) }
-    var refreshing by remember(room.token) { mutableStateOf(false) }
-    var sending by remember { mutableStateOf(false) }
-    var loadAttempt by remember(room.token) { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-    val messageListState = rememberLazyListState()
-    val orderedMessages = remember(messages) { messages?.sortedBy(TalkMessage::id) }
-
-    suspend fun refresh() {
-        val page = services.listTalkMessagePage(session, room.token)
-        messages = page.messages
-        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages)
-        olderCursor = page.olderCursor
-        hasMoreHistory = page.hasMoreHistory
-    }
-    LaunchedEffect(room.token, loadAttempt) {
-        refreshing = messages != null
-        error = null
-        runCatching { refresh() }.onFailure { error = it.message ?: "Could not load messages." }
-        refreshing = false
-    }
-    LaunchedEffect(orderedMessages?.lastOrNull()?.id) {
-        val lastIndex = orderedMessages?.lastIndex ?: return@LaunchedEffect
-        messageListState.scrollToItem(lastIndex)
-    }
-
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(room.displayName, "Talk", onBack)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                error != null && messages == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-                messages == null -> LoadingMessage("Loading messages...")
-                messages?.isEmpty() == true -> EmptyMessage("No messages in this conversation yet.")
-                else -> LazyColumn(
-                    state = messageListState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    if ((hasMoreHistory && olderCursor != null) || historyError != null) {
-                        item(key = "talk-load-earlier") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                historyError?.let { message ->
-                                    Text(
-                                        message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                }
-                                if (hasMoreHistory && olderCursor != null) {
-                                    TextButton(
-                                        enabled = !loadingEarlier,
-                                        onClick = {
-                                            val cursor = olderCursor ?: return@TextButton
-                                            loadingEarlier = true
-                                            historyError = null
-                                            scope.launch {
-                                                runCatching {
-                                                    services.listTalkMessagePage(
-                                                        session = session,
-                                                        token = room.token,
-                                                        olderCursor = cursor,
-                                                    )
-                                                }.onSuccess { page ->
-                                                    messages = mergeTalkMessageHistory(
-                                                        messages.orEmpty(),
-                                                        page.messages,
-                                                    )
-                                                    TalkWorkspaceMemoryCache.storeMessages(
-                                                        session,
-                                                        room.token,
-                                                        messages.orEmpty(),
-                                                    )
-                                                    olderCursor = page.olderCursor
-                                                    hasMoreHistory = page.hasMoreHistory
-                                                }.onFailure { failure ->
-                                                    historyError =
-                                                        failure.message ?: "Could not load earlier messages."
-                                                }
-                                                loadingEarlier = false
-                                            }
-                                        },
-                                    ) {
-                                        if (loadingEarlier) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Text("Load earlier messages")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    listItems(requireNotNull(orderedMessages), key = TalkMessage::id) { message ->
-                        TalkMessageCard(
-                            services = services,
-                            session = session,
-                            message = message,
-                            mine = message.actorId == userId,
-                            onOpenAttachment = { attachment ->
-                                onOpenAttachment(attachment.asNextcloudFile())
-                            },
-                        )
-                    }
-                }
-            }
-            if (refreshing) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                )
-            }
-            if (error != null && messages != null) {
-                RetainedRefreshError(
-                    message = requireNotNull(error),
-                    onRetry = { loadAttempt += 1 },
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                enabled = !sending,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            )
-            IconButton(
-                enabled = draft.isNotBlank() && !sending,
-                onClick = {
-                    val message = draft.trim()
-                    sending = true
-                    scope.launch {
-                        runCatching {
-                            services.sendTalkMessage(session, room.token, message)
-                            draft = ""
-                            refresh()
-                        }.onFailure { error = it.message ?: "Could not send message." }
-                        sending = false
-                    }
-                },
-            ) { Icon(NextcloudIcons.Send, contentDescription = "Send message") }
-        }
-    }
-}
 
 @Composable
 private fun ProjectNewsScreen(
@@ -11302,1176 +12162,6 @@ private fun ProjectNewsArticleScreen(
     }
 }
 
-@Composable
-private fun LoggedOutAppUpdateReviewScreen(
-    services: NextcloudPlatformServices,
-    platformCapabilityRefreshRequest: Long,
-    onContinueToSignIn: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ProductHeader(title = "App update", showSettings = false)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            item {
-                Text(
-                    "Review this app update without connecting a Nextcloud account.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item {
-                AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-            }
-            item {
-                OutlinedButton(onClick = onContinueToSignIn) {
-                    Text("Continue to sign in")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AppUpdateSettingsCard(
-    services: NextcloudPlatformServices,
-    platformCapabilityRefreshRequest: Long,
-) {
-    val scope = rememberCoroutineScope()
-    val support = remember(services) { services.appUpdateSupport() }
-    var updateChannel by remember(services) {
-        mutableStateOf(services.loadAppUpdateChannel())
-    }
-    val channelPresentation = remember(support, updateChannel) {
-        appUpdateChannelPresentation(support, updateChannel)
-    }
-    val updateState by remember(services) {
-        services.observeAppUpdateInstallState()
-    }.collectAsState(AppUpdateInstallState.Idle)
-    val observedCheckResult by remember(services) {
-        services.observeAppUpdateCheckResult()
-    }.collectAsState(null)
-    var updatePreferences by remember(services) {
-        mutableStateOf(services.loadAppUpdatePreferences())
-    }
-    val notificationCapability = remember(services, platformCapabilityRefreshRequest) {
-        services.platformCapabilities().firstOrNull { status ->
-            status.capability == PlatformCapability.Notifications
-        }
-    }
-    val appUpdateNotificationDeliveryAllowed = remember(services, platformCapabilityRefreshRequest) {
-        services.appUpdateNotificationDeliveryAllowed()
-    }
-    var notificationEnablePending by remember(services) { mutableStateOf(false) }
-    var checking by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
-    var pendingInstallConfirmation by remember { mutableStateOf<AppUpdateRelease?>(null) }
-    var installMessage by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(
-        appUpdateNotificationDeliveryAllowed,
-        notificationCapability?.state,
-        notificationEnablePending,
-        platformCapabilityRefreshRequest,
-    ) {
-        if (notificationEnablePending && appUpdateNotificationDeliveryAllowed) {
-            val updated = updatePreferences.copy(notifications = true)
-            if (services.saveAppUpdatePreferences(updated)) {
-                updatePreferences = updated
-            }
-            notificationEnablePending = false
-            installMessage = null
-        } else if (
-            notificationEnablePending &&
-            notificationCapability?.state in setOf(
-                PlatformCapabilityState.Blocked,
-                PlatformCapabilityState.Unsupported,
-            )
-        ) {
-            notificationEnablePending = false
-        }
-    }
-    fun beginInstall(release: AppUpdateRelease) {
-        installing = true
-        installMessage = null
-        scope.launch {
-            installMessage = when (val install = services.beginAppUpdate(release)) {
-                AppUpdateInstallResult.ConfirmationOpened ->
-                    "The system installer opened the update confirmation."
-                AppUpdateInstallResult.Installed ->
-                    "The update was installed. Restart Nextcloud Native to use the new version."
-                is AppUpdateInstallResult.Cancelled ->
-                    if (install.canResume) {
-                        "Download paused. You can resume it without starting over."
-                    } else {
-                        "Download stopped. The next attempt will start from the beginning."
-                    }
-                is AppUpdateInstallResult.PermissionRequired -> install.message
-                is AppUpdateInstallResult.Rejected -> install.message
-            }
-            installing = false
-        }
-    }
-    fun requestInstall(release: AppUpdateRelease) {
-        if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
-            pendingInstallConfirmation = release
-        } else {
-            beginInstall(release)
-        }
-    }
-    pendingInstallConfirmation?.let { release ->
-        AlertDialog(
-            onDismissRequest = { pendingInstallConfirmation = null },
-            title = { Text("Install app update?") },
-            text = {
-                Text(
-                    "Nextcloud Native will download and verify version ${release.versionName}, then ask " +
-                        "the system package service to install it. Restart the app after installation.",
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        pendingInstallConfirmation = null
-                        beginInstall(release)
-                    },
-                ) {
-                    Text("Install update")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingInstallConfirmation = null }) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Small),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Cloud,
-                        contentDescription = null,
-                        modifier = Modifier.padding(12.dp).size(26.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("App updates", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (channelPresentation.selectorVisible) {
-                            "Version ${support.currentVersionName} - ${updateChannel.name} channel"
-                        } else {
-                            "Version ${support.currentVersionName} - ${support.channel.name}"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (support.canCheckDirectUpdates) {
-                    TextButton(
-                        enabled = !checking && updateChannel.available,
-                        onClick = {
-                            checking = true
-                            installMessage = null
-                            scope.launch {
-                                services.checkForAppUpdate(updateChannel)
-                                checking = false
-                            }
-                        },
-                    ) {
-                        if (checking) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("Check")
-                        }
-                    }
-                }
-            }
-            Text(
-                support.explanation,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (channelPresentation.selectorVisible) {
-                Text(
-                    "Update channel",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Column(modifier = Modifier.selectableGroup()) {
-                    channelPresentation.options.forEach { option ->
-                        val enabled = option.enabled && !checking && !installing
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = option.selected,
-                                    enabled = enabled,
-                                    role = Role.RadioButton,
-                                    onClick = {
-                                        if (services.saveAppUpdateChannel(option.channel)) {
-                                            updateChannel = option.channel
-                                            installMessage = null
-                                        }
-                                    },
-                                )
-                                .padding(vertical = NextcloudSpacing.Small),
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = option.selected,
-                                enabled = enabled,
-                                onClick = null,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
-                                    option.availabilityLabel?.let { label ->
-                                        Text(
-                                            label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                                Text(
-                                    option.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            if (channelPresentation.selectorVisible) {
-                UpdatePreferenceRow(
-                    label = "Check automatically",
-                    description = if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
-                        "Check the selected channel periodically while Nextcloud Native is running."
-                    } else {
-                        "Check the selected channel in the background without downloading packages."
-                    },
-                    checked = updatePreferences.automaticChecks,
-                    onCheckedChange = { enabled ->
-                        val updated = updatePreferences.copy(automaticChecks = enabled)
-                        if (services.saveAppUpdatePreferences(updated)) {
-                            updatePreferences = updated
-                            if (enabled) {
-                                scope.launch { services.checkForAppUpdate(automatic = true) }
-                            }
-                        }
-                    },
-                )
-                if (support.channel == AppDistributionChannel.DirectApk) {
-                    UpdatePreferenceRow(
-                        label = "Use unmetered networks only",
-                        description = "Automatic Android checks wait for an unmetered connection.",
-                        checked = updatePreferences.unmeteredNetworkOnly,
-                        enabled = updatePreferences.automaticChecks,
-                        onCheckedChange = { enabled ->
-                            val updated = updatePreferences.copy(unmeteredNetworkOnly = enabled)
-                            if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                        },
-                    )
-                    UpdatePreferenceRow(
-                        label = "Notify when available",
-                        description = when {
-                            notificationCapability?.state == PlatformCapabilityState.Granted &&
-                                appUpdateNotificationDeliveryAllowed ->
-                                "Post one Android notification for each newly discovered version."
-                            notificationCapability?.state == PlatformCapabilityState.Granted ->
-                                "The App updates notification channel is blocked. Turn it on in Android settings."
-                            notificationCapability?.state == PlatformCapabilityState.NeedsPermission ->
-                                "Allow Android notifications to be notified about newly discovered versions."
-                            notificationCapability?.state == PlatformCapabilityState.Blocked ->
-                                "Notifications are blocked. Turn them on in Android app settings to use this option."
-                            notificationCapability?.state == PlatformCapabilityState.Unsupported ->
-                                "Android notifications are unavailable on this device."
-                            else ->
-                                "Android notification permission status is unavailable."
-                        },
-                        checked = updatePreferences.notifications && appUpdateNotificationDeliveryAllowed,
-                        enabled = updatePreferences.automaticChecks,
-                        onCheckedChange = { enabled ->
-                            if (!enabled) {
-                                notificationEnablePending = false
-                                val updated = updatePreferences.copy(notifications = false)
-                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (appUpdateNotificationDeliveryAllowed) {
-                                val updated = updatePreferences.copy(notifications = true)
-                                if (services.saveAppUpdatePreferences(updated)) updatePreferences = updated
-                            } else if (services.requestAppUpdateNotificationDelivery()) {
-                                notificationEnablePending = true
-                                installMessage = "Allow notifications in Android to finish enabling update alerts."
-                            } else {
-                                installMessage = "Android could not open notification permission settings."
-                            }
-                        },
-                    )
-                }
-            }
-            when (val checked = observedCheckResult) {
-                is AppUpdateCheckResult.Available -> {
-                    val release = checked.release
-                    val releaseState = updateState.takeIf { state ->
-                        when (state) {
-                            is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Verifying -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Installing -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.PermissionRequired -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Cancelled -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Failed -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.ConfirmationOpened -> state.versionCode == release.versionCode
-                            is AppUpdateInstallState.Installed -> state.versionCode == release.versionCode
-                            AppUpdateInstallState.Idle -> false
-                        }
-                    } ?: AppUpdateInstallState.Idle
-                    Text(
-                        "Version ${release.versionName} is available.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    TextButton(onClick = { services.openExternalUrl(release.releaseNotesUrl) }) {
-                        Text("Read release notes")
-                    }
-                    when (releaseState) {
-                        is AppUpdateInstallState.Downloading -> {
-                            val progress =
-                                (releaseState.downloadedBytes.toDouble() / releaseState.totalBytes.toDouble())
-                                    .coerceIn(0.0, 1.0)
-                                    .toFloat()
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.fillMaxWidth().height(6.dp),
-                            )
-                            Text(
-                                buildString {
-                                    append(formatBytes(releaseState.downloadedBytes))
-                                    append(" of ")
-                                    append(formatBytes(releaseState.totalBytes))
-                                    if (releaseState.resumedFromBytes > 0) append(" - resumed")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            OutlinedButton(onClick = { services.cancelAppUpdate() }) {
-                                Text(appUpdateDownloadCancellationLabel(support.channel))
-                            }
-                        }
-                        is AppUpdateInstallState.Verifying -> {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            Text(
-                                if (release is AndroidDirectRelease) {
-                                    "Download complete. Verifying package and signing certificate..."
-                                } else {
-                                    "Download complete. Checking the package checksum..."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        is AppUpdateInstallState.Installing -> {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            Text(
-                                "Waiting for the system package service to finish installation...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        is AppUpdateInstallState.Cancelled -> {
-                            Text(
-                                if (releaseState.canResume) {
-                                    "${formatBytes(releaseState.downloadedBytes)} saved for resume."
-                                } else {
-                                    "The download was paused before any data was saved."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Button(
-                                onClick = { requestInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
-                            }
-                        }
-                        is AppUpdateInstallState.Failed -> {
-                            Text(
-                                releaseState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            Button(
-                                onClick = { requestInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text(if (releaseState.canResume) "Resume download" else "Retry download")
-                            }
-                        }
-                        is AppUpdateInstallState.PermissionRequired -> {
-                            Text(
-                                releaseState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Button(
-                                onClick = { beginInstall(release) },
-                                enabled = !installing,
-                            ) {
-                                Text("Continue update")
-                            }
-                        }
-                        is AppUpdateInstallState.ConfirmationOpened -> Text(
-                            "The system installer opened the update confirmation.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NextcloudTheme.colors.success,
-                        )
-                        is AppUpdateInstallState.Installed -> Text(
-                            "The update was installed. Restart Nextcloud Native to use the new version.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NextcloudTheme.colors.success,
-                        )
-                        AppUpdateInstallState.Idle -> Button(
-                            onClick = { requestInstall(release) },
-                            enabled = !installing,
-                        ) {
-                            if (installing) {
-                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else {
-                                Text("Download, verify, and install")
-                            }
-                        }
-                    }
-                }
-                is AppUpdateCheckResult.Current -> Text(
-                    "This installation is up to date.",
-                    color = NextcloudTheme.colors.success,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                is AppUpdateCheckResult.Failed -> Text(
-                    checked.message,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                is AppUpdateCheckResult.Unavailable, null -> Unit
-            }
-            installMessage?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpdatePreferenceRow(
-    label: String,
-    description: String,
-    checked: Boolean,
-    enabled: Boolean = true,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(
-                value = checked,
-                enabled = enabled,
-                role = Role.Switch,
-                onValueChange = onCheckedChange,
-            )
-            .semantics(mergeDescendants = true) {}
-            .padding(vertical = NextcloudSpacing.Small),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.titleSmall)
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(
-            checked = checked,
-            enabled = enabled,
-            onCheckedChange = null,
-        )
-    }
-}
-
-@Composable
-private fun SettingsScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    serverInfo: NextcloudServerInfo?,
-    themePreference: ThemePreference,
-    platformCapabilityRefreshRequest: Long,
-    onThemePreferenceChanged: (ThemePreference) -> Unit,
-    onAdminApps: () -> Unit,
-    onOfflineCenter: () -> Unit,
-    onTransfers: () -> Unit,
-    onProjectNews: () -> Unit,
-    onLoggedOut: suspend () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var loggingOut by remember { mutableStateOf(false) }
-    var logoutError by remember { mutableStateOf<String?>(null) }
-    var capabilityRefresh by remember { mutableStateOf(0) }
-    var startOnLogin by remember(services) { mutableStateOf(services.loadStartOnLoginPreference()) }
-    var startOnLoginMessage by remember(services) { mutableStateOf<String?>(null) }
-    var keepRunningInBackground by remember(services) {
-        mutableStateOf(services.loadKeepRunningInBackgroundPreference())
-    }
-    val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
-        services.platformCapabilities()
-    }
-    if (LocalNextcloudWorkspaceCapabilities.current.isDesktop) {
-        DesktopSettingsWorkspace(
-            summary = SettingsWorkspaceSummary(
-                displayName = serverInfo?.displayName ?: session.loginName,
-                cloudName = serverInfo?.themeName ?: "Nextcloud",
-                serverUrl = session.serverUrl,
-                serverVersion = serverInfo?.version,
-                installedApps = serverInfo?.apps?.count { it.id != "dashboard" } ?: 0,
-                syncLabel = if (services.supportsRecursiveFileOfflineStorage) {
-                    "Folder sync available"
-                } else {
-                    "Offline files available"
-                },
-            ),
-        ) { section ->
-            when (section) {
-                SettingsWorkspaceSection.Account -> {
-                    SettingsActionCard(
-                        title = serverInfo?.displayName ?: session.loginName,
-                        description = "${session.serverUrl} · ${serverInfo?.version?.let { "Nextcloud $it" } ?: "Connected"}",
-                        icon = NextcloudIcons.Profile,
-                        onClick = {},
-                        trailing = "Primary account",
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Text("Security", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "This device uses an app password. Signing out revokes its access without changing other sessions.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            OutlinedButton(
-                                enabled = !loggingOut,
-                                onClick = {
-                                    loggingOut = true
-                                    logoutError = null
-                                    scope.launch {
-                                        runCatching { services.revokeSession(session) }
-                                        runCatching { onLoggedOut() }
-                                            .onFailure { failure ->
-                                                logoutError = logoutCleanupFailureMessage(failure)
-                                                loggingOut = false
-                                            }
-                                    }
-                                },
-                            ) {
-                                Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.size(8.dp))
-                                Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
-                            }
-                            logoutError?.let { message ->
-                                Text(
-                                    message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.Appearance -> {
-                    Text("Color theme", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                        ThemePreference.entries.forEach { preference ->
-                            FilterChip(
-                                selected = themePreference == preference,
-                                onClick = { onThemePreferenceChanged(preference) },
-                                label = { Text(preference.name) },
-                                leadingIcon = {
-                                    Icon(
-                                        when (preference) {
-                                            ThemePreference.System -> NextcloudIcons.SystemMode
-                                            ThemePreference.Light -> NextcloudIcons.LightMode
-                                            ThemePreference.Dark -> NextcloudIcons.DarkMode
-                                        },
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                            )
-                        }
-                    }
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("Designed for this screen", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "Desktop workspaces use persistent navigation, dense controls, and detail panes. Compact windows adapt automatically.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.SyncAndStorage -> {
-                    SettingsActionCard(
-                        title = "Folder sync workspace",
-                        description = if (services.supportsRecursiveFileOfflineStorage) {
-                            "Manage sync pairs, rules, conflicts, virtual files, and storage"
-                        } else {
-                            "Manage pinned files, downloads, conflicts, and device storage"
-                        },
-                        icon = NextcloudIcons.Cloud,
-                        onClick = onOfflineCenter,
-                        trailing = if (services.supportsRecursiveFileOfflineStorage) "Ready" else null,
-                    )
-                    if (services.supportsMediaTransferCenter) {
-                        SettingsActionCard(
-                            title = "Media transfers",
-                            description = "Review pending, active, failed, and completed uploads",
-                            icon = NextcloudIcons.Refresh,
-                            onClick = onTransfers,
-                        )
-                    }
-                    SettingsActionCard(
-                        title = "Offline availability",
-                        description = "Choose what stays available when this device is offline",
-                        icon = NextcloudIcons.FolderOpen,
-                        onClick = onOfflineCenter,
-                    )
-                }
-
-                SettingsWorkspaceSection.NotificationsAndDevice -> {
-                    if (platformCapabilities.isEmpty()) {
-                        Text("No device permissions are required on this platform.")
-                    } else {
-                        platformCapabilities.forEach { status ->
-                            SettingsActionCard(
-                                title = status.label,
-                                description = status.description,
-                                icon = NextcloudIcons.Settings,
-                                trailing = when (status.state) {
-                                    PlatformCapabilityState.Granted -> "Enabled"
-                                    PlatformCapabilityState.AvailableWithoutPermission -> "Available"
-                                    PlatformCapabilityState.NeedsPermission -> "Enable"
-                                    PlatformCapabilityState.Blocked -> "Open settings"
-                                    PlatformCapabilityState.Unsupported -> "Unavailable"
-                                },
-                                onClick = {
-                                    if (status.state == PlatformCapabilityState.NeedsPermission ||
-                                        status.state == PlatformCapabilityState.Blocked
-                                    ) {
-                                        services.requestPlatformCapability(status.capability)
-                                        capabilityRefresh += 1
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-
-                SettingsWorkspaceSection.DesktopApp -> {
-                    if (services.supportsKeepRunningInBackground) {
-                        DesktopBackgroundSettingsCard(
-                            enabled = keepRunningInBackground,
-                            onEnabledChanged = { enabled ->
-                                services.saveKeepRunningInBackgroundPreference(enabled)
-                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
-                            },
-                        )
-                    }
-                    if (services.supportsStartOnLogin) {
-                        DesktopStartOnLoginSettingsCard(
-                            enabled = startOnLogin,
-                            message = startOnLoginMessage,
-                            onEnabledChanged = { enabled ->
-                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                                startOnLogin = services.loadStartOnLoginPreference()
-                            },
-                        )
-                    }
-                }
-
-                SettingsWorkspaceSection.Updates -> AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-
-                SettingsWorkspaceSection.Diagnostics -> SupportDiagnosticsSettingsCard(services)
-
-                SettingsWorkspaceSection.HelpAndGuides -> {
-                    SettingsActionCard(
-                        title = "Guides",
-                        description = "Follow illustrated setup, sync, offline, photo, Calendar, and app workflows",
-                        icon = NextcloudIcons.Info,
-                        onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
-                        trailing = "6 guides",
-                    )
-                    SettingsActionCard(
-                        title = "Project news",
-                        description = "Read release notes and development updates in a cached native view",
-                        icon = NextcloudIcons.Activity,
-                        onClick = onProjectNews,
-                    )
-                }
-
-                SettingsWorkspaceSection.Administration -> {
-                    SettingsActionCard(
-                        title = "Server apps",
-                        description = "Install, update, enable, or disable apps as an administrator",
-                        icon = NextcloudIcons.Apps,
-                        onClick = onAdminApps,
-                        trailing = serverInfo?.apps?.size?.let { "$it active" },
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("Installed workspaces", style = MaterialTheme.typography.titleSmall)
-                            serverInfo?.apps.orEmpty().filterNot { it.id == "dashboard" }.take(8).forEach { app ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    Icon(NextcloudIcons.app(app.id), contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Text(app.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    Text(
-                                        if (app.id in nativeAppIds) "Native" else "Adaptive",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-    Column(modifier = Modifier.fillMaxSize()) {
-        ProductHeader(title = "Settings", showSettings = false)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
-        ) {
-            item {
-                SectionTitle("Appearance")
-                Row(
-                    modifier = Modifier.padding(top = NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    ThemePreference.entries.forEach { preference ->
-                        FilterChip(
-                            selected = themePreference == preference,
-                            onClick = { onThemePreferenceChanged(preference) },
-                            label = { Text(preference.name) },
-                            leadingIcon = {
-                                Icon(
-                                    when (preference) {
-                                        ThemePreference.System -> NextcloudIcons.SystemMode
-                                        ThemePreference.Light -> NextcloudIcons.LightMode
-                                        ThemePreference.Dark -> NextcloudIcons.DarkMode
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-            if (services.supportsStartOnLogin || services.supportsKeepRunningInBackground) {
-                item {
-                    SectionTitle("Desktop")
-                    if (services.supportsKeepRunningInBackground) {
-                        DesktopBackgroundSettingsCard(
-                            enabled = keepRunningInBackground,
-                            onEnabledChanged = { enabled ->
-                                services.saveKeepRunningInBackgroundPreference(enabled)
-                                keepRunningInBackground = services.loadKeepRunningInBackgroundPreference()
-                            },
-                        )
-                    }
-                    if (services.supportsStartOnLogin) {
-                        DesktopStartOnLoginSettingsCard(
-                            enabled = startOnLogin,
-                            message = startOnLoginMessage,
-                            onEnabledChanged = { enabled ->
-                                startOnLoginMessage = services.saveStartOnLoginPreference(enabled)
-                                startOnLogin = services.loadStartOnLoginPreference()
-                            },
-                        )
-                    }
-                }
-            }
-            item {
-                SectionTitle("Account")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Profile,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(serverInfo?.displayName ?: session.loginName, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                session.serverUrl,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            serverInfo?.version?.let {
-                                Text(
-                                    "Nextcloud $it",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                SectionTitle("Files")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onOfflineCenter,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Cloud,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Sync & offline", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                if (services.supportsFileOfflineStorage) {
-                                    if (services.supportsRecursiveFileOfflineStorage) {
-                                        "Folder sync, offline files, conflicts, and storage"
-                                    } else {
-                                        "Pinned files, downloads, conflicts, and device storage"
-                                    }
-                                } else {
-                                    "Review this platform's offline file support and limitations"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open Sync & offline",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-            }
-            if (services.supportsMediaTransferCenter) {
-                item {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = onTransfers,
-                        color = NextcloudTheme.colors.appTile,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                                Icon(
-                                    NextcloudIcons.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.padding(12.dp).size(26.dp),
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Media transfers", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "Pending, active, failed, and completed uploads",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Icon(
-                                NextcloudIcons.ChevronRight,
-                                contentDescription = "Open media transfers",
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
-            }
-            if (platformCapabilities.isNotEmpty()) {
-                item {
-                    SectionTitle("Device features")
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        platformCapabilities.forEach { status ->
-                            Surface(
-                                color = NextcloudTheme.colors.appTile,
-                                shape = RoundedCornerShape(NextcloudRadii.Card),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        NextcloudIcons.Settings,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(status.label, style = MaterialTheme.typography.titleSmall)
-                                        Text(
-                                            status.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    when (status.state) {
-                                        PlatformCapabilityState.NeedsPermission,
-                                        PlatformCapabilityState.Blocked,
-                                        -> TextButton(
-                                            onClick = {
-                                                services.requestPlatformCapability(status.capability)
-                                                capabilityRefresh += 1
-                                            },
-                                        ) {
-                                            Text(if (status.state == PlatformCapabilityState.Blocked) "Settings" else "Enable")
-                                        }
-                                        PlatformCapabilityState.Granted -> Text("Enabled", color = NextcloudTheme.colors.success)
-                                        PlatformCapabilityState.AvailableWithoutPermission -> Text("Available")
-                                        PlatformCapabilityState.Unsupported -> Text("Unavailable")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                SectionTitle("Nextcloud Native")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = { services.openExternalUrl(NEXTCLOUD_NATIVE_GUIDES_URL) },
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Info,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Help & guides", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Illustrated setup, sync, offline, photo, Calendar, and app workflows",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open Nextcloud Native guides",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onProjectNews,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Activity,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Project news", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Read development notes in a native, cached view",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open project news",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                AppUpdateSettingsCard(
-                    services = services,
-                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                )
-                Spacer(Modifier.height(NextcloudSpacing.Medium))
-                SupportDiagnosticsSettingsCard(services)
-            }
-            item {
-                SectionTitle("Administration")
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.Medium),
-                    onClick = onAdminApps,
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.Apps,
-                                contentDescription = null,
-                                modifier = Modifier.padding(12.dp).size(26.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Server apps", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Install, update, enable, or disable apps as an administrator",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open server app management",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-            }
-            item {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    OutlinedButton(
-                        enabled = !loggingOut,
-                        onClick = {
-                            loggingOut = true
-                            logoutError = null
-                            scope.launch {
-                                runCatching { services.revokeSession(session) }
-                                runCatching { onLoggedOut() }
-                                    .onFailure { failure ->
-                                        logoutError = logoutCleanupFailureMessage(failure)
-                                        loggingOut = false
-                                    }
-                            }
-                        },
-                    ) {
-                        Icon(NextcloudIcons.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text(if (loggingOut) "Signing out..." else "Sign out and revoke access")
-                    }
-                    logoutError?.let { message ->
-                        Text(
-                            message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 internal fun logoutCleanupFailureMessage(failure: Throwable): String {
     val detail = failure.message.orEmpty()
         .filterNot(Char::isISOControl)
@@ -12480,249 +12170,6 @@ internal fun logoutCleanupFailureMessage(failure: Throwable): String {
         .takeIf(String::isNotEmpty)
         ?: "Local desktop cleanup did not complete."
     return "Could not finish signing out. $detail You can retry safely."
-}
-
-@Composable
-private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
-    val scope = rememberCoroutineScope()
-    var refresh by remember { mutableStateOf(0) }
-    val diagnosticsRevision by remember(services) {
-        services.supportDiagnosticsRevisions()
-    }.collectAsState(0L)
-    var summary by remember(services) {
-        mutableStateOf(
-            SupportDiagnosticsSummary(
-                available = false,
-                eventCount = 0,
-                warningCount = 0,
-                errorCount = 0,
-                oldestEventAtEpochMillis = null,
-                newestEventAtEpochMillis = null,
-                components = emptySet(),
-                storedBytes = 0L,
-                includedFiles = SUPPORT_BUNDLE_INCLUDED_FILES,
-                explanation = "Loading private diagnostic history...",
-            ),
-        )
-    }
-    LaunchedEffect(services, diagnosticsRevision, refresh) {
-        summary = services.loadSupportDiagnosticsSummary()
-    }
-    var reproductionSteps by remember { mutableStateOf("") }
-    var exporting by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var showPreview by rememberSaveable { mutableStateOf(false) }
-
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Clear diagnostic history?") },
-            text = {
-                Text(
-                    "This permanently removes the recorded diagnostic events on this device. " +
-                        "It does not remove reports you already exported.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        confirmClear = false
-                        scope.launch {
-                            status = if (services.clearSupportDiagnostics()) {
-                                refresh += 1
-                                "Diagnostic history cleared."
-                            } else {
-                                "Diagnostic history could not be cleared."
-                            }
-                        }
-                    },
-                ) { Text("Clear history") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
-            },
-        )
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                    Icon(
-                        NextcloudIcons.Activity,
-                        contentDescription = null,
-                        modifier = Modifier.padding(12.dp).size(26.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Anonymized support report", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Export bounded app events and failure context when you choose. Nothing is uploaded automatically.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (summary.available) {
-                Text(
-                    "${summary.eventCount} events · ${summary.errorCount} errors · " +
-                        "${summary.warningCount} warnings · ${formatVirtualFileBytes(summary.storedBytes)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    summary.components
-                        .sortedBy { component -> component.name }
-                        .joinToString(prefix = "Areas: ", separator = ", ") { it.name }
-                        .takeIf { summary.components.isNotEmpty() }
-                        ?: "No diagnostic events have been recorded yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Text(
-                    summary.explanation ?: "Diagnostic storage is unavailable on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
-            OutlinedTextField(
-                value = reproductionSteps,
-                onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = summary.available && !exporting,
-                label = { Text("What happened? (optional)") },
-                placeholder = { Text("Describe what you did, what you expected, and what happened.") },
-                supportingText = {
-                    Text(
-                        "Recognizable credentials, account details, URLs, and paths are anonymized. " +
-                            "Review your description before sharing.",
-                    )
-                },
-                minLines = 3,
-                maxLines = 7,
-            )
-
-            Text(
-                "Includes: ${summary.includedFiles.joinToString()}. " +
-                    "Does not include file contents, request bodies, credentials, cookies, or the private alias key.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (summary.recentEvents.isNotEmpty()) {
-                OutlinedButton(
-                    onClick = {
-                        refresh += 1
-                        showPreview = !showPreview
-                    },
-                ) {
-                    Text(if (showPreview) "Hide event preview" else "Preview recent events")
-                }
-                if (showPreview) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(NextcloudRadii.Small),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                "Latest ${summary.recentEvents.size} sanitized events",
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            summary.recentEvents.asReversed().forEach { event ->
-                                Text(
-                                    buildString {
-                                        append(event.severity.name)
-                                        append(" · ")
-                                        append(event.component.name)
-                                        append(" · ")
-                                        append(event.operation)
-                                        append(" · ")
-                                        append(event.outcome)
-                                        event.code?.let { append(" · ").append(it) }
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                Button(
-                    enabled = summary.available && !exporting,
-                    onClick = {
-                        exporting = true
-                        status = null
-                        refresh += 1
-                        scope.launch {
-                            try {
-                                status = when (val result = services.exportSupportDiagnostics(reproductionSteps)) {
-                                    is SupportDiagnosticsExportResult.Exported ->
-                                        "Report prepared: ${result.destination}"
-                                    SupportDiagnosticsExportResult.Cancelled -> "Report export cancelled."
-                                    is SupportDiagnosticsExportResult.Failed -> result.message
-                                    is SupportDiagnosticsExportResult.Unsupported -> result.reason
-                                }
-                            } catch (cancellation: CancellationException) {
-                                throw cancellation
-                            } catch (_: Throwable) {
-                                status = "The anonymized support report could not be saved."
-                            } finally {
-                                exporting = false
-                                refresh += 1
-                            }
-                        }
-                    },
-                ) {
-                    if (exporting) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (exporting) "Preparing..." else "Export report")
-                }
-                if (summary.eventCount > 0) {
-                    OutlinedButton(
-                        enabled = !exporting,
-                        onClick = { confirmClear = true },
-                    ) { Text("Clear history") }
-                }
-            }
-            status?.let { message ->
-                Text(
-                    message,
-                    modifier = Modifier.semantics {
-                        contentDescription = message
-                        liveRegion = LiveRegionMode.Polite
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
 }
 
 @Composable
@@ -12815,7 +12262,7 @@ internal fun DesktopBackgroundSettingsCard(
 }
 
 @Composable
-private fun ProductHeader(
+internal fun ProductHeader(
     title: String,
     onSettings: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null,
@@ -12940,79 +12387,19 @@ internal fun ScreenHeader(
 }
 
 @Composable
-private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier = modifier, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
 }
 
 @Composable
-private fun LoadingMessage(message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        CircularProgressIndicator()
-        Text(message, modifier = Modifier.padding(top = NextcloudSpacing.Large))
-    }
-}
-
-@Composable
-internal fun EmptyMessage(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.XLarge), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
-    Column(modifier = Modifier.padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-        Text(message, color = MaterialTheme.colorScheme.error)
-        onRetry?.let { retry -> OutlinedButton(onClick = retry) { Text("Try again") } }
-    }
-}
-
-@Composable
-private fun RetainedRefreshError(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.padding(
-            horizontal = NextcloudSpacing.Large,
-            vertical = NextcloudSpacing.Small,
-        ),
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = onRetry) { Text("Retry") }
-        }
-    }
+private fun RetainedRefreshError(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice(message, onRetry, modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small))
 }
 
 private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeSubtitle(appId: String): String = when (appId) {
-    "files" -> "Browse your server files"
-    "photos", "memories" -> "Photos, videos and RAW previews"
-    "spreed", "talk" -> "Continue your conversations"
-    "activity" -> "See recent changes across your cloud"
-    "notes" -> "Write and organize Markdown notes"
-    "dashboard" -> "See your cloud at a glance"
-    "user_status" -> "Manage your presence and status message"
-    else -> "Open native experience"
 }
 
 private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
@@ -13031,7 +12418,7 @@ private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
     else -> "adaptive collection"
 }
 
-private fun formatBytes(bytes: Long?): String = when {
+internal fun formatBytes(bytes: Long?): String = when {
     bytes == null -> "File"
     bytes < 1_024 -> "$bytes B"
     bytes < 1_048_576 -> "${bytes / 1_024} KB"

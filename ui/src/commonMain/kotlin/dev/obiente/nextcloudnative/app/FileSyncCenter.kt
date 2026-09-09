@@ -201,11 +201,24 @@ data class FileSyncConflictSummary(
     val relativePath: String,
     val reason: FileSyncDecisionReason,
     val choices: Set<FileSyncDecisionChoice>,
+    val local: FileSyncConflictSideSummary? = null,
+    val remote: FileSyncConflictSideSummary? = null,
 ) {
     init {
         require(workId > 0L)
         requireValidSyncPath(relativePath)
         require(choices.isNotEmpty())
+    }
+}
+
+data class FileSyncConflictSideSummary(
+    val kind: SyncEntryKind,
+    val sizeBytes: Long? = null,
+    val modifiedEpochMillis: Long? = null,
+) {
+    init {
+        require(sizeBytes == null || sizeBytes >= 0L)
+        require(modifiedEpochMillis == null || modifiedEpochMillis >= 0L)
     }
 }
 
@@ -231,7 +244,16 @@ sealed interface FileSyncCenterActionResult {
         }
     }
 
-    data class Rejected(val reason: String) : FileSyncCenterActionResult {
+    data class Stopped(val message: String) : FileSyncCenterActionResult {
+        init {
+            require(message.isSafeFileSyncCenterText(1_024))
+        }
+    }
+
+    data class Rejected(
+        val reason: String,
+        val scope: FileSyncRejectionScope = FileSyncRejectionScope.Items,
+    ) : FileSyncCenterActionResult {
         init {
             require(reason.isSafeFileSyncCenterText(1_024))
         }
@@ -242,6 +264,11 @@ sealed interface FileSyncCenterActionResult {
             require(reason.isSafeFileSyncCenterText(1_024))
         }
     }
+}
+
+enum class FileSyncRejectionScope {
+    Preflight,
+    Items,
 }
 
 fun FileSyncPair.toCenterSummary(
@@ -270,18 +297,35 @@ fun FileSyncPair.toCenterSummary(
         configuration = configuration,
         readyCount = readyCount,
         runningCount = runningCount,
-        conflicts = workItems.mapNotNull { work ->
-            work.decision
-                ?.takeIf { work.state == FileSyncExecutionState.AwaitingDecision }
-                ?.let { decision ->
+        conflicts = workItems.asSequence()
+            .mapNotNull { work ->
+                work.decision
+                    ?.takeIf { work.state == FileSyncExecutionState.AwaitingDecision }
+                    ?.let { decision ->
                     FileSyncConflictSummary(
                         workId = work.id,
                         relativePath = work.relativePath,
                         reason = decision.reason,
                         choices = decision.choices,
+                        local = work.observedLocal?.let { local ->
+                            FileSyncConflictSideSummary(
+                                kind = local.kind,
+                                sizeBytes = local.size,
+                                modifiedEpochMillis = local.modifiedEpochMillis,
+                            )
+                        },
+                        remote = work.observedRemote?.let { remote ->
+                            FileSyncConflictSideSummary(
+                                kind = remote.kind,
+                                sizeBytes = remote.size,
+                                modifiedEpochMillis = remote.modifiedEpochMillis,
+                            )
+                        },
                     )
-                }
-        },
+                    }
+            }
+            .take(MAX_PRESENTED_FILE_SYNC_CONFLICTS)
+            .toList(),
         conflictCount = conflictCount,
         failedCount = failedCount,
         skippedCount = skippedCount,
@@ -292,6 +336,8 @@ fun FileSyncPair.toCenterSummary(
         runState = runState,
         networkState = networkState,
     )
+
+const val MAX_PRESENTED_FILE_SYNC_CONFLICTS = 5
 
 fun liveFileSyncNetworkState(
     networkAvailable: Boolean?,

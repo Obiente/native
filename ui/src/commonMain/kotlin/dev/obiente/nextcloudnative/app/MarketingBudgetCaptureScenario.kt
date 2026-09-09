@@ -1,10 +1,13 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationHost
+import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
@@ -390,23 +393,28 @@ internal fun MarketingBudgetDashboardScenario(scenario: MarketingCaptureScenario
         NextcloudCollectionDestination("bills", "Bills"),
         NextcloudCollectionDestination("savings-goals", "Savings goals"),
     )
-    NextcloudCollectionWorkspaceScaffold(
-        model = NextcloudCollectionNavigationModel.create(destinations, NATIVE_BUDGET_DASHBOARD_VIEW_ID),
-        mode = if (desktop) NextcloudCollectionNavigationMode.Sidebar else NextcloudCollectionNavigationMode.Drawer,
-        workspaceLabel = "Budget",
-        contentTitle = "Dashboard",
-        contentSubtitle = "Net worth and finance overview",
-        onBack = {},
-        hasHierarchyBack = false,
-        onDestinationSelected = {},
-    ) {
-        NativeBudgetDashboard(
-            schema = marketingBudgetSchema,
-            state = NativeScreenState.Ready(marketingBudgetRecords.getValue("accounts")),
-            recordsByResourceId = marketingBudgetRecords,
-            dashboardReads = marketingBudgetDashboardReads,
-            dashboardRecordsByActionId = marketingBudgetDashboardRecords,
-        )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        NextcloudCollectionWorkspaceScaffold(
+            model = NextcloudCollectionNavigationModel.create(destinations, NATIVE_BUDGET_DASHBOARD_VIEW_ID),
+            mode = resolveNextcloudCollectionNavigationMode(
+                if (desktop) NextcloudCollectionNavigationHost.Desktop else NextcloudCollectionNavigationHost.AdaptiveAndroid,
+                maxWidth.value.toInt(), destinations.size,
+            ),
+            workspaceLabel = "Budget",
+            contentTitle = "Dashboard",
+            contentSubtitle = "Net worth and finance overview",
+            onBack = {},
+            hasHierarchyBack = false,
+            onDestinationSelected = {},
+        ) {
+            NativeBudgetDashboard(
+                schema = marketingBudgetSchema,
+                state = NativeScreenState.Ready(marketingBudgetRecords.getValue("accounts")),
+                recordsByResourceId = marketingBudgetRecords,
+                dashboardReads = marketingBudgetDashboardReads,
+                dashboardRecordsByActionId = marketingBudgetDashboardRecords,
+            )
+        }
     }
 }
 
@@ -444,7 +452,7 @@ internal fun MarketingBudgetDynamicWorkspaceScenario(scenario: MarketingCaptureS
     )
     NextcloudCollectionWorkspaceScaffold(
         model = NextcloudCollectionNavigationModel.create(destinations, selectedView.id),
-        mode = if (desktop) NextcloudCollectionNavigationMode.Sidebar else NextcloudCollectionNavigationMode.Drawer,
+        mode = if (desktop) NextcloudCollectionNavigationMode.Sidebar else NextcloudCollectionNavigationMode.Sheet,
         workspaceLabel = "Budget",
         contentTitle = selectedView.title,
         contentSubtitle = when {

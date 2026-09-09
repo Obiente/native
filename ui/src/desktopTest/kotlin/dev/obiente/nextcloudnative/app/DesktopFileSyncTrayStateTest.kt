@@ -8,15 +8,15 @@ class DesktopFileSyncTrayStateTest {
     @Test
     fun tooltipSummarizesEveryOperationalPhase() {
         assertEquals(
-            "Nextcloud Native - syncing",
+            "nati.ve - syncing",
             DesktopFileSyncTraySnapshot(DesktopFileSyncTrayPhase.Syncing).tooltip(),
         )
         assertEquals(
-            "Nextcloud Native - sync paused",
+            "nati.ve - sync paused",
             DesktopFileSyncTraySnapshot(DesktopFileSyncTrayPhase.Paused).tooltip(),
         )
         assertEquals(
-            "Nextcloud Native - attention needed; 1 conflict; 2 failed",
+            "nati.ve - attention needed; 1 conflict; 2 failed",
             DesktopFileSyncTraySnapshot(
                 phase = DesktopFileSyncTrayPhase.NeedsAttention,
                 conflictCount = 1,
@@ -24,7 +24,7 @@ class DesktopFileSyncTrayStateTest {
             ).tooltip(),
         )
         assertEquals(
-            "Nextcloud Native - 7 pending",
+            "nati.ve - 7 pending",
             DesktopFileSyncTraySnapshot(
                 phase = DesktopFileSyncTrayPhase.Idle,
                 pairCount = 3,
@@ -32,7 +32,7 @@ class DesktopFileSyncTrayStateTest {
             ).tooltip(),
         )
         assertEquals(
-            "Nextcloud Native - up to date",
+            "nati.ve - up to date",
             DesktopFileSyncTraySnapshot(
                 phase = DesktopFileSyncTrayPhase.Idle,
                 pairCount = 3,

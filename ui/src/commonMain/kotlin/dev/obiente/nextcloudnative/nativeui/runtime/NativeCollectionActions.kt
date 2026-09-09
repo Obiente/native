@@ -73,6 +73,22 @@ internal data class NativeCollectionReorderActionPlan(
     private val availableRecordIds: Set<String>,
     private val bindingValues: Map<String, String>,
 ) {
+    internal fun pendingMutationScope(resourceId: String): String = buildString {
+        append(resourceId.length)
+        append(':')
+        append(resourceId)
+        bindingValues.toSortedMap().forEach { (name, value) ->
+            append('|')
+            append(name.length)
+            append(':')
+            append(name)
+            append('=')
+            append(value.length)
+            append(':')
+            append(value)
+        }
+    }
+
     /**
      * Builds the default request a generic reorder UI should use.
      *
@@ -403,7 +419,7 @@ private fun ActionSpec.nativeCollectionCommandPlan(
         binding.allowsObservedBodyFields ||
         binding.queryParameterNames.isNotEmpty() ||
         binding.requiredQueryParameterNames.isNotEmpty() ||
-        binding.hasSelfResourcePathIdentity(resource)
+        binding.hasNativeCollectionSelfResourcePathIdentity(resource)
     ) {
         return null
     }
@@ -481,7 +497,7 @@ private fun ActionSpec.nativeCollectionBatchPlan(
         binding.queryParameterNames.isNotEmpty() ||
         binding.requiredQueryParameterNames.isNotEmpty() ||
         binding.allowsObservedBodyFields ||
-        binding.hasSelfResourcePathIdentity(resource)
+        binding.hasNativeCollectionSelfResourcePathIdentity(resource)
     ) {
         return null
     }
@@ -623,13 +639,21 @@ private fun ApiBinding.resolveNativeCollectionBindings(
     }
     val resolved = linkedMapOf<String, String>()
     pathNames.forEach { name ->
-        val value = context[name]
-            ?: context["id"].takeIf {
-                pathNames.size == 1 &&
-                    isProvenSingleCollectionParentIdentityAlias(name)
-            }
-            ?.takeIf(String::isSafeNativeCollectionPathValue)
-            ?: return null
+        val qualifiedValues = context.resourceQualifiedValuesForGenericPathIdentity(
+            path = path,
+            parameterName = name,
+        )
+        val value = when (qualifiedValues.size) {
+            0 -> context[name]
+                ?: context["id"].takeIf {
+                    pathNames.size == 1 &&
+                        isProvenSingleCollectionParentIdentityAlias(name)
+                }
+                ?.takeIf(String::isSafeNativeCollectionPathValue)
+                ?: return null
+            1 -> qualifiedValues.single()
+            else -> return null
+        }
         resolved[name] = value
     }
     requiredQueryParameterNames.forEach { name ->
@@ -641,26 +665,16 @@ private fun ApiBinding.resolveNativeCollectionBindings(
     return resolved
 }
 
-private fun ApiBinding.isProvenSingleCollectionParentIdentityAlias(parameterName: String): Boolean {
-    if (!parameterName.endsWith("Id", ignoreCase = true) || parameterName.length <= 2) return false
-    val parentResourceId = parameterName.dropLast(2)
-    val segments = path.substringBefore('?').split('/').filter(String::isNotBlank)
-    val placeholder = "{$parameterName}"
-    return segments.indices.any { index ->
-        segments[index] == placeholder &&
-            index > 0 &&
-            segments[index - 1].sameDynamicResourceAs(parentResourceId)
-    }
-}
-
 private fun ApiBinding.isDirectChildRouteOf(
     readBinding: ApiBinding,
     resource: ResourceSpec,
     context: Map<String, String>,
 ): Boolean {
-    if (hasSelfResourcePathIdentity(resource)) return false
     val readSegments = readBinding.resolvedNativeCollectionPathSegments(context) ?: return false
     val actionSegments = resolvedNativeCollectionPathSegments(context) ?: return false
+    // A generic `{id}` is ambiguous in isolation, but is proven to be the collection parent's
+    // identity when both exact routes resolve to the same collection and the command appends one
+    // literal segment. A record-scoped route still has an extra identity segment and fails below.
     return actionSegments.size == readSegments.size + 1 &&
         actionSegments.dropLast(1) == readSegments &&
         path.trimEnd('/').substringAfterLast('/').let { segment ->
@@ -693,11 +707,6 @@ private fun ApiBinding.resolvedNativeCollectionPathSegments(
         }
 }
 
-private fun ApiBinding.hasSelfResourcePathIdentity(resource: ResourceSpec): Boolean =
-    (pathParameterNames + requiredPathParameterNames)
-        .distinct()
-        .any { name -> name.isSelfResourceIdentityField(resource) }
-
 private fun String.isSelfResourceSelectionField(resource: ResourceSpec): Boolean {
     val normalized = nativeCollectionSemanticId()
     if (normalized in GENERIC_COLLECTION_SELECTION_FIELD_IDS) return true
@@ -705,7 +714,7 @@ private fun String.isSelfResourceSelectionField(resource: ResourceSpec): Boolean
     return normalized.dropLast(3).sameDynamicResourceAs(resource.id)
 }
 
-private fun String.isSelfResourceIdentityField(resource: ResourceSpec): Boolean {
+internal fun String.isSelfResourceIdentityField(resource: ResourceSpec): Boolean {
     val normalized = nativeCollectionSemanticId()
     if (normalized == "id") return true
     if (!normalized.endsWith("id") || normalized.length <= 2) return false
@@ -1081,7 +1090,7 @@ private fun String.isSafeNativeCollectionTemplateName(): Boolean =
 private fun Confidence.isSafeNativeCollectionConfidence(): Boolean =
     this == Confidence.high || this == Confidence.verified
 
-private fun String.nativeCollectionSemanticId(): String = lowercase().filter(Char::isLetterOrDigit)
+internal fun String.nativeCollectionSemanticId(): String = lowercase().filter(Char::isLetterOrDigit)
 
 private fun JsonObject.string(name: String): String? =
     (this[name] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
