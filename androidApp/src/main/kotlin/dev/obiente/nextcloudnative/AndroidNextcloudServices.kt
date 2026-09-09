@@ -215,7 +215,6 @@ import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
-import dev.obiente.nextcloudnative.app.MediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.MemoriesPreferredTimelineReadService
 import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationLoadResult
 import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationSnapshot
@@ -227,6 +226,7 @@ import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
 import dev.obiente.nextcloudnative.app.isRawPhoto
 import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
 import dev.obiente.nextcloudnative.app.photoMediaCarryoverScope
+import dev.obiente.nextcloudnative.app.sharedMediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.toPhotoTimelineEntryOrNull
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
@@ -435,12 +435,9 @@ internal class AndroidNextcloudServices(
         )
     }
     private val nativeMediaPreviewDecodeMutex = Mutex()
-    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     internal fun isDurableUploadAccountResolutionAvailable() = preferences.durableUploadAccountResolutionAvailable()
     internal fun durableUploadAccountRegistry() = accountCredentials.durableUploadAccountRegistry()
-    private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
-        executeNextcloudApi(session, request)
-    }
+    private val memoriesTimeline = MemoriesPreferredTimelineReadService(::executeNextcloudApi)
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
@@ -1894,11 +1891,12 @@ internal class AndroidNextcloudServices(
                 shouldSearchRaw = { files ->
                     rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
                 },
-                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverStore = sharedMediaTimelineDavCarryoverStore,
                 carryoverAccountScope = photoMediaCarryoverScope(
                     accountScope = NextcloudDocumentIds.cacheAccountId(session),
                     owner = queryOwner,
                 ),
+                carryoverAccountId = session.accountId,
             )
             return PhotoTimelinePage(
                 entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
@@ -1926,6 +1924,7 @@ internal class AndroidNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = NextcloudDocumentIds.cacheAccountId(session),
             monthResolver = monthResolver,
         )

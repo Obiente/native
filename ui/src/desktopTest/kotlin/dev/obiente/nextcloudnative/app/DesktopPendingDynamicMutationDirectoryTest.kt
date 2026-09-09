@@ -157,7 +157,7 @@ class DesktopPendingDynamicMutationDirectoryTest {
                     coalescer,
                     cache,
                     session.accountId.storageKey,
-                    memoryCache,
+                    memoryCache::retireAccount,
                 )
                 release.complete(Unit)
 
@@ -191,7 +191,7 @@ class DesktopPendingDynamicMutationDirectoryTest {
                     coalescer,
                     cache,
                     session.accountId.storageKey,
-                    memoryCache,
+                    memoryCache::retireAccount,
                 )
             }
 

@@ -1,5 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -77,4 +81,69 @@ class SupportSettingsDraftRegistryTest {
         assertSame(retained, SupportSettingsDraftRegistry.stateFor(retainedAccount))
         assertEquals("Unsaved private report", retained.reportDraft)
     }
+
+    @Test
+    fun `retirement clears the old state and preserves other accounts and login`() {
+        val targetAccount = "6".repeat(64)
+        val otherAccount = "7".repeat(64)
+        val target = SupportSettingsDraftRegistry.stateFor(targetAccount)
+        val other = SupportSettingsDraftRegistry.stateFor(otherAccount)
+        val login = SupportSettingsDraftRegistry.loginState()
+        try {
+            target.updateReportDraft("Removed account report")
+            target.updateReplyDraft("removed", "Removed account reply")
+            other.updateReportDraft("Other account report")
+            login.updateReportDraft("Login report")
+
+            SupportSettingsDraftRegistry.retireAccount(targetAccount)
+
+            assertFalse(target.hasDraftContent())
+            assertEquals("Other account report", other.reportDraft)
+            assertEquals("Login report", login.reportDraft)
+            val whileClosed = SupportSettingsDraftRegistry.stateFor(targetAccount)
+            whileClosed.updateReportDraft("Must not survive")
+            assertFalse(whileClosed.hasDraftContent())
+
+            SupportSettingsDraftRegistry.activateAccount(targetAccount)
+            val current = SupportSettingsDraftRegistry.stateFor(targetAccount)
+            assertNotSame(target, current)
+            assertFalse(current.hasDraftContent())
+            target.updateReportDraft("Late old report")
+            whileClosed.updateReplyDraft("late", "Late closed reply")
+            assertFalse(current.hasDraftContent())
+        } finally {
+            SupportSettingsDraftRegistry.retireAccount(targetAccount)
+            SupportSettingsDraftRegistry.activateAccount(targetAccount)
+            SupportSettingsDraftRegistry.retireAccount(otherAccount)
+            SupportSettingsDraftRegistry.activateAccount(otherAccount)
+            login.clearDrafts()
+        }
+    }
+
+    @Test
+    fun `concurrent draft writes cannot survive account retirement`() = runBlocking {
+        val account = "8".repeat(64)
+        val state = SupportSettingsDraftRegistry.stateFor(account)
+        try {
+            val writers = List(8) { worker ->
+                async(Dispatchers.Default) {
+                    repeat(100) { iteration ->
+                        state.updateReportDraft("report-$worker-$iteration")
+                        state.updateReplyDraft("reply-$worker", "reply-$iteration")
+                    }
+                }
+            }
+            val retirement = async(Dispatchers.Default) {
+                SupportSettingsDraftRegistry.retireAccount(account)
+            }
+            (writers + retirement).awaitAll()
+
+            assertFalse(state.hasDraftContent())
+            assertFalse(SupportSettingsDraftRegistry.stateFor(account).hasDraftContent())
+        } finally {
+            SupportSettingsDraftRegistry.retireAccount(account)
+            SupportSettingsDraftRegistry.activateAccount(account)
+        }
+    }
+
 }

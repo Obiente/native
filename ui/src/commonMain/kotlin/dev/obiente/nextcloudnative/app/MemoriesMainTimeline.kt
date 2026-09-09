@@ -1,8 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -429,11 +427,20 @@ class MemoriesMainTimelineReadService internal constructor(
     }
 }
 
-class MemoriesPreferredTimelineReadService(
+class MemoriesPreferredTimelineReadService internal constructor(
     execute: suspend (NextcloudSession, NextcloudApiRequest) -> NextcloudApiResponse,
+    private val indexCache: MemoriesMainTimelineIndexCache,
 ) {
     private val memories = MemoriesMainTimelineReadService(execute)
-    private val indexCache = MemoriesMainTimelineIndexCache()
+
+    constructor(
+        execute: suspend (NextcloudSession, NextcloudApiRequest) -> NextcloudApiResponse,
+    ) : this(execute, sharedMemoriesMainTimelineIndexCache)
+
+    internal constructor(
+        execute: suspend (NextcloudSession, NextcloudApiRequest) -> NextcloudApiResponse,
+        gate: AccountPrivateMemoryGate,
+    ) : this(execute, MemoriesMainTimelineIndexCache(gate))
 
     constructor(services: NextcloudPlatformServices) : this(services::executeNextcloudApi)
 
@@ -445,13 +452,18 @@ class MemoriesPreferredTimelineReadService(
         fallback: suspend (PhotoTimelineCursor?) -> PhotoTimelinePage,
     ): PhotoTimelinePage {
         require(accountScope.isNotBlank()) { "The Memories timeline account scope is missing." }
+        val producer = checkNotNull(indexCache.producer(session.accountId)) {
+            "The Memories timeline account is no longer available."
+        }
         if (cursor != null && !cursor.isMemoriesMainTimelineCursor()) {
-            indexCache.markFallbackActive(accountScope)
+            indexCache.markFallbackActive(session.accountId, accountScope, producer)
             return fallback(cursor)
         }
         val indexResult = indexCache.load(
+            accountId = session.accountId,
             accountScope = accountScope,
             forceRefresh = cursor == null,
+            producer = producer,
         ) {
             memories.loadDayIndex(session)
         }
@@ -461,7 +473,7 @@ class MemoriesPreferredTimelineReadService(
                 require(!cursor.isMemoriesMainTimelineCursor()) {
                     "The Memories timeline became unavailable; refresh the timeline."
                 }
-                indexCache.markFallbackActive(accountScope)
+                indexCache.markFallbackActive(session.accountId, accountScope, producer)
                 return fallback(cursor)
             }
         }
@@ -476,8 +488,10 @@ class MemoriesPreferredTimelineReadService(
             is MemoriesMainTimelineLoadResult.Loaded -> {
                 check(
                     indexCache.markMemoriesActive(
+                        accountId = session.accountId,
                         accountScope = accountScope,
                         sourceGeneration = cachedIndex.sourceGeneration,
+                        producer = producer,
                     ),
                 ) {
                     "The Memories timeline index changed while loading a page; refresh the timeline."
@@ -489,18 +503,19 @@ class MemoriesPreferredTimelineReadService(
                 require(cursor == null) {
                     "The Memories timeline paging contract changed; refresh the timeline."
                 }
-                indexCache.markFallbackActive(accountScope)
+                indexCache.markFallbackActive(session.accountId, accountScope, producer)
                 fallback(null)
             }
         }
     }
 
     suspend fun navigationSnapshot(
+        accountId: NextcloudAccountId,
         accountScope: String,
         monthResolver: PhotoTimelineMonthResolver = UtcPhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? {
         require(accountScope.isNotBlank()) { "The Memories timeline account scope is missing." }
-        val cached = indexCache.activeMemoriesIndex(accountScope) ?: return null
+        val cached = indexCache.activeMemoriesIndex(accountId, accountScope) ?: return null
         val geometry = buildMemoriesTimelinePlaceholderGeometry(
             index = cached.index,
             monthResolver = monthResolver,
@@ -522,9 +537,12 @@ class MemoriesPreferredTimelineReadService(
         require(sourceGeneration > 0L) {
             "The Memories timeline navigation generation is invalid."
         }
+        val producer = indexCache.producer(session.accountId)
         val cached = indexCache.activeMemoriesIndex(
+            accountId = session.accountId,
             accountScope = accountScope,
             sourceGeneration = sourceGeneration,
+            producer = producer,
         ) ?: return MemoriesTimelineNavigationLoadResult.Stale
         val advertisedNewerItems = cached.index.advertisedItemsBefore(targetDayId)
             ?: return MemoriesTimelineNavigationLoadResult.Unavailable(
@@ -543,8 +561,10 @@ class MemoriesPreferredTimelineReadService(
         )
         if (
             !indexCache.matchesActiveMemoriesIndex(
+                accountId = session.accountId,
                 accountScope = accountScope,
                 sourceGeneration = sourceGeneration,
+                producer = producer,
             )
         ) {
             return MemoriesTimelineNavigationLoadResult.Stale
@@ -572,97 +592,6 @@ class MemoriesPreferredTimelineReadService(
         }
     }
 }
-
-private class MemoriesMainTimelineIndexCache {
-    private val mutex = Mutex()
-    private var accountScope: String? = null
-    private var index: MemoriesMainTimelineDayIndex? = null
-    private var sourceGeneration = 0L
-    private var memoriesActive = false
-
-    suspend fun load(
-        accountScope: String,
-        forceRefresh: Boolean,
-        fetch: suspend () -> MemoriesMainTimelineLoadResult<MemoriesMainTimelineDayIndex>,
-    ): MemoriesMainTimelineLoadResult<MemoriesMainTimelineCachedIndex> = mutex.withLock {
-        if (!forceRefresh && accountScope == this.accountScope) {
-            index?.let {
-                return@withLock MemoriesMainTimelineLoadResult.Loaded(
-                    MemoriesMainTimelineCachedIndex(it, sourceGeneration),
-                )
-            }
-        }
-        val loaded = fetch()
-        when (loaded) {
-            is MemoriesMainTimelineLoadResult.Loaded -> {
-                sourceGeneration = nextMemoriesTimelineSourceGeneration(sourceGeneration)
-                this.accountScope = accountScope
-                index = loaded.value
-                memoriesActive = false
-                MemoriesMainTimelineLoadResult.Loaded(
-                    MemoriesMainTimelineCachedIndex(loaded.value, sourceGeneration),
-                )
-            }
-
-            is MemoriesMainTimelineLoadResult.UseFallback -> {
-                sourceGeneration = nextMemoriesTimelineSourceGeneration(sourceGeneration)
-                this.accountScope = null
-                index = null
-                memoriesActive = false
-                loaded
-            }
-        }
-    }
-
-    suspend fun markMemoriesActive(
-        accountScope: String,
-        sourceGeneration: Long,
-    ): Boolean = mutex.withLock {
-        val matches =
-            accountScope == this.accountScope &&
-                sourceGeneration == this.sourceGeneration &&
-                index != null
-        if (matches) memoriesActive = true
-        matches
-    }
-
-    suspend fun markFallbackActive(accountScope: String) = mutex.withLock {
-        if (accountScope == this.accountScope) memoriesActive = false
-    }
-
-    suspend fun activeMemoriesIndex(
-        accountScope: String,
-        sourceGeneration: Long? = null,
-    ): MemoriesMainTimelineCachedIndex? = mutex.withLock {
-        val currentIndex = index ?: return@withLock null
-        if (
-            !memoriesActive ||
-            accountScope != this.accountScope ||
-            (sourceGeneration != null && sourceGeneration != this.sourceGeneration)
-        ) {
-            return@withLock null
-        }
-        MemoriesMainTimelineCachedIndex(currentIndex, this.sourceGeneration)
-    }
-
-    suspend fun matchesActiveMemoriesIndex(
-        accountScope: String,
-        sourceGeneration: Long,
-    ): Boolean = mutex.withLock {
-        memoriesActive &&
-            index != null &&
-            accountScope == this.accountScope &&
-            sourceGeneration == this.sourceGeneration
-    }
-}
-
-private data class MemoriesMainTimelineCachedIndex(
-    val index: MemoriesMainTimelineDayIndex,
-    val sourceGeneration: Long,
-)
-
-private fun nextMemoriesTimelineSourceGeneration(current: Long): Long =
-    if (current == Long.MAX_VALUE) 1L else current + 1L
 
 private fun PhotoTimelineCursor?.isMemoriesMainTimelineCursor(): Boolean =
     this?.value?.startsWith(MEMORIES_MAIN_TIMELINE_CURSOR_PREFIX) == true

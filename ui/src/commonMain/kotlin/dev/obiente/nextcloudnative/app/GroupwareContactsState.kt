@@ -13,8 +13,7 @@ internal object ContactsWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ContactsLoadState.Ready>()
 
-    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
-        gate.producer(session.accountId.storageKey)
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? = gate.producer(session.accountId.storageKey)
 
     fun get(session: NextcloudSession, userId: String): ContactsLoadState.Ready? =
         gate.read(session.accountId.storageKey, null) {
