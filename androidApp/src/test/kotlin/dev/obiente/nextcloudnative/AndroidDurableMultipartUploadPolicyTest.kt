@@ -553,6 +553,7 @@ class AndroidDurableMultipartUploadPolicyTest {
                 recover = {
                     recoveryRuns += 1
                     if (recoveryRuns == 2) throw CancellationException("Lifecycle stopped")
+                    true
                 },
                 wait = { error("an immediate wake must not wait") },
                 recoverySignal = recoverySignal,
@@ -579,6 +580,7 @@ class AndroidDurableMultipartUploadPolicyTest {
                 recover = {
                     recoveryRuns += 1
                     if (recoveryRuns == 2) throw expectedCancellation
+                    true
                 },
                 awaitWorkStopsRunning = { requestedWorkId ->
                     assertEquals(workId, requestedWorkId)

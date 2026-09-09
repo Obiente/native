@@ -9,6 +9,7 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -18,6 +19,38 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidDurableUploadSchedulingRecoveryTest {
+    @Test
+    fun `failed idle reconciliation retries without a new signal and success stops polling`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val recovered = CompletableDeferred<Unit>()
+        val waits = mutableListOf<Long>()
+        var recoveryRuns = 0
+        var nowMillis = 1_000L
+        val monitor = async {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) recovered.complete(Unit)
+                    recoveryRuns == 2
+                },
+                wait = { delayMillis ->
+                    waits += delayMillis
+                    nowMillis += delayMillis
+                },
+                monotonicTimeMillis = { nowMillis },
+                recoverySignal = recoverySignal,
+            )
+        }
+        try {
+            recovered.await()
+            yield()
+            assertEquals(2, recoveryRuns)
+            assertEquals(listOf(60_000L), waits)
+        } finally {
+            monitor.cancelAndJoin()
+        }
+    }
+
     @Test
     fun `request crossing wakeup consumption is claimed without a stale token`() = runBlocking {
         val wakeupConsumed = CompletableDeferred<Unit>()
@@ -69,6 +102,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                             scheduledJobIds += "job-2"
                         }
                         if (recoveryRuns == 2) throw expected
+                        true
                     },
                     awaitWorkStopsRunning = { requestedWorkId ->
                         assertEquals(workId, requestedWorkId)
@@ -88,6 +122,66 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertTrue(monitoring.await() === expected)
         assertEquals(2, recoveryRuns)
         assertEquals(listOf("job-2", "job-2"), scheduledJobIds)
+    }
+
+    @Test
+    fun `persistent cleanup failure yields through immediate recovery to worker backoff expiry`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val workId = UUID.randomUUID()
+        val initialRetryWaitEntered = CompletableDeferred<Unit>()
+        val backoffWaitEntered = CompletableDeferred<Unit>()
+        val expected = CancellationException("monitor stopped after backed off upload recovered")
+        val scheduledJobIds = mutableListOf<String>()
+        val waits = mutableListOf<Long>()
+        var recoveryRuns = 0
+        var secondJobQueued = false
+        var nowMillis = 1_000L
+
+        val monitoring = async {
+            assertFailsWith<CancellationException> {
+                monitorQueuedDurableUploadScheduling(
+                    recover = {
+                        recoveryRuns += 1
+                        if (secondJobQueued) {
+                            recoverySignal.scheduleUnlessBackedOff("job-2") {
+                                scheduledJobIds += "job-2"
+                            }
+                        }
+                        if (scheduledJobIds.isNotEmpty()) throw expected
+                        false
+                    },
+                    awaitWorkStopsRunning = { requestedWorkId -> assertEquals(workId, requestedWorkId) },
+                    wait = { delayMillis ->
+                        waits += delayMillis
+                        when (waits.size) {
+                            1 -> {
+                                initialRetryWaitEntered.complete(Unit)
+                                CompletableDeferred<Unit>().await()
+                            }
+                            2 -> {
+                                backoffWaitEntered.complete(Unit)
+                                CompletableDeferred<Unit>().await()
+                            }
+                            else -> nowMillis += delayMillis
+                        }
+                    },
+                    workerFailureFollowUpDelayMillis = 60_000L,
+                    monotonicTimeMillis = { nowMillis },
+                    recoverySignal = recoverySignal,
+                )
+            }
+        }
+
+        initialRetryWaitEntered.await()
+        secondJobQueued = true
+        recoverySignal.requestAfterWorkStopsRunning("job-2", workId)
+        backoffWaitEntered.await()
+        recoverySignal.request()
+
+        assertTrue(monitoring.await() === expected)
+        assertEquals(3, recoveryRuns)
+        assertEquals(listOf(60_000L, 60_000L, 60_000L), waits)
+        assertEquals(listOf("job-2"), scheduledJobIds)
     }
 
     @Test
@@ -111,6 +205,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                             scheduledJobIds += "job-1"
                         }
                         if (recoveryRuns == 3) throw expected
+                        true
                     },
                     awaitWorkStopsRunning = { requestedWorkId ->
                         assertEquals(workId, requestedWorkId)
@@ -159,6 +254,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                         scheduledJobIds += "job-1"
                     }
                     if (recoveryRuns == 2) throw expected
+                    true
                 },
                 awaitWorkStopsRunning = { workId -> awaitedWorkIds += workId },
                 wait = { delayMillis ->
@@ -246,6 +342,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                         scheduledJobIds += "job-1"
                     }
                     if (recoveryRuns == 3) throw expected
+                    true
                 },
                 awaitWorkStopsRunning = { workId -> awaitedWorkIds += workId },
                 wait = {},
@@ -285,6 +382,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                         scheduledJobIds += "job-1"
                     }
                     if (recoveryRuns == 3) throw expected
+                    true
                 },
                 awaitWorkStopsRunning = { requestedWorkId -> awaitedWorkIds += requestedWorkId },
                 wait = { delayMillis -> waits += delayMillis },
@@ -323,6 +421,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                 recover = {
                     recoveryRuns += 1
                     if (recoveryRuns == 3) throw expected
+                    true
                 },
                 awaitWorkStopsRunning = { workId -> awaitedWorkIds += workId },
                 wait = { delayMillis ->
