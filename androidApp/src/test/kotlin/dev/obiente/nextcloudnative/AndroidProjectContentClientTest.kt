@@ -145,7 +145,7 @@ class AndroidProjectContentClientTest {
     }
 
     @Test
-    fun obsoleteAndroidUpdatePackagesAreRemovedWithoutTouchingTheActivePartial() {
+    fun obsoleteAndroidUpdatePackagesAreRemovedWithoutTouchingTheActiveRetryFiles() {
         val directory = Files.createTempDirectory("project-content-update-cleanup-test").toFile()
         try {
             val oldStaged = directory.resolve("nextcloud-native-20.apk").apply { writeText("old") }
@@ -155,14 +155,20 @@ class AndroidProjectContentClientTest {
             val unrelated = directory.resolve("README.txt").apply { writeText("keep") }
             val malformed = directory.resolve("nextcloud-native-invalid.apk.part").apply { writeText("keep") }
 
-            assertEquals(3, cleanupAndroidUpdatePackages(directory, activePartial))
+            assertEquals(
+                2,
+                cleanupAndroidUpdatePackages(directory, setOf(activePartial, stagedForRetry)),
+            )
             assertFalse(oldStaged.exists())
             assertFalse(oldPartial.exists())
-            assertFalse(stagedForRetry.exists())
+            assertTrue(stagedForRetry.isFile)
             assertTrue(activePartial.isFile)
             assertTrue(unrelated.isFile)
             assertTrue(malformed.isFile)
-            assertEquals(0, cleanupAndroidUpdatePackages(directory, activePartial))
+            assertEquals(
+                0,
+                cleanupAndroidUpdatePackages(directory, setOf(activePartial, stagedForRetry)),
+            )
         } finally {
             directory.deleteRecursively()
         }

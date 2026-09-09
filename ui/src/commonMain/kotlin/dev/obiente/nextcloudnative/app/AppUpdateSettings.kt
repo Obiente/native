@@ -532,11 +532,25 @@ internal fun AppUpdateSettingsCard(
                                 Text("Continue update")
                             }
                         }
-                        is AppUpdateInstallState.ConfirmationOpened -> Text(
-                            "The system installer opened the update confirmation.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NextcloudTheme.colors.success,
-                        )
+                        is AppUpdateInstallState.ConfirmationOpened -> {
+                            Text(
+                                if (release is AndroidDirectRelease) {
+                                    "The system installer opened the update confirmation. If you closed it, open it again without downloading the APK again."
+                                } else {
+                                    "The system installer opened the update confirmation."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (release is AndroidDirectRelease) {
+                                Button(
+                                    onClick = { requestInstall(release) },
+                                    enabled = !installing,
+                                ) {
+                                    Text("Open installer again")
+                                }
+                            }
+                        }
                         is AppUpdateInstallState.Installed -> Text(
                             "The update was installed. Restart nati.ve to use the new version.",
                             style = MaterialTheme.typography.bodySmall,
