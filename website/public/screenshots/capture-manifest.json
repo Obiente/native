@@ -432,7 +432,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppCoroutineResult.kt": "a0d6f140ffa50d1def77e0734b4ceae63855eed9766e2f3f82e82f2307ddc8f7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppNavigationState.kt": "115b9a0b5d360fae4f0738d9e16e1077d969ca4bb5d3c136401d7156adde431c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateChannels.kt": "f8aef5ec39978ef0d80ff6cbab00a9a4af34d73c2f3a759eb483a5cadfb8170a",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateSettings.kt": "f41c20a9e0a91d917c746998ffa1e0061af1f7086eb55aedf495eb2604fbc71f",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateSettings.kt": "68513029bb93f42910cefb81a3007d472ab2313845d6565bae296622d95dad86",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppWorkspaceNavigationMemory.kt": "2a48ec4fda7ca47657253891e880a4169b16dbc83c197808532a92169961d569",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppWorkspacePins.kt": "e2e9e8f823353180f0aaa7d4a5c4fc824591f0878845cfc6d19a0210645342fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppWorkspacePresentation.kt": "e5655f80ca80cdb88ac49a54554e7d4cf684293efb2af4e291f0ef4b34529594",
