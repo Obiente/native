@@ -20,6 +20,64 @@ import kotlin.test.assertTrue
 
 class AndroidDurableUploadSchedulingRecoveryTest {
     @Test
+    fun `a recovery request wakes the idle scheduling monitor without polling`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        var recoveryRuns = 0
+        recoverySignal.request()
+
+        assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) throw CancellationException("Lifecycle stopped")
+                    true
+                },
+                wait = { error("an immediate wake must not wait") },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertEquals(2, recoveryRuns)
+    }
+
+    @Test
+    fun `coalesced immediate recovery preempts worker ownership and follow up waits`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val jobId = "job-1"
+        val workId = UUID.randomUUID()
+        val expectedCancellation = CancellationException("recovery owner stopped")
+        var recoveryRuns = 0
+        var ownershipWaits = 0
+        var delayRuns = 0
+        recoverySignal.request()
+        recoverySignal.requestAfterWorkStopsRunning(jobId, workId)
+
+        val actual = assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) throw expectedCancellation
+                    true
+                },
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    ownershipWaits += 1
+                },
+                wait = { delayMillis ->
+                    assertEquals(ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS, delayMillis)
+                    delayRuns += 1
+                },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertTrue(actual === expectedCancellation)
+        assertEquals(2, recoveryRuns)
+        assertEquals(0, ownershipWaits)
+        assertEquals(0, delayRuns)
+    }
+
+    @Test
     fun `failed idle reconciliation retries without a new signal and success stops polling`() = runBlocking {
         val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
         val recovered = CompletableDeferred<Unit>()
