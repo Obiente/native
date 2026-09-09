@@ -110,6 +110,81 @@ class AndroidDurableUploadSchedulingRecoveryTest {
     }
 
     @Test
+    fun `self signaling cleanup cannot prevent a stopped worker backoff from expiring`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val workId = UUID.randomUUID()
+        val expected = CancellationException("stopped after the queued upload was scheduled")
+        val scheduled = mutableListOf<String>()
+        val waits = mutableListOf<Long>()
+        var recoveryRuns = 0
+        var ownershipWaits = 0
+        var nowMillis = 1_000L
+        recoverySignal.requestAfterWorkStopsRunning("job-1", workId)
+
+        val actual = assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    assertTrue(recoveryRuns <= 3, "Cleanup signals must not spin ahead of the worker deadline")
+                    recoverySignal.request()
+                    recoverySignal.scheduleUnlessBackedOff("job-1") { scheduled += "job-1" }
+                    if (scheduled.isNotEmpty()) throw expected
+                    false
+                },
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    ownershipWaits += 1
+                },
+                wait = { delayMillis ->
+                    waits += delayMillis
+                    nowMillis += delayMillis
+                },
+                monotonicTimeMillis = { nowMillis },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(2, recoveryRuns)
+        assertEquals(1, ownershipWaits)
+        assertEquals(listOf(60_000L), waits)
+        assertEquals(listOf("job-1"), scheduled)
+    }
+
+    @Test
+    fun `idle self signaling cleanup waits for its retry deadline instead of spinning`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val expected = CancellationException("stopped after the bounded cleanup retry")
+        val waits = mutableListOf<Long>()
+        var recoveryRuns = 0
+        var nowMillis = 1_000L
+
+        val actual = assertFailsWith<CancellationException> {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    recoverySignal.request()
+                    if (recoveryRuns == 2) {
+                        assertEquals(listOf(60_000L), waits)
+                        throw expected
+                    }
+                    false
+                },
+                wait = { delayMillis ->
+                    waits += delayMillis
+                    nowMillis += delayMillis
+                },
+                monotonicTimeMillis = { nowMillis },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(2, recoveryRuns)
+        assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
     fun `request crossing wakeup consumption is claimed without a stale token`() = runBlocking {
         val wakeupConsumed = CompletableDeferred<Unit>()
         val releaseBatchClaim = CompletableDeferred<Unit>()

@@ -176,13 +176,19 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
     }
 
     suspend fun recoverOnce() {
-        recoveryRetryDeadlineMillis = if (recover()) {
+        val recovered = recover()
+        // Cleanup can request recovery itself. Coalesce signals raised during this pass into
+        // a timed retry instead of letting the same failure bypass every worker deadline.
+        val pending = recoverySignal.tryTakePending()
+        if (pending != null) addRequests(pending.copy(immediate = false))
+        recoveryRetryDeadlineMillis = if (recovered && pending?.immediate != true) {
             null
         } else {
             monotonicTimeMillis() + workerFailureFollowUpDelayMillis
         }
     }
 
+    recoverySignal.tryTakePending()?.let(::addRequests)
     recoverOnce()
 
     while (true) {
