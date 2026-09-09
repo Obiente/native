@@ -61,6 +61,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     private val wakeups = Channel<Unit>(Channel.CONFLATED)
     private var immediatePending = false
     private val workIdsToAwait = linkedMapOf<String, UUID>()
+    private val backedOffWorkIds = mutableMapOf<String, UUID>()
 
     fun request() {
         synchronized(monitor) {
@@ -73,14 +74,30 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
         require(jobId.isNotBlank())
         synchronized(monitor) {
             workIdsToAwait[jobId] = workId
+            backedOffWorkIds[jobId] = workId
             wakeups.trySend(Unit)
         }
+    }
+
+    fun <Result> scheduleUnlessBackedOff(jobId: String, schedule: () -> Result): Result? {
+        require(jobId.isNotBlank())
+        return synchronized(monitor) {
+            if (jobId in backedOffWorkIds) null else schedule()
+        }
+    }
+
+    fun retireBackoff(jobId: String, workId: UUID): Boolean = synchronized(monitor) {
+        if (jobId in workIdsToAwait) false else backedOffWorkIds.remove(jobId, workId)
     }
 
     suspend fun await(): AndroidDurableUploadSchedulingRecoveryBatch {
         wakeups.receive()
         beforeBatchClaim()
         return takeBatch()
+    }
+
+    fun tryTakePending(): AndroidDurableUploadSchedulingRecoveryBatch? = synchronized(monitor) {
+        if (!immediatePending && workIdsToAwait.isEmpty()) null else takeBatchLocked()
     }
 
     suspend fun runUntilRequested(
@@ -101,10 +118,14 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     }
 
     private fun takeBatch(): AndroidDurableUploadSchedulingRecoveryBatch = synchronized(monitor) {
+        takeBatchLocked()
+    }
+
+    private fun takeBatchLocked(): AndroidDurableUploadSchedulingRecoveryBatch {
         while (wakeups.tryReceive().isSuccess) {
             // Every request represented by a drained token is included in the pending state below.
         }
-        AndroidDurableUploadSchedulingRecoveryBatch(
+        return AndroidDurableUploadSchedulingRecoveryBatch(
             immediate = immediatePending,
             workIdsToAwait = workIdsToAwait.toMap(),
         ).also {
@@ -114,7 +135,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     }
 }
 
-private val ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL =
+internal val ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL =
     AndroidDurableUploadSchedulingRecoverySignal()
 
 internal fun requestQueuedDurableUploadSchedulingRecovery() {
@@ -131,6 +152,8 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
     wait: suspend (Long) -> Unit,
     workerFailureFollowUpDelayMillis: Long =
         ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS,
+    monotonicTimeMillis: () -> Long = { System.nanoTime() / 1_000_000L },
+    afterEmptyPendingBatchClaim: () -> Unit = {},
     recoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
         ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
 ) {
@@ -138,10 +161,18 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
     recover()
     var immediatePending = false
     val workIdsToAwait = linkedMapOf<String, UUID>()
+    val followUpDeadlinesMillis = mutableMapOf<String, Long>()
+    val stoppedWorkIds = mutableMapOf<String, UUID>()
 
     fun addRequests(batch: AndroidDurableUploadSchedulingRecoveryBatch) {
         immediatePending = immediatePending || batch.immediate
-        workIdsToAwait.putAll(batch.workIdsToAwait)
+        batch.workIdsToAwait.forEach { (jobId, workId) ->
+            if (workIdsToAwait.put(jobId, workId) != workId) {
+                followUpDeadlinesMillis[jobId] =
+                    monotonicTimeMillis() + workerFailureFollowUpDelayMillis
+                stoppedWorkIds.remove(jobId)
+            }
+        }
     }
 
     while (true) {
@@ -154,24 +185,45 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
         }
 
         val (jobId, workId) = workIdsToAwait.entries.first()
-        when (val step = recoverySignal.runUntilRequested { awaitWorkStopsRunning(workId) }) {
-            AndroidDurableUploadSchedulingRecoveryStep.Completed -> Unit
-            is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
-                addRequests(step.batch)
-                continue
+        if (stoppedWorkIds[jobId] != workId) {
+            when (val step = recoverySignal.runUntilRequested { awaitWorkStopsRunning(workId) }) {
+                AndroidDurableUploadSchedulingRecoveryStep.Completed -> {
+                    if (workIdsToAwait[jobId] != workId) continue
+                    stoppedWorkIds[jobId] = workId
+                }
+                is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
+                    addRequests(step.batch)
+                    continue
+                }
             }
         }
-        when (
-            val step = recoverySignal.runUntilRequested {
-                wait(workerFailureFollowUpDelayMillis)
+
+        val remainingDelayMillis =
+            (followUpDeadlinesMillis.getValue(jobId) - monotonicTimeMillis()).coerceAtLeast(0L)
+        if (remainingDelayMillis > 0L) {
+            when (
+                val step = recoverySignal.runUntilRequested {
+                    wait(remainingDelayMillis)
+                }
+            ) {
+                AndroidDurableUploadSchedulingRecoveryStep.Completed -> Unit
+                is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
+                    addRequests(step.batch)
+                    continue
+                }
             }
-        ) {
-            AndroidDurableUploadSchedulingRecoveryStep.Completed -> {
-                workIdsToAwait.remove(jobId, workId)
-                recover()
-            }
-            is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> addRequests(step.batch)
         }
+        val pendingBatch = recoverySignal.tryTakePending()
+        if (pendingBatch != null) {
+            addRequests(pendingBatch)
+            continue
+        }
+        afterEmptyPendingBatchClaim()
+        followUpDeadlinesMillis.remove(jobId)
+        stoppedWorkIds.remove(jobId)
+        workIdsToAwait.remove(jobId, workId)
+        recoverySignal.retireBackoff(jobId, workId)
+        recover()
     }
 }
 

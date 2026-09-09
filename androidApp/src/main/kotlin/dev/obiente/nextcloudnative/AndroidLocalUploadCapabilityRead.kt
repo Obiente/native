@@ -57,6 +57,8 @@ internal inline fun <Result> readAndroidLocalUploadCapability(load: () -> Result
     load()
 } catch (cancelled: CancellationException) {
     throw cancelled
+} catch (overflow: DurableUploadCapabilityOverflowException) {
+    throw overflow
 } catch (failure: AndroidLocalUploadCapabilityMalformedException) {
     throw AndroidLocalUploadCapabilityUnavailableException(
         "The local file selection metadata is invalid.",

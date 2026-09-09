@@ -115,7 +115,11 @@ internal class AndroidDurableMultipartUploads(
         }
     }
 
-    suspend fun reconcileQueuedUploads(allowQueuedScheduling: Boolean = true): Boolean {
+    suspend fun reconcileQueuedUploads(
+        allowQueuedScheduling: Boolean = true,
+        schedulingRecoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
+            ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
+    ): Boolean {
         val (jobs, capabilitiesRecovered) = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
             val snapshot = store.list()
             val retainedSelectionIds = durableUploadCapabilityRetainedSelectionIds(snapshot)
@@ -139,7 +143,9 @@ internal class AndroidDurableMultipartUploads(
                     "The durable upload capability cleanup remains pending."
                 }
             },
-            schedule = { job -> schedule(job).await() },
+            schedule = { job ->
+                schedulingRecoverySignal.scheduleUnlessBackedOff(job.id) { schedule(job) }?.await()
+            },
         )
         return capabilitiesRecovered && uploadsRecovered
     }

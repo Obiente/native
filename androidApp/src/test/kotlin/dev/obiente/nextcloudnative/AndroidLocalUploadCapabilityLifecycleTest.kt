@@ -401,6 +401,24 @@ class AndroidLocalUploadCapabilityLifecycleTest {
             "content://synthetic/new",
             (snapshot.capabilities + ("selection-new" to "content://synthetic/new"))["selection-new"],
         )
+        assertFalse(
+            malformedDurableUploadCapabilityPermissionOwnedByAnother(
+                capabilities = snapshot.malformedCapabilities,
+                targetSelectionId = "selection-new",
+                targetPermission = "content://synthetic/new",
+                permissionOf = MalformedDurableUploadCapability::cleanupPermissionIdentity,
+                samePermission = String::equals,
+            ),
+        )
+        assertTrue(
+            malformedDurableUploadCapabilityPermissionOwnedByAnother(
+                capabilities = snapshot.malformedCapabilities,
+                targetSelectionId = "selection-new",
+                targetPermission = "content://synthetic/malformed",
+                permissionOf = MalformedDurableUploadCapability::cleanupPermissionIdentity,
+                samePermission = String::equals,
+            ),
+        )
     }
 
     @Test
