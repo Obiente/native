@@ -18,17 +18,21 @@ import kotlinx.coroutines.withContext
 class DynamicApiRequestCoalescer<T> {
     private data class Key(val accountId: String, val requestIdentity: String)
 
-    private data class InFlight<T>(
+    private class ReadLifetime {
+        var fenced = false
+    }
+
+    private class InFlight<T>(
         val accountGeneration: Long,
         val requestGeneration: Long,
         val result: CompletableDeferred<T>,
+        val lifetime: ReadLifetime,
     )
 
     private val mutex = Mutex()
     private val accountGenerations = mutableMapOf<String, Long>()
     private val closedAccounts = mutableSetOf<String>()
-    private val fencedAccountGenerations = mutableMapOf<String, Long>()
-    private val fencedInFlight = mutableMapOf<String, MutableSet<InFlight<T>>>()
+    private val activeReads = mutableMapOf<String, MutableSet<ReadLifetime>>()
     private val requestGenerations = mutableMapOf<Key, Long>()
     private val inFlight = mutableMapOf<Key, InFlight<T>>()
 
@@ -38,16 +42,41 @@ class DynamicApiRequestCoalescer<T> {
         load: suspend () -> T,
         commit: (T) -> Unit = {},
     ): T {
+        val lifetime = mutex.withLock {
+            if (accountId in closedAccounts) throw DynamicReadAccountFencedException()
+            ReadLifetime().also { activeReads.getOrPut(accountId, ::mutableSetOf).add(it) }
+        }
+        try {
+            return executeReads(accountId, requestIdentity, load, commit, lifetime)
+        } finally {
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    val reads = activeReads[accountId]
+                    reads?.remove(lifetime)
+                    if (reads?.isEmpty() == true) activeReads.remove(accountId)
+                }
+            }
+        }
+    }
+
+    private suspend fun executeReads(
+        accountId: String,
+        requestIdentity: String,
+        load: suspend () -> T,
+        commit: (T) -> Unit,
+        lifetime: ReadLifetime,
+    ): T {
         while (true) {
             val key = Key(accountId, requestIdentity)
             var owner = false
             val entry = mutex.withLock {
-                if (accountId in closedAccounts) throw DynamicReadAccountFencedException()
+                if (lifetime.fenced || accountId in closedAccounts) throw DynamicReadAccountFencedException()
                 val accountGeneration = accountGenerations[accountId] ?: 0L
                 inFlight[key]?.takeIf { current -> current.accountGeneration == accountGeneration } ?: InFlight<T>(
                     accountGeneration = accountGeneration,
                     requestGeneration = requestGenerations[key] ?: 0L,
                     result = CompletableDeferred<T>(),
+                    lifetime = lifetime,
                 ).also {
                     inFlight[key] = it
                     owner = true
@@ -55,66 +84,57 @@ class DynamicApiRequestCoalescer<T> {
             }
             if (!owner) {
                 try {
-                    return entry.result.await()
+                    val loaded = entry.result.await()
+                    return mutex.withLock {
+                        if (lifetime.fenced) throw DynamicReadAccountFencedException()
+                        loaded
+                    }
                 } catch (_: DynamicReadInvalidatedException) {
                     continue
                 }
             }
 
-            val loaded = try {
-                load()
-            } catch (failure: Throwable) {
-                if (failure is CancellationException) {
-                    withContext(NonCancellable) {
-                        mutex.withLock {
-                            inFlight.remove(key, entry)
-                            entry.result.completeExceptionally(failure)
-                            retireRequestGenerationIfIdle(key, entry.requestGeneration)
-                            retireAccountFenceEntry(accountId, entry)
-                        }
+            try {
+                val loaded = try {
+                    load()
+                } catch (failure: Throwable) {
+                    if (failure is CancellationException) throw failure
+                    val invalidation = mutex.withLock {
+                        val cause = invalidationCause(accountId, key, entry)
+                        inFlight.remove(key, entry)
+                        entry.result.completeExceptionally(
+                            if (cause == InvalidationCause.None) failure else cause.exception(),
+                        )
+                        cause
                     }
+                    if (invalidation == InvalidationCause.Invalidated) continue
+                    if (invalidation == InvalidationCause.Fenced) throw DynamicReadAccountFencedException()
                     throw failure
                 }
                 val invalidation = mutex.withLock {
                     val cause = invalidationCause(accountId, key, entry)
-                    inFlight.remove(key, entry)
                     if (cause != InvalidationCause.None) {
                         entry.result.completeExceptionally(cause.exception())
                     } else {
-                        entry.result.completeExceptionally(failure)
-                        retireRequestGenerationIfIdle(key, entry.requestGeneration)
-                    }
-                    retireAccountFenceEntry(accountId, entry)
-                    cause
-                }
-                if (invalidation == InvalidationCause.Invalidated) continue
-                if (invalidation == InvalidationCause.Fenced) throw DynamicReadAccountFencedException()
-                throw failure
-            }
-            val invalidation = mutex.withLock {
-                val cause = invalidationCause(accountId, key, entry)
-                if (cause != InvalidationCause.None) {
-                    inFlight.remove(key, entry)
-                    entry.result.completeExceptionally(cause.exception())
-                    retireAccountFenceEntry(accountId, entry)
-                    cause
-                } else {
-                    try {
                         commit(loaded)
-                        inFlight.remove(key, entry)
                         entry.result.complete(loaded)
-                        retireRequestGenerationIfIdle(key, entry.requestGeneration)
-                        InvalidationCause.None
-                    } catch (failure: Throwable) {
+                    }
+                    inFlight.remove(key, entry)
+                    cause
+                }
+                if (invalidation == InvalidationCause.None) return loaded
+                if (invalidation == InvalidationCause.Fenced) throw DynamicReadAccountFencedException()
+            } catch (failure: Throwable) {
+                entry.result.completeExceptionally(failure)
+                throw failure
+            } finally {
+                withContext(NonCancellable) {
+                    mutex.withLock {
                         inFlight.remove(key, entry)
-                        entry.result.completeExceptionally(failure)
                         retireRequestGenerationIfIdle(key, entry.requestGeneration)
-                        throw failure
                     }
                 }
             }
-            if (invalidation == InvalidationCause.None) return loaded
-            if (invalidation == InvalidationCause.Fenced) throw DynamicReadAccountFencedException()
         }
     }
 
@@ -135,13 +155,8 @@ class DynamicApiRequestCoalescer<T> {
             val generation = (accountGenerations[accountId] ?: 0L) + 1L
             accountGenerations[accountId] = generation
             closedAccounts += accountId
-            val fenced = inFlight.filter { (key, entry) ->
-                key.accountId == accountId && entry.accountGeneration < generation
-            }.values
-            if (fenced.isNotEmpty()) {
-                fencedAccountGenerations[accountId] = generation
-                fencedInFlight.getOrPut(accountId, ::mutableSetOf).addAll(fenced)
-            }
+            // Keep waiters and retry gaps fenced even after their old deduplication slot retires.
+            activeReads[accountId]?.forEach { it.fenced = true }
             requestGenerations.keys.removeAll { it.accountId == accountId }
             invalidate()
         }
@@ -171,6 +186,9 @@ class DynamicApiRequestCoalescer<T> {
     internal suspend fun retainedRequestGenerationCount(): Int =
         mutex.withLock { requestGenerations.size }
 
+    internal suspend fun activeReadCount(): Int =
+        mutex.withLock { activeReads.values.sumOf { it.size } }
+
     private fun retireRequestGenerationIfIdle(key: Key, generation: Long) {
         if (key !in inFlight && requestGenerations[key] == generation) {
             requestGenerations.remove(key)
@@ -178,27 +196,15 @@ class DynamicApiRequestCoalescer<T> {
     }
 
     private fun invalidationCause(accountId: String, key: Key, entry: InFlight<T>): InvalidationCause {
+        if (entry.lifetime.fenced) return InvalidationCause.Fenced
         val accountGeneration = accountGenerations[accountId] ?: 0L
         if (accountGeneration != entry.accountGeneration) {
-            return if ((fencedAccountGenerations[accountId] ?: Long.MIN_VALUE) > entry.accountGeneration) {
-                InvalidationCause.Fenced
-            } else {
-                InvalidationCause.Invalidated
-            }
+            return InvalidationCause.Invalidated
         }
         return if ((requestGenerations[key] ?: 0L) != entry.requestGeneration) {
             InvalidationCause.Invalidated
         } else {
             InvalidationCause.None
-        }
-    }
-
-    private fun retireAccountFenceEntry(accountId: String, entry: InFlight<T>) {
-        val entries = fencedInFlight[accountId] ?: return
-        entries.remove(entry)
-        if (entries.isEmpty()) {
-            fencedInFlight.remove(accountId)
-            fencedAccountGenerations.remove(accountId)
         }
     }
 
