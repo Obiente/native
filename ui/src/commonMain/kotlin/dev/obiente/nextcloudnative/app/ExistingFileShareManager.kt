@@ -39,6 +39,7 @@ internal fun ExistingFileShareManager(
     capabilities: NextcloudFileSharingCapabilities,
     onChanged: (NextcloudFileShare) -> Unit,
     onRevoked: (NextcloudFileShare) -> Unit,
+    onMutationRunningChanged: (Boolean) -> Unit = {},
 ) {
     var editing by remember(share.id) { mutableStateOf(false) }
     var confirmRevoke by remember(share.id) { mutableStateOf(false) }
@@ -47,6 +48,7 @@ internal fun ExistingFileShareManager(
     val passwordPolicy = target?.let(capabilities::passwordPolicy) ?: FileShareFeaturePolicy(false)
     val expirationPolicy = target?.let(capabilities::expirationPolicy) ?: FileShareFeaturePolicy(false)
     var running by remember(share.id) { mutableStateOf(false) }
+    MediaMutationRunningEffect(running, onMutationRunningChanged)
     var error by remember(share.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val safeUrl = safeFileShareUrl(session, share)

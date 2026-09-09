@@ -44,13 +44,21 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+data class DesktopTrayActionFeedback(
+    val message: String,
+    val error: Boolean,
+)
+
 @Composable
 fun DesktopFileSyncTrayPopup(
     snapshot: DesktopFileSyncTraySnapshot,
     onOpenApp: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenSyncCenter: () -> Unit,
     onSyncNow: () -> Unit,
     onTogglePaused: () -> Unit,
     onQuit: () -> Unit,
+    actionFeedback: DesktopTrayActionFeedback? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -64,7 +72,7 @@ fun DesktopFileSyncTrayPopup(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column {
-            TrayHeader(snapshot = snapshot, onOpenApp = onOpenApp)
+            TrayHeader(snapshot = snapshot, onOpenSettings = onOpenSettings)
             snapshot.overallProgress?.let { progress ->
                 LinearProgressIndicator(
                     progress = { progress },
@@ -75,8 +83,9 @@ fun DesktopFileSyncTrayPopup(
                 snapshot = snapshot,
                 onSyncNow = onSyncNow,
                 onTogglePaused = onTogglePaused,
-                onOpenApp = onOpenApp,
+                onOpenSyncCenter = onOpenSyncCenter,
             )
+            actionFeedback?.let { feedback -> TrayActionFeedback(feedback) }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TrayActivityList(snapshot = snapshot, onOpenApp = onOpenApp, modifier = Modifier.weight(1f))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -85,7 +94,7 @@ fun DesktopFileSyncTrayPopup(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onOpenApp) { Text("Open Nextcloud Native") }
+                TextButton(onClick = onOpenApp) { Text("Open nati.ve") }
                 TextButton(onClick = onQuit) { Text("Quit") }
             }
         }
@@ -93,9 +102,35 @@ fun DesktopFileSyncTrayPopup(
 }
 
 @Composable
+private fun TrayActionFeedback(feedback: DesktopTrayActionFeedback) {
+    val containerColor = if (feedback.error) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = if (feedback.error) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = containerColor,
+        contentColor = contentColor,
+    ) {
+        Text(
+            text = feedback.message,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
 private fun TrayHeader(
     snapshot: DesktopFileSyncTraySnapshot,
-    onOpenApp: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(18.dp),
@@ -115,7 +150,7 @@ private fun TrayHeader(
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                snapshot.accountLabel ?: "Nextcloud Native",
+                snapshot.accountLabel ?: "nati.ve",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -135,7 +170,7 @@ private fun TrayHeader(
                 )
             }
         }
-        IconButton(onClick = onOpenApp) {
+        IconButton(onClick = onOpenSettings) {
             Icon(NextcloudIcons.Settings, contentDescription = "Open settings")
         }
     }
@@ -146,7 +181,7 @@ private fun TrayQuickActions(
     snapshot: DesktopFileSyncTraySnapshot,
     onSyncNow: () -> Unit,
     onTogglePaused: () -> Unit,
-    onOpenApp: () -> Unit,
+    onOpenSyncCenter: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -175,7 +210,7 @@ private fun TrayQuickActions(
             label = "Sync center",
             icon = NextcloudIcons.FolderOpen,
             enabled = true,
-            onClick = onOpenApp,
+            onClick = onOpenSyncCenter,
             modifier = Modifier.weight(1f),
         )
     }

@@ -1,8 +1,14 @@
 # Prerelease policy
 
-Nextcloud Native remains on the `0.x.y` release line until the full pre-release
-sprint is complete. Every GitHub release must be marked as a prerelease. The
-release workflow rejects stable versions and all `1.0.0` or higher tags.
+**Last reviewed: 2026-08-20.** The active version and release policy may have
+changed. The `ncVersion*` values in [`gradle.properties`](../gradle.properties),
+the [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
+[latest releases](https://github.com/obiente/native/releases) are the current
+sources of truth.
+
+Curated releases use the `0.x.y` prerelease line. Every GitHub release must be
+marked as a prerelease. The release workflow rejects stable versions and all
+`1.0.0` or higher tags.
 
 Supported versions use one of these forms:
 
@@ -37,6 +43,12 @@ source_sequence="$(git rev-list --count v0.2.0-alpha.1)"
 tools/derive-android-version-code.sh "$source_sequence" alpha
 tools/derive-desktop-package-version.sh "$source_sequence" alpha
 ```
+
+The schema-1 Android and desktop update manifests keep their original top-level
+key sets because installed clients parse them strictly. Do not add optional
+fields to these documents. Publish future cumulative changelogs or other
+extensible metadata as separately versioned sidecars, and test mutable channel
+pointers against every supported client parser before promotion.
 
 ## Creating a prerelease
 
@@ -81,5 +93,8 @@ Android signing secrets belong only in the protected GitHub environment:
 - `ANDROID_RELEASE_KEY_ALIAS`
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
-Release artifacts, keystores, passwords, certificates, and generated update
-metadata must never be committed.
+Private keys, keystores, passwords, release artifacts, and generated update
+metadata must never be committed. The public Android signing-identity digest in
+[`release/android-signing-certificate.sha256`](../release/android-signing-certificate.sha256)
+is intentionally versioned so release workflows can reject an unexpected
+signer.

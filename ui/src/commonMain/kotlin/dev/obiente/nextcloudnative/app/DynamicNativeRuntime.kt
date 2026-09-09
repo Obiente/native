@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.nativeui.model.AdvertisedOpenApi
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.AuthKind
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
@@ -22,6 +23,7 @@ import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
 import dev.obiente.nextcloudnative.nativeui.model.OpenApiTrust
 import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
+import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.model.isExactDynamicIntegerArraySchema
 import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
 import dev.obiente.nextcloudnative.nativeui.model.repeatableObjectInputSpec
@@ -37,6 +39,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import dev.obiente.nextcloudnative.nativeui.runtime.safeActionBindingValues
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -58,6 +61,7 @@ private val dynamicJson = Json {
     explicitNulls = false
 }
 
+@Serializable
 data class DynamicDescriptorDiscovery(
     val descriptor: DynamicAppDescriptor,
     val sourcePath: String?,
@@ -66,6 +70,7 @@ data class DynamicDescriptorDiscovery(
     val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
 )
 
+@Serializable
 enum class DynamicContractVersionStatus {
     VerifiedCurrent,
     LastKnownReadOnly,
@@ -74,6 +79,7 @@ enum class DynamicContractVersionStatus {
 internal fun DynamicContractVersionStatus.allows(risk: ActionRisk): Boolean =
     this == DynamicContractVersionStatus.VerifiedCurrent || risk == ActionRisk.readOnly
 
+@Serializable
 enum class DynamicDescriptorAcquisition {
     OcsApiViewer,
     StaticAppAsset,
@@ -85,6 +91,20 @@ enum class DynamicDescriptorAcquisition {
     AppStoreLinkedMergedContract,
     MetadataFallback,
 }
+
+enum class DynamicDescriptorDiscoveryPhase {
+    CachedWorkspace,
+    ServerApiCatalog,
+    AppApiDefinition,
+    InstalledAppVersion,
+    VerifiedAppPackage,
+    NativeWorkspace,
+}
+
+data class DynamicDescriptorDiscoveryProgress(
+    val phase: DynamicDescriptorDiscoveryPhase,
+    val message: String,
+)
 
 /**
  * Discovers a machine-readable contract shipped by an installed app.
@@ -100,11 +120,13 @@ suspend fun discoverDynamicAppDescriptor(
     serverVersion: String? = null,
     installedAppVersionHint: String? = null,
     serverVersionVerified: Boolean = true,
+    onProgress: (DynamicDescriptorDiscoveryProgress) -> Unit = {},
 ): DynamicDescriptorDiscovery {
     val sameOrigin = discoverDynamicAppDescriptor(
         serverUrl = session.serverUrl,
         app = app,
         execute = { request -> services.executeNextcloudApi(session, request) },
+        onProgress = onProgress,
     )
     if (sameOrigin.acquisition != DynamicDescriptorAcquisition.MetadataFallback) return sameOrigin
     val coreVersion = serverVersion?.coreVersionOrNull()
@@ -113,13 +135,25 @@ suspend fun discoverDynamicAppDescriptor(
                 "The server version is unavailable, so an App Store release could not be selected safely.",
         )
     val contractAppId = app.canonicalAppStoreId()
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.InstalledAppVersion,
+            "Checking the installed app version",
+        ),
+    )
     val observedInstalledVersion = discoverInstalledAppVersion(services, session, contractAppId)
     val installedVersion = observedInstalledVersion ?: installedAppVersionHint?.safeDynamicVersionHint()
-    val versionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
+    val observedVersionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
         DynamicContractVersionStatus.VerifiedCurrent
     } else {
         DynamicContractVersionStatus.LastKnownReadOnly
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.VerifiedAppPackage,
+            "Finding a verified app package",
+        ),
+    )
     val acquired = runCatching {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
@@ -133,6 +167,7 @@ suspend fun discoverDynamicAppDescriptor(
             "verified static read routes for $contractAppId on Nextcloud $coreVersion. " +
             "Only app metadata is available.",
     )
+    val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = runCatching {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
     }.getOrNull() ?: return sameOrigin.copy(
@@ -163,6 +198,12 @@ suspend fun discoverDynamicAppDescriptor(
         AcquiredOpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag ->
             OpenApiTrust.appStoreLinkedCompatibleGitHubTag
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            "Preparing the native workspace",
+        ),
+    )
     val descriptor = runCatching {
         DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
@@ -220,6 +261,21 @@ suspend fun discoverDynamicAppDescriptor(
     )
 }
 
+internal fun AcquiredOpenApiContract.effectiveDynamicContractVersionStatus(
+    observedVersionStatus: DynamicContractVersionStatus,
+): DynamicContractVersionStatus = if (
+    observedVersionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
+    sourceKind in setOf(
+        AcquiredOpenApiContractSourceKind.SignedAppPackage,
+        AcquiredOpenApiContractSourceKind.AppStoreLinkedExactGitHubTag,
+    ) &&
+    contractVersion == appVersion
+) {
+    DynamicContractVersionStatus.VerifiedCurrent
+} else {
+    DynamicContractVersionStatus.LastKnownReadOnly
+}
+
 internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when (this) {
     DynamicDescriptorAcquisition.SignedAppStorePackage,
     DynamicDescriptorAcquisition.SignedAppStoreStaticRoutes,
@@ -233,14 +289,6 @@ internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when
     DynamicDescriptorAcquisition.MetadataFallback,
     -> false
 }
-
-private fun String.safeDynamicVersionHint(): String? = trim()
-    .takeIf { version ->
-        version.length in 1..MAX_DYNAMIC_VERSION_HINT_CHARACTERS &&
-            version.all { character ->
-                character.isLetterOrDigit() || character in setOf('.', '-', '_', '+')
-            }
-    }
 
 private fun AcquiredOpenApiContractSourceKind.isSignedPackage(): Boolean =
     this == AcquiredOpenApiContractSourceKind.SignedAppPackage ||
@@ -301,27 +349,6 @@ internal fun NextcloudAppEntry.canonicalAppStoreId(): String {
     } ?: id
 }
 
-private suspend fun discoverInstalledAppVersion(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    appId: String,
-): String? = runCatching {
-    val response = services.executeNextcloudApi(
-        session,
-        NextcloudApiRequest(
-            method = NextcloudApiMethod.GET,
-            relativePath = "/ocs/v2.php/cloud/apps/$appId",
-            queryParameters = mapOf("format" to "json"),
-            ocsApiRequest = true,
-        ),
-    )
-    if (response.status !in 200..299) return@runCatching null
-    val root = dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
-    val ocs = root?.get("ocs") as? JsonObject
-    val data = ocs?.get("data") as? JsonObject
-    (data?.get("version") as? JsonPrimitive)?.contentOrNull
-}.getOrNull()
-
 private fun String.coreVersionOrNull(): String? =
     Regex("([0-9]+)\\.([0-9]+)\\.([0-9]+)").find(this)?.value
 
@@ -329,6 +356,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     serverUrl: String,
     app: NextcloudAppEntry,
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
+    onProgress: (DynamicDescriptorDiscoveryProgress) -> Unit = {},
 ): DynamicDescriptorDiscovery {
     require(app.id.matches(Regex("[A-Za-z0-9_.-]+"))) { "The app ID is invalid." }
     val origin = serverUrl.httpOrigin()
@@ -344,8 +372,20 @@ internal suspend fun discoverDynamicAppDescriptor(
     val compiler = DynamicAppDescriptorCompiler()
     val diagnostics = mutableListOf<String>()
 
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+            "Checking the server API catalog",
+        ),
+    )
     val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics)
     viewerSpecs.forEach { specId ->
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                "Reading the app's API definition",
+            ),
+        )
         val path = "$OCS_API_VIEWER_SPEC_PATH/${specId.encodeUrlComponent()}"
         val response = runCatching { execute(dynamicDiscoveryRequest(path)) }
             .onFailure { failure ->
@@ -361,6 +401,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             diagnostics += "OCS API Viewer returned an invalid OpenAPI JSON body for $specId${response.contentTypeDiagnostic()}."
             return@forEach
         }
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+                "Preparing the native workspace",
+            ),
+        )
         val descriptor = runCatching {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.onFailure { failure ->
@@ -381,6 +427,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             add("/custom_apps/${app.id}/$file")
         }
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+            "Reading the app's API definition",
+        ),
+    )
     staticCandidates.forEach { path ->
         val response = runCatching {
             execute(dynamicDiscoveryRequest(path))
@@ -389,6 +441,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             return@forEach
         }
         val document = response.parseOpenApiDocument() ?: return@forEach
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+                "Preparing the native workspace",
+            ),
+        )
         val descriptor = runCatching {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.getOrNull() ?: return@forEach
@@ -402,6 +460,12 @@ internal suspend fun discoverDynamicAppDescriptor(
 
     diagnostics += "No valid static OpenAPI document was found in the app's advertised asset locations."
 
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            "Preparing the native workspace",
+        ),
+    )
     return DynamicDescriptorDiscovery(
         descriptor = compiler.compile(
             DynamicDiscoveryInput(
@@ -619,12 +683,40 @@ suspend fun loadDynamicRecords(
     runtimeContext: Map<String, String> = emptyMap(),
     cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 ): List<NativeRecord> {
+    val outcome = loadDynamicRecordsWithOutcome(
+        services = services,
+        session = session,
+        descriptor = descriptor,
+        actionId = actionId,
+        values = values,
+        runtimeContext = runtimeContext,
+        cachePolicy = cachePolicy,
+    )
+    check(outcome.partialFailureMessage == null) { outcome.partialFailureMessage.orEmpty() }
+    return outcome.records
+}
+
+internal data class DynamicRecordLoadOutcome(
+    val records: List<NativeRecord>,
+    val partialFailureMessage: String? = null,
+)
+
+internal suspend fun loadDynamicRecordsWithOutcome(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    descriptor: DynamicAppDescriptor,
+    actionId: String,
+    values: Map<String, String> = emptyMap(),
+    runtimeContext: Map<String, String> = emptyMap(),
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+): DynamicRecordLoadOutcome {
     val action = descriptor.actions.firstOrNull { it.id == actionId }
         ?: error("This view has no declared load action.")
     val bindingContext = dynamicReadBindingContext(action, values, runtimeContext)
-    return executeDynamicReadWithFallback(
+    val outcome = executeDynamicReadWithFallbackOutcome(
         descriptor = descriptor,
         actionId = actionId,
+        boundValues = runtimeContext + values,
         execute = { candidate ->
             val candidateValues = remapReadFallbackValues(action, candidate, values)
             val request = buildDynamicApiRequest(
@@ -639,7 +731,8 @@ suspend fun loadDynamicRecords(
                 }
             }
         },
-    ).map { record ->
+    )
+    return outcome.copy(records = outcome.records.map { record ->
         if (bindingContext.isEmpty()) {
             record
         } else {
@@ -650,7 +743,7 @@ suspend fun loadDynamicRecords(
                     record.actionBindingProvenanceValid && mergedBindingContext != null,
             )
         }
-    }
+    })
 }
 
 /**
@@ -752,20 +845,58 @@ private fun DynamicHttpBinding.requiredReadParameters(): List<HttpParameter> =
 internal suspend fun executeDynamicReadWithFallback(
     descriptor: DynamicAppDescriptor,
     actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
     execute: suspend (DynamicAction) -> NextcloudApiResponse,
-): List<NativeRecord> {
+): List<NativeRecord> = executeDynamicReadWithFallbackOutcome(
+    descriptor = descriptor,
+    actionId = actionId,
+    boundValues = boundValues,
+    execute = execute,
+).records
+
+internal suspend fun executeDynamicReadWithFallbackOutcome(
+    descriptor: DynamicAppDescriptor,
+    actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
+    execute: suspend (DynamicAction) -> NextcloudApiResponse,
+): DynamicRecordLoadOutcome {
     val actionsById = descriptor.actions.associateBy(DynamicAction::id)
     val preferred = actionsById[actionId] ?: error("This view has no declared load action.")
     require(preferred.binding.method == HttpMethod.GET && !preferred.fallbackOnly) {
         "Only declared preferred GET actions can load a dynamic view."
     }
-    val candidates = listOf(preferred) + preferred.fallbackActionIds.mapNotNull(actionsById::get)
+    val linkedFallbacks = preferred.fallbackActionIds.mapNotNull(actionsById::get)
+    val resolvedPagination = descriptor.resolvedDynamicPaginationSpec(preferred.id, boundValues)
+    val pagedFallbacks = if (
+        descriptor.dynamicPaginationSpec(preferred) == null &&
+        resolvedPagination != null
+    ) {
+        linkedFallbacks.filter { candidate ->
+            descriptor.dynamicPaginationSpec(candidate) == resolvedPagination &&
+                candidatePreservesBoundReadParameters(preferred, candidate, boundValues)
+        }
+    } else {
+        emptyList()
+    }
+    // A successful collection response is not necessarily a complete first page. Some app
+    // OpenAPI documents omit optional pagination parameters even though a linked route from the
+    // same verified package declares them. In that case use the verified paged route first; the
+    // documented operation remains the fallback if that fuller read is unavailable.
+    val candidates = pagedFallbacks + preferred + linkedFallbacks.filterNot(pagedFallbacks::contains)
     var bestFailure: Throwable? = null
     var bestFailureSpecificity = -1
     var successfulEmptyResult: List<NativeRecord>? = null
+    var pagedFallbackUnavailable = false
+    var pagedFallbackSucceeded = false
+    var pagedFallbackReturnedEmpty = false
+    val continuationRequested = resolvedPagination?.let { pagination ->
+        boundValues.entries.any { (name, value) ->
+            name.equals(pagination.parameterName, ignoreCase = true) && value.isNotBlank()
+        }
+    } == true
     candidates.forEach { candidate ->
         if (candidate.binding.method != HttpMethod.GET) return@forEach
-        val records = runCatching {
+        val attempt = runCatching {
             val parsingAction = if (candidate.id == preferred.id) {
                 candidate
             } else {
@@ -775,27 +906,92 @@ internal suspend fun executeDynamicReadWithFallback(
                     intent = preferred.intent,
                 )
             }
-            parseDynamicRecords(parsingAction, execute(candidate), candidate.responseFieldIds.toSet())
+            parseDynamicRecords(
+                action = parsingAction,
+                response = execute(candidate),
+                declaredFieldIds = candidate.responseFieldIds.toSet(),
+                preferredIdentityFieldId = descriptor.verifiedRecordIdentityFieldId(candidate),
+            )
         }.onFailure { failure ->
+            if (candidate in pagedFallbacks) pagedFallbackUnavailable = true
             val specificity = (failure as? DynamicReadLoadException)?.specificity ?: 0
             if (bestFailure == null || specificity > bestFailureSpecificity) {
                 bestFailure = failure
                 bestFailureSpecificity = specificity
             }
-        }.getOrNull() ?: return@forEach
-        if (records.isNotEmpty()) return records
+        }
+        val records = attempt.getOrNull() ?: return@forEach
+        if (candidate in pagedFallbacks) {
+            pagedFallbackSucceeded = true
+            if (records.isEmpty()) {
+                if (continuationRequested) return DynamicRecordLoadOutcome(emptyList())
+                pagedFallbackReturnedEmpty = true
+            }
+        }
+        if (records.isNotEmpty()) {
+            return DynamicRecordLoadOutcome(
+                records = records,
+                partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
+                    candidate !in pagedFallbacks &&
+                        (pagedFallbackUnavailable || pagedFallbackReturnedEmpty)
+                },
+            )
+        }
         successfulEmptyResult = records
     }
-    successfulEmptyResult?.let { return it }
+    successfulEmptyResult?.let { records ->
+        return DynamicRecordLoadOutcome(
+            records = records,
+            partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
+                pagedFallbackUnavailable && !pagedFallbackSucceeded
+            },
+        )
+    }
     throw bestFailure ?: error("No usable declared read action was available.")
+}
+
+/**
+ * A verified fallback relationship proves equivalent acquisition for the required parent scope,
+ * but it does not prove that an optional filter has the same meaning or can be discarded. Keep a
+ * paged fallback behind the preferred route unless every currently bound preferred parameter is
+ * accepted by name or is covered by the narrow required-identity remapping above.
+ */
+private fun candidatePreservesBoundReadParameters(
+    preferred: DynamicAction,
+    candidate: DynamicAction,
+    boundValues: Map<String, String>,
+): Boolean {
+    val preferredParameters = preferred.binding.pathParameters + preferred.binding.queryParameters
+    val candidateParameters = candidate.binding.pathParameters + candidate.binding.queryParameters
+    val remappedValues = remapReadFallbackValues(preferred, candidate, boundValues)
+    return preferredParameters.all { parameter ->
+        val boundValue = boundValues.entries
+            .firstOrNull { (name, value) -> name.equals(parameter.name, ignoreCase = true) && value.isNotBlank() }
+            ?.value
+            ?: return@all true
+        candidateParameters.any { candidateParameter ->
+            candidateParameter.name.equals(parameter.name, ignoreCase = true) &&
+                remappedValues.entries.any { (name, value) ->
+                    name.equals(candidateParameter.name, ignoreCase = true) && value == boundValue
+                }
+        } || (
+            parameter.required && candidate.binding.requiredReadParameters().any { candidateParameter ->
+                remappedValues.entries.any { (name, value) ->
+                    name.equals(candidateParameter.name, ignoreCase = true) && value == boundValue
+                }
+            }
+            )
+    }
 }
 
 internal fun parseDynamicRecords(
     action: DynamicAction,
     response: NextcloudApiResponse,
     declaredFieldIds: Set<String> = emptySet(),
+    preferredIdentityFieldId: String? = null,
 ): List<NativeRecord> {
     if (response.status !in 200..299) throw response.toDynamicReadLoadException(action)
+    if (response.status == 204) return emptyList()
     check(response.contentType?.contains("json", ignoreCase = true) == true) {
         "The dynamic endpoint did not return JSON."
     }
@@ -808,7 +1004,23 @@ internal fun parseDynamicRecords(
         mapCollectionCandidate = action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list,
         declaredFieldIds = declaredFieldIds,
         collectionNameHints = action.dynamicCollectionNameHints(),
+        preferredIdentityFieldId = preferredIdentityFieldId,
     )
+}
+
+private fun DynamicAppDescriptor.verifiedRecordIdentityFieldId(action: DynamicAction): String? {
+    if (
+        app.id != "chores" || app.version != "0.1.0" ||
+        action.binding.method != HttpMethod.GET ||
+        action.binding.path != "/apps/chores/api/v1.0/account/invites" ||
+        action.confidence != Confidence.verified ||
+        action.provenance.none { provenance -> provenance.kind == ProvenanceKind.verifiedAppPackage } ||
+        action.responseFieldIds.count { fieldId -> fieldId == "inviteId" } != 1 ||
+        actions.count { candidate -> candidate.id == action.id } != 1
+    ) {
+        return null
+    }
+    return "inviteId"
 }
 
 private fun DynamicAction.dynamicCollectionNameHints(): Set<String> =
@@ -1241,6 +1453,8 @@ internal data class DynamicPaginationSpec(
     val mode: DynamicPaginationMode,
     val expectedPageSize: Int?,
     val recordCursorFieldNames: List<String> = emptyList(),
+    val initialPageNumber: Int = 1,
+    val initialOffset: Int = 0,
 ) {
     fun nextValue(
         nextPageNumber: Int,
@@ -1248,7 +1462,7 @@ internal data class DynamicPaginationSpec(
         lastPage: List<NativeRecord> = emptyList(),
     ): String? = when (mode) {
         DynamicPaginationMode.PageNumber -> nextPageNumber.toString()
-        DynamicPaginationMode.Offset -> loadedRecordCount.toString()
+        DynamicPaginationMode.Offset -> (initialOffset.toLong() + loadedRecordCount).toString()
         DynamicPaginationMode.RecordCursor -> lastPage.lastOrNull()?.let { record ->
             recordCursorFieldNames.firstNotNullOfOrNull { expectedName ->
                 (record.values + record.displayValues).entries.firstOrNull { (fieldName, value) ->
@@ -1261,6 +1475,18 @@ internal data class DynamicPaginationSpec(
 
     fun canContinue(lastPageSize: Int, novelRecordCount: Int = lastPageSize): Boolean =
         novelRecordCount > 0 && expectedPageSize?.let { lastPageSize >= it } != false
+}
+
+internal fun DynamicPaginationSpec.continuationFailureMessage(
+    lastPage: List<NativeRecord>,
+    loadedRecordCount: Int = lastPage.size,
+    novelRecordCount: Int = lastPage.size,
+    nextPageNumber: Int = initialPageNumber + 1,
+): String? {
+    if (mode != DynamicPaginationMode.RecordCursor || !canContinue(lastPage.size, novelRecordCount)) return null
+    return DYNAMIC_CURSOR_CONTINUATION_FAILURE.takeIf {
+        nextValue(nextPageNumber, loadedRecordCount, lastPage) == null
+    }
 }
 
 /**
@@ -1281,20 +1507,122 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
         parameter.name.normalizedDynamicParameterName() in PAGE_NUMBER_PARAMETER_NAMES
     } ?: optionalIntegerParameters.firstOrNull { parameter ->
         parameter.name.normalizedDynamicParameterName() in OFFSET_PARAMETER_NAMES
-    } ?: optionalIntegerParameters.firstOrNull { parameter ->
-        parameter.name.normalizedDynamicParameterName() in RECORD_CURSOR_PARAMETER_NAMES
     } ?: return null
     val mode = when (pagingParameter.name.normalizedDynamicParameterName()) {
         in OFFSET_PARAMETER_NAMES -> DynamicPaginationMode.Offset
-        in RECORD_CURSOR_PARAMETER_NAMES -> DynamicPaginationMode.RecordCursor
         else -> DynamicPaginationMode.PageNumber
     }
-    val cursorFields = if (mode == DynamicPaginationMode.RecordCursor) {
-        DATE_RECORD_CURSOR_FIELD_NAMES
+    val initialPageNumber = if (mode == DynamicPaginationMode.PageNumber) {
+        pagingParameter.declaredInitialPageNumber() ?: return null
     } else {
-        emptyList()
+        1
     }
-    return DynamicPaginationSpec(pagingParameter.name, mode, pageSize, cursorFields)
+    val initialOffset = if (mode == DynamicPaginationMode.Offset) {
+        pagingParameter.declaredInitialOffset() ?: return null
+    } else {
+        0
+    }
+    return DynamicPaginationSpec(
+        parameterName = pagingParameter.name,
+        mode = mode,
+        expectedPageSize = pageSize,
+        initialPageNumber = initialPageNumber,
+        initialOffset = initialOffset,
+    )
+}
+
+/**
+ * Resolves pagination from the visible read or from one unambiguous verified read fallback.
+ * Hidden fallbacks are part of the same acquired contract and can carry optional cursor/limit
+ * parameters omitted by a sparse documented operation. Conflicting fallback declarations remain
+ * unpaged rather than guessing a protocol.
+ */
+internal fun DynamicAppDescriptor.resolvedDynamicPaginationSpec(
+    actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
+): DynamicPaginationSpec? {
+    val action = actions.singleOrNull { candidate -> candidate.id == actionId } ?: return null
+    dynamicPaginationSpec(action)?.let { return it }
+    return action.fallbackActionIds
+        .mapNotNull { fallbackId -> actions.singleOrNull { candidate -> candidate.id == fallbackId } }
+        .filter(DynamicAction::fallbackOnly)
+        .filter { candidate -> candidatePreservesBoundReadParameters(action, candidate, boundValues) }
+        .mapNotNull(::dynamicPaginationSpec)
+        .distinct()
+        .singleOrNull()
+}
+
+private fun DynamicAppDescriptor.dynamicPaginationSpec(action: DynamicAction): DynamicPaginationSpec? =
+    action.dynamicPaginationSpec() ?: action.verifiedRecordCursorPaginationSpec()
+
+/**
+ * Cursor continuation needs an explicit response-field binding; a parameter name alone cannot
+ * establish that relationship. Contract acquisition may add this binding only for a verified,
+ * versioned route whose response field semantics are known.
+ */
+private fun DynamicAction.verifiedRecordCursorPaginationSpec(): DynamicPaginationSpec? {
+    if (
+        binding.method != HttpMethod.GET ||
+        intent != dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list ||
+        provenance.none { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
+    ) {
+        return null
+    }
+    val cursorParameter = binding.queryParameters.singleOrNull { parameter ->
+        !parameter.required &&
+            parameter.isIntegerNumberParameter() &&
+            parameter.name.normalizedDynamicParameterName() == "cursor"
+    } ?: return null
+    val cursorField = recordCursorFieldId?.takeIf(String::isNotBlank) ?: return null
+    val pageSize = binding.queryParameters.firstOrNull { parameter ->
+        parameter.name.normalizedDynamicParameterName() in INITIAL_PAGE_SIZE_PARAMETER_NAMES
+    }?.automaticCollectionPageSize()
+    return DynamicPaginationSpec(
+        parameterName = cursorParameter.name,
+        mode = DynamicPaginationMode.RecordCursor,
+        expectedPageSize = pageSize,
+        recordCursorFieldNames = listOf(cursorField),
+    )
+}
+
+private fun HttpParameter.declaredInitialPageNumber(): Int? = declaredInitialInteger(fallback = 1)
+
+private fun HttpParameter.declaredInitialOffset(): Int? = declaredInitialInteger(fallback = 0)
+
+private fun HttpParameter.declaredInitialInteger(fallback: Int): Int? {
+    val objectSchema = schema as? JsonObject ?: return null
+    fun exactInteger(name: String): Int? {
+        val element = objectSchema[name] ?: return null
+        if (element == JsonNull) return null
+        val number = (element as? JsonPrimitive)
+            ?.takeUnless(JsonPrimitive::isString)
+            ?.doubleOrNull
+            ?.takeIf(Double::isFinite)
+            ?: return null
+        if (number % 1.0 != 0.0 || number < Int.MIN_VALUE || number > Int.MAX_VALUE) return null
+        return number.toInt()
+    }
+
+    if (
+        listOf("minimum", "maximum").any { name ->
+            name in objectSchema && (objectSchema[name] == JsonNull || exactInteger(name) == null)
+        } ||
+        (
+            "default" in objectSchema &&
+                objectSchema["default"] != JsonNull &&
+                exactInteger("default") == null
+            )
+    ) {
+        return null
+    }
+    val declaredDefault = exactInteger("default")
+    val declaredMinimum = exactInteger("minimum")
+    val start = declaredDefault ?: fallback
+    val declaredMaximum = exactInteger("maximum")
+    if (start < 0) return null
+    if (declaredMinimum != null && start < declaredMinimum) return null
+    if (declaredMaximum != null && start > declaredMaximum) return null
+    return start
 }
 
 private fun HttpParameter.isIntegerNumberParameter(): Boolean {
@@ -1316,6 +1644,9 @@ private fun HttpParameter.automaticCollectionPageSize(): Int? {
 
     fun declaredNumber(name: String): Double? {
         val element = objectSchema[name] ?: return null
+        // A null bound is malformed because it changes whether an invented page size is safe.
+        // Nullable default null is handled below as the absence of an explicit default.
+        if (element == JsonNull) return Double.NaN
         val primitive = element as? JsonPrimitive ?: return Double.NaN
         return primitive
             .takeUnless { it.isString }
@@ -1335,7 +1666,7 @@ private fun HttpParameter.automaticCollectionPageSize(): Int? {
     )
     if (lowerBound > upperBound) return null
 
-    if ("default" in objectSchema) {
+    if (objectSchema["default"]?.let { it != JsonNull } == true) {
         val declaredDefault = declaredNumber("default")
             ?.takeUnless { it.isNaN() }
             ?: return null
@@ -1387,11 +1718,13 @@ private fun String.sameRuntimeResource(other: String): Boolean = runtimeResource
 
 internal const val INITIAL_COLLECTION_PAGE_SIZE = 50
 private const val MAX_AUTOMATIC_COLLECTION_PAGE_SIZE = 500
+internal const val DYNAMIC_PAGED_READ_PARTIAL_FAILURE =
+    "Could not load the complete collection. A partial result is shown; retry to load all items."
+internal const val DYNAMIC_CURSOR_CONTINUATION_FAILURE =
+    "The server omitted the next-page cursor. Retry before loading more items."
 private val INITIAL_PAGE_SIZE_PARAMETER_NAMES = setOf("limit", "pagesize", "perpage", "maxresults")
 private val PAGE_NUMBER_PARAMETER_NAMES = setOf("page", "pagenumber", "pageno")
 private val OFFSET_PARAMETER_NAMES = setOf("offset")
-private val RECORD_CURSOR_PARAMETER_NAMES = setOf("cursor")
-private val DATE_RECORD_CURSOR_FIELD_NAMES = listOf("dateInt")
 
 private fun String.runtimeResourceIdentity(): String {
     val normalized = lowercase().filter(Char::isLetterOrDigit)
@@ -1627,11 +1960,13 @@ private fun JsonElement.toNativeRecords(
     mapCollectionCandidate: Boolean,
     declaredFieldIds: Set<String>,
     collectionNameHints: Set<String> = emptySet(),
+    preferredIdentityFieldId: String? = null,
 ): List<NativeRecord> = (when (this) {
     is JsonArray -> asSequence().take(MAX_DYNAMIC_NATIVE_RECORDS).mapIndexed { index, element ->
         element.toNativeRecord(
             fallbackId = index.toString(),
             declaredFieldIds = declaredFieldIds,
+            preferredIdentityFieldId = preferredIdentityFieldId,
             allowObservedRichText = !mapCollectionCandidate,
         )
     }.toList()
@@ -1642,6 +1977,7 @@ private fun JsonElement.toNativeRecords(
             namedArray != null -> namedArray.toNativeRecords(
                 mapCollectionCandidate = false,
                 declaredFieldIds = declaredFieldIds,
+                preferredIdentityFieldId = preferredIdentityFieldId,
             )
             isObjectMapCollection() -> entries.asSequence()
                 .take(MAX_DYNAMIC_NATIVE_RECORDS)
@@ -1649,14 +1985,29 @@ private fun JsonElement.toNativeRecords(
                 (element as? JsonObject)?.toNativeRecord(
                     fallbackId = mapKey,
                     declaredFieldIds = declaredFieldIds,
+                    preferredIdentityFieldId = preferredIdentityFieldId,
                     stableFallbackIdentity = true,
                     allowObservedRichText = false,
                 )
             }.toList()
-            else -> listOf(toNativeRecord("record", declaredFieldIds, allowObservedRichText = true))
+            else -> listOf(
+                toNativeRecord(
+                    fallbackId = "record",
+                    declaredFieldIds = declaredFieldIds,
+                    preferredIdentityFieldId = preferredIdentityFieldId,
+                    allowObservedRichText = true,
+                ),
+            )
         }
     } else {
-        listOf(toNativeRecord("record", declaredFieldIds, allowObservedRichText = true))
+        listOf(
+            toNativeRecord(
+                fallbackId = "record",
+                declaredFieldIds = declaredFieldIds,
+                preferredIdentityFieldId = preferredIdentityFieldId,
+                allowObservedRichText = true,
+            ),
+        )
     }
     else -> listOf(
         NativeRecord(
@@ -1741,6 +2092,7 @@ private fun JsonObject.isObjectMapCollection(): Boolean {
 private fun JsonElement.toNativeRecord(
     fallbackId: String,
     declaredFieldIds: Set<String>,
+    preferredIdentityFieldId: String? = null,
     stableFallbackIdentity: Boolean = false,
     allowObservedRichText: Boolean = false,
 ): NativeRecord {
@@ -1767,7 +2119,10 @@ private fun JsonElement.toNativeRecord(
     // identity from an incomplete response schema. Read-only child routes can still require that
     // observed `databaseId`. Prefer it for navigation, but keep it action-unsafe unless the
     // contract explicitly declared the field.
-    val identity = declaredIdentity("databaseId")
+    val identity = preferredIdentityFieldId
+        ?.takeIf { preferred -> declaredFieldIds.count { it == preferred } == 1 }
+        ?.let(declaredIdentity)
+        ?: declaredIdentity("databaseId")
         ?: observedIdentity("databaseId")
         ?: declaredIdentity("id")
         ?: declaredIdentity("uuid")
@@ -2117,7 +2472,7 @@ private fun String.matchesApiPrefix(prefix: String): Boolean {
     return this == normalized || startsWith("$normalized/")
 }
 
-private fun String.httpOrigin(): String {
+internal fun String.httpOrigin(): String {
     val match = Regex("^(https?://[^/?#]+)").find(this.trim())
         ?: error("The Nextcloud server URL is invalid.")
     return match.groupValues[1]
@@ -2139,6 +2494,5 @@ private fun String.encodeUrlComponent(): String = buildString {
 private const val DYNAMIC_HEX = "0123456789ABCDEF"
 private const val MAX_DYNAMIC_ERROR_BODY_CHARS = 8_192
 private const val MAX_DYNAMIC_ERROR_MESSAGE_CHARS = 240
-private const val MAX_DYNAMIC_VERSION_HINT_CHARACTERS = 128
 private const val OCS_API_VIEWER_CATALOG_PATH = "/index.php/apps/ocs_api_viewer/apps"
 private const val OCS_API_VIEWER_SPEC_PATH = "/index.php/apps/ocs_api_viewer/apps"

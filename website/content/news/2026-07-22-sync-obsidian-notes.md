@@ -2,8 +2,8 @@
 title: Syncing an Obsidian folder with Nextcloud
 slug: sync-obsidian-notes
 date: 2026-07-22
-lastUpdated: 2026-07-25
-description: The design for reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and avoids hidden app folders.
+lastUpdated: 2026-08-20
+description: Reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and avoids hidden app folders.
 tags: Obsidian Nextcloud sync, Markdown notes, Android folder sync, offline files
 captureScenario: obsidian-vault-sync
 imageAlt: Nextcloud Native showing a synthetic Obsidian vault two-way sync pair with pending and completed transfer counts on mobile
@@ -11,6 +11,12 @@ imageCaption: The production folder-pair UI shows the synthetic vault direction,
 ---
 
 # Syncing an Obsidian folder with Nextcloud
+
+**Historical article, reviewed 2026-08-20.** This post explains the folder-sync
+design recorded at publication, not a guarantee for every release or vault. Check
+the [current releases](https://github.com/obiente/native/releases),
+[compatibility notes](/compatibility/), and the current [Android folder-sync guide](/guides/android/folder-sync/)
+before testing it with real notes.
 
 Many people keep years of writing in an Obsidian vault: Markdown notes, attachments,
 canvases, and small configuration files that are valuable precisely because they are
@@ -35,12 +41,12 @@ Large queues stored only in memory disappear after a crash. A screen with hundre
 or thousands of transfer cards can itself become the reason the app slows down or
 stops.
 
-The design therefore treats folder access, durable transfer state, conflict safety,
-and scalable history as one feature.
+Nextcloud Native therefore treats folder access, durable transfer state, conflict
+safety, and scalable history as one feature.
 
 ## Four parts of dependable folder sync
 
-The sync direction now separates four responsibilities:
+Folder sync separates four responsibilities:
 
 1. Android's system folder picker grants access to a normal user-visible directory.
 2. A native Nextcloud destination picker selects a server folder without asking for
@@ -56,7 +62,7 @@ making the user find the same folder a second time.
 
 ## Pairing a vault from start to finish
 
-You open My stuff, choose **Add folder sync**, and select the existing Obsidian vault
+You open **Folder sync**, choose **Add sync**, and select the existing Obsidian vault
 with Android's own folder picker. Next, you browse your Nextcloud folders and choose
 `Notes/Obsidian` as the destination. The app previews representative files from the
 local folder, shows the account that will receive them, and explains the difference
@@ -86,8 +92,9 @@ when a narrower system grant can safely cover the selected tree.
 ## Safe defaults for real Obsidian vaults
 
 Obsidian creates app-specific files and plugins with behavior that differs between
-devices. Sync rules make exclusions visible and handle renames, deletes, case
-differences, rapid edit bursts, and large nested vaults deliberately. Network,
+devices. Sync rules expose exclusions, and conflict and deletion policies remain
+explicit. Case-only renames, rapid edit bursts, plugin state, and large nested vaults
+still deserve testing with disposable data before a real vault is trusted. Network,
 charging, and battery preferences stay attached to each folder pair instead of hiding
 inside one global switch.
 
@@ -97,12 +104,11 @@ folder access pauses only the affected pair and gives a direct path to reconnect
 
 ## From background execution to conflict review
 
-The synchronization design connects native local and remote pickers to durable SQLite
-state. It includes a folder preview before pairing, bounded pending, failed, and
-completed views, scheduled background execution, per-pair network and charging
-preferences, and a conflict review center that keeps both versions available. These
-data-safety gates remain active implementation work and are tracked in the public
-roadmap below.
+Native local and remote pickers connect to a durable, account-scoped sync journal. A
+folder preview appears before pairing, while bounded pending, failed, and completed
+views keep large vaults responsive. Background execution, per-pair network and power
+preferences, and a conflict review center keep the relationship understandable after
+the setup screen has closed.
 
 ## Revisions make retries safe
 
@@ -112,8 +118,8 @@ or a server ETag. A planned transfer records the revisions it expects. Before
 committing a write or delete, the worker checks that the relevant revision has not
 changed.
 
-Queue entries and verification records are specified for SQLite rather than a large
-JSON file. That model supports indexed paging, transactions, restart recovery, and
-bounded queries. Workers claim idempotent jobs so retrying after process death does
-not duplicate a successful upload. The UI observes summaries and pages from that
-durable source instead of owning the work itself.
+Queue entries and verification records live in durable platform storage rather than
+screen state. The journal supports bounded reads, restart recovery, and exact
+account-and-folder ownership. Workers claim operations with their expected revisions,
+so retrying after process death does not duplicate a successful upload. The UI reads
+summaries from that durable source instead of owning the work itself.

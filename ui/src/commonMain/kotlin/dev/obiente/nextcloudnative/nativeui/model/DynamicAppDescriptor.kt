@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonElement
 
 const val DYNAMIC_APP_DESCRIPTOR_VERSION: String = "1.0"
+internal const val MAX_DYNAMIC_ENUM_LABEL_LENGTH: Int = 128
 
 @Serializable
 data class DynamicAppDescriptor(
@@ -71,8 +72,17 @@ data class DynamicResource(
     val fields: List<DynamicField> = emptyList(),
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
+    /** Exact trusted binary GET used to render bounded previews for records in this resource. */
+    val recordImagePreview: DynamicRecordImagePreviewSpec? = null,
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
+)
+
+@Serializable
+data class DynamicRecordImagePreviewSpec(
+    val actionId: String,
+    /** Contract-declared successful response media types, normalized without parameters. */
+    val declaredContentTypes: List<String>,
 )
 
 @Serializable
@@ -169,6 +179,7 @@ data class FormField(
     val required: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val enumLabels: Map<String, String>? = null,
     val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 
@@ -194,6 +205,8 @@ data class DynamicAction(
     val responseFieldIds: List<String> = emptyList(),
     /** Exact same-route GET action used to reconcile an idempotent replacement result. */
     val resultRecoveryActionId: String? = null,
+    /** Explicit verified binding from an opaque cursor parameter to one response record field. */
+    val recordCursorFieldId: String? = null,
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,

@@ -26,10 +26,27 @@ install -D -m 0644 "$metadata" \
     "$root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
 install -D -m 0644 "$license" "$root/usr/share/doc/nextcloudnative/copyright"
 control="$root/DEBIAN/control"
+add_legacy_runtime_alternative() {
+    local current_package="$1"
+    local legacy_package="$2"
+    sed -i -E \
+        "/^Depends:/ s/(^Depends: |, )(${current_package}([[:space:]]*\\([^)]*\\))?)(,|$)/\\1\\2 | ${legacy_package}\\4/" \
+        "$control"
+}
+add_legacy_runtime_alternative libasound2t64 libasound2
+add_legacy_runtime_alternative libpng16-16t64 libpng16-16
+if ! grep -q '^Depends:' "$control"; then
+    sed -i '/^Description:/i Depends: libsecret-tools' "$control"
+elif ! sed -n '/^Depends:/p' "$control" |
+    tr ',' '\n' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -Eq '^libsecret-tools([[:space:](]|$)'; then
+    sed -i '/^Depends:/ s/$/, libsecret-tools/' "$control"
+fi
 if grep -q '^Homepage:' "$control"; then
-    sed -i 's|^Homepage:.*|Homepage: https://nc-native.obiente.dev/|' "$control"
+    sed -i 's|^Homepage:.*|Homepage: https://nati.ve/|' "$control"
 else
-    sed -i '/^Description:/i Homepage: https://nc-native.obiente.dev/' "$control"
+    sed -i '/^Description:/i Homepage: https://nati.ve/' "$control"
 fi
 mapfile -d '' desktop_entries < <(
     find "$root" -type f -name 'nextcloudnative-NextcloudNative.desktop' -print0
@@ -37,6 +54,7 @@ mapfile -d '' desktop_entries < <(
 [[ "${#desktop_entries[@]}" -eq 1 ]]
 desktop_entry="${desktop_entries[0]}"
 sed -i \
+    -e 's|^Name=.*|Name=nati.ve|' \
     -e 's|^Comment=.*|Comment=One native client for your complete Nextcloud account|' \
     -e 's|^Categories=.*|Categories=Network;FileTransfer;Utility;|' \
     -e 's|^Icon=.*|Icon=dev.obiente.nextcloudnative|' \
@@ -57,3 +75,20 @@ install -D -m 0644 "$icon" \
 )
 dpkg-deb --build --root-owner-group "$root" "$rebuilt"
 mv -- "$rebuilt" "${packages[0]}"
+dependencies="$(dpkg-deb --field "${packages[0]}" Depends)"
+printf '%s\n' "$dependencies" |
+    tr ',' '\n' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -Eq '^libsecret-tools([[:space:](]|$)'
+verify_legacy_runtime_alternative() {
+    local current_package="$1"
+    local legacy_package="$2"
+    if grep -Eq "(^|,)[[:space:]]*${current_package}([[:space:](,]|$)" <<<"$dependencies"; then
+        tr ',' '\n' <<<"$dependencies" |
+            sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+            grep -Eq \
+                "^${current_package}([[:space:]]*\\([^)]*\\))?[[:space:]]*\\|[[:space:]]*${legacy_package}$"
+    fi
+}
+verify_legacy_runtime_alternative libasound2t64 libasound2
+verify_legacy_runtime_alternative libpng16-16t64 libpng16-16

@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 
 /**
@@ -40,6 +41,10 @@ enum class NativeAudioCollectionKind {
 data class NativeAudioCollectionContext(
     val kind: NativeAudioCollectionKind,
     val title: String,
+    /** The verified parent resource that supplied this child collection. */
+    val parentResource: ResourceSpec,
+    /** The selected parent record, retained for its authoritative title and artwork fields. */
+    val parentRecord: NativeRecord,
 )
 
 enum class NativeMediaArtworkFallback {
@@ -154,11 +159,12 @@ internal fun nativeAudioTrack(
 }
 
 internal fun nativeAudioCollectionContext(
-    parentResourceId: String?,
+    parentResource: ResourceSpec?,
     parentRecord: NativeRecord?,
 ): NativeAudioCollectionContext? {
+    val resource = parentResource ?: return null
     val record = parentRecord ?: return null
-    val semanticResource = parentResourceId?.nativeAudioSemanticKey().orEmpty()
+    val semanticResource = resource.id.nativeAudioSemanticKey()
     val kind = when {
         semanticResource.contains("album") || semanticResource.contains("release") ->
             NativeAudioCollectionKind.Album
@@ -170,7 +176,71 @@ internal fun nativeAudioCollectionContext(
         ?.trim()
         ?.takeIf(String::isNotBlank)
         ?: return null
-    return NativeAudioCollectionContext(kind, title)
+    return NativeAudioCollectionContext(
+        kind = kind,
+        title = title,
+        parentResource = resource,
+        parentRecord = record,
+    )
+}
+
+/**
+ * Resolves the selected collection through the same dataset context used by the generic renderer.
+ *
+ * Keeping this lookup here makes the parent binding explicit and testable: a contextual album or
+ * artist list must never borrow a similarly named record from another resource.
+ */
+internal fun nativeAudioCollectionContext(
+    schema: NativeAppSchema,
+    datasetContext: NativeDatasetContext,
+): NativeAudioCollectionContext? = nativeAudioCollectionContext(
+    parentResource = datasetContext.parentResourceId?.let(schema::resource),
+    parentRecord = datasetContext.parentRecord,
+)
+
+/**
+ * Plans collection artwork without promoting an arbitrary first track over the selected parent.
+ *
+ * Track rows often omit album artwork and metadata. The selected album or artist record is the
+ * authoritative context, so use its image first. A track is only a fallback when the parent has
+ * no usable image path.
+ */
+internal fun nativeAudioCollectionArtworkReference(
+    collectionContext: NativeAudioCollectionContext,
+    childResource: ResourceSpec,
+    firstPlayableRecord: NativeRecord?,
+    resolver: NativeMediaArtworkResolver?,
+): NativeMediaArtworkReference {
+    val parentReference = resolver?.resolve(
+        collectionContext.parentResource,
+        collectionContext.parentRecord,
+    ) ?: nativeMediaPresentation(
+        collectionContext.parentResource,
+        collectionContext.parentRecord,
+    ).nativeFallbackArtworkReference(collectionContext.parentRecord.id)
+    if (parentReference.relativePath != null) return parentReference
+
+    val trackReference = firstPlayableRecord?.let { record ->
+        resolver?.resolve(childResource, record)
+            ?: nativeMediaPresentation(childResource, record).nativeFallbackArtworkReference(record.id)
+    }
+    return trackReference?.takeIf { reference -> reference.relativePath != null } ?: parentReference
+}
+
+internal fun NativeMediaPresentation.nativeFallbackArtworkReference(
+    recordId: String,
+): NativeMediaArtworkReference {
+    val fallback = when (kind) {
+        NativeMediaItemKind.Artist -> NativeMediaArtworkFallback.Artist
+        NativeMediaItemKind.Album -> NativeMediaArtworkFallback.Album
+        NativeMediaItemKind.Track -> NativeMediaArtworkFallback.Track
+        else -> NativeMediaArtworkFallback.Media
+    }
+    return NativeMediaArtworkReference(
+        relativePath = coverUrl,
+        cacheKey = "${fallback.name.lowercase()}:${recordId.take(128)}:${coverUrl ?: "fallback"}",
+        fallback = fallback,
+    )
 }
 
 private fun NativeRecord.nativeAudioScalar(vararg aliases: String): String? {
@@ -237,4 +307,31 @@ fun interface NativeAudioRecordPlayer {
         selected: NativeRecord,
         collectionContext: NativeAudioCollectionContext?,
     )
+}
+
+/** Returns the first record with a verified playable audio representation in collection order. */
+internal fun nativeAudioCollectionFirstPlayableRecord(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    collectionContext: NativeAudioCollectionContext?,
+): NativeRecord? = records.firstOrNull { record ->
+    nativeAudioTrack(resource, record, collectionContext) != null
+}
+
+/**
+ * Starts a collection queue from its first playable row while preserving the complete record set.
+ *
+ * The player receives every source record so it can build a queue, rather than only the first
+ * play target. This is shared by the collection header and is intentionally a no-op when a
+ * collection contains no playable audio.
+ */
+internal fun NativeAudioRecordPlayer.playCollectionIfPossible(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+    collectionContext: NativeAudioCollectionContext,
+): Boolean {
+    val selected = nativeAudioCollectionFirstPlayableRecord(resource, records, collectionContext)
+        ?: return false
+    play(resource, records, selected, collectionContext)
+    return true
 }

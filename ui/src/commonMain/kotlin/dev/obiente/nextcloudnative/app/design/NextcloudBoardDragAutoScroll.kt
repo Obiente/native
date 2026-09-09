@@ -23,6 +23,15 @@ import kotlinx.coroutines.supervisorScope
 private const val NANOS_PER_SECOND = 1_000_000_000f
 private const val MAX_AUTO_SCROLL_FRAME_SECONDS = 0.05f
 
+private const val BOARD_DRAG_EDGE_VIEWPORT_FRACTION = 0.22f
+
+private val BoardDragMinimumEdgeThreshold = 72.dp
+private val BoardDragMaximumEdgeThreshold = 180.dp
+private val BoardDragIntentThreshold = 12.dp
+private val BoardDragVerticalActivationHalo = 16.dp
+private val BoardDragMaxHorizontalVelocity = 320.dp
+private val BoardDragMaxVerticalVelocity = 240.dp
+
 internal data class BoardDragVerticalScrollTarget(
     val state: ScrollableState,
     val viewport: Rect,
@@ -64,10 +73,12 @@ internal fun NextcloudBoardDragAutoScroll(
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
-    val edgeThresholdPx = with(density) { 56.dp.toPx() }
-    val horizontalIntentThresholdPx = with(density) { 12.dp.toPx() }
-    val verticalActivationHaloPx = with(density) { 16.dp.toPx() }
-    val maxVelocityPxPerSecond = with(density) { 720.dp.toPx() }
+    val minimumEdgeThresholdPx = with(density) { BoardDragMinimumEdgeThreshold.toPx() }
+    val maximumEdgeThresholdPx = with(density) { BoardDragMaximumEdgeThreshold.toPx() }
+    val intentThresholdPx = with(density) { BoardDragIntentThreshold.toPx() }
+    val verticalActivationHaloPx = with(density) { BoardDragVerticalActivationHalo.toPx() }
+    val maxHorizontalVelocityPxPerSecond = with(density) { BoardDragMaxHorizontalVelocity.toPx() }
+    val maxVerticalVelocityPxPerSecond = with(density) { BoardDragMaxVerticalVelocity.toPx() }
     val currentPosition by rememberUpdatedState(position)
     val currentDragOrigin by rememberUpdatedState(dragOrigin)
     val currentBoardViewport by rememberUpdatedState(boardViewport)
@@ -100,14 +111,21 @@ internal fun NextcloudBoardDragAutoScroll(
             val currentDragPosition = currentPosition ?: continue
             val currentViewport = currentBoardViewport ?: continue
             val currentHorizontalDragOrigin = currentDragOrigin?.x ?: continue
+            val horizontalEdgeThreshold = resolveBoardDragEdgeThreshold(
+                viewportStart = currentViewport.left,
+                viewportEnd = currentViewport.right,
+                minimumThreshold = minimumEdgeThresholdPx,
+                maximumThreshold = maximumEdgeThresholdPx,
+                viewportFraction = BOARD_DRAG_EDGE_VIEWPORT_FRACTION,
+            )
             val horizontalVelocity = resolveBoardDragHorizontalEdgeScrollVelocity(
                 pointer = currentDragPosition.x,
                 dragOrigin = currentHorizontalDragOrigin,
                 viewportStart = currentViewport.left,
                 viewportEnd = currentViewport.right,
-                edgeThreshold = edgeThresholdPx,
-                intentThreshold = horizontalIntentThresholdPx,
-                maxVelocity = maxVelocityPxPerSecond,
+                edgeThreshold = horizontalEdgeThreshold,
+                intentThreshold = intentThresholdPx,
+                maxVelocity = maxHorizontalVelocityPxPerSecond,
             )
             val horizontalConsumed = if (horizontalVelocity == 0f) {
                 0f
@@ -128,15 +146,27 @@ internal fun NextcloudBoardDragAutoScroll(
                 currentViewport,
                 verticalActivationHaloPx,
             )
-            val verticalVelocity = verticalScrollTarget?.let { target ->
-                resolveBoardDragEdgeScrollVelocity(
-                    pointer = currentDragPosition.y,
-                    viewportStart = target.viewport.top,
-                    viewportEnd = target.viewport.bottom,
-                    edgeThreshold = edgeThresholdPx,
-                    maxVelocity = maxVelocityPxPerSecond,
+            val currentVerticalDragOrigin = currentDragOrigin?.y
+            val verticalVelocity = if (verticalScrollTarget != null && currentVerticalDragOrigin != null) {
+                val verticalEdgeThreshold = resolveBoardDragEdgeThreshold(
+                    viewportStart = verticalScrollTarget.viewport.top,
+                    viewportEnd = verticalScrollTarget.viewport.bottom,
+                    minimumThreshold = minimumEdgeThresholdPx,
+                    maximumThreshold = maximumEdgeThresholdPx,
+                    viewportFraction = BOARD_DRAG_EDGE_VIEWPORT_FRACTION,
                 )
-            } ?: 0f
+                resolveBoardDragVerticalEdgeScrollVelocity(
+                    pointer = currentDragPosition.y,
+                    dragOrigin = currentVerticalDragOrigin,
+                    viewportStart = verticalScrollTarget.viewport.top,
+                    viewportEnd = verticalScrollTarget.viewport.bottom,
+                    edgeThreshold = verticalEdgeThreshold,
+                    intentThreshold = intentThresholdPx,
+                    maxVelocity = maxVerticalVelocityPxPerSecond,
+                )
+            } else {
+                0f
+            }
             val verticalConsumed = if (verticalScrollTarget == null || verticalVelocity == 0f) {
                 0f
             } else {
@@ -159,6 +189,73 @@ internal fun NextcloudBoardDragAutoScroll(
             onTargetRefresh = currentOnTargetRefresh,
             onTerminalDropReady = currentOnTerminalDropReady,
         )
+    }
+}
+
+/**
+ * Smooth edge scrolling for reorderable vertical collections.
+ *
+ * The scroll is driven once per frame and uses the same bounded, eased velocity profile as board
+ * lanes. Target refreshes happen on the frame after consumed scroll so hit testing sees the new
+ * row geometry instead of repeatedly jumping through stale bounds.
+ */
+@Composable
+internal fun NextcloudVerticalDragAutoScroll(
+    activeDragKey: Any?,
+    position: Offset?,
+    dragOrigin: Offset?,
+    viewport: Rect?,
+    scrollState: ScrollableState,
+) {
+    val density = LocalDensity.current
+    val minimumEdgeThresholdPx = with(density) { BoardDragMinimumEdgeThreshold.toPx() }
+    val maximumEdgeThresholdPx = with(density) { BoardDragMaximumEdgeThreshold.toPx() }
+    val intentThresholdPx = with(density) { BoardDragIntentThreshold.toPx() }
+    val maxVelocityPxPerSecond = with(density) { BoardDragMaxVerticalVelocity.toPx() }
+    val currentPosition by rememberUpdatedState(position)
+    val currentDragOrigin by rememberUpdatedState(dragOrigin)
+    val currentViewport by rememberUpdatedState(viewport)
+    val currentScrollState by rememberUpdatedState(scrollState)
+
+    LaunchedEffect(activeDragKey) {
+        if (activeDragKey == null) return@LaunchedEffect
+        var previousFrameNanos = 0L
+        while (true) {
+            val frameNanos = withFrameNanos { it }
+            if (previousFrameNanos == 0L) {
+                previousFrameNanos = frameNanos
+                continue
+            }
+            val elapsedSeconds = (
+                (frameNanos - previousFrameNanos).toFloat() / NANOS_PER_SECOND
+            ).coerceAtMost(MAX_AUTO_SCROLL_FRAME_SECONDS)
+            previousFrameNanos = frameNanos
+
+            val currentDragPosition = currentPosition ?: continue
+            val currentDragStart = currentDragOrigin ?: continue
+            val currentBounds = currentViewport ?: continue
+            val edgeThreshold = resolveBoardDragEdgeThreshold(
+                viewportStart = currentBounds.top,
+                viewportEnd = currentBounds.bottom,
+                minimumThreshold = minimumEdgeThresholdPx,
+                maximumThreshold = maximumEdgeThresholdPx,
+                viewportFraction = BOARD_DRAG_EDGE_VIEWPORT_FRACTION,
+            )
+            val velocity = resolveBoardDragVerticalEdgeScrollVelocity(
+                pointer = currentDragPosition.y,
+                dragOrigin = currentDragStart.y,
+                viewportStart = currentBounds.top,
+                viewportEnd = currentBounds.bottom,
+                edgeThreshold = edgeThreshold,
+                intentThreshold = intentThresholdPx,
+                maxVelocity = maxVelocityPxPerSecond,
+            )
+            if (velocity != 0f) {
+                runBoardDragScrollMutation {
+                    currentScrollState.scrollBy(velocity * elapsedSeconds)
+                }
+            }
+        }
     }
 }
 
@@ -207,6 +304,32 @@ internal fun resolveBoardDragHorizontalScrollDelta(
         ?: 0f
 }
 
+internal fun resolveBoardDragEdgeThreshold(
+    viewportStart: Float,
+    viewportEnd: Float,
+    minimumThreshold: Float,
+    maximumThreshold: Float,
+    viewportFraction: Float,
+): Float {
+    if (
+        !viewportStart.isFinite() ||
+        !viewportEnd.isFinite() ||
+        !minimumThreshold.isFinite() ||
+        !maximumThreshold.isFinite() ||
+        !viewportFraction.isFinite() ||
+        viewportEnd <= viewportStart ||
+        minimumThreshold <= 0f ||
+        maximumThreshold < minimumThreshold ||
+        viewportFraction <= 0f
+    ) {
+        return 0f
+    }
+    val viewportExtent = viewportEnd - viewportStart
+    return (viewportExtent * viewportFraction)
+        .coerceAtLeast(minimumThreshold)
+        .coerceAtMost(minOf(maximumThreshold, viewportExtent / 2f))
+}
+
 internal fun resolveBoardDragHorizontalEdgeScrollVelocity(
     pointer: Float,
     dragOrigin: Float,
@@ -244,6 +367,57 @@ internal fun resolveBoardDragHorizontalEdgeScrollVelocity(
     }
 }
 
+internal fun resolveBoardDragVerticalEdgeScrollVelocity(
+    pointer: Float,
+    dragOrigin: Float,
+    viewportStart: Float,
+    viewportEnd: Float,
+    edgeThreshold: Float,
+    intentThreshold: Float,
+    maxVelocity: Float,
+): Float = resolveBoardDragIntentEdgeScrollVelocity(
+    pointer = pointer,
+    dragOrigin = dragOrigin,
+    viewportStart = viewportStart,
+    viewportEnd = viewportEnd,
+    edgeThreshold = edgeThreshold,
+    intentThreshold = intentThreshold,
+    maxVelocity = maxVelocity,
+)
+
+private fun resolveBoardDragIntentEdgeScrollVelocity(
+    pointer: Float,
+    dragOrigin: Float,
+    viewportStart: Float,
+    viewportEnd: Float,
+    edgeThreshold: Float,
+    intentThreshold: Float,
+    maxVelocity: Float,
+): Float {
+    if (!dragOrigin.isFinite() || !intentThreshold.isFinite() || intentThreshold < 0f) {
+        return 0f
+    }
+    val edgeVelocity = resolveBoardDragEdgeScrollVelocity(
+        pointer = pointer,
+        viewportStart = viewportStart,
+        viewportEnd = viewportEnd,
+        edgeThreshold = edgeThreshold,
+        maxVelocity = maxVelocity,
+    )
+    val displacement = pointer - dragOrigin
+    val availableOutwardDistance = when {
+        edgeVelocity < 0f -> (dragOrigin - viewportStart).coerceAtLeast(0f)
+        edgeVelocity > 0f -> (viewportEnd - dragOrigin).coerceAtLeast(0f)
+        else -> return 0f
+    }
+    val requiredOutwardDisplacement = minOf(intentThreshold, availableOutwardDistance)
+    return when {
+        edgeVelocity < 0f && displacement < 0f && -displacement >= requiredOutwardDisplacement -> edgeVelocity
+        edgeVelocity > 0f && displacement > 0f && displacement >= requiredOutwardDisplacement -> edgeVelocity
+        else -> 0f
+    }
+}
+
 internal fun resolveBoardDragEdgeScrollVelocity(
     pointer: Float,
     viewportStart: Float,
@@ -269,11 +443,11 @@ internal fun resolveBoardDragEdgeScrollVelocity(
     return when {
         distanceFromStart < edgeThreshold && distanceFromStart <= distanceFromEnd -> {
             val proximity = 1f - distanceFromStart.coerceIn(0f, edgeThreshold) / edgeThreshold
-            -maxVelocity * proximity
+            -maxVelocity * proximity * proximity
         }
         distanceFromEnd < edgeThreshold -> {
             val proximity = 1f - distanceFromEnd.coerceIn(0f, edgeThreshold) / edgeThreshold
-            maxVelocity * proximity
+            maxVelocity * proximity * proximity
         }
         else -> 0f
     }

@@ -92,7 +92,7 @@ class OfficeDocumentRequestTest {
     }
 
     @Test
-    fun directEditingFormTrustsWhiteboardButNotDrawio() {
+    fun directEditingFormAcceptsSafeServerAdvertisedEditorIds() {
         val whiteboard = directEditingOpenForm(
             NextcloudDocumentEditSessionRequest(
                 path = "Boards",
@@ -103,12 +103,21 @@ class OfficeDocumentRequestTest {
         )
 
         assertTrue("editorId=whiteboard" in whiteboard)
+        val onlyoffice = directEditingOpenForm(
+            NextcloudDocumentEditSessionRequest(
+                path = "Documents",
+                fileId = 42,
+                editorId = "onlyoffice",
+                expectedEtag = "v1",
+            ),
+        )
+        assertTrue("editorId=onlyoffice" in onlyoffice)
         assertFailsWith<IllegalArgumentException> {
             directEditingOpenForm(
                 NextcloudDocumentEditSessionRequest(
-                    path = "Diagrams",
+                    path = "Documents",
                     fileId = 42,
-                    editorId = DRAWIO_APP_ID,
+                    editorId = "../invalid",
                     expectedEtag = "v1",
                 ),
             )
@@ -117,6 +126,13 @@ class OfficeDocumentRequestTest {
 
     @Test
     fun acceptsOnlySameOriginTokenRouteWithoutQueryOrFragment() {
+        assertEquals(
+            "https://cloud.example/apps/files/directEditing/token-123",
+            validatedDirectEditingHandoffUrl(
+                "https://cloud.example",
+                "/apps/files/directEditing/token-123",
+            ),
+        )
         assertEquals(
             "https://cloud.example/index.php/apps/files/directEditing/token-123",
             validatedDirectEditingHandoffUrl(

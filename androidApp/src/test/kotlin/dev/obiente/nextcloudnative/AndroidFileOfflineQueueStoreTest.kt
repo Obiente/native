@@ -26,11 +26,11 @@ class AndroidFileOfflineQueueStoreTest {
     fun missingStoreLoadsEmptyAndRoundTripsTypedQueueState() = withStore { store, stateFile ->
         assertEquals(AndroidFileOfflinePersistedState(), store.load())
         val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
-        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id)
+        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id, nowEpochMillis = 11)
         val waiting = recordFileOfflineJobResult(
             running,
             running.jobs.single().id,
-            FileOfflineJobResult.RetryableFailure("offline"),
+            FileOfflineJobResult.RetryableFailure("offline", retryNotBeforeEpochMillis = 120_000L),
             20,
         )
 
@@ -61,6 +61,23 @@ class AndroidFileOfflineQueueStoreTest {
 
         assertEquals(persisted, store.load())
         assertFalse(stateFile.parentFile?.listFiles().orEmpty().any { it.name.endsWith(".tmp") })
+    }
+
+    @Test
+    fun manualRetryPreservesAStoredServerDeadline() {
+        val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
+        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id, nowEpochMillis = 11)
+        val waiting = recordFileOfflineJobResult(
+            running,
+            running.jobs.single().id,
+            FileOfflineJobResult.RetryableFailure("Wait", retryNotBeforeEpochMillis = 120_000L),
+            20,
+        ).jobs.single()
+
+        val retried = prepareFileOfflineCenterManualRetry(waiting)
+
+        assertEquals(dev.obiente.nextcloudnative.app.FileOfflineJobStatus.Queued, retried.status)
+        assertEquals(120_000L, retried.retryNotBeforeEpochMillis)
     }
 
     @Test

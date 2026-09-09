@@ -3,7 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.model
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.app.DynamicPaginationMode
-import dev.obiente.nextcloudnative.app.dynamicPaginationSpec
+import dev.obiente.nextcloudnative.app.resolvedDynamicPaginationSpec
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeMailMessageActionKind
@@ -67,7 +67,7 @@ class MailLiveContractCompatibilityTest {
             action.id in messageList.fallbackActionIds
         }
         assertTrue(messageFallback.binding.apiRequestHeader)
-        val pagination = assertNotNull(messageFallback.dynamicPaginationSpec())
+        val pagination = assertNotNull(descriptor.resolvedDynamicPaginationSpec(messageList.id))
         assertTrue(pagination.mode == DynamicPaginationMode.RecordCursor)
         assertTrue(
             pagination.nextValue(

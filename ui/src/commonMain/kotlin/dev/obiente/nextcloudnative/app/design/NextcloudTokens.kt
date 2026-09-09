@@ -20,9 +20,9 @@ object NextcloudSpacing {
 object NextcloudRadii {
     val Small = 10.dp
     val Card = 12.dp
-    val Medium = 16.dp
-    val Large = 22.dp
-    val XLarge = 30.dp
+    val Medium = 12.dp
+    val Large = 16.dp
+    val XLarge = 20.dp
     val Pill = 100.dp
 }
 

@@ -2,7 +2,9 @@ package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import kotlinx.serialization.encodeToString
@@ -13,6 +15,61 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DynamicNavigationHistoryPersistenceTest {
+    @Test
+    fun `retained team context keeps Chores children available from other destinations`() {
+        val team = DynamicResourceRecordContext(
+            resourceId = "team",
+            recordId = "42",
+            fieldValues = mapOf("id" to "42"),
+        )
+        val invitation = DynamicResourceRecordContext(
+            resourceId = "invitations",
+            recordId = "invite-7",
+            fieldValues = mapOf("teamId" to "42"),
+        )
+
+        assertEquals(team, retainedChoresNavigationContext(team, invitation))
+        assertEquals(invitation, retainedChoresNavigationContext(null, invitation))
+        assertEquals(
+            team,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Chores, team, null),
+        )
+        assertEquals(
+            null,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Team, team, null),
+            "The Team header must retain the root create-team action.",
+        )
+        assertEquals(
+            invitation,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Invitations, team, invitation),
+        )
+        assertTrue(
+            showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Team),
+            "The loaded Team roster must retain its contextual invite-member action.",
+        )
+        assertFalse(showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Chores))
+        assertTrue(showDynamicCollectionCreateAction(null, NativeChoresWorkspaceKind.Chores))
+    }
+
+    @Test
+    fun `restored root view marks automatic landing as already consumed`() {
+        assertFalse(DynamicAppNavigationState().hasPersistedDynamicLocation())
+        assertTrue(
+            DynamicAppNavigationState(selectedViewId = "team.list")
+                .hasPersistedDynamicLocation(),
+        )
+        assertTrue(
+            DynamicAppNavigationState(
+                history = listOf(
+                    SavedDynamicNavigationSnapshot(
+                        viewId = "chores.list",
+                        resourceId = "chores",
+                    ),
+                ),
+            ).hasPersistedDynamicLocation(),
+        )
+    }
+
     @Test
     fun `saved history is bounded and excludes complete record payloads`() {
         val largePayload = "private-record-payload-".repeat(2_000)
@@ -120,5 +177,36 @@ class DynamicNavigationHistoryPersistenceTest {
         assertEquals(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY - 1, restored.size)
         assertEquals("view-5", restored.first().viewId)
         assertEquals("view-19", restored.last().viewId)
+    }
+
+    @Test
+    fun `saved dynamic app state retains bounded back history without record values`() {
+        val history = (0 until MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY + 3).map { index ->
+            SavedDynamicNavigationSnapshot(
+                viewId = "view-$index",
+                resourceId = "resource-$index",
+                recordId = "record-$index",
+                recordResourceId = "resource-$index",
+                pathParameterValues = mapOf("parentId" to "parent-$index"),
+            )
+        }
+        val saved = DynamicAppNavigationState(
+            selectedViewId = "view-current",
+            selectedRecord = NativeRecord(
+                id = "record-current",
+                values = mapOf("body" to "private body must not be saved"),
+            ),
+            selectedRecordResourceId = "resource-current",
+            history = history,
+        ).toSavedDynamicAppNavigationState()
+        val encoded = Json.encodeToString(saved)
+        val restored = saved.toDynamicAppNavigationState()
+
+        assertEquals(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY, saved.history.size)
+        assertEquals("view-3", saved.history.first().viewId)
+        assertEquals("view-18", saved.history.last().viewId)
+        assertEquals(saved.history, restored.history)
+        assertFalse(encoded.contains("private body must not be saved"))
+        assertTrue(encoded.length < 16_000)
     }
 }

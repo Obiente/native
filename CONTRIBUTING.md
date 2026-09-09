@@ -1,9 +1,16 @@
-# Contributing to Nextcloud Native
+# Contributing to nati.ve
 
-Nextcloud Native is an independent Obiente project. Contributions are welcome,
+nati.ve is an independent Obiente project. Contributions are welcome,
 especially protocol research, reusable semantic components, accessibility
 improvements, compatibility fixtures, and tests against different Nextcloud
 versions.
+
+**Last reviewed: 2026-08-20.** Toolchain versions, checks, release state, and
+contribution requirements may have changed. Check [`gradle.properties`](gradle.properties),
+the [version catalog](gradle/libs.versions.toml), the
+[Build and test workflow](.github/workflows/ci.yml), [`AGENTS.md`](AGENTS.md),
+and the [latest releases](https://github.com/obiente/native/releases) before
+starting work.
 
 ## Before you start
 
@@ -18,27 +25,18 @@ versions.
 - Read [AI_POLICY.md](AI_POLICY.md) before using AI assistance. Contributions
   must be human-led; autonomous agent submissions are not accepted.
 
-## Human authorship and DCO sign-off
+## Human responsibility and attribution
 
 The human contributor is responsible for every line they submit, including
 code, documentation, and tests prepared with AI assistance. You must understand
 the change well enough to explain, defend, debug, and modify it.
 
-Every submitted commit must include your human `Signed-off-by` trailer under
-the [Developer Certificate of Origin](https://developercertificate.org/):
-
-```bash
-git commit --signoff
-```
-
-Cryptographic commit signing and DCO sign-off are separate. Follow the
-repository's configured signing policy in addition to using `--signoff`.
-
 AI tools are assistants, not co-authors:
 
 - Do not add an AI tool through a `Co-authored-by` trailer.
-- An AI tool must not add or fabricate your `Signed-off-by` trailer. Add it only
-  after you have reviewed and accepted the complete commit.
+- Do not add or fabricate a person's authorship, approval, signature, or
+  certification trailer. Only that person can provide such an attribution.
+- Preserve existing attribution from other contributors.
 - AI use may be disclosed in the PR description or with an optional
   `Assisted-by: Tool[:model]` trailer. Disclosure is appreciated but not
   required.
@@ -67,7 +65,8 @@ Install JDK 21, Rust stable, Node.js `^20.19.0 || >=22.12.0`, and Android SDK
 Platform 36 with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`
 to your local SDK directory. Do not add local SDK paths to project files.
 
-Run the complete local verification suite:
+Run the baseline local verification suite for changes that affect all build
+targets:
 
 ```bash
 cargo test --locked
@@ -76,12 +75,16 @@ cargo test --locked
   :ui:desktopTest \
   :androidApp:testDebugUnitTest \
   :ui:createDistributable \
+  :androidApp:verifyReleaseLintGate \
   :androidApp:assembleDebug
 bash tools/check-repository.sh
 ```
 
-Focused tests are useful while iterating, but the full suite must pass before a
-pull request is ready for review.
+Focused tests are useful while iterating. Before a pull request is ready for
+review, run every check relevant to the changed platforms and verify that the
+[Build and test workflow](.github/workflows/ci.yml) passes. Platform packaging,
+emulator, server-companion, website, and release changes have additional checks
+described in their owning files and workflows.
 
 Repository-authored text uses ordinary ASCII punctuation while allowing normal
 UTF-8 letters and translations. Run
@@ -89,14 +92,33 @@ UTF-8 letters and translations. Run
 Unicode ellipses, Unicode minus signs, no-break spaces, and invisible
 formatting characters.
 
+### Windows filesystem test prerequisites
+
+The full desktop suite and repository checks create disposable symbolic links
+for path-safety and Linux service fixtures. On Windows, the test process must
+have permission to create those links. Without that permission, Windows reports
+that a required privilege is not held, and Node.js reports `EPERM`. These are
+fixture setup failures, not successful safety checks.
+
+Run these checks from a terminal with the required symbolic-link privilege.
+Pass `--no-daemon` to Gradle so tests do not reuse a daemon started without that
+privilege. Keep the tests enabled: replacing links with ordinary files would bypass the
+behavior they verify. The Git Bash text-hygiene fixture converts its temporary
+paths for the native Windows scanner, including paths sent through stdin.
+
+The aggregate repository check also builds a Debian fixture with `dpkg-deb`.
+Run that check in Linux (including a configured WSL distribution or Linux
+container) with Rust, Node.js, Git, Python 3, jq, and Debian packaging tools
+available. Windows-only fixture checks can run from Git Bash; Node.js launches
+the manifest scripts through Bash using Windows-compatible paths.
+
 ### Isolated Android emulator tests
 
-The emulator helper gives each contributor, worktree, or automated agent a
-separate Android data directory, ADB port, and visible emulator window. It discovers the SDK through
-`ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the shared `/opt/android-sdk` convention;
-no SDK path is stored in the project. The default uses host GPU acceleration;
-headless CI hosts may select a supported software backend with
-`NC_NATIVE_EMULATOR_GPU`.
+The emulator helper gives each concurrent worktree a separate Android data
+directory, ADB port, and visible emulator window. It discovers the SDK through
+`ANDROID_SDK_ROOT` or `ANDROID_HOME`; no SDK path is stored in the project. The
+default uses host GPU acceleration. Headless CI hosts may select a supported
+software backend with `NC_NATIVE_EMULATOR_GPU`.
 
 Install the API 36 AOSP x86_64 system image, then assign a unique slot to each
 concurrent test:
@@ -116,37 +138,27 @@ tools/android-emulator.sh stop media-change
 The window opens visibly by default and remains available to scripted ADB
 checks. Add `--headless` only for unattended runs without a desktop session.
 
-### Shared account safety
+For authenticated compatibility and write-path testing, use the disposable
+[real Nextcloud compatibility instance](integration/nextcloud-demo/README.md).
+It creates a synthetic account, bounded fixtures, a private development CA,
+and an explicit per-app Android write scope without copying a personal desktop
+session.
 
-An emulator may reuse the account already stored by the desktop app when
-authenticated read behavior must be tested:
+### Test account safety
 
-```bash
-tools/android-emulator.sh install files-change
-tools/android-emulator.sh reuse-desktop-session files-change
-```
+Use a synthetic account on an isolated test server with disposable data for
+authenticated tests. Do not import credentials from a personal desktop
+session or test mutations against a production account.
 
-This command streams the desktop keyring entry directly into the private data
-directory of that debuggable emulator app. It is re-encrypted with the
-emulator's Android Keystore key and the temporary import is immediately
-deleted. The resulting session is forced into read-only test mode at the
-Android HTTP boundary.
-
-Treat this as a strict safety boundary:
-
-- Never inspect, print, copy, record, or commit the imported credentials.
+- Never print, record, or commit credentials or session material.
 - Never use personal filenames, contacts, messages, photos, server addresses,
   responses, screenshots, or UI dumps as fixtures or review artifacts.
-- Never attempt uploads, edits, deletes, moves, shares, app administration,
-  calls, messages, sync writes, or any other cloud mutation with a shared
-  account.
-- Never bypass or weaken read-only test mode. Write-path tests require a
-  synthetic account on an isolated test server containing disposable data.
-- Stop and ask before any action whose server-side effect is uncertain.
+- Keep write-path tests explicit, bounded, revision-guarded, and isolated from
+  real data.
+- Stop before any action whose server-side effect is uncertain.
 
-The smoke report contains synthetic screenshots, UI hierarchies, launch timing,
-and logcat output under `build/reports/android-emulator/`. Never run it with a
-real account or copy those generated artifacts into the repository.
+Smoke reports under `build/reports/android-emulator/` are local build output.
+Do not commit them.
 
 ## Pull requests
 

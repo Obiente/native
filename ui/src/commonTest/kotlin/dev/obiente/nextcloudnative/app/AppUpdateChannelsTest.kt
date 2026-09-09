@@ -19,22 +19,24 @@ class AppUpdateChannelsTest {
     )
 
     @Test
-    fun persistedChannelRestoresAvailableValuesAndSafelyDefaultsFutureValues() {
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel(null))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel(""))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("unknown"))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("alpha"))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("prerelease-v1"))
+    fun persistedChannelsMigrateToTheEnforcedNightlyTrack() {
+        assertTrue(appUpdateChannelSelectionLocked)
+        assertEquals(AndroidUpdateChannel.Nightly, enforcedAppUpdateChannel)
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel(null))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel(""))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("unknown"))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("alpha"))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("prerelease-v1"))
         assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("Nightly"))
         assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("nightly-v1"))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("beta"))
-        assertEquals(AndroidUpdateChannel.Alpha, parseAndroidUpdateChannel("stable-v1"))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("beta"))
+        assertEquals(AndroidUpdateChannel.Nightly, parseAndroidUpdateChannel("stable-v1"))
     }
 
     @Test
-    fun onlyAvailableDirectChannelsCanBeSelected() {
-        assertTrue(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Alpha))
-        assertTrue(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Nightly))
+    fun directChannelSelectionRemainsLocked() {
+        assertFalse(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Alpha))
+        assertFalse(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Nightly))
         assertFalse(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Beta))
         assertFalse(canSelectAppUpdateChannel(directSupport, AndroidUpdateChannel.Stable))
         assertFalse(
@@ -46,7 +48,7 @@ class AppUpdateChannelsTest {
                 AndroidUpdateChannel.Nightly,
             ),
         )
-        assertTrue(
+        assertFalse(
             canSelectAppUpdateChannel(
                 directSupport.copy(channel = AppDistributionChannel.DirectDesktopPackage),
                 AndroidUpdateChannel.Nightly,
@@ -55,25 +57,22 @@ class AppUpdateChannelsTest {
     }
 
     @Test
-    fun presentationExposesRiskAndFutureChannelsWithoutEnablingThem() {
+    fun presentationShowsOnlyTheLockedNightlyTrack() {
         val presentation = appUpdateChannelPresentation(
             directSupport,
-            selectedChannel = AndroidUpdateChannel.Nightly,
+            selectedChannel = AndroidUpdateChannel.Alpha,
         )
 
         assertTrue(presentation.selectorVisible)
-        assertTrue(presentation.selectorEnabled)
-        assertEquals(AndroidUpdateChannel.entries.toList(), presentation.options.map { it.channel })
-        val nightly = presentation.options.single { it.channel == AndroidUpdateChannel.Nightly }
+        assertFalse(presentation.selectorEnabled)
+        assertEquals(AndroidUpdateChannel.Nightly, presentation.selectedChannel)
+        val nightly = presentation.options.single()
+        assertEquals(AndroidUpdateChannel.Nightly, nightly.channel)
         assertTrue(nightly.selected)
-        assertTrue(nightly.enabled)
+        assertFalse(nightly.enabled)
+        assertEquals("Locked for now", nightly.availabilityLabel)
         assertTrue(nightly.description.contains("signed APK"))
         assertTrue(nightly.description.contains("less stable"))
-        listOf(AndroidUpdateChannel.Beta, AndroidUpdateChannel.Stable).forEach { channel ->
-            val option = presentation.options.single { it.channel == channel }
-            assertFalse(option.enabled)
-            assertEquals("Coming later", option.availabilityLabel)
-        }
 
         val storePresentation = appUpdateChannelPresentation(
             directSupport.copy(
@@ -124,12 +123,12 @@ class AppUpdateChannelsTest {
     @Test
     fun onlyAvailableChannelsResolveCanonicalMetadataPointers() {
         assertEquals(
-            "https://github.com/Obiente/nc-native/releases/download/" +
+            "https://github.com/obiente/native/releases/download/" +
                 "channel-prerelease/update-manifest.json",
             AndroidUpdateChannel.Alpha.manifestUrl(),
         )
         assertEquals(
-            "https://github.com/Obiente/nc-native/releases/download/" +
+            "https://github.com/obiente/native/releases/download/" +
                 "channel-nightly/update-manifest.json",
             AndroidUpdateChannel.Nightly.manifestUrl(),
         )
@@ -139,7 +138,7 @@ class AppUpdateChannelsTest {
             }
             assertFalse(
                 isCanonicalAndroidUpdateManifestUrl(
-                    "https://github.com/Obiente/nc-native/releases/download/" +
+                    "https://github.com/obiente/native/releases/download/" +
                         "${channel.pointerTag}/update-manifest.json",
                     channel,
                 ),
@@ -199,7 +198,7 @@ class AppUpdateChannelsTest {
             validateAndroidDirectRelease(
                 nightly.copy(
                     apkUrl =
-                        "https://github.com/Obiente/nc-native/releases/download/" +
+                        "https://github.com/obiente/native/releases/download/" +
                             "nightly-20260726-0145-run124-abcdef12/" +
                             "nextcloud-native-$nightlyTag-android.apk",
                 ),
@@ -241,11 +240,11 @@ class AppUpdateChannelsTest {
         packageName = "dev.obiente.nextcloudnative",
         minimumAndroidSdk = 26,
         apkUrl =
-            "https://github.com/Obiente/nc-native/releases/download/$tag/" +
+            "https://github.com/obiente/native/releases/download/$tag/" +
                 "nextcloud-native-$versionName-android.apk",
         apkSize = 123_456,
         apkSha256 = "a".repeat(64),
         signingCertificateSha256Digests = listOf("b".repeat(64)),
-        releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        releaseNotesUrl = "https://github.com/obiente/native/releases/tag/$tag",
     )
 }

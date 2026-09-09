@@ -110,6 +110,20 @@ test("internal work requires an explicit no-user-facing marker", () => {
   assert.equal(parsed.userFacing, false);
 });
 
+test("internal work may omit issue and pull request references", () => {
+  const parsed = parseFragment(
+    fragment({
+      category: "internal",
+      issue: "none",
+      pull: "none",
+      userFacing: "no",
+      summary: "Repository maintenance remains valid before a pull request exists.",
+    }),
+  );
+  assert.equal(parsed.issue, null);
+  assert.equal(parsed.pull, null);
+});
+
 test("security fragments retain their release category", () => {
   const parsed = parseFragment(
     fragment({
@@ -186,7 +200,7 @@ test("website changelog composition replaces only the live Unreleased section", 
 test("release note preparation shares the user-facing aggregation", () => {
   const parsed = parseFragment(fragment(), "changes/unreleased/42.md");
   const notes = composeReleaseNotes("0.2.0-alpha.1", [parsed]);
-  assert.match(notes, /^# Nextcloud Native 0\.2\.0-alpha\.1/m);
+  assert.match(notes, /^# nati\.ve 0\.2\.0-alpha\.1/m);
   assert.match(notes, /^## Features$/m);
   assert.match(notes, /\[Android, Desktop\]/);
   assert.doesNotMatch(notes, /issue #42/);
@@ -468,6 +482,44 @@ test("diff enforcement protects archived fragments and permits release moves", a
     );
     await execFileAsync("git", ["add", "."], { cwd: root });
     await execFileAsync("git", ["commit", "-qm", "archive release"], {
+      cwd: root,
+    });
+    await checkDiffHasFragment(root, base);
+
+    await execFileAsync("git", ["reset", "--hard", base], { cwd: root });
+    await mkdir(releaseDirectory, { recursive: true });
+    await rm(unreleased);
+    await writeFile(
+      path.join(releaseDirectory, "42-feature.md"),
+      fragment({
+        category: "internal",
+        userFacing: "no",
+        summary: "Release curation marked a superseded product claim as internal.",
+      }),
+    );
+    await writeFile(
+      path.join(root, "CHANGELOG.md"),
+      [
+        "# Changelog",
+        "",
+        "## Unreleased",
+        "",
+        "## [0.2.0-alpha.1]",
+        "",
+        "## [0.1.0-alpha.1]",
+        "",
+        "### Fixes",
+        "",
+        "- First preview.",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(root, "docs", "release-notes", "0.2.0-alpha.1.md"),
+      "# Nextcloud Native 0.2.0-alpha.1\n",
+    );
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "archive curated release"], {
       cwd: root,
     });
     await checkDiffHasFragment(root, base);

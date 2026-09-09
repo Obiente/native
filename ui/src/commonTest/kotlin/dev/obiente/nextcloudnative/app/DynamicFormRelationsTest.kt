@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.withCollectionBatchRelationR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -310,6 +311,66 @@ class DynamicFormRelationsTest {
         val finalPage = secondPage.appendPageSucceeded(request, records(96..107))
         assertEquals(107, finalPage.relatedRecords(listOf(request)).getValue("categories").size)
         assertEquals(null, finalPage.continuation(request))
+    }
+
+    @Test
+    fun `relation pagination continues after a zero based first page`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(action("category-index", "categories", "/api/categories", emptyList())),
+        )
+        val request = dynamicFormRelationLoadRequests(schema, form, emptyMap()).single()
+        val pagination = DynamicPaginationSpec(
+            parameterName = "page",
+            mode = DynamicPaginationMode.PageNumber,
+            expectedPageSize = 50,
+            initialPageNumber = 0,
+        )
+
+        val firstPage = DynamicFormRelationCacheState().loadSucceeded(
+            request = request,
+            records = records(1..50),
+            pagination = pagination,
+        )
+
+        assertEquals(1, firstPage.continuation(request)?.nextPageNumber)
+        assertEquals("1", firstPage.continuation(request)?.nextRequestValue)
+    }
+
+    @Test
+    fun `partial first relation page offers a retry without a continuation`() {
+        assertTrue(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = false,
+                loading = false,
+                error = "Could not load every choice.",
+                discardedRecordCount = 0,
+            ),
+        )
+        assertFalse(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = true,
+                loading = false,
+                error = "Could not load more choices.",
+                discardedRecordCount = 0,
+            ),
+        )
+        assertFalse(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = false,
+                loading = true,
+                error = "Could not load every choice.",
+                discardedRecordCount = 0,
+            ),
+        )
     }
 
     @Test

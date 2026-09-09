@@ -1,8 +1,10 @@
 .git
 .github/*
+!.github/social-preview.png
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/ci.yml
+!.github/workflows/refresh-marketing-captures.yml
 .gradle
 .idea
 .kotlin
@@ -11,6 +13,7 @@
 **/build
 target
 website/dist
+website/dist-indexnow
 website/dist-ssr
 website/node_modules
 website/.npm-cache

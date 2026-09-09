@@ -31,6 +31,7 @@ jobs:
       version: ${{ steps.source.outputs.version }}
       version-code: ${{ steps.source.outputs.version_code }}
       desktop-version: ${{ steps.source.outputs.desktop_version }}
+      release-date: ${{ steps.source.outputs.release_date }}
     steps:
       - name: Check out the exact tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,6 +70,7 @@ jobs:
           source_sequence="$(git rev-list --count "${SOURCE_SHA}")"
           version_code="$(tools/derive-android-version-code.sh "${source_sequence}" nightly)"
           desktop_version="$(tools/derive-desktop-package-version.sh "${source_sequence}" nightly)"
+          release_date="$(date --utc --date="${SOURCE_STARTED_AT}" +%F)"
           {
             echo "eligible=true"
             echo "sha=${SOURCE_SHA}"
@@ -76,6 +78,7 @@ jobs:
             echo "version=${tag}"
             echo "version_code=${version_code}"
             echo "desktop_version=${desktop_version}"
+            echo "release_date=${release_date}"
           } >>"${GITHUB_OUTPUT}"
 
   android:
@@ -93,7 +96,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -271,11 +274,17 @@ jobs:
           ref: ${{ needs.source.outputs.sha }}
 
       - name: Set up JDK 21
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
+
+      - name: Set up Rust for Windows packaging
+        if: matrix.platform == 'windows'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Build native desktop package
         shell: bash
@@ -288,6 +297,7 @@ jobs:
             -PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}" \
             -PncVersionName="${{ needs.source.outputs.version }}" \
             -PncVersionCode="${{ needs.source.outputs.version-code }}" \
+            -PncAppStreamReleaseDate="${{ needs.source.outputs.release-date }}" \
             -PncDesktopReleaseBuild=true \
             -PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}" \
             ${{ matrix.tasks }}
@@ -308,7 +318,17 @@ jobs:
             -ExpectedVersion "${env:NIGHTLY_DESKTOP_VERSION}"
 
       - name: Attest Windows MSI provenance
+        id: attest-windows-msi
         if: matrix.platform == 'windows'
+        continue-on-error: true
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ui/build/compose/binaries/main/msi/*.msi
+
+      - name: Retry Windows MSI provenance attestation
+        if: >-
+          matrix.platform == 'windows' &&
+          steps.attest-windows-msi.outcome == 'failure'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: ui/build/compose/binaries/main/msi/*.msi
@@ -461,6 +481,7 @@ jobs:
               --source-sha "${NIGHTLY_SHA}" \
               --source-run-url "${SOURCE_RUN_URL}" \
               --available "${available_platforms}" \
+              --assets dist \
               --output "${RUNNER_TEMP}/release-notes.md"
           }
           write_release_notes "${STAGED_AVAILABLE_PLATFORMS}"
@@ -519,7 +540,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${NIGHTLY_VERSION}"
+              --title "nati.ve ${NIGHTLY_VERSION}"
           fi
 
           canonical="${RUNNER_TEMP}/canonical-release-assets"
@@ -541,14 +562,22 @@ jobs:
           echo "successful=${canonical_successful}" >>"${GITHUB_OUTPUT}"
           echo "available=${canonical_available}" >>"${GITHUB_OUTPUT}"
 
-          write_release_notes "${canonical_available}"
+          rm -f "${canonical}/SHA256SUMS"
+          node tools/nightly-release-notes.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${NIGHTLY_TAG}" \
+            --source-sha "${NIGHTLY_SHA}" \
+            --source-run-url "${SOURCE_RUN_URL}" \
+            --available "${canonical_available}" \
+            --assets "${canonical}" \
+            --output "${RUNNER_TEMP}/release-notes.md"
           gh release edit "${NIGHTLY_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --prerelease \
             --latest=false \
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
-            --title "Nextcloud Native ${NIGHTLY_VERSION}"
+            --title "nati.ve ${NIGHTLY_VERSION}"
 
           if [[ "${canonical_successful}" -ge 3 ]]; then
             if tools/has-direct-desktop-update-assets.sh "${canonical}"; then
@@ -653,7 +682,7 @@ jobs:
       - source
       - publish
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     concurrency:
       group: app-nightly-channel
       cancel-in-progress: false
@@ -677,6 +706,14 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern '*update-manifest.json' \
             --dir channel
+          gh release download "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern '*.apk' \
+            --pattern '*.deb' \
+            --pattern '*.rpm' \
+            --pattern '*.msi' \
+            --pattern '*.dmg' \
+            --dir channel
           android_manifest="-"
           desktop_manifest="-"
           [[ -f channel/update-manifest.json ]] && android_manifest=channel/update-manifest.json
@@ -689,3 +726,8 @@ jobs:
             "${android_manifest}" \
             "${desktop_manifest}" \
             1
+          tools/promote-download-channel.sh \
+            "${GITHUB_REPOSITORY}" \
+            channel-nightly \
+            "${NIGHTLY_TAG}" \
+            channel

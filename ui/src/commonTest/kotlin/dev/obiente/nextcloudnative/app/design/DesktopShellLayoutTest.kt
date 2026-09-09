@@ -50,6 +50,16 @@ class DesktopShellLayoutTest {
         assertEquals(252, layout.navigationWidthDp)
         assertNull(layout.contentMaximumWidthDp)
         assertTrue(layout.supportsAuxiliaryPane)
+        assertEquals(
+            listOf(
+                NextcloudDestination.Home,
+                NextcloudDestination.FolderSync,
+                NextcloudDestination.Activity,
+                NextcloudDestination.Apps,
+                NextcloudDestination.Settings,
+            ),
+            DesktopNextcloudNavigationItems.map(NextcloudNavigationItem::destination),
+        )
     }
 
     @Test
@@ -66,27 +76,110 @@ class DesktopShellLayoutTest {
     }
 
     @Test
+    fun `desktop can collapse without changing the workspace layout contract`() {
+        val collapsed = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+            desktopSidebarExpanded = false,
+        )
+        val expanded = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+            desktopSidebarExpanded = true,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, collapsed.navigationStyle)
+        assertEquals(76, collapsed.navigationWidthDp)
+        assertEquals(NextcloudNavigationStyle.ExpandedSidebar, expanded.navigationStyle)
+        assertEquals(252, expanded.navigationWidthDp)
+        assertNull(collapsed.contentMaximumWidthDp)
+        assertTrue(collapsed.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `expanded preference cannot crowd a narrow desktop window`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 640,
+            destination = NextcloudDestination.Home,
+            desktopSidebarExpanded = true,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
+        assertEquals(76, layout.navigationWidthDp)
+        assertFalse(layout.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `desktop sidebar preference does not affect adaptive presentation`() {
+        val defaultLayout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Adaptive,
+            availableWidthDp = 840,
+            destination = NextcloudDestination.Apps,
+        )
+        val desktopPreference = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Adaptive,
+            availableWidthDp = 840,
+            destination = NextcloudDestination.Apps,
+            desktopSidebarExpanded = false,
+        )
+
+        assertEquals(defaultLayout, desktopPreference)
+    }
+
+    @Test
+    fun `desktop app workspace keeps the useful expanded global sidebar`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_440,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+        )
+
+        assertEquals(NextcloudNavigationStyle.ExpandedSidebar, layout.navigationStyle)
+        assertEquals(252, layout.navigationWidthDp)
+        assertTrue(layout.supportsAuxiliaryPane)
+    }
+
+    @Test
+    fun `narrow desktop app workspace still collapses to a rail`() {
+        val layout = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 760,
+            destination = NextcloudDestination.Apps,
+            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+        )
+
+        assertEquals(NextcloudNavigationStyle.CompactRail, layout.navigationStyle)
+        assertEquals(76, layout.navigationWidthDp)
+    }
+
+    @Test
     fun `desktop shell persists while app and detail screens are open`() {
         assertTrue(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Desktop,
-                isRootScreen = false,
+                isRootOrAppWorkspace = false,
             ),
         )
     }
 
     @Test
-    fun `adaptive shell remains limited to root destinations`() {
+    fun `adaptive shell persists for root destinations and top-level app workspaces`() {
         assertTrue(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Adaptive,
-                isRootScreen = true,
+                isRootOrAppWorkspace = true,
             ),
         )
         assertFalse(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Adaptive,
-                isRootScreen = false,
+                isRootOrAppWorkspace = false,
             ),
         )
     }

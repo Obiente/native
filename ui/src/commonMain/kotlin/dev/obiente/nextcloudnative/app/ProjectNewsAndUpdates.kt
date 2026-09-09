@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
-const val PROJECT_NEWS_FEED_URL = "https://nc-native.obiente.dev/news-feed-v1.json"
+const val PROJECT_NEWS_FEED_URL = "https://nati.ve/news-feed-v1.json"
 const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
 const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
@@ -91,6 +91,11 @@ sealed interface AppUpdateInstallState {
         val versionCode: Long,
     ) : AppUpdateInstallState
 
+    data class Installing(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
+
     data class PermissionRequired(
         val versionName: String,
         val versionCode: Long,
@@ -116,6 +121,11 @@ sealed interface AppUpdateInstallState {
         val versionName: String,
         val versionCode: Long,
     ) : AppUpdateInstallState
+
+    data class Installed(
+        val versionName: String,
+        val versionCode: Long,
+    ) : AppUpdateInstallState
 }
 
 sealed interface AppUpdateRelease {
@@ -123,7 +133,17 @@ sealed interface AppUpdateRelease {
     val versionCode: Long
     val packageSize: Long
     val releaseNotesUrl: String
+    val changes: List<AppUpdateChange>
 }
+
+@Serializable
+data class AppUpdateChange(
+    val id: String,
+    val category: String,
+    val summary: String,
+    val platforms: List<String>,
+    val introducedSourceSequence: Long,
+)
 
 @Serializable
 data class AndroidDirectRelease(
@@ -138,6 +158,7 @@ data class AndroidDirectRelease(
     val apkSha256: String,
     val signingCertificateSha256Digests: List<String>,
     override val releaseNotesUrl: String,
+    override val changes: List<AppUpdateChange> = emptyList(),
 ) : AppUpdateRelease {
     override val packageSize: Long get() = apkSize
 }
@@ -151,6 +172,7 @@ data class DesktopUpdateManifest(
     val packageVersion: String,
     val releaseNotesUrl: String,
     val assets: List<DesktopUpdateAsset>,
+    val changes: List<AppUpdateChange> = emptyList(),
 )
 
 @Serializable
@@ -170,9 +192,35 @@ data class DesktopDirectRelease(
     val packageVersion: String,
     val asset: DesktopUpdateAsset,
     override val releaseNotesUrl: String,
+    override val changes: List<AppUpdateChange> = emptyList(),
 ) : AppUpdateRelease {
     override val packageSize: Long get() = asset.size
 }
+
+fun appUpdateChangesSince(
+    currentVersionCode: Long,
+    release: AppUpdateRelease,
+): List<AppUpdateChange> {
+    val currentSequence = appUpdateSourceSequence(currentVersionCode) ?: return emptyList()
+    val targetSequence = appUpdateSourceSequence(release.versionCode) ?: return emptyList()
+    return release.changes
+        .filter { change ->
+            change.introducedSourceSequence in (currentSequence + 1)..targetSequence &&
+                change.appliesTo(release)
+        }
+        .distinctBy(AppUpdateChange::id)
+}
+
+private fun AppUpdateChange.appliesTo(release: AppUpdateRelease): Boolean {
+    val applicablePlatforms = when (release) {
+        is AndroidDirectRelease -> setOf("all", "android")
+        is DesktopDirectRelease -> setOf("all", "desktop", release.asset.platform)
+    }
+    return platforms.any(applicablePlatforms::contains)
+}
+
+private fun appUpdateSourceSequence(versionCode: Long): Long? =
+    versionCode.takeIf { it > 20_000_000L }?.let { (it - 20_000_000L) / 10L }
 
 data class AppUpdatePreferences(
     val automaticChecks: Boolean = true,
@@ -192,19 +240,32 @@ enum class AndroidUpdateChannel(
     Stable("stable", "stable-v1", "channel-stable", false),
 }
 
+/**
+ * The direct release track is intentionally pinned to Nightly while the product is pre-alpha.
+ *
+ * Keep the other channel contracts intact so selection can be restored without another storage
+ * migration once curated prereleases accurately describe the product's maturity.
+ */
+val enforcedAppUpdateChannel: AndroidUpdateChannel = AndroidUpdateChannel.Nightly
+
+val appUpdateChannelSelectionLocked: Boolean = true
+
 fun AndroidUpdateChannel.manifestUrl(): String {
     require(available) { "$name updates are not available yet." }
-    return "https://github.com/Obiente/nc-native/releases/download/$pointerTag/update-manifest.json"
+    return "https://github.com/obiente/native/releases/download/$pointerTag/update-manifest.json"
 }
 
 fun AndroidUpdateChannel.desktopManifestUrl(): String {
     require(available) { "$name updates are not available yet." }
-    return "https://github.com/Obiente/nc-native/releases/download/" +
+    return "https://github.com/obiente/native/releases/download/" +
         "$pointerTag/desktop-update-manifest.json"
 }
 
 fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
-    AndroidUpdateChannel.entries
+    if (appUpdateChannelSelectionLocked) {
+        enforcedAppUpdateChannel
+    } else {
+        AndroidUpdateChannel.entries
         .singleOrNull { channel ->
             channel.available &&
                 (
@@ -213,7 +274,8 @@ fun parseAndroidUpdateChannel(value: String?): AndroidUpdateChannel =
                         channel.manifestChannel == value
                     )
         }
-        ?: AndroidUpdateChannel.Alpha
+        ?: enforcedAppUpdateChannel
+    }
 
 sealed interface AppUpdateCheckResult {
     data class Current(val support: AppUpdateSupport) : AppUpdateCheckResult
@@ -231,19 +293,29 @@ sealed interface AppUpdateCheckResult {
 
 sealed interface AppUpdateInstallResult {
     data object ConfirmationOpened : AppUpdateInstallResult
+    data object Restarting : AppUpdateInstallResult
+    data object Installed : AppUpdateInstallResult
     data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
-    data class Rejected(val message: String) : AppUpdateInstallResult
+    data class Rejected(
+        val message: String,
+        val diagnosticCode: String = "rejected",
+    ) : AppUpdateInstallResult
 }
 
-private val publicContentJson = Json {
+private val strictPublicContentJson = Json {
     ignoreUnknownKeys = false
+    isLenient = false
+}
+
+private val updateMetadataJson = Json {
+    ignoreUnknownKeys = true
     isLenient = false
 }
 
 fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
     require(bytes.isNotEmpty() && bytes.size <= MAX_PROJECT_NEWS_FEED_BYTES)
-    val feed = publicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
+    val feed = strictPublicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
     require(feed.schemaVersion == 1)
     require(feed.feedRevision.isSha256())
     require(feed.entries.size in 1..100)
@@ -260,7 +332,8 @@ fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
         require(article.tags.size <= 12 && article.tags.all { it.isBoundedPublicText(48) })
         require(article.bodyMarkdown.isBoundedMarkdown(64 * 1024))
         require(
-            article.webUrl == "https://nc-native.obiente.dev/news/${article.id}/",
+            article.webUrl == "https://nc-native.obiente.dev/news/${article.id}/" ||
+                article.webUrl == "https://nati.ve/news/${article.id}/",
         )
         require(article.contentSha256.isSha256())
         require(
@@ -316,7 +389,7 @@ fun parseAndroidDirectRelease(
 ): AndroidDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_UPDATE_METADATA_BYTES)
     require(isCanonicalAndroidUpdateManifestUrl(metadataUrl, expectedChannel))
-    val release = publicContentJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
+    val release = updateMetadataJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
     return validateAndroidDirectRelease(release, expectedChannel, metadataUrl)
 }
 
@@ -342,20 +415,21 @@ fun validateAndroidDirectRelease(
     )
     val tag = release.releaseTag(expectedChannel)
     require(
-        metadataUrl == expectedChannel.manifestUrl() ||
-            metadataUrl ==
-            "https://github.com/Obiente/nc-native/releases/download/$tag/update-manifest.json",
+        metadataUrl.canonicalReleaseRepositoryUrl() == expectedChannel.manifestUrl() ||
+            metadataUrl.canonicalReleaseRepositoryUrl() ==
+            "https://github.com/obiente/native/releases/download/$tag/update-manifest.json",
     )
     require(
-        release.apkUrl.hasCanonicalPathUnder(
-            "https://github.com/Obiente/nc-native/releases/download/$tag/",
+        release.apkUrl.canonicalReleaseRepositoryUrl().hasCanonicalPathUnder(
+            "https://github.com/obiente/native/releases/download/$tag/",
             trailingSlash = false,
         ) && release.apkUrl.endsWith(".apk"),
     )
     require(
-        release.releaseNotesUrl ==
-            "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        release.releaseNotesUrl.canonicalReleaseRepositoryUrl() ==
+            "https://github.com/obiente/native/releases/tag/$tag",
     )
+    validateAppUpdateChanges(release.versionCode, release.changes)
     return release
 }
 
@@ -375,7 +449,7 @@ fun parseDesktopDirectRelease(
 ): DesktopDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_DESKTOP_UPDATE_METADATA_BYTES)
     require(isCanonicalDesktopUpdateManifestUrl(metadataUrl, expectedChannel))
-    val manifest = publicContentJson.decodeFromString<DesktopUpdateManifest>(bytes.decodeToString())
+    val manifest = updateMetadataJson.decodeFromString<DesktopUpdateManifest>(bytes.decodeToString())
     validateDesktopUpdateManifest(manifest, expectedChannel, metadataUrl)
     val asset = manifest.assets.singleOrNull { candidate ->
         candidate.platform == platform &&
@@ -389,6 +463,7 @@ fun parseDesktopDirectRelease(
         packageVersion = manifest.packageVersion,
         asset = asset,
         releaseNotesUrl = manifest.releaseNotesUrl,
+        changes = manifest.changes,
     )
 }
 
@@ -409,15 +484,16 @@ fun validateDesktopUpdateManifest(
     )
     val tag = releaseTag(expectedChannel, manifest.versionName)
     require(
-        metadataUrl == expectedChannel.desktopManifestUrl() ||
-            metadataUrl ==
-            "https://github.com/Obiente/nc-native/releases/download/" +
+        metadataUrl.canonicalReleaseRepositoryUrl() == expectedChannel.desktopManifestUrl() ||
+            metadataUrl.canonicalReleaseRepositoryUrl() ==
+            "https://github.com/obiente/native/releases/download/" +
             "$tag/desktop-update-manifest.json",
     )
     require(
-        manifest.releaseNotesUrl ==
-            "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        manifest.releaseNotesUrl.canonicalReleaseRepositoryUrl() ==
+            "https://github.com/obiente/native/releases/tag/$tag",
     )
+    validateAppUpdateChanges(manifest.versionCode, manifest.changes)
     manifest.assets.forEach { asset ->
         require(asset.platform in setOf("linux", "windows", "macos"))
         require(
@@ -432,8 +508,8 @@ fun validateDesktopUpdateManifest(
         require(asset.size in 1..MAX_DESKTOP_UPDATE_PACKAGE_BYTES)
         require(asset.sha256.isSha256())
         require(
-            asset.url.hasCanonicalPathUnder(
-                "https://github.com/Obiente/nc-native/releases/download/$tag/",
+            asset.url.canonicalReleaseRepositoryUrl().hasCanonicalPathUnder(
+                "https://github.com/obiente/native/releases/download/$tag/",
                 trailingSlash = false,
             ) && asset.url.endsWith(".${asset.format}"),
         )
@@ -441,15 +517,56 @@ fun validateDesktopUpdateManifest(
     return manifest
 }
 
+private fun validateAppUpdateChanges(versionCode: Long, changes: List<AppUpdateChange>) {
+    if (changes.isEmpty()) return
+    val targetSequence = requireNotNull(appUpdateSourceSequence(versionCode))
+    require(changes.size <= 1_000 && changes.distinctBy(AppUpdateChange::id).size == changes.size)
+    changes.forEach { change ->
+        require(change.id.matches(Regex("[a-z0-9]+(?:-[a-z0-9]+)*")))
+        require(change.category in setOf("feature", "fix", "security", "platform", "docs"))
+        require(change.summary.isBoundedPublicText(320))
+        require(
+            change.platforms.isNotEmpty() &&
+                change.platforms.size <= 8 &&
+                change.platforms.distinct().size == change.platforms.size &&
+                change.platforms.all { it in setOf("all", "android", "desktop", "ios", "linux", "macos", "windows") },
+        )
+        require(change.introducedSourceSequence in 1..targetSequence)
+    }
+}
+
+private fun String.canonicalReleaseRepositoryUrl(): String {
+    val legacyPrefixes = listOf(
+        "https://github.com/Obiente/nc-native/releases/",
+        "https://github.com/Obiente/native/releases/",
+    )
+    val prefix = legacyPrefixes.firstOrNull(::startsWith) ?: return this
+    return "https://github.com/obiente/native/releases/" + removePrefix(prefix)
+}
+
+fun canonicalReleaseDownloadRequestUrl(url: String): String {
+    val canonical = url.canonicalReleaseRepositoryUrl()
+    require(canonical.hasCanonicalPathUnder(
+        "https://github.com/obiente/native/releases/download/", trailingSlash = false,
+    ))
+    return canonical
+}
+
+fun canonicalProjectNewsImageRequestUrl(url: String): String {
+    require(isCanonicalProjectNewsImageUrl(url))
+    return url.replace("https://nc-native.obiente.dev/", "https://nati.ve/")
+}
+
 fun isCanonicalDesktopUpdateManifestUrl(
     url: String,
     channel: AndroidUpdateChannel,
 ): Boolean {
+    val canonicalUrl = url.canonicalReleaseRepositoryUrl()
     if (!channel.available) return false
-    if (url == channel.desktopManifestUrl()) return true
-    val prefix = "https://github.com/Obiente/nc-native/releases/download/"
-    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
-    val path = url.removePrefix(prefix).split('/')
+    if (canonicalUrl == channel.desktopManifestUrl()) return true
+    val prefix = "https://github.com/obiente/native/releases/download/"
+    if (!canonicalUrl.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = canonicalUrl.removePrefix(prefix).split('/')
     return path.size == 2 &&
         path[0].matches(channel.releaseTagPattern()) &&
         path[1] == "desktop-update-manifest.json"
@@ -468,11 +585,12 @@ fun isCanonicalAndroidUpdateManifestUrl(
     url: String,
     channel: AndroidUpdateChannel,
 ): Boolean {
+    val canonicalUrl = url.canonicalReleaseRepositoryUrl()
     if (!channel.available) return false
-    if (url == channel.manifestUrl()) return true
-    val prefix = "https://github.com/Obiente/nc-native/releases/download/"
-    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
-    val path = url.removePrefix(prefix).split('/')
+    if (canonicalUrl == channel.manifestUrl()) return true
+    val prefix = "https://github.com/obiente/native/releases/download/"
+    if (!canonicalUrl.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = canonicalUrl.removePrefix(prefix).split('/')
     return path.size == 2 &&
         path[0].matches(channel.releaseTagPattern()) &&
         path[1] == "update-manifest.json"
@@ -510,12 +628,13 @@ private fun AndroidDirectRelease.canonicalMetadataUrl(
 ): String {
     require(expectedChannel.available)
     require(channel == expectedChannel.manifestChannel)
-    return "https://github.com/Obiente/nc-native/releases/download/" +
+    return "https://github.com/obiente/native/releases/download/" +
         "${releaseTag(expectedChannel)}/update-manifest.json"
 }
 
 fun isCanonicalProjectNewsImageUrl(url: String): Boolean =
-    url.hasCanonicalPathUnder("https://nc-native.obiente.dev/screenshots/", trailingSlash = false) &&
+    (url.hasCanonicalPathUnder("https://nc-native.obiente.dev/screenshots/", trailingSlash = false) ||
+        url.hasCanonicalPathUnder("https://nati.ve/screenshots/", trailingSlash = false)) &&
         url.endsWith(".png")
 
 private fun String.hasCanonicalPathUnder(
@@ -550,3 +669,12 @@ private fun String.isBoundedMarkdown(maxLength: Int): Boolean =
         none { character ->
             character.isISOControl() && character != '\n' && character != '\r' && character != '\t'
         }
+
+fun AppUpdateInstallResult.diagnosticOutcome(): String = when (this) {
+    AppUpdateInstallResult.ConfirmationOpened -> "confirmation-opened"
+    AppUpdateInstallResult.Restarting -> "restarting"
+    AppUpdateInstallResult.Installed -> "installed"
+    is AppUpdateInstallResult.Cancelled -> "cancelled"
+    is AppUpdateInstallResult.PermissionRequired -> "permission-required"
+    is AppUpdateInstallResult.Rejected -> "rejected"
+}

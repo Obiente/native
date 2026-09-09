@@ -15,6 +15,55 @@ import kotlin.test.assertTrue
 
 class DynamicAppDescriptorCompilerTest {
     @Test
+    fun `typed collection items do not replace their parent route identity`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Shared tasks","version":"1"},
+              "servers":[{"url":"/apps/tasks"}],
+              "paths":{
+                "/api/teams/{teamId}/tasks":{
+                  "parameters":[
+                    {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"tasks-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"tasks-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object","required":["title"],"properties":{"title":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("tasks", "Tasks", "1"),
+                endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/apps/tasks")),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/apps/tasks/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        assertTrue(descriptor.actions.isNotEmpty())
+        assertTrue(descriptor.actions.all { action ->
+            action.binding.path == "/apps/tasks/api/teams/{teamId}/tasks" &&
+                action.binding.pathParameters.single().name == "teamId"
+        })
+    }
+
+    @Test
     fun `read response fields remain separate from write-only resource fields`() {
         val document = """
             {
@@ -258,6 +307,7 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals("lists", list.resourceId)
         assertEquals(list.resourceId, create.resourceId)
         assertEquals(ActionIntent.create, create.intent)
+        assertEquals("/ocs/v2.php/apps/example/api/houses/{houseId}/lists", create.binding.path)
         assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
         assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
         assertTrue(descriptor.validationErrors().isEmpty())
@@ -620,7 +670,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun cookbookReleaseServersWithEquivalentPathBasesCompileAgainstAuthenticatedOrigin() {
+    fun cookbookReleaseServersWithConcreteForeignOriginAreRejected() {
         val document = """
             {
               "openapi": "3.0.1",
@@ -678,11 +728,10 @@ class DynamicAppDescriptorCompilerTest {
             ),
         )
 
-        val descriptor = DynamicAppDescriptorCompiler().compile(cookbookInput)
-
-        assertEquals("/apps/cookbook/api/v1/recipes", descriptor.actions.single().binding.path)
-        assertEquals(LayoutKind.list, descriptor.layouts.single().kind)
-        assertTrue(descriptor.validationErrors().isEmpty())
+        val failure = assertFailsWith<IllegalArgumentException> {
+            DynamicAppDescriptorCompiler().compile(cookbookInput)
+        }
+        assertTrue(failure.message.orEmpty().contains("Concrete cross-origin OpenAPI server rebasing"))
     }
 
     @Test
@@ -971,8 +1020,8 @@ class DynamicAppDescriptorCompilerTest {
                     "tags":["lists"],
                     "requestBody":{"required":true,"content":{"application/json":{"schema":{
                       "type":"object",
-                      "required":["name"],
-                      "properties":{"name":{"type":"string"},"color":{"type":"string"}}
+                      "required":["id","name"],
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"},"color":{"type":"string"}}
                     }}}},
                     "responses":{"201":{"description":"Created"}}
                   }
@@ -984,6 +1033,7 @@ class DynamicAppDescriptorCompilerTest {
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
         val house = descriptor.actions.single { action -> action.id == "house-index" }
         val lists = descriptor.actions.single { action -> action.id == "list-index" }
+        val createList = descriptor.actions.single { action -> action.id == "list-create" }
         val listResource = descriptor.resources.single { resource -> resource.id == lists.resourceId }
 
         assertEquals(house.resourceId, descriptor.actions.single { it.id == "house-show" }.resourceId)
@@ -995,6 +1045,66 @@ class DynamicAppDescriptorCompilerTest {
             },
             "links=${descriptor.links}",
         )
+        assertEquals("/apps/example/api/houses/{houseId}/lists", createList.binding.path)
+        assertEquals(listOf("houseId"), createList.binding.pathParameters.map(HttpParameter::name))
+        assertEquals(
+            listOf("color", "id", "name"),
+            descriptor.forms.single { it.actionId == createList.id }.fields.map(FormField::fieldId),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `nested collections prefer the exact plural parent over a singular sibling resource`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Inventory","version":"1"},
+              "paths":{
+                "/apps/example/api/config/table/{id}":{
+                  "parameters":[
+                    {"name":"id","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"config-get-table",
+                    "tags":["table"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object","properties":{"displayMode":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables":{
+                  "get":{
+                    "operationId":"tables-index",
+                    "tags":["tables"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables/{tableId}/columns":{
+                  "parameters":[
+                    {"name":"tableId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"columns-index",
+                    "tags":["columns"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val columnsLink = descriptor.links.single { link ->
+            (link.target as? DynamicLinkTarget.Action)?.actionId == "columns-index"
+        }
+
+        assertEquals("tables", columnsLink.resourceId)
+        assertEquals("id", columnsLink.sourceFieldId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
@@ -1096,8 +1206,8 @@ class DynamicAppDescriptorCompilerTest {
         val conflicting = OPEN_API.replace(
             "\"servers\": [{ \"url\": \"/ocs/v2.php/apps/tables/api/2\" }]",
             """"servers": [
-                { "url": "https://one.example/ocs/v2.php/apps/tables/api/2" },
-                { "url": "https://two.example/ocs/v2.php/apps/tables/api/3" }
+                { "url": "https://{hostOne}/ocs/v2.php/apps/tables/api/2" },
+                { "url": "https://{hostTwo}/ocs/v2.php/apps/tables/api/3" }
             ]""",
         )
         val failure = assertFailsWith<IllegalArgumentException> {
@@ -2010,6 +2120,19 @@ class DynamicAppDescriptorCompilerTest {
                 "/apps/example/api/widgets/reorder":{
                   "post":{"operationId":"widgets-reorder","summary":"Reorder widgets","responses":{"200":{"description":"OK"}}}
                 },
+                "/apps/example/api/teams/{teamId}/invites":{
+                  "parameters":[{"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"invite-user-to-team",
+                    "summary":"Invite member",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["userId"],
+                      "properties":{"userId":{"type":"string"}}
+                    }}}},
+                    "responses":{"201":{"description":"Invited"}}
+                  }
+                },
                 "/apps/example/api/widgets/trash":{
                   "delete":{"operationId":"widgets-empty-trash","summary":"Empty trash","responses":{"204":{"description":"Empty"}}}
                 },
@@ -2052,8 +2175,18 @@ class DynamicAppDescriptorCompilerTest {
                   "post":{"operationId":"widgets-batch-delete","summary":"Delete selected widgets","responses":{"200":{"description":"OK"}}}
                 },
                 "/apps/example/api/widgets/upload":{
-                  "post":{"operationId":"widgets-upload","summary":"Upload widgets","responses":{"200":{"description":"OK"}}}
+                  "post":{
+                    "operationId":"widgets-upload",
+                    "summary":"Upload widgets",
+                    "requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{
+                      "type":"object",
+                      "required":["file"],
+                      "properties":{"file":{"type":"string","format":"binary"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
                 },
+                $DYNAMIC_ACTION_SEMANTIC_EXTENSION_PATHS
                 "/apps/example/api/workspaces/{workspaceId}":{
                   "parameters":[{"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}],
                   "get":{
@@ -2075,51 +2208,40 @@ class DynamicAppDescriptorCompilerTest {
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
         val actions = descriptor.actions.associateBy(DynamicAction::id)
 
-        fun assertAction(
-            id: String,
-            effect: ActionEffect,
-            intent: ActionIntent,
-            risk: ActionRisk,
-            requiresConfirmation: Boolean,
-        ) {
-            val action = assertNotNull(actions[id])
-            assertEquals(effect, action.effect, id)
-            assertEquals(intent, action.intent, id)
-            assertEquals(risk, action.risk, id)
-            assertEquals(requiresConfirmation, action.requiresConfirmation, id)
-        }
-
-        assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
-        assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
-        assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-restore", ActionEffect.restore, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-archive", ActionEffect.archive, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-unarchive", ActionEffect.unarchive, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-copy", ActionEffect.copy, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction(
+        actions.assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        actions.assertAction("invite-user-to-team", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        actions.assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
+        actions.assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-restore", ActionEffect.restore, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-archive", ActionEffect.archive, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-unarchive", ActionEffect.unarchive, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-copy", ActionEffect.copy, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction(
             "widget-delete-permanently",
             ActionEffect.permanentDelete,
             ActionIntent.delete,
             ActionRisk.destructive,
             true,
         )
-        assertAction(
+        actions.assertAction(
             "widgets-empty-trash",
             ActionEffect.empty,
             ActionIntent.delete,
             ActionRisk.destructive,
             true,
         )
-        assertAction(
+        actions.assertAction(
             "widgets-batch-delete",
             ActionEffect.batch,
             ActionIntent.execute,
             ActionRisk.destructive,
             true,
         )
-        assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
+        actions.assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widgets-import", ActionEffect.execute, ActionIntent.execute, ActionRisk.mutating, false)
+        assertEquals("categories", actions.getValue("category-rename").resourceId)
+        actions.assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
         assertEquals("widgets", actions.getValue("widget-show").resourceId)
         assertTrue(
             actions.values

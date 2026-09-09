@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { news } from "../src/generated/news.js";
+import { guides } from "../src/generated/guides.js";
 import {
   metadataFor,
   sharingHeadFor,
@@ -23,6 +24,25 @@ test("social cards use the contextual page image", async () => {
     height: article.imageHeight,
     type: "image/png",
   });
+});
+
+test("platform guide metadata has a distinct canonical route and contextual image", () => {
+  const guide = guides.find((entry) => entry.platform === "Android");
+  assert.ok(guide);
+  const metadata = metadataFor(guide.path);
+  assert.equal(metadata.canonical, `${siteUrl}${guide.path}`);
+  assert.equal(metadata.image, `${siteUrl}${guide.websiteImageDark}`);
+
+  const hub = metadataFor("/guides/android/");
+  assert.equal(hub.canonical, `${siteUrl}/guides/android/`);
+  assert.match(hub.title, /Android/u);
+  assert.match(hub.description, /Android/u);
+});
+
+test("internal visual QA remains reachable without entering the search index", () => {
+  const metadata = metadataFor("/visual-qa/");
+  assert.equal(metadata.canonical, `${siteUrl}/visual-qa/`);
+  assert.equal(metadata.robots, "noindex,follow");
 });
 
 test("rendered head contains complete route-specific sharing metadata", async () => {

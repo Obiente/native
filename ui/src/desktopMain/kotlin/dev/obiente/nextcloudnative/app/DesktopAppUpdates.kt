@@ -1,14 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
-import com.sun.jna.platform.win32.Shell32
-import com.sun.jna.platform.win32.WinUser
 import java.awt.Desktop
 import java.io.File
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import kotlinx.coroutines.CancellationException
@@ -35,6 +38,18 @@ internal data class DesktopUpdateTarget(
     val format: String,
     val architecture: String,
 )
+
+internal fun canUseDirectDesktopUpdates(
+    buildIdentity: DesktopUpdateBuildIdentity,
+    target: DesktopUpdateTarget?,
+): Boolean = target != null &&
+    buildIdentity.versionCode > 0 &&
+    buildIdentity.directPackageUpdates
+
+internal enum class DesktopPackageInstallerOutcome {
+    InstallerHandoffStarted,
+    InstallationCompleted,
+}
 
 internal fun currentDesktopUpdateBuildIdentity(): DesktopUpdateBuildIdentity =
     DesktopUpdateBuildIdentity(
@@ -93,6 +108,27 @@ internal fun detectInstalledDesktopPackageFormat(
     }
 }
 
+internal fun detectInstalledDesktopPackageVersion(
+    target: DesktopUpdateTarget,
+    packageQueryOutput: (List<String>) -> String? = ::desktopPackageQueryOutput,
+): String? = when {
+    target.platform != "linux" -> null
+    target.format == "rpm" -> packageQueryOutput(
+        listOf("/usr/bin/rpm", "--query", "--queryformat=%{VERSION}", DESKTOP_PACKAGE_NAME),
+    )
+    target.format == "deb" -> packageQueryOutput(
+        listOf("/usr/bin/dpkg-query", "--show", "--showformat=\${Version}", DESKTOP_PACKAGE_NAME),
+    )
+    else -> null
+}?.takeIf(String::isNotBlank)
+
+internal fun requireInstalledDesktopPackageVersion(installedVersion: String?, expectedVersion: String) {
+    check(installedVersion == expectedVersion) {
+        "The system installer finished, but package version " +
+            "${installedVersion ?: "could not be read"} is installed instead of $expectedVersion."
+    }
+}
+
 private fun desktopPackageQueryOutput(command: List<String>): String? = runCatching {
     val process = ProcessBuilder(command)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
@@ -116,7 +152,9 @@ internal class DesktopAppUpdater(
     private val updateDirectory: File = defaultDesktopUpdateDirectory(),
     private val client: OkHttpClient = buildDesktopUpdateHttpClient(),
     private val prepareInstaller: (File, DesktopDirectRelease) -> Unit = ::prepareDesktopPackageInstaller,
-    private val openInstaller: (File) -> Unit = ::openDesktopPackageInstaller,
+    private val openInstaller: (File) -> DesktopPackageInstallerOutcome = ::openDesktopPackageInstaller,
+    private val installedPackageVersion: (DesktopUpdateTarget) -> String? = ::detectInstalledDesktopPackageVersion,
+    private val onInstallerConfirmationOpened: (DesktopUpdateTarget) -> Unit = {},
 ) {
     private val mutableCheckResult = MutableStateFlow<AppUpdateCheckResult?>(null)
     private val mutableInstallState = MutableStateFlow<AppUpdateInstallState>(AppUpdateInstallState.Idle)
@@ -126,10 +164,7 @@ internal class DesktopAppUpdater(
     @Volatile private var cancellationRequested = false
 
     fun support(): AppUpdateSupport {
-        val canUpdate = buildIdentity.releaseBuild &&
-            buildIdentity.directPackageUpdates &&
-            target != null &&
-            buildIdentity.versionCode > 0
+        val canUpdate = canUseDirectDesktopUpdates(buildIdentity, target)
         return AppUpdateSupport(
             channel = if (canUpdate) {
                 AppDistributionChannel.DirectDesktopPackage
@@ -139,12 +174,19 @@ internal class DesktopAppUpdater(
             currentVersionName = buildIdentity.versionName,
             currentVersionCode = buildIdentity.versionCode,
             canCheckDirectUpdates = canUpdate,
-            explanation = if (canUpdate) {
-                "This native package checks the selected release channel, matches downloads to its advertised " +
-                    "checksum, and uses your system installer."
-            } else {
-                "Development, distribution-managed, and unsupported desktop packages are updated through " +
-                    "their distribution workflow."
+            explanation = when {
+                canUpdate && !buildIdentity.releaseBuild ->
+                    "This development build can update to a newer release from the selected channel. Downloads " +
+                        "are matched to their advertised checksum before using your system installer."
+                canUpdate ->
+                    "This native package checks the selected release channel, matches downloads to its advertised " +
+                        "checksum, and uses your system installer."
+                !buildIdentity.releaseBuild ->
+                    "This development build cannot check for updates directly. Install a newer development build " +
+                        "or release through the same download or package workflow that provided this build."
+                else ->
+                    "Distribution-managed and unsupported desktop packages are updated through their distribution " +
+                        "workflow."
             },
         )
     }
@@ -227,19 +269,30 @@ internal class DesktopAppUpdater(
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val desktopRelease = release as? DesktopDirectRelease
-            ?: return AppUpdateInstallResult.Rejected("This is not a desktop update package.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "This is not a desktop update package.",
+                "desktop-package-type",
+            )
         if (desktopRelease.updateChannel != updateChannel()) {
             return AppUpdateInstallResult.Rejected(
                 "The update channel changed. Check again before downloading this package.",
+                "desktop-channel-changed",
             )
         }
         if (!updateMutex.tryLock()) {
-            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+            return AppUpdateInstallResult.Rejected(
+                "An app update is already in progress.",
+                "desktop-already-running",
+            )
         }
+        var diagnosticStage = "preflight"
         try {
             val support = support()
             if (!support.canCheckDirectUpdates || !isNewerAppRelease(support.currentVersionCode, desktopRelease)) {
-                return AppUpdateInstallResult.Rejected("This release cannot update the installed desktop package.")
+                return AppUpdateInstallResult.Rejected(
+                    "This release cannot update the installed desktop package.",
+                    "desktop-release-ineligible",
+                )
             }
             val selectedTarget = requireNotNull(target)
             check(desktopRelease.asset.platform == selectedTarget.platform)
@@ -248,6 +301,7 @@ internal class DesktopAppUpdater(
             check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
                 "Could not create the desktop app-update cache."
             }
+            diagnosticStage = "cache"
             val packageFile = File(updateDirectory, desktopRelease.asset.url.substringAfterLast('/'))
             val temporary = File(updateDirectory, "${packageFile.name}.part")
             cleanupDesktopUpdatePackages(updateDirectory, activePartial = temporary)
@@ -260,6 +314,7 @@ internal class DesktopAppUpdater(
                 totalBytes = desktopRelease.asset.size,
                 resumedFromBytes = 0,
             )
+            diagnosticStage = "download"
             downloadDesktopUpdatePackage(
                 client = client,
                 release = desktopRelease,
@@ -280,6 +335,7 @@ internal class DesktopAppUpdater(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            diagnosticStage = "verification"
             check(temporary.sha256() == desktopRelease.asset.sha256) {
                 "Update checksum verification failed."
             }
@@ -288,13 +344,35 @@ internal class DesktopAppUpdater(
                 packageFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING,
             )
+            diagnosticStage = "installer-preparation"
             prepareInstaller(packageFile, desktopRelease)
-            openInstaller(packageFile)
-            mutableInstallState.value = AppUpdateInstallState.ConfirmationOpened(
+            mutableInstallState.value = AppUpdateInstallState.Installing(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
-            return AppUpdateInstallResult.ConfirmationOpened
+            diagnosticStage = "installer-handoff"
+            return when (openInstaller(packageFile)) {
+                DesktopPackageInstallerOutcome.InstallerHandoffStarted -> {
+                    val restarting = selectedTarget.platform == "windows"
+                    mutableInstallState.value = if (restarting) {
+                        AppUpdateInstallState.Installing(desktopRelease.versionName, desktopRelease.versionCode)
+                    } else {
+                        AppUpdateInstallState.ConfirmationOpened(desktopRelease.versionName, desktopRelease.versionCode)
+                    }
+                    onInstallerConfirmationOpened(selectedTarget)
+                    if (restarting) AppUpdateInstallResult.Restarting else AppUpdateInstallResult.ConfirmationOpened
+                }
+                DesktopPackageInstallerOutcome.InstallationCompleted -> {
+                    diagnosticStage = "installed-version-verification"
+                    val installedVersion = installedPackageVersion(selectedTarget)
+                    requireInstalledDesktopPackageVersion(installedVersion, desktopRelease.packageVersion)
+                    mutableInstallState.value = AppUpdateInstallState.Installed(
+                        desktopRelease.versionName,
+                        desktopRelease.versionCode,
+                    )
+                    AppUpdateInstallResult.Installed
+                }
+            }
         } catch (_: DesktopUpdateCancelledException) {
             File(updateDirectory, "${desktopRelease.asset.url.substringAfterLast('/')}.part").delete()
             mutableInstallState.value = AppUpdateInstallState.Cancelled(
@@ -334,6 +412,7 @@ internal class DesktopAppUpdater(
             )
             return AppUpdateInstallResult.Rejected(
                 failure.message ?: "The desktop update could not be verified.",
+                "desktop-$diagnosticStage",
             )
         } finally {
             cancellationRequested = false
@@ -349,8 +428,14 @@ internal class DesktopAppUpdater(
         return true
     }
 
-    private fun storedUpdateChannel(): AndroidUpdateChannel =
-        parseAndroidUpdateChannel(preferences.get(KEY_UPDATE_CHANNEL, null))
+    private fun storedUpdateChannel(): AndroidUpdateChannel {
+        val storedValue = preferences.get(KEY_UPDATE_CHANNEL, null)
+        val channel = parseAndroidUpdateChannel(storedValue)
+        if (storedValue != channel.storageValue) {
+            preferences.put(KEY_UPDATE_CHANNEL, channel.storageValue)
+        }
+        return channel
+    }
 
     private companion object {
         const val KEY_UPDATE_CHANNEL = "app-update-channel"
@@ -409,7 +494,7 @@ private fun File.isDesktopUpdatePartial(): Boolean {
 internal val DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS: Long = TimeUnit.HOURS.toMillis(6)
 
 private val DESKTOP_UPDATE_PACKAGE_EXTENSIONS = setOf("deb", "rpm", "msi", "dmg", "pkg")
-private val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
+internal val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
 private const val DESKTOP_PACKAGE_NAME = "nextcloudnative"
 private const val DESKTOP_PACKAGE_QUERY_TIMEOUT_MILLIS = 500L
 private const val DESKTOP_PACKAGE_QUERY_MAX_OUTPUT_CHARACTERS = 64
@@ -490,22 +575,23 @@ internal fun executeDesktopUpdateRequest(
     request: Request,
     onCallChanged: (Call?) -> Unit = {},
 ): Response {
-    val initialCall = client.newCall(request)
+    val canonicalRequest = if (request.url.host == "github.com") request.newBuilder().url(canonicalReleaseDownloadRequestUrl(request.url.toString())).build() else request
+    val initialCall = client.newCall(canonicalRequest)
     onCallChanged(initialCall)
     val initialResponse = initialCall.execute()
     if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
     return try {
         check(
-            request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+            canonicalRequest.url.host == "github.com" &&
+                canonicalRequest.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) { "Unexpected redirect while loading update content." }
         val location = requireNotNull(initialResponse.header("Location"))
-        val redirectedUrl = requireNotNull(request.url.resolve(location))
+        val redirectedUrl = requireNotNull(canonicalRequest.url.resolve(location))
         check(isTrustedDesktopReleaseAssetRedirect(redirectedUrl.toString())) {
             "GitHub release download redirected to an untrusted destination."
         }
         initialResponse.close()
-        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        val redirectedCall = client.newCall(canonicalRequest.newBuilder().url(redirectedUrl).build())
         onCallChanged(redirectedCall)
         redirectedCall.execute()
     } catch (failure: Exception) {
@@ -563,24 +649,245 @@ internal fun windowsZoneIdentifier(sourceUrl: String, referrerUrl: String): Stri
     return "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=$sourceUrl\r\nReferrerUrl=$referrerUrl\r\n"
 }
 
-private fun openDesktopPackageInstaller(packageFile: File) {
+private fun openDesktopPackageInstaller(packageFile: File): DesktopPackageInstallerOutcome {
     if (System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true)) {
-        val result = Shell32.INSTANCE.ShellExecute(
-            null,
-            "open",
-            packageFile.absolutePath,
-            null,
-            null,
-            WinUser.SW_SHOWNORMAL,
-        )
-        check(result.toLong() > 32L) { "Windows could not open the verified update package." }
-        return
+        startWindowsInstallerAfterAppExit(packageFile)
+        return DesktopPackageInstallerOutcome.InstallerHandoffStarted
+    }
+    if (runLinuxNativePackageInstaller(packageFile)) {
+        return DesktopPackageInstallerOutcome.InstallationCompleted
     }
     if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
         Desktop.getDesktop().open(packageFile)
     } else {
         ProcessBuilder("xdg-open", packageFile.absolutePath).start()
     }
+    return DesktopPackageInstallerOutcome.InstallerHandoffStarted
+}
+
+internal fun startWindowsInstallerAfterAppExit(
+    packageFile: File,
+    parentProcessId: Long = ProcessHandle.current().pid(),
+    windowsDirectory: File? = System.getenv("SystemRoot")?.takeIf(String::isNotBlank)?.let(::File),
+    launcherFile: File? = packagedDesktopLauncherPath()?.let(::File),
+    updateGateFile: File = desktopUpdateHandoffGateFile(),
+    processStarter: (List<String>) -> WindowsInstallerHandoffProcess = ::startWindowsInstallerHandoffProcess,
+    readinessWaiter: (File, String) -> Boolean = ::waitForWindowsInstallerHandoffReadiness,
+) {
+    check(parentProcessId > 0L) { "The current Windows process could not be identified." }
+    check(packageFile.extension.equals("msi", ignoreCase = true)) { "The Windows update package is not an MSI." }
+    check(Files.isRegularFile(packageFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        "The verified Windows update package is no longer a regular file."
+    }
+    val systemRoot = requireNotNull(windowsDirectory) { "The Windows system directory is unavailable." }
+    val powershell = File(systemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe")
+    check(Files.isRegularFile(powershell.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        "The trusted Windows PowerShell executable could not be found."
+    }
+    val launcher = requireNotNull(launcherFile) { "The installed nati.ve launcher is unavailable." }
+    check(Files.isRegularFile(launcher.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        "The installed nati.ve launcher could not be found."
+    }
+    val updateGate = updateGateFile.toPath().toAbsolutePath().normalize()
+    val updateGateDirectory = requireNotNull(updateGate.parent)
+    Files.createDirectories(updateGateDirectory)
+    check(!Files.isSymbolicLink(updateGateDirectory)) { "The desktop update runtime folder cannot be a symlink." }
+    check(!Files.isSymbolicLink(updateGate)) { "The desktop update handoff gate cannot be a symlink." }
+    val script = writeWindowsInstallerHandoffScript(requireNotNull(packageFile.parentFile))
+    val acknowledgement = Files.createTempFile(packageFile.parentFile.toPath(), "installer-ready-", ".ack").toFile()
+    Files.delete(acknowledgement.toPath())
+    val acknowledgementToken = ByteArray(32).also(SecureRandom()::nextBytes).lowercaseHex()
+    val cancellation = Files.createTempFile(packageFile.parentFile.toPath(), "installer-cancel-", ".ack").toFile()
+    Files.delete(cancellation.toPath())
+    val cancellationToken = ByteArray(32).also(SecureRandom()::nextBytes).lowercaseHex()
+    var handoffProcess: WindowsInstallerHandoffProcess? = null
+    try {
+        handoffProcess = processStarter(
+            windowsInstallerHandoffCommand(
+                powershell = powershell,
+                script = script,
+                parentProcessId = parentProcessId,
+                packageFile = packageFile,
+                launcherFile = launcher,
+                updateGateFile = updateGate.toFile(),
+                acknowledgementFile = acknowledgement,
+                acknowledgementToken = acknowledgementToken,
+                cancellationFile = cancellation,
+                cancellationToken = cancellationToken,
+            ),
+        )
+        check(readinessWaiter(acknowledgement, acknowledgementToken)) {
+            "The Windows installer handoff did not confirm that it was ready."
+        }
+    } catch (failure: Throwable) {
+        val cancellationRecorded = runCatching {
+            Files.writeString(
+                cancellation.toPath(),
+                cancellationToken,
+                Charsets.US_ASCII,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+            )
+            true
+        }.getOrDefault(false)
+        val processStopped = runCatching { handoffProcess?.cancelAndWait() != false }.getOrDefault(false)
+        Files.deleteIfExists(acknowledgement.toPath())
+        if (processStopped) {
+            Files.deleteIfExists(cancellation.toPath())
+            Files.deleteIfExists(script.toPath())
+        } else if (!cancellationRecorded) {
+            failure.addSuppressed(
+                IOException("The Windows installer handoff could not be cancelled safely."),
+            )
+        }
+        throw failure
+    }
+}
+
+internal fun interface WindowsInstallerHandoffProcess {
+    fun cancelAndWait(): Boolean
+}
+
+private fun startWindowsInstallerHandoffProcess(command: List<String>): WindowsInstallerHandoffProcess {
+    val process = ProcessBuilder(command).start()
+    return WindowsInstallerHandoffProcess {
+        var interrupted = false
+        runCatching { process.destroy() }
+        val exitedNormally = try {
+            process.waitFor(WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            interrupted = true
+            false
+        }
+        if (!exitedNormally) {
+            runCatching { process.destroyForcibly() }
+            while (process.isAlive) {
+                try {
+                    process.waitFor()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        !process.isAlive
+    }
+}
+
+internal fun windowsInstallerHandoffCommand(
+    powershell: File,
+    script: File,
+    parentProcessId: Long,
+    packageFile: File,
+    launcherFile: File,
+    updateGateFile: File,
+    acknowledgementFile: File,
+    acknowledgementToken: String,
+    cancellationFile: File,
+    cancellationToken: String,
+): List<String> = listOf(
+    powershell.absolutePath,
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    "-File",
+    script.absolutePath,
+    "-ParentProcessId",
+    parentProcessId.toString(),
+    "-InstallerPath",
+    packageFile.absolutePath,
+    "-LauncherPath",
+    launcherFile.absolutePath,
+    "-UpdateGatePath",
+    updateGateFile.absolutePath,
+    "-AcknowledgementPath",
+    acknowledgementFile.absolutePath,
+    "-AcknowledgementToken",
+    acknowledgementToken,
+    "-CancellationPath",
+    cancellationFile.absolutePath,
+    "-CancellationToken",
+    cancellationToken,
+)
+
+internal fun desktopUpdateHandoffGateFile(
+    runtimeDirectory: File = defaultDesktopRuntimeDirectory(),
+): File = runtimeDirectory.resolve(WINDOWS_INSTALLER_HANDOFF_GATE_NAME)
+
+internal fun desktopUpdateHandoffActive(
+    gateFile: File = desktopUpdateHandoffGateFile(),
+    windows: Boolean = System.getProperty("os.name", "").startsWith("Windows", ignoreCase = true),
+): Boolean {
+    if (!windows) return false
+    val path = gateFile.toPath().toAbsolutePath().normalize()
+    if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return false
+    if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return true
+    return try {
+        FileChannel.open(path, StandardOpenOption.WRITE).use { channel ->
+            val lock = try {
+                channel.tryLock()
+            } catch (_: OverlappingFileLockException) {
+                null
+            }
+            if (lock == null) return true
+            lock.release()
+        }
+        Files.deleteIfExists(path)
+        false
+    } catch (_: IOException) {
+        true
+    }
+}
+
+private fun waitForWindowsInstallerHandoffReadiness(
+    acknowledgementFile: File,
+    expectedToken: String,
+): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+        val acknowledged = runCatching {
+            Files.isRegularFile(acknowledgementFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                acknowledgementFile.length() <= WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES &&
+                MessageDigest.isEqual(
+                    acknowledgementFile.readBytes(),
+                    expectedToken.encodeToByteArray(),
+                )
+        }.getOrDefault(false)
+        if (acknowledged) return true
+        try {
+            Thread.sleep(WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+    }
+    return false
+}
+
+private fun writeWindowsInstallerHandoffScript(directory: File): File {
+    check(directory.isDirectory) { "The Windows update cache is unavailable." }
+    val target = File(directory, WINDOWS_INSTALLER_HANDOFF_SCRIPT_NAME)
+    val temporary = Files.createTempFile(directory.toPath(), "windows-installer-handoff-", ".ps1")
+    try {
+        Files.writeString(temporary, WINDOWS_INSTALLER_HANDOFF_SCRIPT)
+        try {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(temporary, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    } finally {
+        Files.deleteIfExists(temporary)
+    }
+    return target
 }
 
 private fun File.sha256(): String {
@@ -598,7 +905,18 @@ private fun File.sha256(): String {
     }
 }
 
+private fun ByteArray.lowercaseHex(): String = joinToString("") { byte ->
+    (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+}
+
 internal class DesktopUpdateCancelledException : IOException("Update download cancelled.")
+
+private const val WINDOWS_INSTALLER_HANDOFF_SCRIPT_NAME = "install-after-app-exit.ps1"
+private const val WINDOWS_INSTALLER_HANDOFF_GATE_NAME = "windows-update-in-progress.lock"
+private const val WINDOWS_INSTALLER_HANDOFF_READY_TIMEOUT_SECONDS = 5L
+private const val WINDOWS_INSTALLER_HANDOFF_READY_POLL_MILLIS = 25L
+private const val WINDOWS_INSTALLER_HANDOFF_CANCEL_GRACE_SECONDS = 2L
+private const val WINDOWS_INSTALLER_ACKNOWLEDGEMENT_MAX_BYTES = 128L
 
 internal const val DESKTOP_VERSION_NAME_PROPERTY = "dev.obiente.nextcloudnative.versionName"
 internal const val DESKTOP_VERSION_CODE_PROPERTY = "dev.obiente.nextcloudnative.versionCode"

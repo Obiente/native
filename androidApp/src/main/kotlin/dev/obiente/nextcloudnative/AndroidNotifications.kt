@@ -250,7 +250,7 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
                 .setContentText(event.detail)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(event.detail))
             is NextcloudNotificationEvent.AppUpdateAvailable -> builder
-                .setContentTitle("Nextcloud Native update available")
+                .setContentTitle("nati.ve update available")
                 .setContentText("Version ${event.versionName} is ready to review")
                 .setContentIntent(
                     openAppIntent(
@@ -288,7 +288,7 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
 
     private fun redactedNotification(channelId: String) = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle("Nextcloud Native")
+        .setContentTitle("nati.ve")
         .setContentText("Open the app to view this update")
         .build()
 }
@@ -363,7 +363,7 @@ private fun notificationChannels(): List<NotificationChannel> = if (Build.VERSIO
         description = "Shares, comments, app events, and administrative updates"
     },
     NotificationChannel(CHANNEL_APP_UPDATES, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
-        description = "New Nextcloud Native versions ready to review"
+        description = "New nati.ve versions ready to review"
     },
 )
 

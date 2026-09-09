@@ -38,6 +38,100 @@ class DynamicNativeMemoryCacheTest {
     }
 
     @Test
+    fun `screen cache distinguishes mailbox snapshots with overlapping mailbox ids`() {
+        val personal = NativeRecord(
+            id = "inbox",
+            values = mapOf("accountId" to "personal", "mailboxId" to "inbox"),
+        )
+        val work = personal.copy(values = personal.values + ("accountId" to "work"))
+
+        val personalKey = dynamicScreenCacheKey(
+            session = session,
+            appId = "mail",
+            viewId = "messages.list",
+            selectedRecordId = personal.id,
+            parameterValues = emptyMap(),
+            selectedRecordResourceId = "mailboxes",
+            selectedRecordScope = personal.dynamicScreenCacheScope(),
+        )
+        val workKey = dynamicScreenCacheKey(
+            session = session,
+            appId = "mail",
+            viewId = "messages.list",
+            selectedRecordId = work.id,
+            parameterValues = emptyMap(),
+            selectedRecordResourceId = "mailboxes",
+            selectedRecordScope = work.dynamicScreenCacheScope(),
+        )
+
+        assertNotEquals(personalKey, workKey)
+        assertNotEquals(
+            dynamicScreenSelectionIdentity(
+                resourceId = "mailboxes",
+                recordId = personal.id,
+                recordScope = personal.dynamicScreenCacheScope(),
+            ),
+            dynamicScreenSelectionIdentity(
+                resourceId = "mailboxes",
+                recordId = work.id,
+                recordScope = work.dynamicScreenCacheScope(),
+            ),
+        )
+    }
+
+    @Test
+    fun `pagination completion is rejected after a Mail account selection changes`() {
+        val personal = NativeRecord(
+            id = "inbox",
+            values = mapOf("accountId" to "personal", "mailboxId" to "inbox"),
+        )
+        val work = personal.copy(values = personal.values + ("accountId" to "work"))
+        fun identity(record: NativeRecord) = dynamicPaginationRequestIdentity(
+            session = session,
+            appId = "mail",
+            viewId = "messages.list",
+            resourceId = "messages",
+            selection = dynamicScreenSelectionIdentity(
+                resourceId = "mailboxes",
+                recordId = record.id,
+                recordScope = record.dynamicScreenCacheScope(),
+            ),
+            pathParameters = mapOf("mailboxId" to record.id),
+            cacheable = true,
+        )
+
+        val outstandingPersonalPage = identity(personal)
+        val activeWorkSelection = identity(work)
+
+        assertFalse(outstandingPersonalPage.isCurrentDynamicPaginationRequest(activeWorkSelection))
+        assertNotEquals(
+            personal.dynamicPaginationRecordIdentity("messages"),
+            work.dynamicPaginationRecordIdentity("messages"),
+        )
+    }
+
+    @Test
+    fun `uncacheable sparse selection never stores or returns a screen`() {
+        val cache = DynamicNativeMemoryCache()
+        val key = dynamicScreenCacheKey(
+            session = session,
+            appId = "mail",
+            viewId = "messages.list",
+            selectedRecordId = "inbox",
+            parameterValues = emptyMap(),
+            selectedRecordResourceId = "mailboxes",
+            cacheable = false,
+        )
+
+        cache.storeScreen(
+            key,
+            DynamicScreenSnapshot(listOf(NativeRecord("stale", emptyMap())), emptyMap()),
+        )
+
+        assertNull(cache.screen(key))
+    }
+
+    @Test
     fun `screen cache is bounded and isolated by account`() {
         val cache = DynamicNativeMemoryCache(maximumScreens = 1)
         val firstKey = dynamicScreenCacheKey(session, "mail", "messages.list", null, emptyMap())

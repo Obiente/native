@@ -15,61 +15,175 @@ import com.sun.jna.win32.StdCallLibrary
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+
+internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
+private const val ERROR_FILE_NOT_FOUND = 2
+private const val ERROR_PATH_NOT_FOUND = 3
+internal const val WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
+private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
+private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
+private const val CF_PLACEHOLDER_STATE_INVALID = -1
+private const val CF_OPEN_FILE_FLAG_EXCLUSIVE = 0x1
+private const val CF_OPEN_FILE_FLAG_WRITE_ACCESS = 0x2
+
+internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
+    require(availableCount >= 0)
+    return minOf(availableCount, MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS)
+}
+
+internal fun windowsCloudFailedPlaceholderIndex(
+    firstFailedEntryIndex: Int?,
+    processedCount: Int,
+    placeholderCount: Int,
+): Int? {
+    require(processedCount in 0..placeholderCount)
+    require(firstFailedEntryIndex == null || firstFailedEntryIndex in 0 until placeholderCount)
+    return firstFailedEntryIndex
+        ?: processedCount.takeIf { it in 0 until placeholderCount }
+        ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
+}
+
+internal fun windowsCloudOpenFileFlags(write: Boolean, exclusive: Boolean): Int =
+    (if (write) CF_OPEN_FILE_FLAG_WRITE_ACCESS else 0) or
+        (if (exclusive) CF_OPEN_FILE_FLAG_EXCLUSIVE else 0)
+
+internal fun windowsCloudPlaceholderInspection(
+    findSucceeded: Boolean,
+    win32Error: Int? = null,
+    fileAttributes: Int? = null,
+    reparseTag: Int? = null,
+    placeholderStateBits: Int? = null,
+): WindowsCloudPlaceholderInspection {
+    if (!findSucceeded) {
+        val error = requireNotNull(win32Error)
+        val state = when (error) {
+            ERROR_FILE_NOT_FOUND,
+            ERROR_PATH_NOT_FOUND,
+            -> WindowsCloudPlaceholderEntryState.Missing
+            WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT -> WindowsCloudPlaceholderEntryState.Corrupt
+            else -> WindowsCloudPlaceholderEntryState.Unreadable
+        }
+        return WindowsCloudPlaceholderInspection(state = state, win32Error = error)
+    }
+    val attributes = requireNotNull(fileAttributes)
+    val tag = requireNotNull(reparseTag)
+    val stateBits = requireNotNull(placeholderStateBits)
+    val stateError = if (stateBits == CF_PLACEHOLDER_STATE_INVALID) {
+        requireNotNull(win32Error)
+    } else {
+        require(win32Error == null)
+        null
+    }
+    val state = when {
+        stateBits == CF_PLACEHOLDER_STATE_INVALID && stateError == WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT ->
+            WindowsCloudPlaceholderEntryState.Corrupt
+        stateBits == CF_PLACEHOLDER_STATE_INVALID -> WindowsCloudPlaceholderEntryState.Unreadable
+        stateBits and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderEntryState.Local
+        stateBits and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderEntryState.InSync
+        else -> WindowsCloudPlaceholderEntryState.Dirty
+    }
+    return WindowsCloudPlaceholderInspection(
+        state = state,
+        win32Error = stateError,
+        fileAttributes = attributes,
+        reparseTag = tag,
+    )
+}
 
 /** 64-bit Windows CldApi.dll binding kept behind [WindowsCloudFilesApi] for deterministic tests. */
-internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
+internal class JnaWindowsCloudFilesApi(
+    private val shellRegistrar: WindowsCloudShellRegistrar = PackagedWindowsCloudShellRegistrar(),
+    private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
+) : WindowsCloudFilesApi {
     private val cldApi: CldApi
     private val kernelFiles: KernelFileApi
     private val callbacksByConnection = ConcurrentHashMap<Long, CallbackLifetime>()
+    private val callbackCounts = ConcurrentHashMap<Int, Int>()
+    private val callbackFailures = ConcurrentLinkedQueue<String>()
 
     init {
         require(isWindowsDesktop()) { "CldApi.dll is only available on Windows." }
-        require(Native.POINTER_SIZE == 8) { "Nextcloud Native Cloud Files requires 64-bit Windows." }
+        require(Native.POINTER_SIZE == 8) { "nati.ve Cloud Files requires 64-bit Windows." }
         cldApi = Native.load("CldApi", CldApi::class.java)
         kernelFiles = Native.load("kernel32", KernelFileApi::class.java)
     }
 
-    override fun registerSyncRoot(root: Path, syncRootIdentity: ByteArray) {
-        val identity = syncRootIdentity.nativeMemory()
-        val registration = CfSyncRegistration().apply {
-            structSize = size()
-            providerName = WString("Nextcloud Native")
-            providerVersion = WString("0.1.0")
-            syncRootIdentityPointer = identity
-            syncRootIdentityLength = syncRootIdentity.size
-            fileIdentity = identity
-            fileIdentityLength = syncRootIdentity.size
-            providerId = Guid.GUID("{6D456713-7D9A-4A39-90CE-127998DE42D7}")
-            write()
-        }
-        val policies = CfSyncPolicies().apply {
-            structSize = size()
-            hydration = CfPolicy(CF_HYDRATION_POLICY_PROGRESSIVE, CF_HYDRATION_POLICY_MODIFIER_AUTO_DEHYDRATION_ALLOWED)
-            population = CfPolicy(CF_POPULATION_POLICY_FULL, 0)
-            inSync = CF_INSYNC_POLICY_TRACK_FILE_CREATION_TIME or
-                CF_INSYNC_POLICY_TRACK_FILE_LAST_WRITE_TIME or
-                CF_INSYNC_POLICY_TRACK_DIRECTORY_CREATION_TIME or
-                CF_INSYNC_POLICY_TRACK_DIRECTORY_LAST_WRITE_TIME
-            hardLink = CF_HARDLINK_POLICY_NONE
-            placeholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT
-            write()
-        }
-        checkHResult(
-            cldApi.CfRegisterSyncRoot(
-                WString(root.toAbsolutePath().toString()),
-                registration,
-                policies,
-                CF_REGISTER_FLAG_UPDATE or CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT,
-            ),
-            "register the Windows Cloud Files root",
+    override fun registerSyncRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) {
+        val rootIdentity = WindowsCloudFileIdentityCodec.decode(syncRootIdentity)
+        require(rootIdentity.directory && rootIdentity.path.isEmpty() && rootIdentity.remoteRevision == "root")
+        migrateWindowsSyncRootRegistration(
+            shellAvailable = shellRegistrar.available,
+            unregisterCloudFilesRoot = { unregisterCloudFilesRoot(root) },
+            registerBrandedShellRoot = {
+                shellRegistrar.register(root, rootIdentity.accountId, displayName, syncRootIdentity)
+            },
+            registerCloudFilesRoot = { registerCloudFilesRoot(root, displayName, syncRootIdentity) },
         )
-        identity.clear()
+    }
+
+    private fun registerCloudFilesRoot(root: Path, displayName: String, syncRootIdentity: ByteArray) {
+        val identity = syncRootIdentity.nativeMemory()
+        try {
+            val registration = CfSyncRegistration().apply {
+                structSize = size()
+                providerName = WString(displayName)
+                providerVersion = WString("0.1.0")
+                syncRootIdentityPointer = identity
+                syncRootIdentityLength = syncRootIdentity.size
+                fileIdentity = identity
+                fileIdentityLength = syncRootIdentity.size
+                providerId = Guid.GUID("{6D456713-7D9A-4A39-90CE-127998DE42D7}")
+                write()
+            }
+            val policies = CfSyncPolicies().apply {
+                structSize = size()
+                hydration = CfPolicy(
+                    CF_HYDRATION_POLICY_PROGRESSIVE,
+                    CF_HYDRATION_POLICY_MODIFIER_AUTO_DEHYDRATION_ALLOWED,
+                )
+                population = CfPolicy(CF_POPULATION_POLICY_FULL, 0)
+                inSync = CF_INSYNC_POLICY_TRACK_FILE_CREATION_TIME or
+                    CF_INSYNC_POLICY_TRACK_FILE_LAST_WRITE_TIME or
+                    CF_INSYNC_POLICY_TRACK_DIRECTORY_CREATION_TIME or
+                    CF_INSYNC_POLICY_TRACK_DIRECTORY_LAST_WRITE_TIME
+                hardLink = CF_HARDLINK_POLICY_NONE
+                placeholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT
+                write()
+            }
+            checkHResult(
+                cldApi.CfRegisterSyncRoot(
+                    WString(root.toAbsolutePath().toString()),
+                    registration,
+                    policies,
+                    CF_REGISTER_FLAG_UPDATE or CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT,
+                ),
+                "register the Windows Cloud Files root",
+            )
+        } finally {
+            identity.clear()
+        }
     }
 
     override fun unregisterSyncRoot(root: Path) {
+        val accountId = windowsCloudShellAccountId(root)
+        if (accountId != null && shellRegistrar.available) {
+            when (shellRegistrar.unregister(root, accountId)) {
+                WindowsShellUnregistrationResult.Unregistered -> return
+                WindowsShellUnregistrationResult.NotFound -> Unit
+                WindowsShellUnregistrationResult.Rejected -> {
+                    error("Windows refused to safely unregister the branded Cloud Files root.")
+                }
+            }
+        }
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
-        if (result in SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS) return
+        if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))) return
         checkHResult(result, "unregister the Windows Cloud Files root")
+    }
+
+    private fun unregisterCloudFilesRoot(root: Path): Boolean {
+        val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
+        return result >= 0 || isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))
     }
 
     override fun connect(root: Path, callbacks: WindowsCloudFilesCallbacks): Long {
@@ -85,9 +199,12 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         )
         val nativeCallbacks = types.filter { it != CF_CALLBACK_TYPE_NONE }.associateWith { callbackType ->
             CldCallback { infoPointer, parametersPointer ->
+                callbackCounts.merge(callbackType, 1, Int::plus)
                 currentCallbackType.set(callbackType)
                 try {
-                    runCatching { dispatchCallback(callbacks, infoPointer, parametersPointer) }
+                    dispatchCallback(callbacks, infoPointer, parametersPointer)
+                } catch (failure: Throwable) {
+                    recordCallbackFailure("callback $callbackType: ${failure.message ?: failure.javaClass.simpleName}")
                 } finally {
                     currentCallbackType.remove()
                 }
@@ -116,7 +233,10 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     }
 
     override fun disconnect(connectionKey: Long) {
-        checkHResult(cldApi.CfDisconnectSyncRoot(connectionKey), "disconnect the Windows Cloud Files provider")
+        val result = cldApi.CfDisconnectSyncRoot(connectionKey)
+        if (result < 0 && !isWindowsCloudFilesConnectionAbsentResult(result)) {
+            throw WindowsCloudFilesOperationException("disconnect the Windows Cloud Files provider", result)
+        }
         callbacksByConnection.remove(connectionKey)
     }
 
@@ -124,18 +244,84 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         if (placeholders.isEmpty()) return
         val native = NativePlaceholderArray(placeholders)
         val processed = IntByReference()
-        checkHResult(
-            cldApi.CfCreatePlaceholders(
-                WString(baseDirectory.toAbsolutePath().toString()),
-                native.firstPointer,
-                placeholders.size,
-                CF_CREATE_FLAG_STOP_ON_ERROR,
-                processed,
-            ),
-            "create Windows Cloud Files placeholders",
+        val result = cldApi.CfCreatePlaceholders(
+            WString(baseDirectory.toAbsolutePath().toString()),
+            native.firstPointer,
+            placeholders.size,
+            CF_CREATE_FLAG_STOP_ON_ERROR,
+            processed,
         )
+        if (result < 0) {
+            val processedCount = processed.value.coerceIn(0, placeholders.size)
+            val firstFailedEntryIndex = runCatching { native.firstFailedResultIndex() }.getOrNull()
+            val failedIndex = windowsCloudFailedPlaceholderIndex(
+                firstFailedEntryIndex = firstFailedEntryIndex,
+                processedCount = processedCount,
+                placeholderCount = placeholders.size,
+            )
+            val failed = failedIndex?.let(placeholders::get)
+            val failedState = failed?.let { placeholder ->
+                runCatching { placeholderState(baseDirectory.resolve(placeholder.name)) }
+                    .getOrNull()
+            }
+            runCatching {
+                recordDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.VirtualFiles,
+                        operation = "cloud-files.placeholder-create",
+                        outcome = "failed",
+                        code = "HRESULT:0x${result.toUInt().toString(16)}",
+                        fields = buildList {
+                            add(
+                                SupportDiagnosticFieldDraft(
+                                    "base_directory",
+                                    baseDirectory.toAbsolutePath().toString(),
+                                    SupportDiagnosticValuePrivacy.LocalPath,
+                                ),
+                            )
+                            add(SupportDiagnosticFieldDraft("batch_size", placeholders.size.toString()))
+                            add(SupportDiagnosticFieldDraft("entries_processed", processedCount.toString()))
+                            val diagnosticResultCount = maxOf(processedCount, failedIndex?.plus(1) ?: 0)
+                            runCatching { native.resultSample(diagnosticResultCount) }
+                                .getOrNull()
+                                ?.takeIf(String::isNotEmpty)
+                                ?.let { sample -> add(SupportDiagnosticFieldDraft("entry_results", sample)) }
+                            failedIndex?.let { index ->
+                                add(SupportDiagnosticFieldDraft("failed_index", index.toString()))
+                                runCatching { native.resultAt(index) }.getOrNull()?.let { failedResult ->
+                                    add(
+                                        SupportDiagnosticFieldDraft(
+                                            "failed_entry_result",
+                                            "0x${failedResult.toUInt().toString(16)}",
+                                        ),
+                                    )
+                                }
+                            }
+                            failed?.let { placeholder ->
+                                add(
+                                    SupportDiagnosticFieldDraft(
+                                        "failed_name",
+                                        placeholder.name,
+                                        SupportDiagnosticValuePrivacy.RemotePath,
+                                    ),
+                                )
+                                add(SupportDiagnosticFieldDraft("failed_directory", placeholder.directory.toString()))
+                            }
+                            failedState?.let { state ->
+                                add(SupportDiagnosticFieldDraft("failed_placeholder_state", state.name.lowercase()))
+                            }
+                        },
+                    ),
+                )
+            }
+        }
+        checkHResult(result, "create Windows Cloud Files placeholders")
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
+        placeholders.filter { it.directory }.forEach { placeholder ->
+            updatePlaceholder(baseDirectory.resolve(placeholder.name), placeholder)
+        }
     }
 
     override fun transferData(info: WindowsCloudCallbackInfo, offset: Long, bytes: ByteArray) {
@@ -156,6 +342,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         length: Long,
         message: String,
     ) {
+        recordCallbackFailure("data ${info.normalizedPath} offset=$offset length=$length: $message")
         execute(info, CF_OPERATION_TYPE_TRANSFER_DATA, TRANSFER_PARAMETERS_SIZE) { parameters ->
             parameters.setInt(TRANSFER_FLAGS_OFFSET, 0)
             parameters.setInt(TRANSFER_STATUS_OFFSET, STATUS_CLOUD_FILE_UNSUCCESSFUL)
@@ -171,11 +358,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     ) {
         val native = NativePlaceholderArray(placeholders)
         execute(info, CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS, PLACEHOLDER_PARAMETERS_SIZE) { parameters ->
-            parameters.setInt(PLACEHOLDERS_FLAGS_OFFSET, 0)
+            parameters.setInt(
+                PLACEHOLDERS_FLAGS_OFFSET,
+                CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR or
+                    CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
+            )
             parameters.setInt(PLACEHOLDERS_STATUS_OFFSET, STATUS_SUCCESS)
             parameters.setLong(PLACEHOLDERS_TOTAL_OFFSET, placeholders.size.toLong())
             parameters.setPointer(PLACEHOLDERS_ARRAY_OFFSET, native.firstPointer)
             parameters.setInt(PLACEHOLDERS_COUNT_OFFSET, placeholders.size)
+            // EntriesProcessed is an output field populated by CfExecute.
             parameters.setInt(PLACEHOLDERS_PROCESSED_OFFSET, 0)
         }
     }
@@ -206,13 +398,37 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     }
 
     override fun placeholderState(path: Path): WindowsCloudPlaceholderState {
-        return withFindData(path, WindowsCloudPlaceholderState.Absent) { findData ->
-            val state = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
-            when {
-                state and CF_PLACEHOLDER_STATE_PLACEHOLDER == 0 -> WindowsCloudPlaceholderState.Absent
-                state and CF_PLACEHOLDER_STATE_IN_SYNC != 0 -> WindowsCloudPlaceholderState.InSync
-                else -> WindowsCloudPlaceholderState.Dirty
+        return inspectPlaceholder(path).placeholderState
+    }
+
+    override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+        val findData = WinBase.WIN32_FIND_DATA()
+        Native.setLastError(0)
+        val handle = Kernel32.INSTANCE.FindFirstFile(path.toAbsolutePath().toString(), findData.pointer)
+        if (WinBase.INVALID_HANDLE_VALUE == handle) {
+            return windowsCloudPlaceholderInspection(
+                findSucceeded = false,
+                win32Error = Native.getLastError(),
+            )
+        }
+        return try {
+            findData.read()
+            Native.setLastError(0)
+            val placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
+            val placeholderStateError = if (placeholderStateBits == CF_PLACEHOLDER_STATE_INVALID) {
+                Native.getLastError()
+            } else {
+                null
             }
+            windowsCloudPlaceholderInspection(
+                findSucceeded = true,
+                win32Error = placeholderStateError,
+                fileAttributes = findData.dwFileAttributes,
+                reparseTag = findData.dwReserved0,
+                placeholderStateBits = placeholderStateBits,
+            )
+        } finally {
+            Kernel32.INSTANCE.FindClose(handle)
         }
     }
 
@@ -265,14 +481,15 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         preserveSyncState: Boolean,
     ) {
         require(!invalidateContent || !preserveSyncState)
-        withFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
-            val metadata = placeholder.metadata()
+        withCloudFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
+            val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
                 0
             } else {
                 CF_UPDATE_FLAG_MARK_IN_SYNC or CF_UPDATE_FLAG_VERIFY_IN_SYNC or
-                    if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0
+                    (if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0) or
+                    (if (placeholder.directory) CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION else 0)
             }
             checkHResult(
                 cldApi.CfUpdatePlaceholder(
@@ -335,20 +552,31 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         callbacksByConnection.keys.toList().forEach { key -> runCatching { disconnect(key) } }
     }
 
+    internal fun diagnostics(): String = buildString {
+        append("callback counts=")
+        append(callbackCounts.toSortedMap())
+        if (callbackFailures.isNotEmpty()) {
+            append(", failures=")
+            append(callbackFailures.toList())
+        }
+    }
+
     private fun dispatchCallback(callbacks: WindowsCloudFilesCallbacks, infoPointer: Pointer, parameters: Pointer) {
+        val type = requireNotNull(currentCallbackType.get()) { "The Cloud Files callback type was not bound." }
         val nativeInfo = CfCallbackInfo(infoPointer).apply { read() }
-        val identity = nativeInfo.fileIdentity?.takeIf { nativeInfo.fileIdentityLength > 0 }
-            ?.getByteArray(0L, nativeInfo.fileIdentityLength)
+        val identity = nativeInfo.windowsCloudCallbackIdentity(type == CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS)
         val info = WindowsCloudCallbackInfo(
             connectionKey = nativeInfo.connectionKey,
             transferKey = nativeInfo.transferKey,
             requestKey = nativeInfo.requestKey,
-            normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            normalizedPath = windowsCloudAbsoluteCallbackPath(
+                volumeDosName = nativeInfo.volumeDosName?.toString().orEmpty(),
+                normalizedPath = nativeInfo.normalizedPath?.toString().orEmpty(),
+            ),
             fileIdentity = identity,
             fileSize = nativeInfo.fileSize,
             priorityHint = nativeInfo.priorityHint.toInt() and 0xff,
         )
-        val type = requireNotNull(currentCallbackType.get()) { "The Cloud Files callback type was not bound." }
         val union = PARAMETERS_UNION_OFFSET
         when (type) {
             CF_CALLBACK_TYPE_FETCH_DATA -> callbacks.fetchData(
@@ -397,7 +625,16 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
             setInt(0L, parameterSize)
             fill(this)
         }
-        checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        try {
+            checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+        } catch (failure: Throwable) {
+            recordCallbackFailure("operation $operationType: ${failure.message ?: failure.javaClass.simpleName}")
+            throw failure
+        }
+    }
+
+    private fun recordCallbackFailure(message: String) {
+        if (callbackFailures.size < MAX_RECORDED_CALLBACK_FAILURES) callbackFailures.add(message)
     }
 
     private inline fun <T> withFileHandle(
@@ -423,6 +660,29 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         }
     }
 
+    /**
+     * Cloud Files updates use a protected handle so Explorer can break the oplock cleanly instead
+     * of racing a background CreateFile call with a transient sharing violation.
+     */
+    private inline fun <T> withCloudFileHandle(
+        path: Path,
+        write: Boolean,
+        exclusive: Boolean = false,
+        block: (WinNT.HANDLE) -> T,
+    ): T {
+        val handle = WinNT.HANDLEByReference()
+        val flags = windowsCloudOpenFileFlags(write, exclusive)
+        checkHResult(
+            cldApi.CfOpenFileWithOplock(WString(path.toAbsolutePath().toString()), flags, handle),
+            "open a Windows Cloud Files placeholder for update",
+        )
+        return try {
+            block(handle.value)
+        } finally {
+            cldApi.CfCloseHandle(handle.value)
+        }
+    }
+
     private inline fun <T> withFindData(path: Path, fallback: T, block: (WinBase.WIN32_FIND_DATA) -> T): T {
         if (!Files.exists(path)) return fallback
         val findData = WinBase.WIN32_FIND_DATA()
@@ -437,7 +697,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     }
 
     private fun checkHResult(result: Int, operation: String) {
-        check(result >= 0) { "Could not $operation (HRESULT 0x${result.toUInt().toString(16)})." }
+        if (result < 0) throw WindowsCloudFilesOperationException(operation, result)
     }
 
     private data class CallbackLifetime(
@@ -456,7 +716,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
                 .also { array ->
                     placeholders.forEachIndexed { index, placeholder ->
                         array[index].relativeFileName = names[index]
-                        array[index].metadata = placeholder.metadata()
+                        array[index].metadata = placeholder.windowsMetadata()
                         array[index].fileIdentity = identities[index]
                         array[index].fileIdentityLength = placeholder.identity.size
                         array[index].flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
@@ -466,10 +726,41 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         }
         val firstPointer: Pointer? get() = entries.firstOrNull()?.pointer
 
+        fun resultAt(index: Int): Int {
+            val entry = entries[index]
+            entry.read()
+            return entry.result
+        }
+
+        fun firstFailedResultIndex(): Int? {
+            for (index in entries.indices) {
+                if (resultAt(index) < 0) return index
+            }
+            return null
+        }
+
+        fun resultSample(endExclusive: Int): String {
+            val availableCount = endExclusive.coerceIn(0, entries.size)
+            val sampledCount = windowsCloudPlaceholderDiagnosticSampleSize(availableCount)
+            return buildString {
+                for (index in 0 until sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append(index)
+                    append("=0x")
+                    append(resultAt(index).toUInt().toString(16))
+                }
+                if (availableCount > sampledCount) {
+                    if (isNotEmpty()) append(',')
+                    append("truncated=")
+                    append(availableCount - sampledCount)
+                }
+            }
+        }
+
         fun requireSuccessful() {
-            entries.forEach { entry ->
-                entry.read()
-                check(entry.result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${entry.result.toUInt().toString(16)})." }
+            for (index in entries.indices) {
+                val result = resultAt(index)
+                check(result >= 0) { "Windows rejected a Cloud Files placeholder (HRESULT 0x${result.toUInt().toString(16)})." }
             }
         }
     }
@@ -488,7 +779,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT = 0
         const val CF_REGISTER_FLAG_UPDATE = 0x1
         const val CF_REGISTER_FLAG_MARK_IN_SYNC_ON_ROOT = 0x4
-        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x2
+        const val CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH = 0x4
 
         const val CF_CALLBACK_TYPE_FETCH_DATA = 0
         const val CF_CALLBACK_TYPE_CANCEL_FETCH_DATA = 2
@@ -502,11 +793,6 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
 
         const val CF_OPERATION_TYPE_TRANSFER_DATA = 0
         const val CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS = 4
-        val SYNC_ROOT_ALREADY_UNREGISTERED_RESULTS = setOf(
-            0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
-            0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-            0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
-        )
         const val CF_OPERATION_TYPE_ACK_RENAME = 6
         const val CF_OPERATION_TYPE_ACK_DELETE = 7
         const val STATUS_SUCCESS = 0
@@ -515,9 +801,12 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
         const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
         const val CF_CREATE_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_STOP_ON_ERROR = 0x1
+        const val CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION = 0x2
         const val CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_MARK_IN_SYNC = 0x2
         const val CF_UPDATE_FLAG_DEHYDRATE = 0x4
+        const val CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION = 0x8
         const val CF_UPDATE_FLAG_VERIFY_IN_SYNC = 0x1
         const val CF_CONVERT_FLAG_MARK_IN_SYNC = 0x1
         const val CF_PLACEHOLDER_INFO_STANDARD = 1
@@ -527,6 +816,7 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
         const val CF_STANDARD_INFO_BUFFER_BYTES = CF_STANDARD_INFO_IDENTITY_OFFSET + MAX_PLACEHOLDER_IDENTITY_BYTES
         const val CF_IN_SYNC_STATE_IN_SYNC = 1
         const val FILE_ATTRIBUTE_PINNED = 0x0008_0000
+        const val MAX_RECORDED_CALLBACK_FAILURES = 16
 
         const val PARAMETERS_UNION_OFFSET = 8L
         const val OPERATION_INFO_SIZE = 48
@@ -550,6 +840,53 @@ internal class JnaWindowsCloudFilesApi : WindowsCloudFilesApi {
     }
 }
 
+internal fun isWindowsCloudFilesRootAbsentResult(result: Int, rootMissing: Boolean): Boolean =
+    when (result) {
+        0xC000CF13.toInt(), // STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT
+        0xD000CF13.toInt(), // HRESULT_FROM_NT(STATUS_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        0x80070186.toInt(), // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT)
+        -> true
+        0x80070002.toInt(), // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        0x80070003.toInt(), // HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)
+        -> rootMissing
+        else -> false
+    }
+
+internal fun isWindowsCloudFilesRegistrationMissingResult(result: Int): Boolean =
+    result == 0xC000CF13.toInt() ||
+        result == 0xD000CF13.toInt() ||
+        result == 0x80070186.toInt() ||
+        result == 0x80070002.toInt() ||
+        result == 0x80070003.toInt()
+
+internal fun isWindowsCloudFilesConnectionAbsentResult(result: Int): Boolean =
+    result == 0x80070057.toInt() // HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)
+
+internal fun isWindowsCloudFilesPlaceholderAlreadyExistsResult(result: Int): Boolean =
+    result == 0x800700B7.toInt() // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
+
+internal fun isWindowsCloudFilesPlaceholderMetadataCorruptResult(result: Int): Boolean =
+    result == 0x8007016B.toInt() // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_METADATA_CORRUPT)
+
+internal class WindowsCloudFilesOperationException(
+    operation: String,
+    val hResult: Int,
+) : IllegalStateException("Could not $operation (HRESULT 0x${hResult.toUInt().toString(16)}).")
+
+internal fun windowsCloudFilesDiagnosticCode(failure: Throwable): String? {
+    var current: Throwable? = failure
+    repeat(MAX_WINDOWS_CLOUD_FILES_DIAGNOSTIC_CAUSE_DEPTH) {
+        val candidate = current ?: return null
+        if (candidate is WindowsCloudFilesOperationException) {
+            return "HRESULT:0x${candidate.hResult.toUInt().toString(16)}"
+        }
+        current = candidate.cause
+    }
+    return null
+}
+
+private const val MAX_WINDOWS_CLOUD_FILES_DIAGNOSTIC_CAUSE_DEPTH = 6
+
 internal interface CldApi : StdCallLibrary {
     fun CfRegisterSyncRoot(path: WString, registration: CfSyncRegistration, policies: CfSyncPolicies, flags: Int): Int
     fun CfUnregisterSyncRoot(path: WString): Int
@@ -558,6 +895,8 @@ internal interface CldApi : StdCallLibrary {
     fun CfCreatePlaceholders(path: WString, placeholders: Pointer?, count: Int, flags: Int, processed: IntByReference): Int
     fun CfExecute(operationInfo: Pointer, operationParameters: Pointer): Int
     fun CfGetPlaceholderStateFromFindData(findData: Pointer): Int
+    fun CfOpenFileWithOplock(path: WString, flags: Int, protectedHandle: WinNT.HANDLEByReference): Int
+    fun CfCloseHandle(protectedHandle: WinNT.HANDLE)
     fun CfGetPlaceholderInfo(
         handle: WinNT.HANDLE,
         infoClass: Int,
@@ -683,11 +1022,23 @@ internal class CfCallbackInfo(pointer: Pointer) : Structure(pointer) {
     @JvmField var requestKey: Long = 0L
 }
 
-private fun WindowsCloudPlaceholder.metadata(): CfFsMetadata = CfFsMetadata().apply {
+internal fun WindowsCloudPlaceholder.windowsMetadata(
+    fallbackEpochMillis: Long? = System.currentTimeMillis(),
+): CfFsMetadata = CfFsMetadata().apply {
+    val timestamp = (lastModifiedEpochMillis ?: fallbackEpochMillis)?.let(::windowsFileTime) ?: 0L
+    creationTime = timestamp
+    lastAccessTime = timestamp
+    lastWriteTime = timestamp
+    changeTime = timestamp
     fileAttributes = if (directory) WinNT.FILE_ATTRIBUTE_DIRECTORY else WinNT.FILE_ATTRIBUTE_ARCHIVE
     fileSize = size
     write()
 }
+
+internal fun windowsFileTime(epochMillis: Long): Long = Math.multiplyExact(
+    Math.addExact(epochMillis, WINDOWS_EPOCH_OFFSET_MILLIS),
+    WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND,
+)
 
 private fun ByteArray.nativeMemory(): Memory = Memory(size.toLong()).also { memory ->
     memory.write(0L, this, 0, size)
@@ -699,6 +1050,18 @@ private fun String.wideMemory(): Memory = Memory(((length + 1) * Native.WCHAR_SI
 
 internal fun isWindowsDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("windows")
+
+internal fun windowsCloudAbsoluteCallbackPath(volumeDosName: String, normalizedPath: String): String {
+    require(normalizedPath.isNotBlank()) { "The Cloud Files callback has no normalized path." }
+    if (WINDOWS_ABSOLUTE_PATH.matchesAt(normalizedPath, 0)) return normalizedPath
+    require(WINDOWS_VOLUME_DOS_NAME.matches(volumeDosName)) {
+        "The Cloud Files callback has no valid DOS volume name."
+    }
+    require(normalizedPath.first() == '\\' || normalizedPath.first() == '/') {
+        "The Cloud Files callback path is not rooted on its volume."
+    }
+    return "$volumeDosName$normalizedPath"
+}
 
 internal data class WindowsCloudNativeLayoutSizes(
     val registration: Int,
@@ -715,3 +1078,8 @@ internal fun windowsCloudNativeLayoutSizes(): WindowsCloudNativeLayoutSizes = Wi
     placeholder = CfPlaceholderCreateInfo().size(),
     callbackInfo = CfCallbackInfo(Memory(160L)).size(),
 )
+
+private const val WINDOWS_EPOCH_OFFSET_MILLIS = 11_644_473_600_000L
+private const val WINDOWS_FILE_TIME_TICKS_PER_MILLISECOND = 10_000L
+private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/]")
+private val WINDOWS_VOLUME_DOS_NAME = Regex("^[A-Za-z]:$")

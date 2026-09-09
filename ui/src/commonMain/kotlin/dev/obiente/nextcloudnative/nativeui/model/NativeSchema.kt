@@ -51,6 +51,13 @@ data class ResourceSpec(
     val confidence: Confidence,
     val fields: List<FieldSpec> = emptyList(),
     val evidence: List<Evidence> = emptyList(),
+    val recordImagePreview: RecordImagePreviewSpec? = null,
+)
+
+@Serializable
+data class RecordImagePreviewSpec(
+    val actionId: String,
+    val declaredContentTypes: List<String>,
 )
 
 @Serializable
@@ -62,6 +69,7 @@ data class FieldSpec(
     val readOnly: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val enumLabels: Map<String, String>? = null,
     val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 

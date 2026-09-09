@@ -115,8 +115,20 @@ class FileSyncCenterTest {
                 FileSyncWorkItem(
                     id = 1,
                     relativePath = "note.md",
-                    observedLocal = LocalSyncEntry("note.md", SyncEntryKind.File, "local"),
-                    observedRemote = RemoteSyncEntry("note.md", SyncEntryKind.File, "remote"),
+                    observedLocal = LocalSyncEntry(
+                        "note.md",
+                        SyncEntryKind.File,
+                        "local",
+                        size = 120L,
+                        modifiedEpochMillis = 1_000L,
+                    ),
+                    observedRemote = RemoteSyncEntry(
+                        "note.md",
+                        SyncEntryKind.File,
+                        "remote",
+                        size = 140L,
+                        modifiedEpochMillis = 2_000L,
+                    ),
                     observedBaseline = null,
                     operation = FileSyncOperation.NeedsDecision(
                         "note.md",
@@ -137,10 +149,22 @@ class FileSyncCenterTest {
             nextWorkId = 2,
         )
 
-        val summary = pair.toCenterSummary("Vault")
+        val summary = pair.toCenterSummary(
+            localDisplayName = "Vault",
+            runState = FileSyncPairRunState.Active,
+            networkState = FileSyncNetworkState.Available,
+        )
 
         assertEquals("Vault", summary.localDisplayName)
         assertEquals(1, summary.conflicts.size)
+        assertEquals(
+            FileSyncConflictSideSummary(SyncEntryKind.File, 120L, 1_000L),
+            summary.conflicts.single().local,
+        )
+        assertEquals(
+            FileSyncConflictSideSummary(SyncEntryKind.File, 140L, 2_000L),
+            summary.conflicts.single().remote,
+        )
         assertEquals(0, summary.failedCount)
     }
 
@@ -168,7 +192,58 @@ class FileSyncCenterTest {
             ),
         )
 
-        assertEquals(2, pair.toCenterSummary("Camera").completedCount)
+        assertEquals(
+            2,
+            pair.toCenterSummary(
+                localDisplayName = "Camera",
+                runState = FileSyncPairRunState.Active,
+                networkState = FileSyncNetworkState.Available,
+            ).completedCount,
+        )
+    }
+
+    @Test
+    fun `summary presents a bounded conflict page while retaining the total`() {
+        val conflicts = (1L..8L).map { id ->
+            FileSyncWorkItem(
+                id = id,
+                relativePath = "conflict-$id.txt",
+                observedLocal = LocalSyncEntry("conflict-$id.txt", SyncEntryKind.File, "local-$id"),
+                observedRemote = RemoteSyncEntry("conflict-$id.txt", SyncEntryKind.File, "remote-$id"),
+                observedBaseline = null,
+                operation = FileSyncOperation.NeedsDecision(
+                    "conflict-$id.txt",
+                    FileSyncDecisionReason.FirstSyncCollision,
+                ),
+                state = FileSyncExecutionState.AwaitingDecision,
+                decision = FileSyncDecision(
+                    FileSyncDecisionReason.FirstSyncCollision,
+                    setOf(
+                        FileSyncDecisionChoice.UseLocal,
+                        FileSyncDecisionChoice.UseRemote,
+                        FileSyncDecisionChoice.KeepBoth,
+                        FileSyncDecisionChoice.Skip,
+                    ),
+                ),
+            )
+        }
+        val summary = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Documents",
+            configuration = FileSyncConfiguration(deviceLabel = "phone"),
+            workItems = conflicts,
+            nextWorkId = 9,
+        ).toCenterSummary(
+            localDisplayName = "Documents",
+            runState = FileSyncPairRunState.Active,
+            networkState = FileSyncNetworkState.Available,
+        )
+
+        assertEquals(8, summary.conflictCount)
+        assertEquals(MAX_PRESENTED_FILE_SYNC_CONFLICTS, summary.conflicts.size)
+        assertEquals((1L..5L).toList(), summary.conflicts.map(FileSyncConflictSummary::workId))
     }
 
     @Test
@@ -203,9 +278,35 @@ class FileSyncCenterTest {
             nextWorkId = 2,
         )
 
-        val summary = pair.toCenterSummary("Projects")
+        val summary = pair.toCenterSummary(
+            localDisplayName = "Projects",
+            runState = FileSyncPairRunState.Paused,
+            networkState = FileSyncNetworkState.WaitingForNetwork,
+        )
 
         assertEquals(1, summary.skippedCount)
         assertEquals(listOf(reason), summary.skippedReasons)
+        assertEquals(FileSyncPairRunState.Paused, summary.runState)
+        assertEquals(FileSyncNetworkState.WaitingForNetwork, summary.networkState)
+    }
+
+    @Test
+    fun `live network state distinguishes offline metered and unknown connections`() {
+        assertEquals(
+            FileSyncNetworkState.WaitingForNetwork,
+            liveFileSyncNetworkState(false, null, FileSyncNetworkPolicy.AnyConnection),
+        )
+        assertEquals(
+            FileSyncNetworkState.WaitingForNetwork,
+            liveFileSyncNetworkState(true, false, FileSyncNetworkPolicy.Unmetered),
+        )
+        assertEquals(
+            FileSyncNetworkState.Available,
+            liveFileSyncNetworkState(true, true, FileSyncNetworkPolicy.Unmetered),
+        )
+        assertEquals(
+            FileSyncNetworkState.Unknown,
+            liveFileSyncNetworkState(null, null, FileSyncNetworkPolicy.AnyConnection),
+        )
     }
 }

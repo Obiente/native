@@ -9,6 +9,7 @@ import {
   normalizeNewsArticleBody,
   parseNewsFrontmatter,
 } from "./content-frontmatter.mjs";
+import { parseGuideFrontmatter } from "./guide-frontmatter.mjs";
 import {
   assertValidNativeNewsFeed,
   nativeNewsFeedRevision,
@@ -26,18 +27,21 @@ import {
   validateArchivedReleaseHistory,
 } from "../../tools/changelog-fragments.mjs";
 import {
-  articleCapture,
+  articleCapturePair,
   stableCapturePath,
   validateCaptureManifest,
   websiteCapturePath,
 } from "./marketing-captures.mjs";
+import { resolveGithubRepositoryData } from "./github-repository-data.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
 const generatedDirectory = path.join(websiteRoot, "src", "generated");
 const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
+const guideDirectory = path.join(websiteRoot, "content", "guides");
 const roadmapSnapshotFile = path.join(websiteRoot, "data", "roadmap-snapshot.json");
+const repositorySnapshotFile = path.join(websiteRoot, "data", "github-repository.json");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
 await mkdir(generatedDirectory, { recursive: true });
@@ -118,12 +122,20 @@ const sources = [
       "How Android, iOS, Windows, macOS and Linux share domain rules while keeping native system integrations.",
   },
   {
+    file: "docs/shared-ui-controls.md",
+    path: "/shared-ui-controls/",
+    title: "Shared native choice controls",
+    shortTitle: "Shared controls",
+    description:
+      "Reusable native view switchers and form choices, their real consumers, and the state and permission boundaries they preserve.",
+  },
+  {
     file: "CONTRIBUTING.md",
     path: "/contributing/",
     title: "Contributing",
     shortTitle: "Contributing",
     description:
-      "Build requirements, validation commands and contribution guidance for Nextcloud Native.",
+      "Build requirements, validation commands and contribution guidance for nati.ve.",
   },
   {
     file: "SECURITY.md",
@@ -190,16 +202,21 @@ function textOnly(source) {
 }
 
 function headingsFrom(source) {
-  return [...source.matchAll(/^#{2,4}\s+(.+)$/gm)].map((match) => ({
-    title: match[1].replace(/[`*_]/g, "").trim(),
-    anchor: slugify(match[1]),
+  return [...source.matchAll(/^(#{2,4})[\t ]+(.+)$/gm)].map((match) => ({
+    title: match[2].replace(/[`*_]/g, "").trim(),
+    anchor: slugify(match[2]),
+    level: match[1].length,
   }));
+}
+
+function withoutLeadingTitle(source) {
+  return source.replace(/^#\s+[^\r\n]+\r?\n(?:\r?\n)*/u, "");
 }
 
 const docs = await Promise.all(
   sources.map(async (source) => {
     const markdownSource = await readFile(path.join(repositoryRoot, source.file), "utf8");
-    const html = markdown.render(markdownSource);
+    const html = markdown.render(withoutLeadingTitle(markdownSource));
     const text = textOnly(markdownSource);
     return {
       ...source,
@@ -217,6 +234,81 @@ await writeFile(path.join(generatedDirectory, "docs.js"), moduleSource);
 await writeFile(
   path.join(generatedDirectory, "docs-content.js"),
   `// Generated from repository Markdown. Do not edit.\nexport const docsContent = ${JSON.stringify(docs, null, 2)};\n`,
+);
+
+const guideFiles = (await readdir(guideDirectory))
+  .filter((file) => file.endsWith(".md"))
+  .sort();
+const guides = await Promise.all(
+  guideFiles.map(async (file) => {
+    const source = await readFile(path.join(guideDirectory, file), "utf8");
+    const parsed = parseGuideFrontmatter(source, file);
+    const steps = parsed.steps.map((step) => {
+      const capturePair = articleCapturePair(
+        captureManifest,
+        step.captureScenario,
+        `${file} step ${step.number}`,
+      );
+      const dark = capturePair.dark;
+      const light = capturePair.light;
+      return {
+        ...step,
+        html: markdown.render(step.source),
+        text: textOnly(step.source),
+        imageDark: stableCapturePath(dark),
+        imageLight: stableCapturePath(light),
+        websiteImageDark: websiteCapturePath(captureManifest, dark),
+        websiteImageLight: websiteCapturePath(captureManifest, light),
+        imageWidth: dark.width,
+        imageHeight: dark.height,
+      };
+    });
+    const text = [parsed.introduction, ...steps.map((step) => step.text)].join(" ");
+    const firstStep = steps[0];
+    return {
+      file,
+      path: `/guides/${parsed.metadata.platformSlug}/${parsed.metadata.slug}/`,
+      title: parsed.metadata.title,
+      shortTitle: parsed.metadata.title,
+      description: parsed.metadata.description,
+      category: parsed.metadata.category,
+      platform: parsed.metadata.platform,
+      platformSlug: parsed.metadata.platformSlug,
+      device: parsed.metadata.device,
+      platforms: parsed.metadata.platforms,
+      durationMinutes: parsed.metadata.durationMinutes,
+      difficulty: parsed.metadata.difficulty,
+      lastUpdated: parsed.metadata.lastUpdated,
+      prerequisites: parsed.metadata.prerequisites,
+      introduction: parsed.introduction,
+      introductionHtml: markdown.render(parsed.introduction),
+      steps,
+      text,
+      readingMinutes: Math.max(1, Math.ceil(text.split(/\s+/u).length / 220)),
+      imageDark: firstStep.imageDark,
+      imageLight: firstStep.imageLight,
+      websiteImageDark: firstStep.websiteImageDark,
+      websiteImageLight: firstStep.websiteImageLight,
+      imageAlt: firstStep.imageAlt,
+      imageWidth: firstStep.imageWidth,
+      imageHeight: firstStep.imageHeight,
+    };
+  }),
+);
+if (new Set(guides.map((guide) => guide.path)).size !== guides.length) {
+  throw new Error("Guide slugs must be unique.");
+}
+const guidesMetadata = guides.map(({ introductionHtml, steps, ...guide }) => ({
+  ...guide,
+  steps: steps.map(({ html, source, ...step }) => step),
+}));
+await writeFile(
+  path.join(generatedDirectory, "guides.js"),
+  `// Generated from task-based guide Markdown. Do not edit.\nexport const guides = ${JSON.stringify(guidesMetadata, null, 2)};\n`,
+);
+await writeFile(
+  path.join(generatedDirectory, "guides-content.js"),
+  `// Generated from task-based guide Markdown. Do not edit.\nexport const guidesContent = ${JSON.stringify(guides, null, 2)};\n`,
 );
 
 let changelogSource;
@@ -280,8 +372,13 @@ const news = await Promise.all(
     const { metadata, body } = parseNewsFrontmatter(source, file);
     const text = textOnly(body);
     const articleBody = normalizeNewsArticleBody(body, metadata.title);
-    const capture = articleCapture(captureManifest, metadata.captureScenario, file);
-    const image = stableCapturePath(capture);
+    const capturePair = articleCapturePair(
+      captureManifest,
+      metadata.captureScenario,
+      file,
+    );
+    const imageDark = stableCapturePath(capturePair.dark);
+    const imageLight = stableCapturePath(capturePair.light);
     return {
       file,
       path: `/news/${metadata.slug}/`,
@@ -291,13 +388,19 @@ const news = await Promise.all(
       date: metadata.date,
       lastUpdated: metadata.lastUpdated,
       tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-      captureScenario: capture.scenario,
-      image,
-      websiteImage: websiteCapturePath(captureManifest, capture),
+      captureScenario: capturePair.dark.baseScenario,
+      captureScenarioDark: capturePair.dark.scenario,
+      captureScenarioLight: capturePair.light.scenario,
+      image: imageDark,
+      imageDark,
+      imageLight,
+      websiteImage: websiteCapturePath(captureManifest, capturePair.dark),
+      websiteImageDark: websiteCapturePath(captureManifest, capturePair.dark),
+      websiteImageLight: websiteCapturePath(captureManifest, capturePair.light),
       imageAlt: metadata.imageAlt,
       imageCaption: metadata.imageCaption,
-      imageWidth: capture.width,
-      imageHeight: capture.height,
+      imageWidth: capturePair.dark.width,
+      imageHeight: capturePair.dark.height,
       html: markdown.render(articleBody),
       text,
       headings: headingsFrom(articleBody),
@@ -359,15 +462,20 @@ await writeFile(
 const searchIndex = [
   {
     path: "/",
-    title: "Nextcloud Native mobile and desktop client",
-    shortTitle: "Nextcloud Native",
+    title: "nati.ve for Android, Linux and Windows",
+    shortTitle: "nati.ve",
     description:
-      "Explore the Android and Linux alpha plus the public delivery roadmap for Files, sync, Photos, Memories, Talk, groupware, installed apps, and administration.",
+      "Open-source native Nextcloud alpha with Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
     text:
-      "Android Linux alpha native Nextcloud client public roadmap planned iOS macOS Windows offline cache multiple accounts background sync global search photo backup Live Photos RAW editing Talk calls Obsidian folder sync administration",
+      "Android Linux Windows native Nextcloud alpha Files offline sync multiple accounts background transfer global search photo backup Memories Recognize Live Photos Talk history Mail Calendar Contacts Tasks Notes Deck Tables Cookbook Cospend Music Obsidian folder sync planned iOS iPadOS macOS",
     contentType: "Product",
   },
   ...docs.map(({ html, ...doc }) => ({ ...doc, contentType: "Documentation" })),
+  ...guides.map(({ introductionHtml, steps, ...guide }) => ({
+    ...guide,
+    contentType: "Guide",
+    headings: steps.map((step) => ({ title: step.title, anchor: `step-${step.number}` })),
+  })),
   ...news.map(({ html, ...post }) => ({ ...post, contentType: "News" })),
   { ...changelog, html: undefined, contentType: "Changelog" },
 ];
@@ -387,7 +495,7 @@ async function githubJson(url) {
     signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) {
-    throw new Error(`GitHub roadmap request failed with HTTP ${response.status}.`);
+    throw new Error(`GitHub API request failed with HTTP ${response.status}.`);
   }
   return response.json();
 }
@@ -434,6 +542,20 @@ async function allProjectItems() {
 
 const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
 
+const githubRepositoryResult = await resolveGithubRepositoryData({
+  loadLive: () => githubJson("https://api.github.com/repos/obiente/native"),
+  loadSnapshot: async () => JSON.parse(await readFile(repositorySnapshotFile, "utf8")),
+});
+if (githubRepositoryResult.warning) {
+  console.warn(
+    `Using bundled GitHub repository snapshot: ${githubRepositoryResult.warning}`,
+  );
+}
+await writeFile(
+  path.join(generatedDirectory, "github-repository.js"),
+  `// Generated from public GitHub repository metadata with a bundled fallback. Do not edit.\nexport const githubRepository = Object.freeze(${JSON.stringify(githubRepositoryResult.repository, null, 2)});\n`,
+);
+
 let roadmap = fallbackRoadmap;
 try {
   const [epics, priorities, projectItems, verification, milestones] = await Promise.all([
@@ -442,7 +564,7 @@ try {
     allProjectItems(),
     githubProjectItems(`${projectApi}/views/4/items?per_page=100&${projectFieldQuery}`),
     githubJson(
-      "https://api.github.com/repos/Obiente/nc-native/milestones?state=all&per_page=100",
+      "https://api.github.com/repos/obiente/native/milestones?state=all&per_page=100",
     ),
   ]);
   const projectRoadmapItems = projectItems.map(roadmapItem).filter(Boolean);

@@ -204,6 +204,7 @@ private fun OfficeEditBlockedReason.toIntegratedFileBlockedReason(): IntegratedF
     -> IntegratedFileBlockedReason.MimeNotRegistered
     OfficeEditBlockedReason.DirectEditingUnavailable,
     OfficeEditBlockedReason.InsecureEditor,
+    OfficeEditBlockedReason.InsecureAccountOrigin,
     OfficeEditBlockedReason.Directory,
     -> IntegratedFileBlockedReason.DirectEditingUnavailable
 }
@@ -226,10 +227,12 @@ fun planIntegrationAppExperience(
     capabilities: NextcloudDocumentEditingCapabilities,
 ): IntegrationAppExperience = when (app.id) {
     OFFICE_NAVIGATION_APP_ID -> {
-        if (inventory.contains(OFFICE_CAPABILITY_APP_ID) &&
-            OFFICE_CAPABILITY_APP_ID in capabilities.editors
-        ) {
-            IntegrationAppExperience.Ready(OFFICE_CAPABILITY_APP_ID)
+        val editor = capabilities.editors.values
+            .filter { it.secure && it.id.isSafeDocumentCapabilityId() }
+            .sortedWith(compareBy(NextcloudDocumentEditorCapability::displayName, NextcloudDocumentEditorCapability::id))
+            .firstOrNull { inventory.contains(it.id) || inventory.contains(OFFICE_NAVIGATION_APP_ID) }
+        if (editor != null) {
+            IntegrationAppExperience.Ready(editor.id)
         } else {
             IntegrationAppExperience.Unsupported(app.id)
         }

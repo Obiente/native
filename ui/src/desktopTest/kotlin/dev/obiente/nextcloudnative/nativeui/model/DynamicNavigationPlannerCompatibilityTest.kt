@@ -7,7 +7,7 @@ import kotlin.test.assertFalse
 
 class DynamicNavigationPlannerCompatibilityTest {
     @Test
-    fun `Tables root opens tables and selected table opens columns and rows only`() {
+    fun `Tables root opens safe reads and selected table opens columns and rows only`() {
         val document = javaClass.getResourceAsStream(FIXTURE_PATH).use { stream ->
             requireNotNull(stream) { "Missing Tables OpenAPI fixture" }
             Json.parseToJsonElement(stream.bufferedReader().readText())
@@ -24,7 +24,7 @@ class DynamicNavigationPlannerCompatibilityTest {
         )
 
         assertEquals(
-            listOf("tables"),
+            listOf("tables", "overview"),
             descriptor.planDynamicNavigation().rootDestinations.map(DynamicNavigationDestination::resourceId),
         )
 

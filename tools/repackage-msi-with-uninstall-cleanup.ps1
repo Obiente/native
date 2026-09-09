@@ -21,7 +21,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-foreach ($path in @($PackageDirectory, $ArgumentsFile, $JpackageResourceDirectory, $AppImage, $Jpackage)) {
+foreach ($path in @(
+    $PackageDirectory,
+    $ArgumentsFile,
+    $JpackageResourceDirectory,
+    $AppImage,
+    $Jpackage
+)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required MSI packaging input does not exist: $path"
     }
@@ -76,6 +82,13 @@ if ($name -ne "NextcloudNative" -or
     throw "The captured package metadata or application image is invalid."
 }
 
+$packagedShellRegistrar = Join-Path $AppImage "NextcloudNativeShellRegistrar.exe"
+$packagedShellIcon = Join-Path $AppImage "NextcloudNative.ico"
+if (-not (Test-Path -LiteralPath $packagedShellRegistrar -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $packagedShellIcon -PathType Leaf)) {
+    throw "The completed Windows application image is missing its shell registration helper or icon."
+}
+
 if (Test-Path -LiteralPath $GeneratedResourceDirectory) {
     Remove-Item -LiteralPath $GeneratedResourceDirectory -Recurse -Force
 }
@@ -110,11 +123,21 @@ $actionDefinition = @'
       Directory="INSTALLDIR"
       ExeCommand="&quot;[INSTALLDIR]NextcloudNative.exe&quot; --unregister-windows-sync-root"
       Return="check" />
+    <CustomAction
+      Id="LaunchNextcloudNative"
+      Directory="INSTALLDIR"
+      ExeCommand="&quot;[INSTALLDIR]NextcloudNative.exe&quot;"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="asyncNoWait" />
 
 '@
 $actionSequence = @'
       <Custom Action="UnregisterNextcloudNativeSyncRoot" Before="RemoveFiles">
         REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
+      <Custom Action="LaunchNextcloudNative" After="InstallFinalize">
+        NOT REMOVE AND UILevel &gt;= 3 AND NOT NEXTCLOUD_NATIVE_UPDATER_HANDOFF
       </Custom>
 '@
 if (-not $mainWix.Contains("    <InstallExecuteSequence>")) {
@@ -166,3 +189,5 @@ $rebuilt = @(Get-ChildItem -LiteralPath $PackageDirectory -Filter "*.msi" -File)
 if ($rebuilt.Count -ne 1) {
     throw "Expected exactly one rebuilt MSI package, found $($rebuilt.Count)."
 }
+
+& (Join-Path $PSScriptRoot "set-windows-package-display-name.ps1") -Package $rebuilt[0].FullName

@@ -1,17 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
 data class TalkAttachmentReadPolicy(
-    val maxOriginalBytes: Long = DEFAULT_TALK_ATTACHMENT_READ_LIMIT_BYTES,
+    val maxInMemoryBytes: Long = DEFAULT_TALK_ATTACHMENT_IN_MEMORY_BYTES,
 ) {
     init {
-        require(maxOriginalBytes in 1..MAX_TALK_ATTACHMENT_READ_LIMIT_BYTES)
+        require(maxInMemoryBytes in 1..MAX_TALK_ATTACHMENT_IN_MEMORY_BYTES)
     }
 }
 
 enum class TalkAttachmentReadUnavailableReason {
     DownloadHidden,
     MissingPath,
-    FileTooLarge,
+    InMemoryReadTooLarge,
 }
 
 sealed interface TalkAttachmentReadResult {
@@ -37,7 +37,7 @@ class NextcloudTalkAttachmentDownloadBackend(
     )
 }
 
-/** Bounded original-file reader for future native audio playback or explicit save/open actions. */
+/** Bounded in-memory reader for previews. Explicit save/open actions must use a streaming handoff. */
 class TalkAttachmentReader(
     private val backend: TalkAttachmentDownloadBackend,
     private val policy: TalkAttachmentReadPolicy = TalkAttachmentReadPolicy(),
@@ -48,17 +48,17 @@ class TalkAttachmentReader(
         }
         val path = model.attachment.path?.takeIf(String::isNotBlank)
             ?: return TalkAttachmentReadResult.Unavailable(TalkAttachmentReadUnavailableReason.MissingPath)
-        if (model.attachment.size != null && model.attachment.size > policy.maxOriginalBytes) {
-            return TalkAttachmentReadResult.Unavailable(TalkAttachmentReadUnavailableReason.FileTooLarge)
+        if (model.attachment.size != null && model.attachment.size > policy.maxInMemoryBytes) {
+            return TalkAttachmentReadResult.Unavailable(TalkAttachmentReadUnavailableReason.InMemoryReadTooLarge)
         }
 
-        val content = backend.download(path, policy.maxOriginalBytes)
-        if (content.bytes.size.toLong() > policy.maxOriginalBytes) {
-            return TalkAttachmentReadResult.Unavailable(TalkAttachmentReadUnavailableReason.FileTooLarge)
+        val content = backend.download(path, policy.maxInMemoryBytes)
+        if (content.bytes.size.toLong() > policy.maxInMemoryBytes) {
+            return TalkAttachmentReadResult.Unavailable(TalkAttachmentReadUnavailableReason.InMemoryReadTooLarge)
         }
         return TalkAttachmentReadResult.Content(content)
     }
 }
 
-const val DEFAULT_TALK_ATTACHMENT_READ_LIMIT_BYTES = 64L * 1024L * 1024L
-const val MAX_TALK_ATTACHMENT_READ_LIMIT_BYTES = 256L * 1024L * 1024L
+const val DEFAULT_TALK_ATTACHMENT_IN_MEMORY_BYTES = 64L * 1024L * 1024L
+const val MAX_TALK_ATTACHMENT_IN_MEMORY_BYTES = 256L * 1024L * 1024L

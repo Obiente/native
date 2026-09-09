@@ -14,8 +14,48 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class MarketingCaptureOwnershipTest {
+    @Test
+    fun `capture typography is repository owned and weight stable`() {
+        val workingDirectory = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize()
+        val repositoryRoot = if (Files.exists(workingDirectory.resolve("tools/marketing-capture-inputs.txt"))) {
+            workingDirectory
+        } else {
+            requireNotNull(workingDirectory.parent)
+        }
+        val typography = deterministicCaptureTypography(repositoryRoot)
+        val standardStyles = listOf(
+            typography.displayLarge,
+            typography.displayMedium,
+            typography.displaySmall,
+            typography.headlineLarge,
+            typography.headlineMedium,
+            typography.headlineSmall,
+            typography.titleLarge,
+            typography.titleMedium,
+            typography.titleSmall,
+            typography.bodyLarge,
+            typography.bodyMedium,
+            typography.bodySmall,
+            typography.labelLarge,
+            typography.labelMedium,
+            typography.labelSmall,
+        )
+        val fontFamily = assertNotNull(standardStyles.first().fontFamily)
+        assertTrue(standardStyles.all { style -> style.fontFamily == fontFamily })
+
+        val captureSources = discoverCaptureSources(repositoryRoot)
+        listOf("Regular", "Medium", "SemiBold", "Bold").forEach { weight ->
+            assertTrue(
+                "ui/src/desktopMain/resources/marketing/fonts/NotoSans-$weight.ttf" in captureSources,
+            )
+        }
+        assertTrue("ui/src/desktopMain/resources/marketing/fonts/OFL.txt" in captureSources)
+    }
+
     @Test
     fun `preservation requires an explicit allowlist and rejects symlinks`() {
         withTemporaryDirectory("capture-preservation") { parent ->
@@ -71,7 +111,7 @@ class MarketingCaptureOwnershipTest {
                 stagedDirectory = staged,
                 registry = listOf(entry),
                 expectedCaptureSources = listOf("source.kt"),
-                expectedCaptureSourceSha256 = "1".repeat(64),
+                expectedCaptureSourceHashes = mapOf("source.kt" to "3".repeat(64)),
                 expectedAvatarSha256 = "2".repeat(64),
                 preservedFileNames = emptySet(),
             )
@@ -83,7 +123,7 @@ class MarketingCaptureOwnershipTest {
                     staged,
                     listOf(entry),
                     listOf("source.kt"),
-                    "1".repeat(64),
+                    mapOf("source.kt" to "3".repeat(64)),
                     "2".repeat(64),
                     emptySet(),
                 )
@@ -96,7 +136,7 @@ class MarketingCaptureOwnershipTest {
                     staged,
                     listOf(entry),
                     listOf("source.kt"),
-                    "1".repeat(64),
+                    mapOf("source.kt" to "3".repeat(64)),
                     "2".repeat(64),
                     emptySet(),
                 )
@@ -124,6 +164,30 @@ class MarketingCaptureOwnershipTest {
                 validateCatalog(staged, entry)
             }
             Files.deleteIfExists(external)
+        }
+    }
+
+    @Test
+    fun rejectedInitialRenamePreservesOriginalCatalog() {
+        withTemporaryDirectory("capture-locked-directory") { parent ->
+            val current = Files.createDirectory(parent.resolve("screenshots"))
+            val staged = Files.createDirectory(parent.resolve("staged"))
+            Files.writeString(current.resolve("capture-manifest.json"), "old manifest")
+            Files.write(current.resolve("old.png"), byteArrayOf(1, 2, 3))
+            Files.write(staged.resolve("new.png"), byteArrayOf(9, 8, 7))
+            val before = snapshot(current)
+
+            assertFailsWith<IOException> {
+                promoteStagedCaptureDirectory(current, staged) { _, _ ->
+                    throw IOException("injected directory lock")
+                }
+            }
+
+            assertEquals(before.keys, snapshot(current).keys)
+            before.forEach { (name, bytes) ->
+                assertContentEquals(bytes, snapshot(current).getValue(name))
+            }
+            assertContentEquals(byteArrayOf(9, 8, 7), Files.readAllBytes(staged.resolve("new.png")))
         }
     }
 
@@ -188,7 +252,7 @@ class MarketingCaptureOwnershipTest {
             staged,
             listOf(entry),
             listOf("source.kt"),
-            "1".repeat(64),
+            mapOf("source.kt" to "3".repeat(64)),
             "2".repeat(64),
             emptySet(),
         )
@@ -196,7 +260,9 @@ class MarketingCaptureOwnershipTest {
 
     private fun registryEntry() = MarketingCaptureRegistryEntry(
         id = "capture",
+        baseScenario = "capture",
         fileName = "capture.png",
+        theme = "dark",
         feature = "Files",
         surface = "Browser",
         state = "Ready",
@@ -220,17 +286,19 @@ class MarketingCaptureOwnershipTest {
             directory.resolve("capture-manifest.json"),
             """
                 {
-                  "schemaVersion": 2,
+                  "schemaVersion": 4,
                   "renderer": "Compose ImageComposeScene",
                   "identity": "Obiente",
                   "cloudIdentity": "Nextcloud",
                   "networkAccess": false,
                   "captureSources": ["source.kt"],
-                  "captureSourceSha256": "${"1".repeat(64)}",
+                  "captureSourceHashes": {"source.kt": "${"3".repeat(64)}"},
                   "avatarSha256": "${"2".repeat(64)}",
                   "captures": [{
                     "scenario": "${entry.id}",
+                    "baseScenario": "${entry.baseScenario}",
                     "file": "${entry.fileName}",
+                    "theme": "${entry.theme}",
                     "width": ${entry.width},
                     "height": ${entry.height},
                     "density": ${entry.density},

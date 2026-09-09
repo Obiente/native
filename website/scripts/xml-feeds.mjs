@@ -7,13 +7,15 @@ export function escapeXml(value) {
     .replaceAll("'", "&apos;");
 }
 
-export function buildSitemap(routes, newsEntries, baseUrl) {
+export function buildSitemap(routes, contentEntries, baseUrl) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     ...routes.map((route) => {
-      const post = newsEntries.find((entry) => entry.path === route);
-      const lastModified = post ? `<lastmod>${escapeXml(post.lastUpdated)}</lastmod>` : "";
+      const entry = contentEntries.find((candidate) => candidate.path === route);
+      const lastModified = entry?.lastUpdated
+        ? `<lastmod>${escapeXml(entry.lastUpdated)}</lastmod>`
+        : "";
       return `  <url><loc>${escapeXml(`${baseUrl}${route}`)}</loc>${lastModified}</url>`;
     }),
     "</urlset>",
@@ -25,9 +27,9 @@ export function buildRss(newsEntries, baseUrl) {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<rss version="2.0"><channel>',
-    "<title>Nextcloud Native project news</title>",
+    "<title>nati.ve project news</title>",
     `<link>${escapeXml(`${baseUrl}/news/`)}</link>`,
-    "<description>Guides to Nextcloud Native features, workflows, architecture, and public delivery roadmaps across phones and desktops.</description>",
+    "<description>Dated product and design notes from the nati.ve project.</description>",
     "<language>en</language>",
     ...newsEntries.map((post) => {
       const url = `${baseUrl}${post.path}`;

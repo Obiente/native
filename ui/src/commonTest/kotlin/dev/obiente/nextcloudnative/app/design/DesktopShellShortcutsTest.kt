@@ -2,9 +2,20 @@ package dev.obiente.nextcloudnative.app.design
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class DesktopShellShortcutsTest {
+    @Test
+    fun appSelectionUsesTheSameCanonicalIdsAsWorkspacePins() {
+        assertTrue(desktopAppIdsMatch("talk", "spreed"))
+        assertTrue(desktopAppIdsMatch("spreed", "Talk"))
+        assertTrue(desktopAppIdsMatch("Calendar", "calendar"))
+        assertFalse(desktopAppIdsMatch("talk", null))
+        assertFalse(desktopAppIdsMatch("talk", "calendar"))
+    }
+
     @Test
     fun `number shortcuts map to persistent desktop destinations`() {
         assertEquals(
@@ -12,7 +23,7 @@ class DesktopShellShortcutsTest {
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.One, true),
         )
         assertEquals(
-            NextcloudDestination.Apps,
+            NextcloudDestination.FolderSync,
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Two, true),
         )
         assertEquals(
@@ -20,7 +31,7 @@ class DesktopShellShortcutsTest {
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Three, true),
         )
         assertEquals(
-            NextcloudDestination.Settings,
+            NextcloudDestination.Apps,
             destinationForNextcloudDesktopShortcut(NextcloudDesktopShortcutKey.Four, true),
         )
     }

@@ -13,6 +13,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.actionBindingValues
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeStructuredDetail
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecipePresentation
+import dev.obiente.nextcloudnative.nativeui.runtime.uneditableNativeBodyFieldIds
 import dev.obiente.nextcloudnative.nativeui.runtime.withEphemeralDisplayFields
 import dev.obiente.nextcloudnative.nativeui.runtime.withObservedSettingsFormTypes
 import dev.obiente.nextcloudnative.nativeui.runtime.withObservedSettingsInputTypes
@@ -68,6 +69,90 @@ class CookbookOpenApiCompatibilityTest {
         assertEquals(
             listOf("servingSize", "calories", "carbohydrateContent", "proteinContent"),
             nutrition.entries.map { it.key },
+        )
+    }
+
+    @Test
+    fun cookbookTaggedAllOfRecipeBodyBecomesAnActionableNativeForm() {
+        val original = javaClass.getResourceAsStream(CONTRACT_FIXTURE_PATH).use { stream ->
+            requireNotNull(stream) { "Missing Cookbook OpenAPI fixture" }
+            Json.parseToJsonElement(stream.bufferedReader().readText()) as JsonObject
+        }
+        val components = original.getValue("components") as JsonObject
+        val schemas = components.getValue("schemas") as JsonObject
+        val recipe = schemas.getValue("Recipe") as JsonObject
+        val recipeProperties = recipe.getValue("properties") as JsonObject
+        val identityFields = setOf("id", "name", "keywords")
+        val composedRecipe = JsonObject(
+            mapOf(
+                "description" to JsonPrimitive("A recipe according to schema.org"),
+                "allOf" to JsonArray(
+                    listOf(
+                        JsonObject(
+                            mapOf(
+                                "type" to JsonPrimitive("object"),
+                                "properties" to JsonObject(recipeProperties.filterKeys(identityFields::contains)),
+                                "required" to JsonArray(identityFields.map(::JsonPrimitive)),
+                            ),
+                        ),
+                        JsonObject(
+                            mapOf(
+                                "type" to JsonPrimitive("object"),
+                                "properties" to JsonObject(recipeProperties.filterKeys { id -> id !in identityFields }),
+                                "required" to JsonArray(
+                                    listOf("description", "recipeIngredient", "recipeInstructions", "tool")
+                                        .map(::JsonPrimitive),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val paths = original.getValue("paths") as JsonObject
+        val recipesPath = paths.getValue("/apps/cookbook/api/v1/recipes") as JsonObject
+        val createOperation = recipesPath.getValue("post") as JsonObject
+        val document = JsonObject(
+            original +
+                ("components" to JsonObject(
+                    components + ("schemas" to JsonObject(schemas + ("Recipe" to composedRecipe))),
+                )) +
+                ("paths" to JsonObject(
+                    paths + ("/apps/cookbook/api/v1/recipes" to JsonObject(
+                        recipesPath + ("post" to JsonObject(
+                            createOperation + ("operationId" to JsonPrimitive("newrecipe")),
+                        )),
+                    )),
+                )),
+        )
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("cookbook", "Cookbook", "0.11.10"),
+                endpointPolicy = EndpointPolicy(
+                    serverOrigin = "https://cloud.example.test",
+                    approvedApiPrefixes = listOf("/apps/cookbook"),
+                ),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    documentUrl = "https://raw.githubusercontent.com/nextcloud/cookbook/v0.11.10/docs/dev/api/0.1.3/openapi-cookbook.yaml",
+                    document = document,
+                    trust = OpenApiTrust.appStoreLinkedExactGitHubTag,
+                ),
+            ),
+        )
+        val create = descriptor.actions.single { action ->
+            action.binding.method == HttpMethod.POST &&
+                action.binding.path == "/apps/cookbook/api/v1/recipes"
+        }
+        val createFields = descriptor.forms.single { form -> form.actionId == create.id }.fields
+        assertTrue(createFields.any { field -> field.fieldId == "name" && field.required })
+        assertTrue(createFields.any { field -> field.fieldId == "description" && !field.required })
+        assertTrue(setOf("id", "dateCreated", "dateModified", "nutrition").none { id ->
+            createFields.any { field -> field.fieldId == id }
+        })
+        val request = buildDynamicApiRequest(descriptor, create, mapOf("name" to "Compatibility recipe"))
+        assertEquals(
+            JsonObject(mapOf("name" to JsonPrimitive("Compatibility recipe"))),
+            Json.parseToJsonElement(requireNotNull(request.body).decodeToString()),
         )
     }
 
@@ -316,7 +401,7 @@ class CookbookOpenApiCompatibilityTest {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_APPSTORE_TEST") != "1") return
         val acquired = assertNotNull(
             SignedAppStoreContractAcquirer().acquire(
-                ContractAcquisitionRequest("cookbook", "34.0.1", "0.11.9"),
+                ContractAcquisitionRequest("cookbook", "34.0.1", "0.11.10"),
             ),
         )
         val trust = when (acquired.sourceKind) {
@@ -330,7 +415,7 @@ class CookbookOpenApiCompatibilityTest {
         }
         val descriptor = DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
-                app = AppIdentity("cookbook", "Cookbook", "0.11.9"),
+                app = AppIdentity("cookbook", "Cookbook", "0.11.10"),
                 endpointPolicy = EndpointPolicy(
                     serverOrigin = "https://cloud.example.test",
                     approvedApiPrefixes = listOf(
@@ -366,6 +451,28 @@ class CookbookOpenApiCompatibilityTest {
         assertTrue(descriptor.validationErrors().isEmpty())
 
         val nativeSchema = descriptor.toNativeAppSchema()
+        val updateRecipe = descriptor.actions.single { action ->
+            action.binding.path == "/apps/cookbook/api/v1/recipes/{id}" &&
+                action.binding.method == HttpMethod.PUT
+        }
+        val nativeUpdateRecipe = nativeSchema.actions.single { action -> action.id == updateRecipe.id }
+        val nativeRecipeResource = nativeSchema.resources.single { resource ->
+            resource.id == nativeUpdateRecipe.resourceId
+        }
+        val editableRecipeFields = editableNativeFields(nativeRecipeResource, nativeUpdateRecipe)
+        assertTrue(
+            uneditableNativeBodyFieldIds(
+                action = nativeUpdateRecipe,
+                editableFields = editableRecipeFields,
+                autoBoundValues = mapOf("id" to "123"),
+            ).isEmpty(),
+            "Cookbook recipe update has declared body fields without safe native editors: " +
+                uneditableNativeBodyFieldIds(
+                    action = nativeUpdateRecipe,
+                    editableFields = editableRecipeFields,
+                    autoBoundValues = mapOf("id" to "123"),
+                ).joinToString(),
+        )
         val configRead = descriptor.actions.single { action ->
             action.binding.path == "/apps/cookbook/api/v1/config" &&
                 action.binding.method == HttpMethod.GET
