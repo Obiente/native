@@ -883,7 +883,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
 
     private fun findDocumentWithOfflineFallback(session: NextcloudSession, path: String): NextcloudFile {
         val cached = offline.availableEntry(session, path) ?: virtualFiles.cachedEntry(session, path)
-        return runCatching { findDocument(session, resolveAccount(session), path) }
+        return runCatching { findDocument(session, resolveAccount(session), path, accountLeaseHeld = true) }
             .getOrElse { failure ->
                 cached ?: throw FileNotFoundException("The requested Nextcloud document was not found.").also {
                     it.initCause(failure)
