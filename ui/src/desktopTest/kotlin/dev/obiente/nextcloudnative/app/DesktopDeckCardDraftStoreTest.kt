@@ -295,6 +295,32 @@ class DesktopDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `submitted legacy draft cannot return after migration deletion fails`() = withStore { root, key, store ->
+        val session = session()
+        val original = persisted(title = "Submitted legacy draft")
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(session), original.key))
+        val marker = root.resolve(legacy.name.replaceFirst("draft_", "submitted_").removeSuffix(".json.enc") + ".marker")
+        writeLegacyDraft(legacy, key, original)
+        val originalEnvelope = legacy.readText()
+        val failing = DesktopDeckCardDraftStore(
+            root = root,
+            keyProvider = fixedKey(key),
+            deleteFile = { file ->
+                if (file == legacy) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+            },
+        )
+
+        assertEquals(original, failing.load(session, original.key))
+        failing.quarantineAfterSubmit(session, original.key)
+
+        assertEquals(originalEnvelope, legacy.readText())
+        assertTrue(marker.exists())
+        assertNull(failing.load(session, original.key))
+        assertNull(DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, original.key))
+        assertTrue(root.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
     fun `explicit legacy discard bypasses keyring and preserves unrelated recovery`() = withStore { root, key, store ->
         val session = session()
         val draftKey = persisted().key

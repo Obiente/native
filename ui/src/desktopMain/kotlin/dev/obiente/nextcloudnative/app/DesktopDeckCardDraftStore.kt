@@ -117,12 +117,16 @@ internal class DesktopDeckCardDraftStore(
 
     @Synchronized
     fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey) {
-        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), key)
+        val legacy = File(root, legacyStorageFileName(desktopFileCacheAccountId(session), key))
+        val legacyMarker = legacyQuarantineFile(legacy)
         val file = draftFile(session, key)
         val quarantine = quarantineFile(file)
         ensurePrivateDirectory()
+        publish(legacyMarker, SUBMITTED_MARKER_BYTES)
         publish(quarantine, SUBMITTED_MARKER_BYTES)
-        if (deleteDurably(file)) deleteDurably(quarantine)
+        if (deleteDurably(legacy) && deleteDurably(file) && deleteDurably(legacyMarker)) {
+            deleteDurably(quarantine)
+        }
     }
 
     @Synchronized
