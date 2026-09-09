@@ -437,9 +437,7 @@ internal class AndroidNextcloudServices(
     private val nativeMediaPreviewDecodeMutex = Mutex()
     internal fun isDurableUploadAccountResolutionAvailable() = preferences.durableUploadAccountResolutionAvailable()
     internal fun durableUploadAccountRegistry() = accountCredentials.durableUploadAccountRegistry()
-    private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
-        executeNextcloudApi(session, request)
-    }
+    private val memoriesTimeline = MemoriesPreferredTimelineReadService(::executeNextcloudApi)
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)

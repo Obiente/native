@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+private const val MAXIMUM_RETAINED_MEMORIES_ACCOUNT_SCOPES = 4
+
 internal class MemoriesMainTimelineIndexCache(
     private val gate: AccountPrivateMemoryGate,
 ) {
@@ -37,6 +39,8 @@ internal class MemoriesMainTimelineIndexCache(
             lock.withLock {
                 if (!forceRefresh) {
                     accounts[scope]?.let { state ->
+                        accounts.remove(scope)
+                        accounts[scope] = state
                         cached = MemoriesMainTimelineCachedIndex(
                             state.index,
                             state.sourceGeneration,
@@ -79,6 +83,9 @@ internal class MemoriesMainTimelineIndexCache(
                         )
                         accounts.remove(scope)
                         accounts[scope] = state
+                        while (accounts.size > MAXIMUM_RETAINED_MEMORIES_ACCOUNT_SCOPES) {
+                            accounts.remove(accounts.keys.first())
+                        }
                         published = MemoriesMainTimelineLoadResult.Loaded(
                             MemoriesMainTimelineCachedIndex(state.index, state.sourceGeneration),
                         )
@@ -106,10 +113,13 @@ internal class MemoriesMainTimelineIndexCache(
         producer: AccountPrivateMemoryProducer?,
     ): Boolean = gate.read(accountId.storageKey, producer, false) {
         lock.withLock {
-            val state = accounts[AccountScope(accountId, accountScope)]
+            val scope = AccountScope(accountId, accountScope)
+            val state = accounts[scope]
                 ?.takeIf { it.sourceGeneration == sourceGeneration }
                 ?: return@withLock false
             state.memoriesActive = true
+            accounts.remove(scope)
+            accounts[scope] = state
             true
         }
     }
@@ -131,12 +141,15 @@ internal class MemoriesMainTimelineIndexCache(
         producer: AccountPrivateMemoryProducer? = producer(accountId),
     ): MemoriesMainTimelineCachedIndex? = gate.read(accountId.storageKey, producer, null) {
         lock.withLock {
-            val state = accounts[AccountScope(accountId, accountScope)]
+            val scope = AccountScope(accountId, accountScope)
+            val state = accounts[scope]
                 ?.takeIf { current ->
                     current.memoriesActive &&
                         (sourceGeneration == null || sourceGeneration == current.sourceGeneration)
                 }
                 ?: return@withLock null
+            accounts.remove(scope)
+            accounts[scope] = state
             MemoriesMainTimelineCachedIndex(state.index, state.sourceGeneration)
         }
     }
