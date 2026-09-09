@@ -675,15 +675,15 @@ data class CachedDashboardStatus(
 internal class DashboardStatusMemoryCache(
     private val ttlSeconds: Long = DASHBOARD_STATUS_CACHE_TTL_SECONDS,
 ) {
-    private val entries = mutableMapOf<String, CachedDashboardStatus>()
+    private val entries = mutableMapOf<NextcloudAccountId, CachedDashboardStatus>()
 
     fun get(session: NextcloudSession, nowEpochSeconds: Long): CachedDashboardStatus? {
-        val entry = entries[session.dashboardCacheKey()] ?: return null
+        val entry = entries[session.accountId] ?: return null
         return entry.takeIf {
             nowEpochSeconds >= it.storedAtEpochSeconds &&
                 nowEpochSeconds - it.storedAtEpochSeconds <= ttlSeconds
         } ?: run {
-            entries.remove(session.dashboardCacheKey())
+            entries.remove(session.accountId)
             null
         }
     }
@@ -695,11 +695,11 @@ internal class DashboardStatusMemoryCache(
         nowEpochSeconds: Long,
     ) {
         require(nowEpochSeconds >= 0L) { "The dashboard cache timestamp is invalid." }
-        entries[session.dashboardCacheKey()] = CachedDashboardStatus(dashboard, status, nowEpochSeconds)
+        entries[session.accountId] = CachedDashboardStatus(dashboard, status, nowEpochSeconds)
     }
 
     fun invalidate(session: NextcloudSession) {
-        entries.remove(session.dashboardCacheKey())
+        entries.remove(session.accountId)
     }
 }
 
@@ -885,9 +885,6 @@ private fun String.encodeStatusFormComponent(): String = buildString {
         }
     }
 }
-
-private fun NextcloudSession.dashboardCacheKey(): String =
-    serverUrl.trim().trimEnd('/').lowercase() + '\u0000' + loginName
 
 private val dashboardJson = Json { ignoreUnknownKeys = true }
 

@@ -74,11 +74,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
 internal sealed interface DashboardSurfaceState {
@@ -233,21 +233,21 @@ internal fun NativeDashboardScreen(
     val workspaceRepository = remember(workspaceStorage) {
         HomeWorkspaceLayoutRepository(workspaceStorage)
     }
-    val workspaceScope = remember(session.serverUrl, session.loginName, formFactor) {
-        HomeWorkspaceScope(
-            accountScopeDigest = previewCacheDigest(session),
-            formFactor = formFactor,
-        )
+    val workspacePersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
+    val workspaceScope = remember(workspacePersistenceScopes.current, formFactor) {
+        HomeWorkspaceScope(workspacePersistenceScopes.current, formFactor)
     }
-    var workspaceLayout by remember(workspaceScope) {
-        mutableStateOf(workspaceRepository.load(workspaceScope))
-    }
+    val workspaceLayoutState = rememberMigratedHomeWorkspaceLayoutState(
+        workspaceRepository, workspaceScope, workspacePersistenceScopes.legacy,
+    )
+    var workspaceLayout by workspaceLayoutState.layout
 
     NativeDashboardPresentation(
         state = state,
         installedApps = installedApps,
         pinnedAppIds = pinnedAppIds,
         workspaceLayout = workspaceLayout,
+        workspaceLayoutAuthoritative = workspaceLayoutState.storageAuthoritative.value,
         onWorkspaceLayoutChanged = { updated ->
             workspaceLayout = updated
             workspaceRepository.save(updated)
@@ -274,6 +274,7 @@ internal fun NativeDashboardPresentation(
     installedApps: List<NextcloudAppEntry>,
     pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     workspaceLayout: HomeWorkspaceLayout,
+    workspaceLayoutAuthoritative: Boolean = true,
     onWorkspaceLayoutChanged: (HomeWorkspaceLayout) -> Boolean,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenStatus: (() -> Unit)?,
@@ -287,18 +288,15 @@ internal fun NativeDashboardPresentation(
         mutableStateOf(false)
     }
     var workspacePersistenceError by remember(workspaceLayout.scope) { mutableStateOf<String?>(null) }
-    var activeWorkspaceLayout by remember(workspaceLayout.scope) { mutableStateOf(workspaceLayout) }
-    LaunchedEffect(workspaceLayout) {
-        if (workspaceLayout != activeWorkspaceLayout) activeWorkspaceLayout = workspaceLayout
-    }
+    var activeWorkspaceLayout by remember(workspaceLayout) { mutableStateOf(workspaceLayout) }
     val widgetsAuthoritative = (state as? DashboardSurfaceState.Available)?.widgetsAuthoritative != false
-    LaunchedEffect(widgetsAuthoritative) {
-        if (!widgetsAuthoritative) {
+    val workspaceWritesEnabled = widgetsAuthoritative && workspaceLayoutAuthoritative
+    LaunchedEffect(workspaceWritesEnabled) {
+        if (!workspaceWritesEnabled) {
             customizeWorkspace = false
             workspacePersistenceError = null
         }
     }
-
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
             title = "Home",
@@ -309,7 +307,7 @@ internal fun NativeDashboardPresentation(
             },
             onBack = onBack,
             onRefresh = onRefresh,
-            onCustomize = if (widgetsAuthoritative) {
+            onCustomize = if (workspaceWritesEnabled) {
                 { customizeWorkspace = true }
             } else {
                 null
@@ -338,8 +336,8 @@ internal fun NativeDashboardPresentation(
                 val effectiveLayout = remember(activeWorkspaceLayout, availableSectionIds) {
                     activeWorkspaceLayout.reconcileAvailableSections(availableSectionIds)
                 }
-                LaunchedEffect(effectiveLayout, current.widgetsAuthoritative) {
-                    if (current.widgetsAuthoritative && effectiveLayout != activeWorkspaceLayout) {
+                LaunchedEffect(effectiveLayout, workspaceWritesEnabled) {
+                    if (workspaceWritesEnabled && effectiveLayout != activeWorkspaceLayout) {
                         activeWorkspaceLayout = effectiveLayout
                         onWorkspaceLayoutChanged(effectiveLayout)
                     }
@@ -364,7 +362,7 @@ internal fun NativeDashboardPresentation(
                 }
                 val updateWorkspaceLayout: (HomeWorkspaceLayout, Boolean) -> Unit = { updated, persist ->
                     activeWorkspaceLayout = updated
-                    if (persist && current.widgetsAuthoritative) {
+                    if (persist && workspaceWritesEnabled) {
                         workspacePersistenceError = if (onWorkspaceLayoutChanged(updated)) {
                             null
                         } else {
@@ -1410,7 +1408,7 @@ private sealed interface UserStatusSurfaceState {
 }
 
 private object UserStatusWorkspaceMemoryCache {
-    private val entries = linkedMapOf<String, UserStatusSurfaceState.Available>()
+    private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
 
     fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
         val key = key(session)
@@ -1424,8 +1422,7 @@ private object UserStatusWorkspaceMemoryCache {
         while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+    private fun key(session: NextcloudSession): NextcloudAccountId = session.accountId
 }
 
 private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
