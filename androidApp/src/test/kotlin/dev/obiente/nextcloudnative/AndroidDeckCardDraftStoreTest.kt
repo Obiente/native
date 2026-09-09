@@ -339,6 +339,30 @@ class AndroidDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `submitted legacy draft cannot return after migration deletion fails`() {
+        val storage = MemoryDeckDraftStorage()
+        val store = store(storage, IdentityDeckDraftCipher)
+        val original = persisted(title = "Submitted legacy draft")
+        val legacyKey = store.legacyStorageKey(session, original.key)
+        val legacyCiphertext = legacyCiphertextFor(original, legacyKey)
+        storage.values[legacyKey] = legacyCiphertext
+        storage.removeSucceeds = false
+
+        assertEquals(original, store.load(session, original.key))
+        store.quarantineAfterSubmit(session, original.key)
+
+        assertEquals(legacyCiphertext, storage.values[legacyKey])
+        assertEquals(
+            AndroidDeckCardDraftStore.QUARANTINE_MARKER,
+            storage.values[legacyKey.replaceFirst("draft_", "submitted_")],
+        )
+        assertNull(store(storage, IdentityDeckDraftCipher).load(session, original.key))
+        storage.removeSucceeds = true
+        assertNull(store(storage, IdentityDeckDraftCipher).load(session, original.key))
+        assertTrue(storage.values.isEmpty())
+    }
+
+    @Test
     fun `explicit legacy discard bypasses decryption and preserves unrelated recovery`() {
         val storage = MemoryDeckDraftStorage()
         val store = store(storage, IdentityDeckDraftCipher)
@@ -368,7 +392,8 @@ class AndroidDeckCardDraftStoreTest {
 
         unavailable.clear(session, key, discardUnreadable = true)
 
-        assertEquals(unrelated, storage.values)
+        assertEquals(unrelated.keys, storage.values.keys)
+        unrelated.forEach { (storedKey, value) -> assertEquals(value, storage.getString(storedKey)) }
         val replacement = persisted(title = "Replacement")
         store.save(session, replacement)
         assertEquals(replacement, store(storage, IdentityDeckDraftCipher).load(session, key))

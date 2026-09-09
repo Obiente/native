@@ -213,12 +213,18 @@ internal class AndroidDeckCardDraftStore(
 
     fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey): Unit =
         synchronized(STORAGE_LOCK) {
-            migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
             val storedKey = storageKey(session, key)
+            val legacyKey = legacyStorageKey(NextcloudDocumentIds.accountKey(session), key)
+            val legacyMarker = quarantineKey(legacyKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX)
+            check(storage.putString(legacyMarker, QUARANTINE_MARKER)) {
+                "The submitted legacy Deck card draft could not be quarantined."
+            }
             check(storage.putString(quarantineKey(storedKey), QUARANTINE_MARKER)) {
                 "The submitted Deck card draft could not be quarantined."
             }
-            if (!storage.remove(setOf(storedKey, quarantineKey(storedKey)))) return@synchronized
+            if (!storage.remove(setOf(legacyKey, legacyMarker, storedKey, quarantineKey(storedKey)))) {
+                return@synchronized
+            }
         }
 
     fun discardAll(): Unit = synchronized(STORAGE_LOCK) {

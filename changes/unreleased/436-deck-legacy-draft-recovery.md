@@ -4,4 +4,4 @@ pull: 436
 platforms: android, desktop
 user-facing: yes
 
-Keep replacement Deck drafts from being cleared by an older submitted-draft marker after migration. Explicitly discarding an unreadable legacy draft now clears only that account's selected draft without requiring its encryption key.
+Preserve replacement Deck drafts and prevent submitted drafts from reappearing after failed legacy cleanup. Explicit discard clears only the selected account's draft without requiring its encryption key.
