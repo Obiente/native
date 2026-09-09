@@ -337,6 +337,43 @@ class AndroidDocumentProviderReadAccessTest {
     }
 
     @Test
+    fun providerReadKeepsCredentialTransitionBlockedThroughTheAuthenticatedCall() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val readEntered = CompletableDeferred<Unit>()
+        val finishRead = CompletableDeferred<Unit>()
+        val replacement = original.copy(appPassword = "replacement-password")
+        var currentSession = original
+        val read = async(Dispatchers.Default) {
+            withAndroidDocumentProviderReadAccess(
+                original,
+                originalIncarnation,
+                { currentSession },
+                { originalIncarnation },
+                guard,
+                lifetimeGuard,
+            ) {
+                readEntered.complete(Unit)
+                runBlocking { finishRead.await() }
+            }
+        }
+        readEntered.await()
+        val transition = async(Dispatchers.Default) {
+            guard.withAccounts(androidAccountOperationIdentities(replacement)) {
+                currentSession = replacement
+            }
+        }
+        yield()
+
+        assertFalse(transition.isCompleted)
+        assertEquals(original, currentSession)
+        finishRead.complete(Unit)
+        read.await()
+        transition.await()
+        assertEquals(replacement, currentSession)
+    }
+
+    @Test
     fun failedReadReleasesTheAccountLease() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()

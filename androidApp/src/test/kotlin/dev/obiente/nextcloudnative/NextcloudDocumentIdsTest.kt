@@ -51,6 +51,41 @@ class NextcloudDocumentIdsTest {
     }
 
     @Test
+    fun documentIdsAreStableAcrossCanonicalServerSpellings() {
+        val equivalent = session.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE:443///")
+        val retainedDocument = NextcloudDocumentIds.documentId(session, legacy, "Documents/report.pdf")
+
+        assertEquals(session.accountId, equivalent.accountId)
+        assertNotEquals(NextcloudDocumentIds.accountKey(session), NextcloudDocumentIds.accountKey(equivalent))
+        assertEquals(
+            retainedDocument,
+            NextcloudDocumentIds.documentId(equivalent, legacy, "Documents/report.pdf"),
+        )
+        assertEquals(
+            NextcloudDocumentIds.providerRootId(session, legacy),
+            NextcloudDocumentIds.providerRootId(equivalent, legacy),
+        )
+        assertEquals(
+            "Documents/report.pdf",
+            NextcloudDocumentIds.requireForSession(retainedDocument, equivalent, legacy).path,
+        )
+    }
+
+    @Test
+    fun legacyRawDocumentIdsRemainReadableForTheirCurrentSession() {
+        val canonical = NextcloudDocumentIds.documentId(session, legacy, "Documents/report.pdf")
+        val legacyId = canonical.replaceFirst(
+            NextcloudDocumentIds.documentAccountKey(session),
+            NextcloudDocumentIds.accountKey(session),
+        )
+
+        assertEquals(
+            "Documents/report.pdf",
+            NextcloudDocumentIds.requireForSession(legacyId, session, legacy).path,
+        )
+    }
+
+    @Test
     fun accountWorkIdentityRetainsThePreRegistryRawServerDigest() {
         val legacySession = session.copy(serverUrl = "https://CLOUD.EXAMPLE:443/")
 
@@ -128,11 +163,11 @@ class NextcloudDocumentIdsTest {
         val versioned = NextcloudDocumentIncarnation.Versioned("1".repeat(32))
 
         assertEquals(
-            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), legacy),
+            NextcloudDocumentRootReference(NextcloudDocumentIds.documentAccountKey(session), legacy),
             NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, legacy)),
         )
         assertEquals(
-            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), versioned),
+            NextcloudDocumentRootReference(NextcloudDocumentIds.documentAccountKey(session), versioned),
             NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, versioned)),
         )
         assertFailsWith<IllegalArgumentException> {

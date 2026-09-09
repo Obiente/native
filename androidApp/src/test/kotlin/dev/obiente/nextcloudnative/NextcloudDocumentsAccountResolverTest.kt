@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class NextcloudDocumentsAccountResolverTest {
     private val alice = session("alice")
@@ -120,6 +121,25 @@ class NextcloudDocumentsAccountResolverTest {
             resolver.resolvableAccounts(),
         )
         assertEquals(alice.accountId.storageKey, loadedIdentity)
+    }
+
+    @Test
+    fun `retained IDs resolve after canonically equivalent reauthentication`() {
+        val equivalent = alice.copy(
+            serverUrl = "HTTPS://CLOUD.EXAMPLE:443///",
+            appPassword = "replacement-password",
+        )
+        val retainedDocument = NextcloudDocumentIds.documentId(alice, aliceIncarnation, "Documents/report.pdf")
+        val retainedRoot = NextcloudDocumentIds.providerRootId(alice, aliceIncarnation)
+        val resolver = resolver(
+            accounts = listOf(equivalent.accountRecord()),
+            loadSession = { equivalent },
+        )
+
+        assertEquals(alice.accountId, equivalent.accountId)
+        assertNotEquals(NextcloudDocumentIds.accountKey(alice), NextcloudDocumentIds.accountKey(equivalent))
+        assertEquals("Documents/report.pdf", resolver.requireDocument(retainedDocument).reference.path)
+        assertEquals(aliceIncarnation, resolver.requireRoot(retainedRoot).incarnation)
     }
 
     @Test

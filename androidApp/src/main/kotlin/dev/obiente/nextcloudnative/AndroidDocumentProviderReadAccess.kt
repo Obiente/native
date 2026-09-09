@@ -53,27 +53,38 @@ internal inline fun <Descriptor> openAndroidTrackedRangeDescriptor(
     throw failure
 }
 
-internal inline fun <Result> withAndroidDocumentProviderReadAccess(
+internal fun <Result> withAndroidDocumentProviderReadAccess(
     expectedSession: NextcloudSession,
     expectedIncarnation: NextcloudDocumentIncarnation,
-    noinline loadCurrentSession: () -> NextcloudSession?,
-    noinline loadCurrentIncarnation: (String) -> NextcloudDocumentIncarnation,
+    loadCurrentSession: () -> NextcloudSession?,
+    loadCurrentIncarnation: (String) -> NextcloudDocumentIncarnation,
     operationGuard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
     action: (NextcloudSession) -> Result,
 ): Result {
-    val lease = acquireAndroidDocumentProviderReadLease(
-        expectedSession,
-        expectedIncarnation,
-        loadCurrentSession,
-        loadCurrentIncarnation,
-        operationGuard,
-        lifetimeGuard,
+    val lifetimeLease = lifetimeGuard.acquireReadBlocking(
+        expectedSession.documentProviderIncarnationAccountIdentity(),
     )
+    val operationLease = try {
+        operationGuard.acquireBlocking(androidAccountOperationIdentities(expectedSession))
+    } catch (failure: Throwable) {
+        lifetimeLease.close()
+        throw failure
+    }
     return try {
+        checkAndroidDocumentProviderReadAccess(
+            expectedSession,
+            expectedIncarnation,
+            loadCurrentSession,
+            loadCurrentIncarnation,
+        )
         action(expectedSession)
     } finally {
-        lease.close()
+        try {
+            operationLease.close()
+        } finally {
+            lifetimeLease.close()
+        }
     }
 }
 

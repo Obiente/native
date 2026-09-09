@@ -48,6 +48,9 @@ internal object NextcloudDocumentIds {
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
+    fun documentAccountKey(session: NextcloudSession): String =
+        session.accountId.storageKey.take(DOCUMENT_ACCOUNT_KEY_CHARACTERS)
+
     /** Full digest for private caches which require a canonical SHA-256 directory key. */
     fun cacheAccountId(session: NextcloudSession): String =
         accountDigest(session.serverUrl, session.loginName)
@@ -55,8 +58,8 @@ internal object NextcloudDocumentIds {
 
     fun providerRootId(session: NextcloudSession, incarnation: NextcloudDocumentIncarnation): String =
         when (incarnation) {
-            NextcloudDocumentIncarnation.Legacy -> accountKey(session)
-            is NextcloudDocumentIncarnation.Versioned -> "${accountKey(session)}:${incarnation.value}"
+            NextcloudDocumentIncarnation.Legacy -> documentAccountKey(session)
+            is NextcloudDocumentIncarnation.Versioned -> "${documentAccountKey(session)}:${incarnation.value}"
         }
 
     fun parseProviderRootId(rootId: String): NextcloudDocumentRootReference {
@@ -72,7 +75,7 @@ internal object NextcloudDocumentIds {
     }
 
     fun rootId(session: NextcloudSession, incarnation: NextcloudDocumentIncarnation): String =
-        rootId(accountKey(session), incarnation)
+        rootId(documentAccountKey(session), incarnation)
 
     fun rootId(accountKey: String, incarnation: NextcloudDocumentIncarnation): String {
         require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
@@ -90,9 +93,9 @@ internal object NextcloudDocumentIds {
         val normalizedPath = normalizePath(path)
         val encodedPath = encoder.encodeToString(normalizedPath.encodeToByteArray())
         return when (incarnation) {
-            NextcloudDocumentIncarnation.Legacy -> "$LEGACY_PREFIX:${accountKey(session)}:$encodedPath"
+            NextcloudDocumentIncarnation.Legacy -> "$LEGACY_PREFIX:${documentAccountKey(session)}:$encodedPath"
             is NextcloudDocumentIncarnation.Versioned ->
-                "$VERSIONED_PREFIX:${accountKey(session)}:${incarnation.value}:$encodedPath"
+                "$VERSIONED_PREFIX:${documentAccountKey(session)}:${incarnation.value}:$encodedPath"
         }
     }
 
@@ -123,7 +126,9 @@ internal object NextcloudDocumentIds {
         incarnation: NextcloudDocumentIncarnation,
     ): NextcloudDocumentReference =
         parse(documentId).also { reference ->
-            require(reference.accountKey == accountKey(session)) { "Document belongs to another account." }
+            require(reference.accountKey in setOf(documentAccountKey(session), accountKey(session))) {
+                "Document belongs to another account."
+            }
             require(reference.incarnation == incarnation) { "Document belongs to an earlier account incarnation." }
         }
 
@@ -131,6 +136,8 @@ internal object NextcloudDocumentIds {
         val identity = serverUrl.trimEnd('/') + "\n" + loginName
         return MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
     }
+
+    private const val DOCUMENT_ACCOUNT_KEY_CHARACTERS = 32
 
     fun parentPath(path: String): String = normalizePath(path).substringBeforeLast('/', missingDelimiterValue = "")
 

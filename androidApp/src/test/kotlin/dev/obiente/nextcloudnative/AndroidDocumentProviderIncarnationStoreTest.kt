@@ -595,6 +595,49 @@ class AndroidDocumentProviderIncarnationStoreTest {
     }
 
     @Test
+    fun credentialResetQuiescesRangeSessionsBeforeCredentialsDisappear() = runBlocking {
+        val active = AndroidDocumentProviderIncarnationRecord.Active(
+            NextcloudDocumentIncarnation.Versioned("1".repeat(32)),
+        )
+        val fixture = fixture(
+            records = mutableMapOf(accountIdentity to encodeAndroidDocumentProviderIncarnationRecord(active)),
+        )
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val activity = AndroidFileRangeSessionActivity()
+        var sourceClosed = false
+        val registration = coordinator.register("legacy-range-account", activity) {
+            sourceClosed = true
+            activity.close()
+        }
+        val finishRead = requireNotNull(activity.start())
+        var credentialsCleared = false
+
+        val reset = async(start = CoroutineStart.UNDISPATCHED) {
+            retireAndroidDocumentProviderIncarnationsForCredentialReset(
+                store = fixture.store,
+                lifetimeGuard = AndroidAccountRemovalLifetimeGuard(),
+                rangeCoordinator = coordinator,
+                clearCredentials = { credentialsCleared = true },
+            )
+        }
+
+        assertTrue(sourceClosed)
+        assertFalse(credentialsCleared)
+        assertFailsWith<IllegalStateException> {
+            coordinator.register("late-range-account", AndroidFileRangeSessionActivity()) {}
+        }
+
+        finishRead()
+        reset.await()
+
+        assertTrue(credentialsCleared)
+        assertEquals(null, activity.start())
+        registration.close()
+        val newActivity = AndroidFileRangeSessionActivity()
+        coordinator.register("new-range-account", newActivity, newActivity::close).close()
+    }
+
+    @Test
     fun credentialResetWaitsForARecordlessLegacyDocumentLifetimeLease() = runBlocking {
         val fixture = fixture()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()

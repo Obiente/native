@@ -363,26 +363,29 @@ internal class AndroidDocumentProviderIncarnationStore(
 internal suspend fun retireAndroidDocumentProviderIncarnationsForCredentialReset(
     store: AndroidDocumentProviderIncarnationStore,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard,
+    rangeCoordinator: AndroidFileRangeSessionCoordinator = ANDROID_FILE_RANGE_SESSION_COORDINATOR,
     clearCredentials: suspend () -> Unit,
     recordCompletionFailure: (Exception) -> Unit = {},
 ) {
     val accountIdentities = store.accountIdentitiesForCredentialReset()
     lifetimeGuard.withCredentialReset(accountIdentities) {
-        val retirements = store.prepareForCredentialReset(accountIdentities)
-        withContext(NonCancellable) {
-            try {
-                clearCredentials()
-            } catch (failure: Exception) {
-                retirements.asReversed().forEach { retirement ->
-                    runCatching { store.rollback(retirement) }.onFailure(failure::addSuppressed)
-                }
-                throw failure
-            }
-            retirements.forEach { retirement ->
+        rangeCoordinator.withAllQuiesced {
+            val retirements = store.prepareForCredentialReset(accountIdentities)
+            withContext(NonCancellable) {
                 try {
-                    store.complete(retirement)
+                    clearCredentials()
                 } catch (failure: Exception) {
-                    recordCompletionFailure(failure)
+                    retirements.asReversed().forEach { retirement ->
+                        runCatching { store.rollback(retirement) }.onFailure(failure::addSuppressed)
+                    }
+                    throw failure
+                }
+                retirements.forEach { retirement ->
+                    try {
+                        store.complete(retirement)
+                    } catch (failure: Exception) {
+                        recordCompletionFailure(failure)
+                    }
                 }
             }
         }
