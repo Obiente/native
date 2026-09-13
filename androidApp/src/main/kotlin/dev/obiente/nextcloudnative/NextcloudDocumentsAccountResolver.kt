@@ -20,6 +20,7 @@ internal class NextcloudDocumentsAccountResolver(
     private val listAccounts: () -> List<NextcloudAccountRecord>,
     private val loadSession: (NextcloudAccountId) -> NextcloudSession?,
     private val loadIncarnation: (String) -> NextcloudDocumentIncarnation,
+    private val loadLegacyAliases: (NextcloudAccountId) -> Set<String> = { emptySet() },
 ) {
     fun resolvableAccounts(): List<ResolvedNextcloudDocumentsAccount> {
         val records = runCatching(listAccounts).getOrElse { return emptyList() }
@@ -39,7 +40,7 @@ internal class NextcloudDocumentsAccountResolver(
         val account = requireAccount(parsed.accountKey)
         return ResolvedNextcloudDocument(
             session = account.session,
-            reference = NextcloudDocumentIds.requireForSession(documentId, account.session, account.incarnation),
+            reference = NextcloudDocumentIds.requireForSession(documentId, account.session, account.incarnation, loadLegacyAliases(account.session.accountId)),
         )
     }
 
@@ -51,7 +52,7 @@ internal class NextcloudDocumentsAccountResolver(
     }
 
     private fun requireAccount(accountKey: String): ResolvedNextcloudDocumentsAccount {
-        val matches = listAccounts().filter { record -> accountKey in record.documentAccountKeys() }
+        val matches = listAccounts().filter { record -> accountKey in (record.documentAccountKeys() + loadLegacyAliases(record.id)) }
         require(matches.size == 1) { "The document account is missing or ambiguous." }
         return requireNotNull(loadExactAccount(matches.single())) {
             "The document account credentials are unavailable."
@@ -72,10 +73,12 @@ internal class NextcloudDocumentsAccountResolver(
 internal fun nextcloudDocumentsAccountResolver(
     services: AndroidNextcloudServices,
     incarnations: AndroidDocumentProviderIncarnationStore,
+    aliases: AndroidDocumentLegacyAliases,
 ) = NextcloudDocumentsAccountResolver(
     services::listAccounts,
     services::loadSession,
     incarnations::activeIncarnation,
+    { id -> aliases.read(id.storageKey, incarnations.activeIncarnation(id.storageKey)) },
 )
 
 private fun NextcloudAccountRecord.canonicalDocumentAccountKey(): String =

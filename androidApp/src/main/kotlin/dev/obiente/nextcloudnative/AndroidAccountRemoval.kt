@@ -264,10 +264,10 @@ internal fun revokeAndroidAccountDocumentGrants(
 ) {
     val retired = AndroidDocumentProviderIncarnationStore(context).retiredIncarnation(accountStorageKey)
         ?: NextcloudDocumentIncarnation.Legacy
-    val rootIds = listOf(
-        NextcloudDocumentIds.rootId(accountIdentity, NextcloudDocumentIncarnation.Legacy),
-        NextcloudDocumentIds.rootId(accountIdentity, retired),
-    ).distinct()
+    val aliases = AndroidDocumentLegacyAliases(context).read(accountStorageKey, retired)
+    val rootIds = (aliases + accountIdentity).flatMap { alias ->
+        androidAccountDocumentGrantRootIds(alias, accountStorageKey, retired)
+    }.distinct()
     rootIds.forEach { rootId ->
         AndroidAccountDocumentGrantScope.entries.forEach { scope ->
             context.revokeUriPermission(
@@ -276,6 +276,7 @@ internal fun revokeAndroidAccountDocumentGrants(
             )
         }
     }
+    AndroidDocumentLegacyAliases(context).clear(accountStorageKey)
 }
 
 internal suspend fun runAndroidAccountRemovalCleanups(
@@ -292,4 +293,14 @@ internal suspend fun runAndroidAccountRemovalCleanups(
         }
     }
     firstFailure?.let { throw it }
+}
+
+internal fun androidAccountDocumentGrantRootIds(
+    legacyAccountIdentity: String,
+    accountStorageKey: String,
+    retired: NextcloudDocumentIncarnation,
+): List<String> = listOf(legacyAccountIdentity, accountStorageKey.take(32)).distinct().flatMap { identity ->
+    listOf(NextcloudDocumentIncarnation.Legacy, retired).distinct().map { incarnation ->
+        NextcloudDocumentIds.rootId(identity, incarnation)
+    }
 }

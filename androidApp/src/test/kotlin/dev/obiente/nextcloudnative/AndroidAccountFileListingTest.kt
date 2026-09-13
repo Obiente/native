@@ -39,7 +39,7 @@ class AndroidAccountFileListingTest {
                     }
                 }
                 if (operation in listOf("move destination", "nested create")) {
-                    requireAndroidDocumentDirectory(NextcloudDocumentReference(key, "Notes/Child"), ::findDocument)
+                    requireAndroidDocumentDirectory(NextcloudDocumentReference(key, NextcloudDocumentIncarnation.Legacy, "Notes/Child"), ::findDocument)
                 } else {
                     assertEquals("Notes/Child", findDocument("Notes/Child").path, operation)
                 }
@@ -129,9 +129,9 @@ class AndroidAccountFileListingTest {
     @Test
     fun rootCreateSkipsLookupAndNonDirectoryParentIsRejected() {
         val key = NextcloudDocumentIds.accountKey(session())
-        requireAndroidDocumentDirectory(NextcloudDocumentReference(key, "")) { error("Root has no parent listing") }
+        requireAndroidDocumentDirectory(NextcloudDocumentReference(key, NextcloudDocumentIncarnation.Legacy, "")) { error("Root has no parent listing") }
         assertFailsWith<IllegalArgumentException> {
-            requireAndroidDocumentDirectory(NextcloudDocumentReference(key, "Notes.txt")) { file(it) }
+            requireAndroidDocumentDirectory(NextcloudDocumentReference(key, NextcloudDocumentIncarnation.Legacy, "Notes.txt")) { file(it) }
         }
     }
 

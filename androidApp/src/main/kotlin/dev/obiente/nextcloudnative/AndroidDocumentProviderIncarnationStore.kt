@@ -503,10 +503,11 @@ internal fun prepareAndroidDocumentProviderAccountSave(
 ) {
     val store = AndroidDocumentProviderIncarnationStore(context)
     store.reconcilePendingForCredentialAccess(current.registry)
-    store.prepareForAccountSave(
+    val incarnation = store.prepareForAccountSave(
         session.documentProviderIncarnationAccountIdentity(),
         session.accountId in current.sessions,
     )
+    AndroidDocumentLegacyAliases(context).remember(session, current.sessions[session.accountId], incarnation)
 }
 
 internal fun reconcileAndroidDocumentProviderAccountRemovals(

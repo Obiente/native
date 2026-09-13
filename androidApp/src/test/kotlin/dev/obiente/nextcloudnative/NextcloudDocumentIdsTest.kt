@@ -12,6 +12,18 @@ class NextcloudDocumentIdsTest {
     private val legacy = NextcloudDocumentIncarnation.Legacy
 
     @Test
+    fun removalRevokesCanonicalAndLegacyRootsForTheRetiredIncarnation() {
+        val rawKey = "a".repeat(32)
+        val canonicalKey = "b".repeat(64)
+        val retired = NextcloudDocumentIncarnation.Versioned("c".repeat(32))
+        assertEquals(
+            setOf("nc1:$rawKey:", "nc2:$rawKey:${retired.value}:",
+                "nc1:${canonicalKey.take(32)}:", "nc2:${canonicalKey.take(32)}:${retired.value}:"),
+            androidAccountDocumentGrantRootIds(rawKey, canonicalKey, retired).toSet(),
+        )
+    }
+
+    @Test
     fun cacheAccountIdIsAFullSha256Digest() {
         val digest = NextcloudDocumentIds.cacheAccountId(session)
 

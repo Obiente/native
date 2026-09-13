@@ -54,7 +54,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         cleanupIncompleteAndroidDocumentWritebacks(providerContext)
         services = AndroidNextcloudServices(providerContext)
         documentIncarnations = AndroidDocumentProviderIncarnationStore(providerContext)
-        accountResolver = nextcloudDocumentsAccountResolver(services, documentIncarnations)
+        accountResolver = nextcloudDocumentsAccountResolver(services, documentIncarnations, AndroidDocumentLegacyAliases(providerContext))
         AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(providerContext))
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
@@ -825,7 +825,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             message = "This Nextcloud document ID is no longer valid.",
             accountIdentity = NextcloudDocumentIds.accountKey(session),
         ) {
-            NextcloudDocumentIds.requireForSession(documentId, session, incarnation)
+            NextcloudDocumentIds.requireForSession(documentId, session, incarnation, AndroidDocumentLegacyAliases(requireNotNull(context)).read(session.accountId.storageKey, incarnation))
         }
 
     private inline fun <Result> withDocumentMutation(

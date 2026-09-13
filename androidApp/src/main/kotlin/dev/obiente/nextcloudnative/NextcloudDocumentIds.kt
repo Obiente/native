@@ -124,9 +124,10 @@ internal object NextcloudDocumentIds {
         documentId: String,
         session: NextcloudSession,
         incarnation: NextcloudDocumentIncarnation,
+        legacyAliases: Set<String> = emptySet(),
     ): NextcloudDocumentReference =
         parse(documentId).also { reference ->
-            require(reference.accountKey in setOf(documentAccountKey(session), accountKey(session))) {
+            require(reference.accountKey in (setOf(documentAccountKey(session), accountKey(session)) + legacyAliases)) {
                 "Document belongs to another account."
             }
             require(reference.incarnation == incarnation) { "Document belongs to an earlier account incarnation." }
