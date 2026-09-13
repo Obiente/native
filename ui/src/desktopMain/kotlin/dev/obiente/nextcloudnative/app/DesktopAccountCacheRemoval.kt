@@ -70,6 +70,7 @@ internal suspend fun removeDesktopAccountPrivateStorage(
 }
 
 internal fun removeDesktopAccountVirtualFilePreferences(preferences: Preferences, accountId: String) {
+    preferences.remove(virtualFileProviderPreferenceKey(accountId))
     preferences.remove(virtualFileProviderRootPreferenceKey(accountId))
     preferences.remove(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX, accountId))
     preferences.remove(virtualFileCachePreferenceKey(KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX, accountId))

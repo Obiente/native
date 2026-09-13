@@ -67,6 +67,26 @@ class DesktopVirtualFileProviderPreferencesTest {
     }
 
     @Test
+    fun `credential removal sees the durable provider preference still enabled`() {
+        val preferences = Preferences.userRoot().node("provider-removal-${java.util.UUID.randomUUID()}")
+        val accountId = "a".repeat(64)
+        try {
+            setDesktopVirtualFileProviderPreference(preferences, accountId, true)
+            assertTrue(removeDesktopAccountCredential(
+                preferences, accountId, credentialStillExists = { false },
+            ) {
+                preferences.sync()
+                assertTrue(preferences.getBoolean(virtualFileProviderPreferenceKey(accountId), false))
+                true
+            })
+            preferences.sync()
+            assertFalse(preferences.getBoolean(virtualFileProviderPreferenceKey(accountId), false))
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
     fun `provider restore failure does not prevent in-memory account recovery`() {
         val events = mutableListOf<String>()
         val restoreFailure = IllegalStateException("synthetic preference flush failure")

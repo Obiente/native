@@ -618,11 +618,11 @@ class DesktopAccountOperationGuardTest {
         }
 
         assertTrue(failure.isFailure)
-        assertEquals(listOf("cleared", "remove", "restored:true"), events)
+        assertEquals(listOf("remove", "restored:true"), events)
     }
 
     @Test
-    fun failedProviderPreferenceClearRestoresThePreviousValue() {
+    fun failedProviderPreferenceClearFinishesCommittedRemoval() {
         val events = mutableListOf<String>()
 
         assertFailsWith<IllegalStateException> {
@@ -633,6 +633,8 @@ class DesktopAccountOperationGuardTest {
                     error("synthetic preference flush failure")
                 },
                 restoreProviderPreference = { enabled -> events += "restore:$enabled" },
+                removalCommitted = { true },
+                finishCommittedRemoval = { events += "finish" },
                 removeCredential = {
                     events += "remove"
                     true
@@ -640,7 +642,7 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("clear", "restore:true"), events)
+        assertEquals(listOf("remove", "clear", "clear", "finish"), events)
     }
 
     @Test
@@ -659,7 +661,7 @@ class DesktopAccountOperationGuardTest {
             ),
         )
 
-        assertEquals(listOf("cleared", "remove"), events)
+        assertEquals(listOf("remove", "cleared"), events)
     }
 
     @Test
@@ -680,7 +682,7 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("cleared", "remove", "finish"), events)
+        assertEquals(listOf("remove", "cleared", "finish"), events)
     }
 
     @Test
@@ -705,7 +707,7 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("cleared", "remove", "probe", "status:null"), events)
+        assertEquals(listOf("remove", "probe", "status:null"), events)
         assertEquals(1, failure.suppressedExceptions.size)
     }
 
