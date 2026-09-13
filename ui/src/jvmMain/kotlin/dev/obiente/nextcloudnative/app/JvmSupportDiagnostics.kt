@@ -522,6 +522,15 @@ fun Throwable.toSupportDiagnosticExceptionDraft(
         ?.toSupportDiagnosticExceptionDraft(depth + 1),
 )
 
+/** Bounded failure shape for persistence paths which may fail before secrets are registered. */
+fun Throwable.toNonSecretSupportDiagnosticExceptionDraft(): SupportDiagnosticExceptionDraft =
+    toSupportDiagnosticExceptionDraft().withoutMessages()
+
+private fun SupportDiagnosticExceptionDraft.withoutMessages(): SupportDiagnosticExceptionDraft = copy(
+    message = null,
+    cause = cause?.withoutMessages(),
+)
+
 internal fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
     SupportDiagnosticsEnvironment(
         appVersion = appVersion.safeEnvironmentValue(),

@@ -192,3 +192,16 @@ private fun previewCacheAccount(session: NextcloudSession): String {
 }
 
 internal expect fun previewCacheDigest(session: NextcloudSession): String
+
+internal data class AccountPersistenceScopeDigests(
+    val current: String,
+    val legacy: String?,
+)
+
+internal fun accountPersistenceScopeDigests(session: NextcloudSession): AccountPersistenceScopeDigests {
+    val current = previewCacheDigest(session)
+    val legacy = legacyPreviewCacheDigest(session).takeUnless { digest -> digest == current }
+    return AccountPersistenceScopeDigests(current, legacy)
+}
+
+internal expect fun legacyPreviewCacheDigest(session: NextcloudSession): String

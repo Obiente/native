@@ -296,7 +296,6 @@ private val DYNAMIC_SCREEN_SCOPE_RELATIONS = setOf(
     "threadid",
 )
 
-private fun NextcloudSession.dynamicAccountKey(): String =
-    serverUrl.trim().trimEnd('/').lowercase() + '\u0000' + loginName
+private fun NextcloudSession.dynamicAccountKey(): String = accountId.storageKey
 
 internal val sharedDynamicNativeMemoryCache = DynamicNativeMemoryCache()
