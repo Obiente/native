@@ -86,23 +86,17 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String?,
         legacyAccountScopeDigest: String?,
     ) {
+        val cacheIdentity = previewCacheIdentity ?: NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
-            previewCacheIdentity,
+            cacheIdentity,
             clearPreviewAccount,
             listOf(
                 {
-                    if (previewCacheIdentity == null) {
-                        DynamicNativeMemoryAccountLifecycle.retireAccount(session.accountId.storageKey)
-                    } else {
-                        fenceAndroidDynamicApiStateForRemoval(
-                            previewCacheIdentity,
-                            dynamicApiState.coalescer,
-                            dynamicApiState.cache,
-                            session.accountId.storageKey,
-                        )
-                    }
+                    fenceAndroidDynamicApiStateForRemoval(
+                        cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache, session.accountId.storageKey,
+                    )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
@@ -123,7 +117,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
-                { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
+                { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
                 { AccountPrivateMemoryCleanup.removeAccount(session.accountId.storageKey) },
             ),
         )
