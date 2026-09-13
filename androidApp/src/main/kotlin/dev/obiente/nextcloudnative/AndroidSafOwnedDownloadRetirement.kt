@@ -154,6 +154,7 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         rootId = localRootId,
         downloadOwnershipStore = ownership,
         providerRecoverySession = providerRecoverySession,
+        localRecoveryAuthority = nextcloudDocumentsAuthority(appContext.packageName),
     )
     val recordedDocumentIds = ownership.pendingTransactions().asSequence()
         .flatMap { transaction ->

@@ -127,21 +127,13 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val cursor = MatrixCursor(columns)
         val (session, recoveryAuthorized) = requireAndroidDocumentsProviderChildrenSession(parentDocumentId, services::loadSession)
         val parent = requireReference(parentDocumentId, session)
-        val children = runCatching {
-            val account = resolveAccount(session)
-            runBlocking(Dispatchers.IO) {
-                if (recoveryAuthorized) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent.path)
+        val children = runBlocking(Dispatchers.IO) {
+            loadAndroidProviderChildren(recoveryAuthorized, read = {
+                val account = resolveAccount(session)
+                if (recoveryAuthorized) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent.path, requireNetwork = true)
                 else services.listFiles(session, account.userId, parent.path)
-            }
-        }.getOrElse { failure ->
-            val cachedChildren = offline.availableChildren(session, parent.path)
-            if (cachedChildren.isNotEmpty() || offline.isStoredDirectory(session, parent.path)) {
-                cachedChildren
-            } else {
-                throw FileNotFoundException("Could not load this Nextcloud folder.").also {
-                    it.initCause(failure)
-                }
-            }
+            }, cached = { offline.availableChildren(session, parent.path) },
+                storedDirectory = { offline.isStoredDirectory(session, parent.path) })
         }
         children.forEach { cursor.addDocumentRow(session, it) }
         return cursor

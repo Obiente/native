@@ -29,11 +29,12 @@ internal class AndroidSafFileSyncLocalTree(
     rootId: String,
     private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
     private val providerRecoverySession: NextcloudSession? = null,
+    localRecoveryAuthority: String? = null,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
     private val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocumentId)
-    private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(providerRecoverySession)
+    private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(providerRecoverySession, localRecoveryAuthority)
 
     init {
         require(rootId.startsWith("content://")) { "The local sync root is not a document-tree grant." }

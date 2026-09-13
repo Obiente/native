@@ -1353,8 +1353,8 @@ internal class AndroidNextcloudServices(
     internal suspend fun listFilesWhileAccountLeaseHeld(
         session: NextcloudSession,
         userId: String,
-        path: String,
-    ): List<NextcloudFile> = listFilesWithSource(session, userId, path, accountLeaseHeld = true).files
+        path: String, requireNetwork: Boolean = false,
+    ): List<NextcloudFile> = listFilesWithSource(session, userId, path, accountLeaseHeld = true).filesForProviderRecovery(requireNetwork)
 
     private suspend fun listFilesWithSource(
         session: NextcloudSession,

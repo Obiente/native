@@ -112,7 +112,7 @@ internal class AndroidAccountRemovalLeaseCoordinator(
         accountIdentity = NextcloudDocumentIds.accountKey(session),
         guard = guard,
         prepare = { prepareAndroidAccountRemoval(appContext, session) },
-        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        revalidate = { revalidateAndroidAccountRemoval(appContext, session) },
         action = action,
     )
 
@@ -124,7 +124,10 @@ internal class AndroidAccountRemovalLeaseCoordinator(
     ): Result = withUnavailableAndroidAccountRemovalLease(
         accountIdentity = NextcloudDocumentIds.accountKey(session),
         guard = guard,
-        preflight = { preflightAndroidAccountRemoval(appContext, session) },
+        preflight = {
+            preflightAndroidAccountRemoval(appContext, session)
+            ANDROID_FILE_RANGE_SESSION_COORDINATOR.quiesce(NextcloudDocumentIds.accountKey(session))
+        },
         action = action,
     )
 
@@ -136,7 +139,7 @@ internal class AndroidAccountRemovalLeaseCoordinator(
         accountIdentity = NextcloudDocumentIds.accountKey(session),
         guard = guard,
         prepare = { prepareAndroidAccountRemoval(appContext, session) },
-        revalidate = { preflightAndroidAccountRemoval(appContext, session) },
+        revalidate = { revalidateAndroidAccountRemoval(appContext, session) },
         revoke = revoke,
         removeLocalAccount = removeLocalAccount,
     )
@@ -190,4 +193,12 @@ internal suspend fun runAndroidAccountRemovalCleanups(
         }
     }
     firstFailure?.let { throw it }
+}
+
+internal suspend fun revalidateAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+    preflightAndroidAccountRemoval(context, session)
+    reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
+        context, NextcloudDocumentIds.accountKey(session), session, accountLeaseHeld = true,
+    )
+    ANDROID_FILE_RANGE_SESSION_COORDINATOR.quiesce(NextcloudDocumentIds.accountKey(session))
 }

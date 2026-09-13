@@ -247,7 +247,7 @@ internal fun releaseSafGrantAfterPairRemoval(
     }
 }
 
-internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String) {
+internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String, providerRecoverySession: NextcloudSession? = null) {
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         val store = AndroidFileSyncStore(context)
         val current = store.load()
@@ -265,6 +265,7 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
                     context,
                     pair.localRootId,
                     androidSafOwnedDownloadRecoveryPaths(pair),
+                    providerRecoverySession,
                 )
             },
             cancelSchedule = { pair -> scheduler.cancel(pair.id) },
@@ -283,11 +284,16 @@ internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRem
     context: Context,
     accountId: String,
     providerRecoverySession: NextcloudSession,
+    accountLeaseHeld: Boolean = false,
 ) {
+    if (AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+        AndroidFileSyncStore(context).load().coordinator.pairs.none { it.accountId == accountId }
+    }) return
     val services = AndroidNextcloudServices(context.applicationContext)
     withAndroidFileSyncAccountRecoveryLease(
         expectedSession = providerRecoverySession,
         resolveSession = { services.loadSession(providerRecoverySession.accountId) },
+        accountLeaseHeld = accountLeaseHeld,
     ) {
         AndroidFileSyncEngine.ENGINE_LOCK.withLock {
             reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
@@ -310,8 +316,9 @@ internal suspend fun <Result> withAndroidFileSyncAccountRecoveryLease(
     expectedSession: NextcloudSession,
     resolveSession: suspend () -> NextcloudSession?,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    accountLeaseHeld: Boolean = false,
     action: suspend () -> Result,
-): Result = guard.withExactAccountSession(
+): Result = if (accountLeaseHeld) action() else guard.withExactAccountSession(
     expectedSession = expectedSession,
     resolveSession = resolveSession,
     unavailable = { error("The account changed before folder sync recovery could start.") },

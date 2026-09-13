@@ -90,7 +90,12 @@ internal class AndroidFileRangeSessionCoordinator {
         val current = synchronized(monitor) { registrations[accountIdentity]?.toList().orEmpty() }
         current.forEach(Registration::cancel)
         current.forEach { registration -> registration.awaitDrained() }
-        synchronized(monitor) { registrations.remove(accountIdentity) }
+        synchronized(monitor) {
+            registrations[accountIdentity]?.let { remaining ->
+                remaining.removeAll(current.toSet())
+                if (remaining.isEmpty()) registrations.remove(accountIdentity)
+            }
+        }
     }
 
     private fun unregister(accountIdentity: String, registration: Registration) = synchronized(monitor) {
