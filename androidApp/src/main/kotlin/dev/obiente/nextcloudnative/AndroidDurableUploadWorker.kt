@@ -12,7 +12,6 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
-import java.io.FileNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -380,8 +379,6 @@ internal suspend fun <Result> processQueuedDurableUploadSource(
     } catch (failure: AndroidLocalUploadCapabilityReadException) {
         return onProviderUnavailable(failure)
     } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
-        return onCapabilityUnavailable()
-    } catch (_: FileNotFoundException) {
         return onCapabilityUnavailable()
     } catch (_: SecurityException) {
         return onCapabilityUnavailable()
