@@ -1,7 +1,7 @@
-category: fix
+category: security
 issue: 172
 pull: none
 platforms: android, desktop
 user-facing: yes
 
-Media viewer routes now stay bound to the account and account incarnation that created them, preventing stale media from opening after an account is removed or replaced.
+Media viewer routes are scoped to their owning account and cleared when that account is removed, preventing retained media from reopening through another account or after removal.
