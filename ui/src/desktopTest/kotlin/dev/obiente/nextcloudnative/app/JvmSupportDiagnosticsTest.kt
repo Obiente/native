@@ -317,7 +317,7 @@ class JvmSupportDiagnosticsTest {
             workers.execute {
                 ready.countDown()
                 start.await()
-                repeat(2) { index ->
+                repeat(20) { index ->
                     diagnostics.record(
                         SupportDiagnosticEventDraft(
                             severity = SupportDiagnosticSeverity.Warning,
@@ -347,8 +347,8 @@ class JvmSupportDiagnosticsTest {
         }
         assertTrue(completed)
 
-        assertEquals(16, diagnostics.summary().eventCount)
-        assertEquals(16, diagnostics(root).summary().eventCount)
+        assertEquals(160, diagnostics.summary().eventCount)
+        assertEquals(160, diagnostics(root).summary().eventCount)
         assertTrue(File(root, "events-v1.jsonl").length() <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
     }
 

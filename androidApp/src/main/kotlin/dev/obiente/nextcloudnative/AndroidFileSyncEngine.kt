@@ -93,7 +93,7 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
     private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
     private val loadCapabilityState = store::loadAndReconcileUploadCleanups
-    init { reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, loadCapabilityState, capabilities) } }
+    init { reconciliationScope.launch { reconcileFileSyncCapabilitiesAfterRestoration(ENGINE_LOCK, loadCapabilityState, capabilities) } }
 
     suspend fun loadCenter(
         session: NextcloudSession,

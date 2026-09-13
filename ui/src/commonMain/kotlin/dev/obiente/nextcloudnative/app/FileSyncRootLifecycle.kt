@@ -56,7 +56,7 @@ internal class FileSyncSetupDraftState private constructor(
             }
             val root = when (saved[1]) {
                 "0" -> null
-                "1" -> runCatching { FileSyncLocalRoot(saved[2], saved[3]) }.getOrNull() ?: return null
+                "1" -> runCatching { FileSyncLocalRoot(saved[2], saved[3], savedStateId = saved[2]) }.getOrNull() ?: return null
                 else -> return null
             }
             val remotePath = when (saved[5]) {
@@ -79,12 +79,12 @@ internal class FileSyncSetupDraftState private constructor(
 }
 
 internal fun FileSyncSetupDraftState.savedState(): List<String>? {
-    val root = localRoot.value
+    val root = localRoot.value?.takeIf { it.savedStateId != null }
     val remote = remotePath.value
     val saved = listOf(
         SAVED_SETUP_VERSION,
         if (root == null) "0" else "1",
-        root?.localRootId.orEmpty(),
+        root?.savedStateId.orEmpty(),
         root?.displayName.orEmpty(),
         mediaSuggestionJson.value.orEmpty(),
         if (remote == null) "0" else "1",
@@ -97,7 +97,7 @@ internal fun FileSyncSetupDraftState.savedState(): List<String>? {
     return listOf(
         SAVED_SETUP_VERSION,
         if (root == null) "0" else "1",
-        root?.localRootId.orEmpty(),
+        root?.savedStateId.orEmpty(),
         root?.displayName.orEmpty(),
         "",
         "0",
@@ -146,4 +146,4 @@ private fun tryAbandonFileSyncRoot(
 
 private const val SAVED_SETUP_FIELD_COUNT = 10
 private const val MAX_SAVED_SETUP_CHARACTERS = 32 * 1024
-private const val SAVED_SETUP_VERSION = "file-sync-setup-v1"
+private const val SAVED_SETUP_VERSION = "file-sync-setup-v2"

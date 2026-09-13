@@ -173,7 +173,6 @@ internal fun FileOfflineCenterScreen(
             actionKey = null
         }
     }
-
     fun runSyncAction(pairId: String, remove: Boolean) {
         if (pairId in syncBusyPairIds) return
         syncBusyPairIds += pairId
@@ -194,7 +193,6 @@ internal fun FileOfflineCenterScreen(
             syncBusyPairIds -= pairId
         }
     }
-
     fun beginAddFolderSync() {
         if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return
         if (pendingLocalRoot != null && !abandonPendingFolderSync()) return
@@ -203,6 +201,11 @@ internal fun FileOfflineCenterScreen(
             try {
                 runCatching { services.chooseFileSyncLocalRoot(session) }
                     .onSuccess { selected ->
+                        if (selected?.accessRestored == true) {
+                            actionMessage = "Folder access restored. Resume the existing sync pair."
+                            refreshAttempt += 1
+                            return@onSuccess
+                        }
                         pendingMediaSuggestionJson = null
                         pendingLocalRoot = selected
                         pendingRemotePath = selected?.let { "" }
@@ -220,7 +223,6 @@ internal fun FileOfflineCenterScreen(
             }
         }
     }
-
     fun openMediaSuggestion(suggestion: MediaSyncFolderSuggestion) {
         pendingMediaPreview = null
         mediaPreviewError = null
@@ -233,7 +235,6 @@ internal fun FileOfflineCenterScreen(
         remoteFolderPickerVisible = false
         syncSelectionPickerVisible = false
     }
-
     fun resolveSyncConflict(target: PendingFileSyncDecision) {
         if (target.pair.id in syncBusyPairIds) return
         syncBusyPairIds += target.pair.id
@@ -257,7 +258,6 @@ internal fun FileOfflineCenterScreen(
             syncBusyPairIds -= target.pair.id
         }
     }
-
     fun saveVirtualStoragePolicy(policy: VirtualFileCachePolicy) {
         if (virtualStorageBusy) return
         virtualStorageBusy = true
@@ -472,7 +472,7 @@ internal fun FileOfflineCenterScreen(
         if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
         syncLoading = true
         try {
-            if (!services.reconcileFileSyncRootSetup(session, pendingLocalRoot)) {
+            if (!restoreAndReconcileFileSyncRootSetup(services, session, setupDraft)) {
                 setupDraft.clear()
                 actionMessage = "Select the local folder again to restore folder access."
             }

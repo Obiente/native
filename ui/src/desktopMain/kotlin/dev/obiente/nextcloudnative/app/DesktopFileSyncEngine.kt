@@ -31,7 +31,7 @@ internal class DesktopFileSyncEngine(
         }
         val token = "desktop-selection:${UUID.randomUUID()}"
         selectedRoots[token] = selected.toFile()
-        FileSyncLocalRoot(token, selected.fileName?.toString()?.takeIf(String::isNotBlank) ?: "Selected folder")
+        FileSyncLocalRoot(token, selected.fileName?.toString()?.takeIf(String::isNotBlank) ?: "Selected folder", savedStateId = token)
     }
 
     suspend fun loadCenter(

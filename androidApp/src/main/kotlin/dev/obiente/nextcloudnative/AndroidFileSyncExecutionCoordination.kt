@@ -102,10 +102,11 @@ internal suspend fun reconcileFileSyncCapabilities(
     lock: Mutex,
     load: () -> AndroidFileSyncPersistedState,
     capabilities: AndroidFileSyncCapabilityLifecycle,
+    reclaimUnrestoredReady: Boolean = false,
 ) {
     lock.withLock {
         try {
-            capabilities.reconcile(load())
+            capabilities.reconcile(load(), reclaimUnrestoredReady)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
@@ -129,14 +130,16 @@ internal suspend fun reconcileRestoredFileSyncSetup(
 internal fun recoverFailedFileSyncPairSave(
     pairId: String,
     load: () -> AndroidFileSyncPersistedState,
-    abandonUncommittedPair: (String) -> Unit,
+    abandonUncommittedPair: (String) -> Boolean,
 ): Boolean {
     val commitIsPresent = try {
         load().coordinator.pairs.any { it.id == pairId }
     } catch (_: Exception) {
         return false
     }
-    if (!commitIsPresent) runCatching { abandonUncommittedPair(pairId) }
+    if (!commitIsPresent) check(abandonUncommittedPair(pairId)) {
+        "The saved folder access still needs cleanup. Retry closing the folder setup."
+    }
     return commitIsPresent
 }
 
@@ -145,13 +148,17 @@ internal fun bindAndPersistFileSyncPair(
     bindReady: () -> Unit,
     persist: () -> Unit,
     load: () -> AndroidFileSyncPersistedState,
-    abandonUncommittedPair: (String) -> Unit,
+    abandonUncommittedPair: (String) -> Boolean,
 ) {
     try {
         bindReady()
         persist()
     } catch (failure: Exception) {
-        if (recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)) return
+        try {
+            if (recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)) return
+        } catch (cleanupFailure: Exception) {
+            failure.addSuppressed(cleanupFailure)
+        }
         throw failure
     }
 }

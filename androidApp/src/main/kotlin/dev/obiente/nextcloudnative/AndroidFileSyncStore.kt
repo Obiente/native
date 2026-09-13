@@ -11,7 +11,6 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -75,7 +74,7 @@ internal class AndroidFileSyncStore internal constructor(
             throw IllegalStateException("Folder sync state exceeds its safe storage limit.")
         }
         val stored = try {
-            DataInputStream(BufferedInputStream(FileInputStream(stateFile))).use { input ->
+            DataInputStream(BufferedInputStream(Files.newInputStream(stateFile.toPath()))).use { input ->
                 check(input.readInt() == MAGIC) { "Folder sync state has an invalid header." }
                 check(input.readInt() == FORMAT_VERSION) { "Folder sync state version is unsupported." }
                 val snapshotLength = input.readInt()
@@ -124,9 +123,11 @@ internal class AndroidFileSyncStore internal constructor(
 
     @Synchronized
     fun loadAndReconcileUploadCleanups(): AndroidFileSyncPersistedState = load().also { state ->
-        uploadCleanupStore.replace(
-            state.coordinator.pairs.associate { pair -> pair.id to pair.pendingUploadCleanups },
-        )
+        if (stateFile.isFile) {
+            uploadCleanupStore.replace(
+                state.coordinator.pairs.associate { pair -> pair.id to pair.pendingUploadCleanups },
+            )
+        }
     }
 
     @Synchronized

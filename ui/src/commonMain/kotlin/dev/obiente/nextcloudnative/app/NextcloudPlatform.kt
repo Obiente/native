@@ -932,7 +932,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
     ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
         "Selective virtual folders are not available on this platform.",
     )
-    /** Opens the native folder chooser and persists a least-privilege folder grant. */
+    suspend fun restoreFileSyncLocalRoot(session: NextcloudSession, reference: FileSyncLocalRoot): FileSyncLocalRoot? = reference
     suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String? = null): FileSyncLocalRoot? = null
     fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot): Boolean = true
     fun retainFileSyncRootOnDispose(): Boolean = false

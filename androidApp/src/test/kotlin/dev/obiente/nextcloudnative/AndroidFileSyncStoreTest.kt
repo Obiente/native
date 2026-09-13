@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.app.newFileSyncUploadCheckpoint
 import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.io.File
+import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -79,7 +80,7 @@ class AndroidFileSyncStoreTest {
             val writes = executor.submit {
                 start.await()
                 repeat(100) { index ->
-                    writer.save(if (index % 2 == 0) second else first)
+                    saveWhileReadersHoldWindowsHandles { writer.save(if (index % 2 == 0) second else first) }
                 }
             }
             val reads = executor.submit {
@@ -155,6 +156,7 @@ class AndroidFileSyncStoreTest {
             }
 
             assertTrue(!stateFile.exists())
+            AndroidFileSyncStore(stateFile).loadAndReconcileUploadCleanups()
             assertEquals(
                 listOf(cleanup),
                 AndroidFileSyncUploadCleanupStore(File(directory, "state.bin.upload-cleanups"))
@@ -350,5 +352,22 @@ class AndroidFileSyncStoreTest {
     private companion object {
         const val UPLOAD_ID = "01234567-89ab-cdef-0123-456789abcdef"
         const val OTHER_UPLOAD_ID = "fedcba98-7654-3210-fedc-ba9876543210"
+    }
+}
+
+// Windows may reject replacement while another reader holds the destination open.
+// Every write must still complete; readers continue asserting whole snapshots.
+private fun saveWhileReadersHoldWindowsHandles(save: () -> Unit) {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (true) {
+        try {
+            save()
+            return
+        } catch (failure: AccessDeniedException) {
+            if (!System.getProperty("os.name").startsWith("Windows") || System.nanoTime() >= deadline) {
+                throw failure
+            }
+            Thread.sleep(10)
+        }
     }
 }
