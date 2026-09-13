@@ -120,6 +120,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
                         phase = CapabilityPhase.Acquiring,
                         processGeneration = PROCESS_GENERATION,
                         grantPreExisting = grantPreExisting,
+                        priorUnownedPeerDigests = if (grantPreExisting) emptySet() else snapshot.malformedCapabilities.keys.map(::uploadPeerEvidenceKey).toSet(),
                     )
                     val ready = acquiring.copy(phase = CapabilityPhase.Ready)
                     val cleanupPending = acquiring.copy(phase = CapabilityPhase.CleanupPending)
@@ -223,7 +224,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             return@synchronized retainCapabilityCleanup(file.selectionId)
         }
         when (malformedPeerCleanupDisposition(
-            snapshot.malformedCapabilities, file.selectionId, source.uri.toString(), source.grantPreExisting,
+            snapshot.malformedCapabilities, file.selectionId, source.uri.toString(), source.grantPreExisting, source.priorUnownedPeerDigests,
         )) {
             DurableUploadMalformedPeerCleanupDisposition.Quarantine ->
                 return@synchronized quarantineCapabilityCleanup(file.selectionId, onQuarantined)
@@ -377,7 +378,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
                     malformedPeerCleanupDisposition(
                         malformedCapabilities,
                         selectionId,
-                        capability.uri.toString(),
+                        capability.uri.toString(), capability.grantPreExisting, capability.priorUnownedPeerDigests,
                     ) == DurableUploadMalformedPeerCleanupDisposition.Quarantine
                 ) {
                     PENDING_CLEANUP_SELECTIONS.remove(selectionId)
@@ -432,6 +433,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             .put("sizeBytes", source.file.sizeBytes)
             .put("phase", source.phase.persistedValue)
             .put("grantPreExisting", source.grantPreExisting)
+            .put("priorUnownedPeerDigests", org.json.JSONArray(source.priorUnownedPeerDigests.toList()))
         source.processGeneration?.let { generation -> payload.put("processGeneration", generation) }
         val encrypted = cipher.encrypt(payload.toString())
         return preferences.putString(preferenceKey(source.file.selectionId), encrypted)
@@ -615,25 +617,6 @@ internal class AndroidLocalUploadPicker(context: Context) {
         samePermission = String::equals,
     )
 
-    private fun malformedPeerCleanupDisposition(
-        malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
-        targetSelectionId: String,
-        targetPermissionIdentity: String,
-        targetGrantPreExisting: Boolean = false,
-    ): DurableUploadMalformedPeerCleanupDisposition = durableUploadMalformedPeerCleanupDisposition(
-        malformedPeers = malformedCapabilities.values.asSequence().map { capability ->
-            DurableUploadPermissionPeer(
-                capability.selectionId,
-                capability.cleanupPermissionIdentity,
-                capability.grantPreExisting,
-            )
-        }.asIterable(),
-        targetSelectionId = targetSelectionId,
-        targetPermission = targetPermissionIdentity,
-        samePermission = String::equals,
-        targetGrantPreExisting = targetGrantPreExisting,
-    )
-
     private fun persistedSource(file: LocalUploadFile): SelectedSource {
         return requiredSource(file, useCachedSource = true)
     }
@@ -701,6 +684,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 phase = phase,
                 processGeneration = processGeneration,
                 grantPreExisting = grantPreExisting,
+                priorUnownedPeerDigests = readPriorUnownedUploadPeerDigests(payload),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -731,6 +715,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         val phase: CapabilityPhase = CapabilityPhase.Ready,
         val processGeneration: String? = PROCESS_GENERATION,
         val grantPreExisting: Boolean = false,
+        val priorUnownedPeerDigests: Set<String> = emptySet(),
     )
 
     private companion object {
