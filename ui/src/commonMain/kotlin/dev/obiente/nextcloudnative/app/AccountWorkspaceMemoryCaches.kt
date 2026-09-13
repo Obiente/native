@@ -1,34 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.runtime.mutableStateOf
-
-internal class PhotoTimelineUiState {
-    val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
-    val backupStatuses = mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
-    val initialLoadCompleted = mutableStateOf(false)
-}
-
-internal object PhotoTimelineUiStateRepository {
-    private const val MAXIMUM_ACCOUNT_STATES = 4
-    private val accountStates = linkedMapOf<String, PhotoTimelineUiState>()
-
-    fun stateFor(session: NextcloudSession): PhotoTimelineUiState {
-        val accountKey = previewCacheDigest(session)
-        accountStates.remove(accountKey)?.let { existing ->
-            accountStates[accountKey] = existing
-            return existing
-        }
-        val created = PhotoTimelineUiState()
-        accountStates[accountKey] = created
-        while (accountStates.size > MAXIMUM_ACCOUNT_STATES) accountStates.remove(accountStates.keys.first())
-        return created
-    }
-
-    fun removeAccount(accountStorageKey: String) {
-        accountStates.remove(accountStorageKey)
-    }
-}
-
 internal sealed interface CalendarLoadState {
     data object Loading : CalendarLoadState
     data class Ready(
