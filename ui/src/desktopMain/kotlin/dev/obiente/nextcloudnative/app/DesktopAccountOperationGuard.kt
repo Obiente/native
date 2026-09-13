@@ -132,10 +132,9 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
     removeCredential: () -> Boolean,
 ): Boolean {
     return try {
-        clearProviderPreference()
         removeCredential().also { removed ->
             commitStatusObserved(removed)
-            if (!removed) restoreProviderPreference(providerWasEnabled)
+            if (removed) clearProviderPreference()
         }
     } catch (failure: Throwable) {
         val committed = try {
@@ -149,9 +148,10 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
             false -> runCatching { restoreProviderPreference(providerWasEnabled) }
                 .exceptionOrNull()
                 ?.let(failure::addSuppressed)
-            true -> runCatching(finishCommittedRemoval)
-                .exceptionOrNull()
-                ?.let(failure::addSuppressed)
+            true -> {
+                runCatching(clearProviderPreference).exceptionOrNull()?.let(failure::addSuppressed)
+                runCatching(finishCommittedRemoval).exceptionOrNull()?.let(failure::addSuppressed)
+            }
             null -> Unit
         }
         throw failure
