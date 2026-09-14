@@ -40,10 +40,10 @@ internal class AndroidAccountRemovalCleanupJournal(
             .putStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, recovery.active))
     }
 
-    fun markReviewed(accountStorageKey: String) {
+    fun markReviewed(accountStorageKey: String, retainedAccountStorageKeys: Set<String>?) {
         val encoded = readEncoded()
         commit(preferences.edit().putStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-            markAndroidCleanupAccountReviewed(encoded, accountStorageKey)))
+            markAndroidCleanupAccountReviewed(encoded, accountStorageKey, retainedAccountStorageKeys)))
     }
 
     fun prepare(pending: AndroidPendingAccountRemovalCleanup) = commit(prepareEdit(preferences.edit(), pending))

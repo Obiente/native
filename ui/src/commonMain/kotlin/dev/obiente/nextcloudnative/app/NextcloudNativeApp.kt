@@ -528,16 +528,8 @@ fun NextcloudNativeApp(
             }
             if (sessionLoad == null) {
                 LoadingMessage("Loading account")
-            } else if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
-                SecureSessionStorageUnavailable(
-                    onRetry = { sessionLoadAttempt += 1 },
-                    onSignInAgain = signInAgain,
-                )
-            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
-                LegacySessionMigrationUnavailable(
-                    onRetry = { sessionLoadAttempt += 1 },
-                    onSignInAgain = signInAgain,
-                )
+            } else if (sessionLoad !is NextcloudSessionLoadState.Loaded) {
+                SessionLoadingRecoveryScreen(sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
             } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(

@@ -67,6 +67,22 @@ class NextcloudSessionLoadingTest {
     }
 
     @Test
+    fun newerStorageKeepsItsRecoveryCategoryInsteadOfOpeningLogin() {
+        assertEquals(
+            NextcloudSessionLoadState.StorageVersionUnsupported,
+            loadNextcloudSessionSafely { throw NextcloudSessionStorageVersionUnsupportedException() },
+        )
+    }
+
+    @Test
+    fun malformedStorageKeepsSupportRecoverySeparateFromVersionAndSignIn() {
+        assertEquals(
+            NextcloudSessionLoadState.StorageMalformed,
+            loadNextcloudSessionSafely { throw NextcloudSessionStorageMalformedException() },
+        )
+    }
+
+    @Test
     fun unrelatedProgrammingFailureIsNotPresentedAsUnavailableStorage() {
         assertFailsWith<IllegalStateException> {
             loadNextcloudSessionSafely { error("synthetic invariant failure") }
