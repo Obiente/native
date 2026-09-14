@@ -80,6 +80,9 @@ internal class DeckAttachmentUploadWorker(
         if (accountResolution == DurableUploadAccountResolution.CredentialUnavailable &&
             durableUploadCredentialNeedsRecovery(applicationContext, services.listAccounts(), initial.accountId)
         ) return Result.success()
+        if (accountResolution == DurableUploadAccountResolution.RegistryUnavailable &&
+            durableUploadRegistryNeedsRecovery(applicationContext)
+        ) return Result.success()
         val session = when (accountResolution) {
             is DurableUploadAccountResolution.Available -> accountResolution.session
             DurableUploadAccountResolution.RegistryUnavailable,

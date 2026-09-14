@@ -304,6 +304,8 @@ Android queued uploads retain their rows while saved credentials require recover
 Malformed preference values, damaged ciphertext, and invalid decoded credential
 records pause timed retries when no usable or temporarily inaccessible fallback
 remains. Temporary keystore failures continue retrying, including for inactive
-accounts. Unsupported credential versions require an upgrade. These policies are
+accounts. A malformed registry with a missing or permanently damaged aggregate
+also pauses retries; temporary aggregate access failures remain retryable.
+Unsupported credential versions require an upgrade. These policies are
 covered by deterministic Android unit tests; they do not establish device or
 release validation.
