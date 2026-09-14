@@ -353,3 +353,10 @@ Path-changing stage IDs require the original stage name and matching recorded
 content. Renamed backup IDs require matching recorded content even when the name
 contains the recovery token. Unverified token-bearing candidates preserve the
 ownership row without authorizing a rename or deletion.
+
+Self-provider SAF recovery retains the exact ETag of a successfully completed
+content verification and uses it for the later delete or rename precondition.
+Failed or cancelled verification invalidates prior proof; a concurrent replacement
+cannot contribute its newer ETag to the mutation. Directory recovery without an
+authenticated aggregate generation remains pending and preserves its content.
+Ordinary external-provider access retains its original platform contract.

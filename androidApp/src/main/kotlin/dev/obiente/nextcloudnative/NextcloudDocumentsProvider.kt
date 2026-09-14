@@ -207,7 +207,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         if (file.isDirectory) throw FileNotFoundException("Folders cannot be opened as files.")
         if (mode != "r") return openWritableDocument(session, account, file, mode, signal)
-
+        recordAndroidProviderRecoveryReadGeneration(documentId, file.etag)
         file.etag?.takeIf(String::isNotBlank)?.let { etag ->
             virtualFiles.acquire(session, reference.path, expectedRemoteEtag = etag)?.let { lease ->
                 signal?.throwIfCanceled()
@@ -484,7 +484,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             val file = findDocument(session, account, reference.path, accountLeaseHeld = true)
             val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
             if (destination == reference.path) return@withAndroidDocumentsProviderRename documentId
-            val etag = requireMutationEtag(file)
+            val etag = androidProviderRecoveryMutationEtag(documentId, requireMutationEtag(file), file.isDirectory)
             withNoBlockingAndroidDocumentWriteback(context, session, reference.path, destination) {
                 mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
             }
@@ -504,7 +504,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                         session,
                         account.userId,
                         reference.path,
-                        requireMutationEtag(file),
+                        androidProviderRecoveryMutationEtag(documentId, requireMutationEtag(file), file.isDirectory),
                         isDirectory = file.isDirectory,
                     )
                 }

@@ -27,6 +27,7 @@ private class AndroidDocumentsProviderRecoveryPermit(
     val session: NextcloudSession,
     val documentId: String,
     val operation: AndroidDocumentsProviderRecoveryOperation,
+    val generations: AndroidProviderRecoveryGenerations? = null,
     var consumed: Boolean = false,
 )
 
@@ -38,6 +39,8 @@ internal class AndroidDocumentsProviderRecoveryAccess(
     private val localAuthority: String? = null,
     private val preserveTreeGrant: Boolean = false,
 ) {
+    private val generations = AndroidProviderRecoveryGenerations()
+
     fun <Result> run(
         document: Uri,
         operation: AndroidDocumentsProviderRecoveryOperation,
@@ -51,7 +54,7 @@ internal class AndroidDocumentsProviderRecoveryAccess(
             buildChildDocumentsUri = { id -> DocumentsContract.buildChildDocumentsUriUsingTree(document, id) },
         )
         val bound = session ?: return action(ordinaryUri)
-        if (preserveTreeGrant) return withAndroidDocumentsProviderRecoveryPermit(bound, documentId, operation) { action(ordinaryUri) }
+        if (preserveTreeGrant) return withAndroidDocumentsProviderRecoveryPermit(bound, documentId, operation, generations) { action(ordinaryUri) }
         val authority = androidLocalRecoveryAuthority(requireNotNull(document.authority), requireNotNull(localAuthority))
         val recoveryUri = androidDocumentsProviderRecoveryUri(
             documentId = documentId,
@@ -59,7 +62,7 @@ internal class AndroidDocumentsProviderRecoveryAccess(
             buildDocumentUri = { id -> DocumentsContract.buildDocumentUri(authority, id) },
             buildChildDocumentsUri = { id -> DocumentsContract.buildChildDocumentsUri(authority, id) },
         )
-        return withAndroidDocumentsProviderRecoveryPermit(bound, documentId, operation) {
+        return withAndroidDocumentsProviderRecoveryPermit(bound, documentId, operation, generations) {
             action(recoveryUri)
         }
     }
@@ -110,18 +113,19 @@ internal fun <Result> withAndroidDocumentsProviderRecoveryPermit(
     session: NextcloudSession,
     documentId: String,
     operation: AndroidDocumentsProviderRecoveryOperation,
+    generations: AndroidProviderRecoveryGenerations? = null,
     action: () -> Result,
 ): Result {
     NextcloudDocumentIds.requireForSession(documentId, session)
     requireAndroidDocumentsProviderRecoveryOperation(operation)
-    val permit = AndroidDocumentsProviderRecoveryPermit(session, documentId, operation)
+    val permit = AndroidDocumentsProviderRecoveryPermit(session, documentId, operation, generations)
     val permits = ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS.get()
         ?: mutableListOf<AndroidDocumentsProviderRecoveryPermit>().also { created ->
             ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS.set(created)
         }
     permits += permit
     return try {
-        action()
+        if (generations == null) action() else generations.run(documentId, operation, action)
     } finally {
         check(permits.remove(permit)) { "The document recovery permit was already cleared." }
         if (permits.isEmpty()) ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS.remove()
@@ -303,4 +307,19 @@ internal fun androidRootBoundProviderRecoverySession(
     if (removingSession == null) return null
     val reference = NextcloudDocumentIds.parse(rootDocumentId)
     return removingSession.takeIf { reference.accountKey == NextcloudDocumentIds.accountKey(it) }
+}
+
+internal fun recordAndroidProviderRecoveryReadGeneration(documentId: String, etag: String?) {
+    ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS.get().orEmpty().lastOrNull {
+        it.consumed && it.documentId == documentId && it.operation == AndroidDocumentsProviderRecoveryOperation.OpenRead
+    }?.generations?.recordReadGeneration(documentId, etag)
+}
+
+internal fun androidProviderRecoveryMutationEtag(documentId: String, currentEtag: String, isDirectory: Boolean): String {
+    val permit = ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS.get().orEmpty().lastOrNull {
+        it.consumed && it.documentId == documentId &&
+            (it.operation == AndroidDocumentsProviderRecoveryOperation.Rename || it.operation == AndroidDocumentsProviderRecoveryOperation.Delete)
+    } ?: return currentEtag
+    return requireNotNull(permit.generations) { "Recovery mutation has no authenticated generation." }
+        .mutationEtag(documentId, isDirectory)
 }
