@@ -244,6 +244,11 @@ store. Missing recovery evidence withholds both actions. The header control is
 scoped to the active account and navigation context and cleared on disposal;
 pending writes remain in durable storage, not in that control.
 
+Android publishes pending mutation records only after synchronizing the record
+and its containing directory. A publication failure withholds the request.
+External file handoff records cannot be restored or newly persisted while
+the durable handoff cleanup marker remains pending, including after restart.
+
 Task requests, durable recovery storage, and recovery reads are serialized.
 Refresh and recovery-discard controls remain disabled until the active request
 finishes. A queued recovery read reloads the durable record after obtaining the

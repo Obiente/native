@@ -23,14 +23,19 @@ internal class AndroidExternalFileHandoffStore(
     internal val stateFile: File,
     internal val managedContentRoot: File? = null,
     private val deleteStateFile: (File) -> Boolean = File::delete,
+    internal val cleanupPending: () -> Boolean = { false },
 ) {
     constructor(context: Context) : this(
         File(context.applicationContext.noBackupFilesDir, STATE_DIRECTORY).resolve(STATE_FILE_NAME),
         androidExternalLargeShareCacheRoot(context.applicationContext.cacheDir),
+        cleanupPending = { hasPendingAndroidExternalHandoffCleanup(
+            context.applicationContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE),
+        ) },
     )
 
     @Synchronized
     fun load(): List<AndroidExternalFileHandoffRecord> {
+        if (cleanupPending()) return emptyList()
         if (!stateFile.exists()) return emptyList()
         if (!stateFile.isFile || stateFile.length() !in 1L..MAX_STATE_BYTES) {
             throw AndroidExternalFileHandoffStoreException("External handoff state exceeds its safe storage limit.")
@@ -61,6 +66,7 @@ internal class AndroidExternalFileHandoffStore(
 
     @Synchronized
     fun save(records: Collection<AndroidExternalFileHandoffRecord>) {
+        requireStored(records.isEmpty() || !cleanupPending()) { "External handoff cleanup must finish before sharing again." }
         requireStored(records.size <= MAX_RECORDS) { "External handoff state has too many records." }
         val parent = stateFile.parentFile
             ?: throw AndroidExternalFileHandoffStoreException("External handoff state has no parent directory.")

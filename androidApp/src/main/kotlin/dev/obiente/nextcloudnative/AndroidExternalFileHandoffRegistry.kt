@@ -79,6 +79,13 @@ internal object AndroidExternalFileHandoffRegistry {
         val storeIdentity = store.stateFile.absolutePath
         val readersToRevoke = mutableListOf<AndroidExternalFileHandoffLease>()
         synchronized(lock) {
+            if (store.cleanupPending()) {
+                readersToRevoke += entries.values.flatMap(Entry::readers)
+                entries.clear()
+                boundStore = store
+                boundStoreIdentity = storeIdentity
+                return@synchronized
+            }
             if (boundStoreIdentity == storeIdentity) {
                 val expired = pruneExpiredLocked(nowEpochMillis)
                 readersToRevoke += expired

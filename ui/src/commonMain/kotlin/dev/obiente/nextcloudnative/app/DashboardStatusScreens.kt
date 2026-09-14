@@ -229,7 +229,7 @@ internal fun NativeDashboardScreen(
         recoveryAttempt = recoveryAttempt,
     )
     val formFactor = rememberHomeFormFactor()
-    val workspaceStorage = rememberHomeWorkspaceLayoutStorage()
+    val workspaceStorage = rememberAccountHomeWorkspaceStorage(session)
     val workspaceRepository = remember(workspaceStorage) {
         HomeWorkspaceLayoutRepository(workspaceStorage)
     }

@@ -78,6 +78,7 @@ class DesktopAccountCacheRemovalTest {
             val rootKey = virtualFileProviderRootPreferenceKey(ACCOUNT_ID)
             val primaryKey = "vfpc-primary.$ACCOUNT_ID"
             val overflowKey = "vfpc-overflow.$ACCOUNT_ID"
+            preferences.putBoolean(virtualFileProviderPreferenceKey(ACCOUNT_ID), true)
             preferences.put(rootKey, "/private/mount")
             preferences.put(primaryKey, "/private/primary")
             preferences.put(overflowKey, "/private/overflow")
@@ -85,6 +86,7 @@ class DesktopAccountCacheRemovalTest {
 
             removeDesktopAccountVirtualFilePreferences(preferences, ACCOUNT_ID)
 
+            assertNull(preferences.get(virtualFileProviderPreferenceKey(ACCOUNT_ID), null))
             assertNull(preferences.get(rootKey, null))
             assertNull(preferences.get(primaryKey, null))
             assertNull(preferences.get(overflowKey, null))

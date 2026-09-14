@@ -46,6 +46,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -89,6 +90,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -132,6 +134,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 },
                 { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
