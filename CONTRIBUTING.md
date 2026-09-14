@@ -86,6 +86,14 @@ review, run every check relevant to the changed platforms and verify that the
 emulator, server-companion, website, and release changes have additional checks
 described in their owning files and workflows.
 
+Linux CI serializes Gradle workers to avoid compiling Android variants and
+desktop sources concurrently in the Kotlin daemon. Before compilation it logs
+available runner memory, reserves 6 GiB for Gradle and Android tooling, and
+selects a bounded 4-8 GiB Kotlin compiler heap. It fails early if the runner
+cannot provide that headroom. This CI profile does not change local Gradle
+defaults; use `--max-workers=1` and a suitable
+`-Pkotlin.daemon.jvmargs=-Xmx<size>` when diagnosing local compiler heap failures.
+
 Repository-authored text uses ordinary ASCII punctuation while allowing normal
 UTF-8 letters and translations. Run
 `bash tools/check-repository.sh` to catch smart quotes, typographic dashes,

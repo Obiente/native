@@ -43,11 +43,7 @@ internal fun resolveDurableUploadSession(
     } ?: return DurableUploadAccountResolution.AccountUnavailable
     val session = loadSession(account.id)
         ?.takeIf { loaded -> NextcloudDocumentIds.accountKey(loaded) == expectedAccountId }
-        ?: return if (account.id == availableRegistry.activeAccountId) {
-            DurableUploadAccountResolution.CredentialUnavailable
-        } else {
-            DurableUploadAccountResolution.DeferAccountActivation
-        }
+        ?: return DurableUploadAccountResolution.CredentialUnavailable
     return DurableUploadAccountResolution.Available(session)
 }
 
