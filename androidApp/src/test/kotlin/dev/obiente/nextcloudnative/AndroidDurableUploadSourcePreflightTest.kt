@@ -65,9 +65,8 @@ class AndroidDurableUploadSourcePreflightTest {
     }
 
     @Test
-    fun `permanently unavailable provider source terminally fails and releases`() = runBlocking {
+    fun `revoked provider permission terminally fails and releases`() = runBlocking {
         listOf(
-            FileNotFoundException("document removed"),
             SecurityException("grant revoked"),
         ).forEach { failure ->
             var queued = true
@@ -94,6 +93,26 @@ class AndroidDurableUploadSourcePreflightTest {
             assertFalse(retained)
             assertEquals(0, starts)
         }
+    }
+
+    @Test
+    fun `cloud provider file-not-found open failure retains capability and can recover`() = runBlocking {
+        var released = false
+        var attempts = 0
+        suspend fun attempt() = processQueuedDurableUploadSource(
+            requireCapability = {},
+            openSource = {
+                if (attempts++ == 0) throw FileNotFoundException("synthetic provider temporarily offline")
+            },
+            onCapabilityUnavailable = { released = true; "failed" },
+            onProviderUnavailable = { "retry" },
+            onReady = { "ready" },
+        )
+        assertEquals("retry", attempt())
+        assertFalse(released)
+        assertEquals("ready", attempt())
+        assertFalse(released)
+        assertEquals(2, attempts)
     }
 
     @Test

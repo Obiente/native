@@ -12,7 +12,6 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
-import java.io.FileNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -92,13 +91,18 @@ internal class DeckAttachmentUploadWorker(
         jobId: String,
     ): Result {
         val services = AndroidNextcloudServices(applicationContext)
-        if (!services.isDurableUploadAccountResolutionAvailable()) return Result.retry()
+        // Malformed or future registry formats need recovery, not a timed retry.
+        // Keep the queued row and capability; account activation reschedules it.
+        if (!services.isDurableUploadAccountResolutionAvailable()) return Result.success()
         val accountResolution = resolveDurableUploadSessionWithRegistryRecovery(
             expectedAccountId = initial.accountId,
             readRegistry = services::durableUploadAccountRegistry,
             recoverRegistry = { services.loadSession() },
             loadSession = services::loadSession,
         )
+        if (accountResolution == DurableUploadAccountResolution.CredentialUnavailable &&
+            durableUploadCredentialNeedsUpgrade(applicationContext, services.listAccounts(), initial.accountId)
+        ) return Result.success()
         val session = when (accountResolution) {
             is DurableUploadAccountResolution.Available -> accountResolution.session
             DurableUploadAccountResolution.RegistryUnavailable -> {
@@ -380,8 +384,6 @@ internal suspend fun <Result> processQueuedDurableUploadSource(
     } catch (failure: AndroidLocalUploadCapabilityReadException) {
         return onProviderUnavailable(failure)
     } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
-        return onCapabilityUnavailable()
-    } catch (_: FileNotFoundException) {
         return onCapabilityUnavailable()
     } catch (_: SecurityException) {
         return onCapabilityUnavailable()
