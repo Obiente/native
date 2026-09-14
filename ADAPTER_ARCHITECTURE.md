@@ -299,3 +299,11 @@ staging files under the sync engine lock, while keeping user originals.
 
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
+
+Android queued uploads retain their rows while saved credentials require recovery.
+Malformed preference values, damaged ciphertext, and invalid decoded credential
+records pause timed retries when no usable or temporarily inaccessible fallback
+remains. Temporary keystore failures continue retrying, including for inactive
+accounts. Unsupported credential versions require an upgrade. These policies are
+covered by deterministic Android unit tests; they do not establish device or
+release validation.
