@@ -209,6 +209,9 @@ is released. Cleanup retries do not transfer or delete user file contents.
 A durably removed Android folder-sync pair reports completion while its previously
 scheduled capability recovery worker retries any remaining permission cleanup.
 Ambiguous coordinator saves still require authoritative confirmation of removal.
+Account retirement remains strict until its capability cleanup finishes.
+Cancellation from grant, storage, and cipher adapters remains cancellation rather
+than being reported as damaged recovery metadata or deferred cleanup.
 Reconciliation records independent cleanup progress before reporting a failed
 provider, so one unavailable grant cannot indefinitely retain unrelated grants.
 A legacy shared root can regain expired access only for an account that still

@@ -201,7 +201,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     fun `later background reconciliation finishes a committed removal after repeated failure`() {
         val fixture = preparedCleanup()
         fixture.grants.failRelease = true
-        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() }
+        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID, allowDeferredCleanup = true) { state() }
         assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
         fixture.grants.failRelease = false
         fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)

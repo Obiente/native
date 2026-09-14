@@ -321,7 +321,7 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
             },
             prepareLocalGrantCleanup = capabilities::preparePairCleanup,
             persistRetirement = { store.save(removeAndroidFileSyncAccountPairs(current, accountId)) },
-            finishLocalGrantCleanup = { pairId -> capabilities.finishPairCleanupOrRetry(pairId, store::load) },
+            finishLocalGrantCleanup = { pairId -> capabilities.finishPairCleanupOrRetry(pairId, load = store::load) },
         )
     }
 }

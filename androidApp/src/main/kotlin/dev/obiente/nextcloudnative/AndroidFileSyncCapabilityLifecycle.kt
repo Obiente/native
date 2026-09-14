@@ -134,6 +134,7 @@ internal class AndroidFileSyncCapabilityStore(
         val encrypted = try {
             storage.read()
         } catch (failure: Exception) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
             throw AndroidFileSyncCapabilityRecoveryException(failure)
         } ?: return emptyList()
         return try {
@@ -150,6 +151,7 @@ internal class AndroidFileSyncCapabilityStore(
                 }
             }
         } catch (failure: Exception) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
             if (failure is AndroidFileSyncCapabilityRecoveryException) throw failure
             throw AndroidFileSyncCapabilityRecoveryException(failure)
         }
@@ -161,11 +163,13 @@ internal class AndroidFileSyncCapabilityStore(
         val encrypted = try {
             cipher.encrypt(array.toString())
         } catch (failure: Exception) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
             throw IllegalStateException("Folder capability recovery data could not be encrypted.", failure)
         }
         val saved = try {
             storage.write(encrypted)
         } catch (failure: Exception) {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
             throw IllegalStateException("Folder capability recovery data could not be saved.", failure)
         }
         check(saved) { "Folder capability recovery data could not be saved." }
@@ -375,6 +379,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
 
     fun finishPairCleanupOrRetry(
         pairId: String,
+        allowDeferredCleanup: Boolean = false,
         load: () -> AndroidFileSyncPersistedState,
     ) {
         try {
@@ -388,6 +393,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
+            if (!allowDeferredCleanup) throw failure
             if (load().coordinator.pairs.any { it.id == pairId }) throw failure
             // Removal is committed. The recovery owner was scheduled before the
             // cleanup intent and retains the remaining grant cleanup across restart.
@@ -594,10 +600,18 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     private fun recoverAcquisition(recordId: String) {
         val record = try {
             store.list().singleOrNull { it.id == recordId }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             null
         } ?: return
-        runCatching { prepareAndFinishCleanup(record) }
+        try {
+            prepareAndFinishCleanup(record)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The durable recovery owner retains this incomplete acquisition.
+        }
     }
 
     private fun prepareAndFinishCleanup(record: AndroidFileSyncCapabilityRecord): Boolean {
@@ -619,17 +633,23 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         if (ownedRead || ownedWrite) {
             val granted = try {
                 grants.exactGrant(record.uri)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 return false
             }
             if ((ownedRead && granted.read) || (ownedWrite && granted.write)) {
                 try {
                     grants.releaseExactGrant(record.uri, ownedRead, ownedWrite)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
                     return false
                 }
                 val retained = try {
                     grants.exactGrant(record.uri)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
                     return false
                 }
@@ -642,8 +662,14 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         return try {
             store.remove(record.id, AndroidFileSyncCapabilityPhase.CleanupPending)
             true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
-            try { store.list().none { it.id == record.id } } catch (_: Exception) { false }
+            try {
+                store.list().none { it.id == record.id }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) { false }
         }.also { removed ->
             if (removed) {
                 abandonedSelections.remove(record.id)

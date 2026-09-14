@@ -363,7 +363,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     }
                 },
                 cancelSchedule = { scheduler.cancel(pairId) },
-                releaseLocalGrant = { capabilities.finishPairCleanupOrRetry(pairId, store::load) },
+                releaseLocalGrant = { capabilities.finishPairCleanupOrRetry(pairId, allowDeferredCleanup = true, load = store::load) },
             )
             if (!removed) {
                 return@withLock FileSyncCenterActionResult.Rejected(if (remoteCleanupRejected) {
