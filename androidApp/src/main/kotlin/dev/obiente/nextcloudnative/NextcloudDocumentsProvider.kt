@@ -140,17 +140,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             cursor
         }
     }
-    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
-        val resolved = runCatching { accountResolver.requireDocument(parentDocumentId) }.getOrNull() ?: return false
-        val session = resolved.session
-        val parent = resolved.reference
-        val child = runCatching {
-            NextcloudDocumentIds.requireForSession(documentId, session, parent.incarnation)
-        }.getOrNull()
-            ?: return false
-        if (child.isRoot || parent.path == child.path) return false
-        return parent.isRoot || child.path.startsWith(parent.path + "/")
-    }
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
+        runCatching { accountResolver.isChildDocument(parentDocumentId, documentId) }.getOrDefault(false)
+
     override fun openDocument(
         documentId: String,
         mode: String,
@@ -825,7 +817,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             message = "This Nextcloud document ID is no longer valid.",
             accountIdentity = NextcloudDocumentIds.accountKey(session),
         ) {
-            NextcloudDocumentIds.requireForSession(documentId, session, incarnation, AndroidDocumentLegacyAliases(requireNotNull(context)).read(session.accountId.storageKey, incarnation))
+            accountResolver.requireReference(documentId, session, incarnation)
         }
 
     private inline fun <Result> withDocumentMutation(

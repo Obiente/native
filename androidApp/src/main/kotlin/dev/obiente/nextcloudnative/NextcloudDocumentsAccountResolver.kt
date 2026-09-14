@@ -40,8 +40,35 @@ internal class NextcloudDocumentsAccountResolver(
         val account = requireAccount(parsed.accountKey)
         return ResolvedNextcloudDocument(
             session = account.session,
-            reference = NextcloudDocumentIds.requireForSession(documentId, account.session, account.incarnation, loadLegacyAliases(account.session.accountId)),
+            reference = requireReference(documentId, account.session, account.incarnation),
         )
+    }
+
+    fun requireReference(
+        documentId: String,
+        session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation,
+    ): NextcloudDocumentReference {
+        val key = NextcloudDocumentIds.parse(documentId).accountKey
+        val aliases = if (key in session.accountRecord().documentAccountKeys()) emptySet()
+            else verifiedLegacyAliases(session.accountId)
+        return NextcloudDocumentIds.requireForSession(documentId, session, incarnation, aliases)
+    }
+
+    fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
+        val parent = requireDocument(parentDocumentId)
+        val child = requireReference(documentId, parent.session, parent.reference.incarnation)
+        if (child.isRoot || parent.reference.path == child.path) return false
+        return parent.reference.isRoot || child.path.startsWith(parent.reference.path + "/")
+    }
+
+    private fun verifiedLegacyAliases(accountId: NextcloudAccountId): Set<String> = try {
+        loadLegacyAliases(accountId)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // Optional unreadable metadata cannot authorize an old identity or block current IDs.
+        emptySet()
     }
 
     fun requireRoot(rootId: String): ResolvedNextcloudDocumentsAccount {
@@ -52,7 +79,7 @@ internal class NextcloudDocumentsAccountResolver(
     }
 
     private fun requireAccount(accountKey: String): ResolvedNextcloudDocumentsAccount {
-        val matches = listAccounts().filter { record -> accountKey in (record.documentAccountKeys() + loadLegacyAliases(record.id)) }
+        val matches = listAccounts().filter { record -> accountKey in record.documentAccountKeys() || accountKey in verifiedLegacyAliases(record.id) }
         require(matches.size == 1) { "The document account is missing or ambiguous." }
         return requireNotNull(loadExactAccount(matches.single())) {
             "The document account credentials are unavailable."

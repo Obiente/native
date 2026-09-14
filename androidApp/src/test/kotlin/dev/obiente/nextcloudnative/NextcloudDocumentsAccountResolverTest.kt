@@ -16,6 +16,33 @@ class NextcloudDocumentsAccountResolverTest {
     private val bobIncarnation = incarnation("2")
 
     @Test
+    fun `unreadable aliases do not block current identities but cannot authorize legacy IDs`() {
+        val resolver = NextcloudDocumentsAccountResolver(
+            { listOf(alice.accountRecord(), bob.accountRecord()) },
+            { id -> mapOf(alice.accountId to alice, bob.accountId to bob)[id] },
+            { aliceIncarnation },
+            { error("malformed optional aliases") },
+        )
+        val canonical = NextcloudDocumentIds.documentId(alice, aliceIncarnation, "Notes/file.txt")
+        assertEquals(alice, resolver.requireDocument(canonical).session)
+        val legacy = canonical.replace(NextcloudDocumentIds.documentAccountKey(alice), "f".repeat(32))
+        assertFailsWith<IllegalArgumentException> { resolver.requireDocument(legacy) }
+    }
+
+    @Test
+    fun `child checks preserve incarnation scoped historical aliases`() {
+        val alias = "f".repeat(32)
+        val resolver = NextcloudDocumentsAccountResolver(
+            { listOf(alice.accountRecord()) }, { alice }, { aliceIncarnation }, { setOf(alias) },
+        )
+        val parent = NextcloudDocumentIds.documentId(alice, aliceIncarnation, "Notes")
+        val child = NextcloudDocumentIds.documentId(alice, aliceIncarnation, "Notes/file.txt")
+            .replace(NextcloudDocumentIds.documentAccountKey(alice), alias)
+        kotlin.test.assertTrue(resolver.isChildDocument(parent, child))
+        kotlin.test.assertFalse(resolver.isChildDocument(child, parent))
+    }
+
+    @Test
     fun `persisted account document resolves after another account becomes active`() {
         var active = alice
         val resolver = resolver(
