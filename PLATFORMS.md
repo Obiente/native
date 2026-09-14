@@ -157,7 +157,9 @@ for the component contracts and current consumers.
 Interrupted account cleanup has a separate retry screen from unavailable secure
 storage. It preserves the saved sign-in and offers no sign-in reset action while
 cleanup is pending or its records need review. Unrecognized cleanup records direct
-the user to Obiente support for recovery guidance.
+the user to Obiente support for recovery guidance. Pending cleanup explains how to
+reopen the app for another cleanup attempt and contact support if it stays blocked;
+the screen's check action only reloads session state.
 
 Desktop credential-save recovery records persist a terminal marker before their
 identity fields are erased. Restart recovery can finish this cleanup at every
