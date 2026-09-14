@@ -444,7 +444,7 @@ internal class AndroidDurableMultipartUploadStore(
         } catch (failure: Exception) {
             throw AndroidDurableMultipartUploadRecoveryException(
                 failure,
-                DurableUploadQueueRecoveryDisposition.Quarantine,
+                durableUploadQueueDecryptionDisposition(failure),
             )
         }
         return try {

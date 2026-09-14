@@ -31,14 +31,16 @@ internal class DeckAttachmentUploadWorker(
         },
     ) {
         withContext(Dispatchers.IO) {
-            executeDurableUploadWork()
+            withDurableUploadQueueRecovery(onRetry = { Result.retry() }, onQuarantine = { Result.success() }) {
+                executeDurableUploadWork()
+            }
         }
     }
 
     private suspend fun executeDurableUploadWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
             ?: return Result.failure()
-        val store = AndroidDurableMultipartUploadStore(applicationContext)
+        val store = constructDurableUploadQueueOwner { AndroidDurableMultipartUploadStore(applicationContext) }
         val initial = store.find(jobId) ?: return Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {
