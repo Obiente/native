@@ -10,8 +10,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TestTimeSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 
 class DynamicNativeMemoryCacheTest {
     private val session = NextcloudSession("https://cloud.example.test", "alice", "never-cache-this")
@@ -228,6 +233,96 @@ class DynamicNativeMemoryCacheTest {
     }
 
     @Test
+    fun `retirement purges only the exact account across every cache class`() {
+        val cache = DynamicNativeMemoryCache()
+        val otherSession = session.copy(loginName = "bob")
+        val targetScreen = dynamicScreenCacheKey(session, "mail", "messages.list", null, emptyMap())
+        val otherScreen = dynamicScreenCacheKey(otherSession, "mail", "messages.list", null, emptyMap())
+        cache.storeDiscovery(session, "mail", discovery("mail"))
+        cache.storeDiscovery(otherSession, "mail", discovery("mail"))
+        cache.markDiscoveryFailure(session, "mail")
+        cache.markDiscoveryFailure(otherSession, "mail")
+        cache.storeScreen(targetScreen, snapshot("target"))
+        cache.storeScreen(otherScreen, snapshot("other"))
+
+        cache.retireAccount(session.accountId.storageKey)
+
+        assertNull(cache.discovery(session, "mail"))
+        assertNull(cache.screen(targetScreen))
+        assertFalse(cache.shouldRetryDiscovery(session, "mail"))
+        assertEquals("mail", cache.discovery(otherSession, "mail")?.descriptor?.app?.id)
+        assertEquals("other", cache.screen(otherScreen)?.records?.single()?.id)
+        assertFalse(cache.shouldRetryDiscovery(otherSession, "mail"))
+
+        cache.activateAccount(session.accountId.storageKey)
+
+        assertNull(cache.discovery(session, "mail"))
+        assertNull(cache.screen(targetScreen))
+        assertTrue(cache.shouldRetryDiscovery(session, "mail"))
+        assertEquals("other", cache.screen(otherScreen)?.records?.single()?.id)
+    }
+
+    @Test
+    fun `completion crossing retirement and reactivation cannot store into the new incarnation`() {
+        val cache = DynamicNativeMemoryCache()
+        val key = dynamicScreenCacheKey(session, "mail", "messages.list", null, emptyMap())
+        val staleProducer = requireNotNull(cache.producer(session))
+
+        cache.retireAccount(session.accountId.storageKey)
+        cache.activateAccount(session.accountId.storageKey)
+        cache.storeDiscovery(session, "mail", discovery("mail"), staleProducer)
+        cache.markDiscoveryFailure(session, "mail", staleProducer)
+        cache.storeScreen(key, snapshot("late"), staleProducer)
+
+        assertNull(cache.discovery(session, "mail"))
+        assertNull(cache.screen(key))
+        assertTrue(cache.shouldRetryDiscovery(session, "mail"))
+
+        val currentProducer = requireNotNull(cache.producer(session))
+        cache.storeDiscovery(session, "mail", discovery("mail"), currentProducer)
+        cache.storeScreen(key, snapshot("current"), currentProducer)
+
+        assertEquals("mail", cache.discovery(session, "mail")?.descriptor?.app?.id)
+        assertEquals("current", cache.screen(key)?.records?.single()?.id)
+    }
+
+    @Test
+    fun `concurrent cache access stays safe across retirement`() = runBlocking {
+        val cache = DynamicNativeMemoryCache(maximumScreens = 8)
+        val accountStorageKey = session.accountId.storageKey
+
+        List(12) { worker ->
+            async(Dispatchers.Default) {
+                repeat(200) { iteration ->
+                    val appId = "app-${iteration % 4}"
+                    val key = dynamicScreenCacheKey(
+                        session,
+                        appId,
+                        "view-$worker",
+                        iteration.toString(),
+                        emptyMap(),
+                    )
+                    cache.storeDiscovery(session, appId, discovery(appId))
+                    cache.markDiscoveryFailure(session, appId)
+                    cache.storeScreen(key, snapshot("$worker-$iteration"))
+                    cache.discovery(session, appId)
+                    cache.isDiscoveryFresh(session, appId)
+                    cache.shouldRetryDiscovery(session, appId)
+                    cache.screen(key)
+                    if (iteration % 11 == 0) cache.invalidateScreens(session, appId)
+                }
+            }
+        }.awaitAll()
+
+        cache.retireAccount(accountStorageKey)
+
+        repeat(4) { app ->
+            assertNull(cache.discovery(session, "app-$app"))
+            assertFalse(cache.shouldRetryDiscovery(session, "app-$app"))
+        }
+    }
+
+    @Test
     fun `dynamic response identity is stable across query order and contains no credentials`() {
         val first = NextcloudApiRequest(
             method = NextcloudApiMethod.GET,
@@ -246,4 +341,37 @@ class DynamicNativeMemoryCacheTest {
             first.copy(maximumResponseBytes = first.maximumResponseBytes + 1L).dynamicReadCacheIdentity(),
         )
     }
+
+    private fun discovery(appId: String) = DynamicDescriptorDiscovery(
+        descriptor = DynamicAppDescriptor(
+            descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
+            app = AppIdentity(appId, appId, "1.0.0"),
+            endpointPolicy = EndpointPolicy(
+                serverOrigin = "https://cloud.example.test",
+                approvedApiPrefixes = listOf("/ocs/v2.php/apps/$appId"),
+            ),
+        ),
+        sourcePath = "signed-package/openapi.json",
+        acquisition = DynamicDescriptorAcquisition.SignedAppStorePackage,
+        versionStatus = DynamicContractVersionStatus.VerifiedCurrent,
+    )
+
+    private fun snapshot(id: String) = DynamicScreenSnapshot(
+        records = listOf(NativeRecord(id, mapOf("id" to id))),
+        relatedRecords = emptyMap(),
+    )
+
+    private fun DynamicNativeMemoryCache.storeDiscovery(
+        session: NextcloudSession,
+        appId: String,
+        discovery: DynamicDescriptorDiscovery,
+    ) = storeDiscovery(session, appId, discovery, requireNotNull(producer(session)))
+
+    private fun DynamicNativeMemoryCache.markDiscoveryFailure(session: NextcloudSession, appId: String) =
+        markDiscoveryFailure(session, appId, requireNotNull(producer(session)))
+
+    private fun DynamicNativeMemoryCache.storeScreen(
+        key: DynamicScreenCacheKey,
+        snapshot: DynamicScreenSnapshot,
+    ) = storeScreen(key, snapshot, requireNotNull(producer(key)))
 }

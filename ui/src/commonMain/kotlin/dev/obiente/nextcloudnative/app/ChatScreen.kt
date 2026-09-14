@@ -72,9 +72,10 @@ internal fun ChatScreen(
     val historyHeaderVisible = (hasMoreHistory && olderCursor != null) || historyError != null
 
     suspend fun refresh() {
+        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
         val page = services.listTalkMessagePage(session, room.token)
         messages = page.messages
-        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages)
+        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages, cacheProducer)
         olderCursor = page.olderCursor
         hasMoreHistory = page.hasMoreHistory
     }
@@ -154,6 +155,7 @@ internal fun ChatScreen(
                                             loadingEarlier = true
                                             historyError = null
                                             scope.launch {
+                                                val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
                                                 runCatchingUnlessCancelled {
                                                     services.listTalkMessagePage(
                                                         session = session,
@@ -169,6 +171,7 @@ internal fun ChatScreen(
                                                         session,
                                                         room.token,
                                                         messages.orEmpty(),
+                                                        cacheProducer,
                                                     )
                                                     olderCursor = page.olderCursor
                                                     hasMoreHistory = page.hasMoreHistory

@@ -7,7 +7,8 @@ internal fun restoreDesktopAccountRegistry(
     session: NextcloudSession,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
 ) {
-    val restored = restoreNextcloudAccountRegistry(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null), session)
+    val registryStore = DesktopAccountRegistryPreferenceStore(preferences)
+    val restored = restoreNextcloudAccountRegistry(registryStore.read(), session)
     restored.recoveryReason?.let { reason ->
         recordDiagnostic(
             SupportDiagnosticEventDraft(
@@ -45,19 +46,14 @@ internal fun prepareDesktopAccountRegistry(session: NextcloudSession): String =
     prepareDesktopAccountRegistry(singleAccountRegistry(session))
 
 internal fun prepareDesktopAccountRegistry(registry: NextcloudAccountRegistry): String =
-    encodeNextcloudAccountRegistry(registry).also { encoded ->
-        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) {
-            "The account registry exceeds the desktop preference value limit."
-        }
-    }
+    encodeNextcloudAccountRegistry(registry)
 
 internal fun persistDesktopAccountRegistry(preferences: Preferences, encodedRegistry: String) {
-    require(encodedRegistry.length <= Preferences.MAX_VALUE_LENGTH)
-    preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
+    DesktopAccountRegistryPreferenceStore(preferences).write(encodedRegistry)
 }
 
 internal fun clearDesktopAccountRegistry(preferences: Preferences) {
-    preferences.remove(DESKTOP_ACCOUNT_REGISTRY_KEY)
+    DesktopAccountRegistryPreferenceStore(preferences).write(null)
 }
 
 internal const val DESKTOP_ACCOUNT_REGISTRY_KEY = "account_registry_v1"

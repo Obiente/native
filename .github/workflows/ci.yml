@@ -213,8 +213,19 @@ jobs:
           RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outcome != 'success' || steps.changes.outputs.android == 'true' }}
         run: |
           set -euo pipefail
+          # Leave room for Gradle's 4 GiB heap and Android tooling beside the compiler.
+          available_mib=$(awk '/MemAvailable:/ { printf "%d", $2 / 1024 }' /proc/meminfo)
+          reserved_mib=6144
+          compiler_heap_mib=$(( (available_mib - reserved_mib) / 512 * 512 ))
+          if (( compiler_heap_mib < 4096 )); then
+            printf 'Insufficient memory: %s MiB available; at least 10240 MiB is required.\n' "$available_mib" >&2
+            exit 1
+          fi
+          if (( compiler_heap_mib > 8192 )); then compiler_heap_mib=8192; fi
+          printf 'Gradle memory: %s MiB available, %s MiB reserved, %s MiB Kotlin heap.\n' \
+            "$available_mib" "$reserved_mib" "$compiler_heap_mib"
           gradle_tasks=()
-          gradle_options=()
+          gradle_options=("--max-workers=1" "-Pkotlin.daemon.jvmargs=-Xmx${compiler_heap_mib}m")
           if [[ "${RUN_CONTRACT}" == "true" ]]; then
             gradle_tasks+=(":contractAcquisition:test")
           fi

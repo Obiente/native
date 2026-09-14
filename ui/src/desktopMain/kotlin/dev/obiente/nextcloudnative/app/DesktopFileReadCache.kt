@@ -10,31 +10,6 @@ import java.util.prefs.Preferences
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-internal data class DesktopCachedFileContent(
-    val bytes: ByteArray,
-    val mimeType: String?,
-    val etag: String,
-)
-
-internal data class DesktopCachedFileListing(
-    val files: List<NextcloudFile>,
-    val fetchedAtEpochMillis: Long,
-)
-
-internal data class DesktopCachedVirtualListing(
-    val nodes: List<LinuxVirtualFileNode>,
-    val fetchedAtEpochMillis: Long,
-    val freshAtEpochMillis: Long = fetchedAtEpochMillis,
-)
-
-internal data class DesktopVirtualFileCacheSummary(
-    val policy: VirtualFileCachePolicy,
-    val cachedBytes: Long,
-    val reclaimableBytes: Long,
-    val entryCount: Int,
-    val availableFreeBytes: Long,
-)
-
 /**
  * Disposable, account-private Files read cache for desktop.
  *
@@ -56,6 +31,7 @@ internal class DesktopFileReadCache(
 ) {
     private val loadedIndexes = LinkedHashMap<String, CacheIndexV1>(16, 0.75f, true)
     private val failedVirtualListingInvalidations = mutableMapOf<String, Set<String>>()
+    private val lifecycle = DesktopFileReadCacheLifecycle()
     private val virtualListingInvalidationPreferences = preferences.node(
         "linux-virtual-metadata-invalidations-v1",
     )
@@ -74,7 +50,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun cachedListingPaths(accountId: String): Set<String> =
-        load(accountId).let { index ->
+        if (!lifecycle.isActive(accountId)) emptySet() else load(accountId).let { index ->
             buildSet {
                 index.listings.mapTo(this, CachedListingV1::path)
                 index.listingShards.mapTo(this, CachedListingShardReferenceV1::path)
@@ -83,6 +59,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun cachedListingSnapshot(accountId: String, path: String): DesktopCachedFileListing? {
+        if (!lifecycle.isActive(accountId)) return null
         val normalized = path.cachePath()
         val index = load(accountId)
         val listing = index.listings.firstOrNull { it.path == normalized }
@@ -95,7 +72,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun cachedVirtualListingPaths(accountId: String): Set<String> =
-        load(accountId).let { index ->
+        if (!lifecycle.isActive(accountId)) emptySet() else load(accountId).let { index ->
             buildSet {
                 index.virtualListings.mapTo(this, CachedVirtualListingV1::path)
                 index.virtualListingShards.mapTo(this, CachedVirtualListingShardReferenceV1::path)
@@ -104,6 +81,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun cachedVirtualListingSnapshot(accountId: String, path: String): DesktopCachedVirtualListing? {
+        if (!lifecycle.isActive(accountId)) return null
         val normalized = path.cachePath()
         val index = load(accountId)
         val listing = index.virtualListings.firstOrNull { it.path == normalized }
@@ -120,6 +98,7 @@ internal class DesktopFileReadCache(
 
     @Synchronized
     fun failedVirtualListingInvalidations(accountId: String): Set<String> {
+        if (!lifecycle.isActive(accountId)) return emptySet()
         failedVirtualListingInvalidations[accountId]?.let { return it.toSet() }
         return if (virtualListingInvalidationPreferences.getBoolean(accountId, false)) {
             setOf("")
@@ -129,7 +108,12 @@ internal class DesktopFileReadCache(
     }
 
     @Synchronized
-    fun replaceFailedVirtualListingInvalidations(accountId: String, paths: Set<String>) {
+    fun replaceFailedVirtualListingInvalidations(
+        accountId: String,
+        paths: Set<String>,
+        cacheProducer: DesktopFileReadCacheProducer? = producer(accountId),
+    ) {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return
         if (paths.isEmpty()) {
             failedVirtualListingInvalidations.remove(accountId)
             virtualListingInvalidationPreferences.remove(accountId)
@@ -143,12 +127,31 @@ internal class DesktopFileReadCache(
     }
 
     @Synchronized
+    fun removeAccount(accountId: String) {
+        retireAccount(accountId)
+        try {
+            purgeDesktopAccountCacheDirectory(root, accountId)
+            virtualListingInvalidationPreferences.remove(accountId)
+            virtualListingInvalidationPreferences.flush()
+        } finally {
+            loadedIndexes.remove(accountId)
+            failedVirtualListingInvalidations.remove(accountId)
+        }
+    }
+
+    @Synchronized fun retireAccount(accountId: String) = lifecycle.retire(accountId)
+    @Synchronized fun producer(accountId: String): DesktopFileReadCacheProducer? = lifecycle.producer(accountId)
+    @Synchronized fun activateAccount(accountId: String) = lifecycle.activate(accountId)
+
+    @Synchronized
     fun storeListing(
         accountId: String,
         path: String,
         files: List<NextcloudFile>,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        cacheProducer: DesktopFileReadCacheProducer? = producer(accountId),
     ) {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return
         require(nowEpochMillis >= 0L)
         require(files.size <= MAX_FILES_PER_LISTING) { "The folder contains too many cacheable entries." }
         val normalized = path.cachePath()
@@ -181,7 +184,9 @@ internal class DesktopFileReadCache(
         files: List<NextcloudFile>,
         fetchedAtEpochMillis: Long,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        cacheProducer: DesktopFileReadCacheProducer? = producer(accountId),
     ): Boolean {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return false
         require(fetchedAtEpochMillis >= 0L)
         require(nowEpochMillis >= 0L)
         val normalized = path.cachePath()
@@ -197,7 +202,7 @@ internal class DesktopFileReadCache(
         ) {
             return false
         }
-        storeListing(accountId, normalized, files, fetchedAtEpochMillis)
+        storeListing(accountId, normalized, files, fetchedAtEpochMillis, cacheProducer)
         return true
     }
 
@@ -209,7 +214,9 @@ internal class DesktopFileReadCache(
         fetchedAtEpochMillis: Long,
         freshAtEpochMillis: Long = fetchedAtEpochMillis,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        cacheProducer: DesktopFileReadCacheProducer? = producer(accountId),
     ): Boolean {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return false
         require(fetchedAtEpochMillis >= 0L)
         require(freshAtEpochMillis >= fetchedAtEpochMillis)
         require(nowEpochMillis >= 0L)
@@ -252,6 +259,7 @@ internal class DesktopFileReadCache(
         path: String,
         maximumBytes: Long,
     ): DesktopCachedFileContent? {
+        if (!lifecycle.isActive(accountId)) return null
         require(maximumBytes > 0L)
         val normalized = path.cachePath()
         val record = load(accountId).content.firstOrNull { it.path == normalized } ?: return null
@@ -283,7 +291,9 @@ internal class DesktopFileReadCache(
         path: String,
         content: NextcloudFileContent,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        cacheProducer: DesktopFileReadCacheProducer? = producer(accountId),
     ): Boolean {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return false
         require(nowEpochMillis >= 0L)
         val normalized = path.cachePath()
         val etag = content.etag?.takeIf(String::isNotBlank) ?: return false
@@ -397,7 +407,8 @@ internal class DesktopFileReadCache(
     ): VirtualFileEvictionPlan = applyEviction(accountId, requestedBytesToFree, nowEpochMillis)
 
     @Synchronized
-    fun invalidate(accountId: String, path: String) {
+    fun invalidate(accountId: String, path: String, cacheProducer: DesktopFileReadCacheProducer? = producer(accountId)): Boolean {
+        if (!lifecycle.accepts(accountId, cacheProducer)) return false
         val normalized = path.cachePath()
         val parent = normalized.parentCachePath()
         val accountDirectory = accountDirectory(accountId)
@@ -444,6 +455,7 @@ internal class DesktopFileReadCache(
                 content = index.content.filterNot { it in removed },
             ),
         )
+        return true
     }
 
     private fun CacheIndexV1.bounded(): CacheIndexV1 {
@@ -1354,18 +1366,6 @@ private data class MetadataShardIndexGroup(
         require(ordinary.isEmpty() != virtual.isEmpty())
     }
 }
-
-internal fun desktopFileCacheAccountId(session: NextcloudSession): String =
-    sha256Hex("${session.serverUrl}\u0000${session.loginName}")
-
-private fun desktopFilesCacheDirectory(): File {
-    val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
-    val cacheRoot = xdgCache?.let(::File) ?: File(System.getProperty("user.home"), ".cache")
-    return File(cacheRoot, "nextcloud-native/files")
-}
-
-internal fun defaultDesktopFileReadCache(): DesktopFileReadCache =
-    DesktopFileReadCache(desktopFilesCacheDirectory())
 
 private fun String.cachePath(): String {
     require(length <= 8_192)

@@ -385,14 +385,30 @@ internal class AndroidFileOfflineRepository(context: Context) {
         return update.state.folderAvailability(accountId, folder.path)
     }
 
-    fun execute(
+    suspend fun execute(
+        expectedAccountId: String,
+        userId: String,
+        jobId: Long,
+        cancellation: DocumentRequestCancellation,
+    ): AndroidOfflineExecutionOutcome = ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(expectedAccountId) {
+        executeWhileAccountRetained(expectedAccountId, userId, jobId, cancellation)
+    }
+
+    private fun executeWhileAccountRetained(
         expectedAccountId: String,
         userId: String,
         jobId: Long,
         cancellation: DocumentRequestCancellation,
     ): AndroidOfflineExecutionOutcome {
-        val session = AndroidNextcloudServices(appContext).loadSession()
-        if (session == null || NextcloudDocumentIds.accountKey(session) != expectedAccountId) {
+        val services = AndroidNextcloudServices(appContext)
+        val accountSnapshot = services.accountRetentionSnapshot()
+        val session = resolveStoredAndroidAccountSession(
+            expectedAccountId, { accountSnapshot.accountsOrEmpty() }, services::loadSession,
+        )
+        if (session == null) {
+            if (shouldRetryAndroidOfflineJobForMissingSession(expectedAccountId, accountSnapshot)) {
+                return AndroidOfflineExecutionOutcome.Retry
+            }
             finish(
                 jobId,
                 FileOfflineJobResult.PermanentFailure("Sign in to this account to finish the offline download."),
@@ -693,7 +709,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
         val record: dev.obiente.nextcloudnative.app.FileOfflinePinRecord,
     )
 
-    private companion object {
+    internal companion object {
         const val CONTENT_DIRECTORY = "offline-content-v1"
         const val WORK_TAG = "nextcloud-native-offline-files"
         const val MAX_OFFLINE_CENTER_VISIBLE_ITEMS = 10_000

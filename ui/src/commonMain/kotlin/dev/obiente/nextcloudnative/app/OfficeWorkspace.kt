@@ -98,10 +98,11 @@ internal fun officeWorkspaceOperations(
     cachedFiles = { services.listFilesCachedWithSource(session, userId, it) },
     files = { services.listFilesWithSource(session, userId, it) },
     capabilities = {
+        val cacheProducer = sharedDocumentEditingCapabilitiesCache.producer(session)
         val cached = sharedDocumentEditingCapabilitiesCache.get(session)
         when (val result = services.loadDocumentEditingCapabilities(session, cached?.etag, cached?.capabilities)) {
             is NextcloudConditionalRead.Modified -> result.value.also {
-                sharedDocumentEditingCapabilitiesCache.store(session, it, result.responseEtag)
+                sharedDocumentEditingCapabilitiesCache.store(session, it, result.responseEtag, cacheProducer)
             }
             NextcloudConditionalRead.NotModified -> cached?.capabilities
                 ?: error("Document editor metadata was not returned.")

@@ -5,12 +5,51 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import java.util.prefs.Preferences
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
+    @Test
+    fun successfulFallbackCleanupClearsAnEarlierProviderFailure() {
+        assertEquals(
+            null,
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = "provider removal failed",
+                fallbackFailure = null,
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
+    @Test
+    fun failedFallbackCleanupPreservesTheEarlierProviderFailure() {
+        assertEquals(
+            "provider removal failed",
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = "provider removal failed",
+                fallbackFailure = IllegalStateException("fallback failed"),
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
+    @Test
+    fun failedFallbackCleanupPublishesItsOwnFailureWhenTheProviderSucceeded() {
+        assertEquals(
+            "fallback failed",
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = null,
+                fallbackFailure = IllegalStateException("fallback failed"),
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
     @Test
     fun preservedRootRecordSurvivesReloadUntilAcknowledged() {
         val nodeName = "windows-preserved-root-test-${UUID.randomUUID()}"
@@ -242,6 +281,194 @@ class WindowsUninstallCleanupTest {
     }
 
     @Test
+    fun inactiveAccountRemovalUnregistersOnlyThatAccountsCloudFilesRoots() {
+        val preferences = Preferences.userRoot().node("windows-account-removal-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-removal-home").toFile()
+        val removedAccountId = "7".repeat(64)
+        val retainedAccountId = "8".repeat(64)
+        val removedRoot = desktopWindowsCloudFilesRoot(removedAccountId, home)
+        val retainedRoot = desktopWindowsCloudFilesRoot(retainedAccountId, home)
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(removedAccountId), removedRoot.absolutePath)
+            preferences.put(windowsCloudFilesRootPreferenceKey(retainedAccountId), retainedRoot.absolutePath)
+            preferences.put("windows-cloud-files-root", retainedRoot.absolutePath)
+
+            unregisterWindowsCloudFilesRootsForAccountRemoval(
+                preferences = preferences,
+                accountId = removedAccountId,
+                userHome = home,
+                apiFactory = { api },
+            )
+
+            assertEquals(
+                listOf(
+                    removedRoot.toPath(),
+                    home.resolve("Nextcloud Native").resolve(removedAccountId).toPath(),
+                ),
+                api.unregisteredRoots,
+            )
+            assertEquals(null, preferences.get(windowsCloudFilesRootPreferenceKey(removedAccountId), null))
+            assertEquals(
+                retainedRoot.absolutePath,
+                preferences.get(windowsCloudFilesRootPreferenceKey(retainedAccountId), null),
+            )
+            assertEquals(retainedRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
+            assertTrue(api.closed)
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountRemovalDeletesHydratedDataOnlyWhenEveryEntryIsInSync() {
+        val preferences = Preferences.userRoot().node("windows-account-data-removal-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-data-removal-home").toFile()
+        val accountId = "d".repeat(64)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = desktopLegacyWindowsCloudFilesRoot(accountId, home).toPath()
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            Files.createDirectories(currentRoot.resolve("Documents"))
+            Files.writeString(currentRoot.resolve("Documents/private.txt"), "hydrated private bytes")
+            Files.createDirectories(legacyRoot)
+            Files.writeString(legacyRoot.resolve("legacy.txt"), "legacy hydrated bytes")
+
+            unregisterWindowsCloudFilesRootsForAccountRemoval(preferences, accountId, home) { api }
+
+            assertFalse(Files.exists(currentRoot))
+            assertFalse(Files.exists(legacyRoot))
+            assertNull(persistedWindowsCloudFilesPreservedRoot(preferences, accountId))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountRemovalMovesUncommittedDataIntoTheExplicitRecoveryFolder() {
+        val preferences = Preferences.userRoot().node("windows-account-data-recovery-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-data-recovery-home").toFile()
+        val accountId = "e".repeat(64)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = desktopLegacyWindowsCloudFilesRoot(accountId, home).toPath()
+        val api = RecordingWindowsCloudFilesApi().apply {
+            inspectEntry = { path ->
+                WindowsCloudPlaceholderInspection(
+                    when (path.fileName.toString()) {
+                        "dirty.txt" -> WindowsCloudPlaceholderEntryState.Dirty
+                        "local.txt" -> WindowsCloudPlaceholderEntryState.Local
+                        else -> WindowsCloudPlaceholderEntryState.InSync
+                    },
+                )
+            }
+        }
+        try {
+            Files.createDirectories(currentRoot)
+            Files.writeString(currentRoot.resolve("dirty.txt"), "uncommitted edit")
+            Files.createDirectories(legacyRoot)
+            Files.writeString(legacyRoot.resolve("local.txt"), "local-only file")
+
+            unregisterWindowsCloudFilesRootsForAccountRemoval(preferences, accountId, home) { api }
+
+            val recoveryRoot = assertNotNull(persistedWindowsCloudFilesPreservedRoot(preferences, accountId))
+            assertFalse(Files.exists(currentRoot))
+            assertFalse(Files.exists(legacyRoot))
+            assertEquals("uncommitted edit", Files.readString(recoveryRoot.resolve("root-0/dirty.txt")))
+            assertEquals("local-only file", Files.readString(recoveryRoot.resolve("root-1/local.txt")))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountRemovalRetryClearsAnEmptyRecoveryFolderAfterInterruptedCleanup() {
+        val preferences = Preferences.userRoot().node("windows-account-data-retry-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-data-retry-home").toFile()
+        val accountId = "f".repeat(64)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val api = RecordingWindowsCloudFilesApi().apply {
+            inspectEntry = { WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Dirty) }
+        }
+        try {
+            Files.createDirectories(currentRoot)
+            Files.writeString(currentRoot.resolve("draft.txt"), "local draft")
+            unregisterWindowsCloudFilesRootsForAccountRemoval(preferences, accountId, home) { api }
+            val recoveryRoot = assertNotNull(persistedWindowsCloudFilesPreservedRoot(preferences, accountId))
+            recoveryRoot.toFile().listFiles().orEmpty().forEach(File::deleteRecursively)
+
+            unregisterWindowsCloudFilesRootsForAccountRemoval(preferences, accountId, home) { api }
+
+            assertFalse(Files.exists(recoveryRoot))
+            assertNull(persistedWindowsCloudFilesPreservedRoot(preferences, accountId))
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun partialAccountRootCleanupRemainsJournaledUntilEveryRootIsUnregistered() = runBlocking {
+        val preferences = Preferences.userRoot().node("windows-account-cleanup-retry-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-cleanup-retry-home").toFile()
+        val accountId = "9".repeat(64)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = desktopLegacyWindowsCloudFilesRoot(accountId, home).toPath()
+        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+        val firstApi = RecordingWindowsCloudFilesApi().apply { failingRoot = legacyRoot }
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(accountId), currentRoot.toString())
+            val removed = removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = accountId,
+                prepareCleanup = journal::prepare,
+                commitCleanup = journal::commit,
+                clearCleanup = journal::clear,
+                accountOwnership = { DesktopAccountOwnership.Absent },
+                removeCredential = { true },
+                removeSyncPairs = {
+                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                        preferences = preferences,
+                        accountId = accountId,
+                        userHome = home,
+                        apiFactory = { firstApi },
+                    )
+                },
+                recordCleanupFailure = {},
+            )
+
+            assertTrue(removed)
+            assertEquals(listOf(currentRoot, legacyRoot), firstApi.unregisterAttempts)
+            assertEquals(
+                listOf(DesktopAccountSyncPairCleanup(accountId, DesktopAccountSyncPairCleanupPhase.Committed)),
+                journal.pending(),
+            )
+
+            val retryApi = RecordingWindowsCloudFilesApi()
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = journal.pending().single(),
+                accountOwnership = { DesktopAccountOwnership.Absent },
+                removeSyncPairs = {
+                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                        preferences = preferences,
+                        accountId = accountId,
+                        userHome = home,
+                        apiFactory = { retryApi },
+                    )
+                },
+                clearCleanup = journal::clear,
+            )
+
+            assertEquals(listOf(currentRoot, legacyRoot), retryApi.unregisterAttempts)
+            assertTrue(journal.pending().isEmpty())
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun uninstallCanUseThePersistedRootAfterSessionMetadataIsGone() {
         val preferences = Preferences.userRoot().node("windows-uninstall-root-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-uninstall-root-home").toFile()
@@ -410,13 +637,20 @@ class WindowsUninstallCleanupTest {
     }
 
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
+        val unregisterAttempts = mutableListOf<Path>()
         val unregisteredRoots = mutableListOf<Path>()
         val unregisteredRoot: Path? get() = unregisteredRoots.lastOrNull()
         var prerequisiteRoot: Path? = null
         var dependentRoot: Path? = null
+        var failingRoot: Path? = null
+        var inspectEntry: (Path) -> WindowsCloudPlaceholderInspection = {
+            WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync)
+        }
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
+            unregisterAttempts.add(root)
+            if (root == failingRoot) error("Synthetic Cloud Files unregister failure")
             if (root == dependentRoot && prerequisiteRoot !in unregisteredRoots) {
                 error("The stable registration still points at another candidate root.")
             }
@@ -437,7 +671,8 @@ class WindowsUninstallCleanupTest {
         override fun failPlaceholderFetch(info: WindowsCloudCallbackInfo) = unsupported()
         override fun acknowledgeDelete(info: WindowsCloudCallbackInfo, accepted: Boolean) = unsupported()
         override fun acknowledgeRename(info: WindowsCloudCallbackInfo, accepted: Boolean) = unsupported()
-        override fun placeholderState(path: Path): WindowsCloudPlaceholderState = unsupported()
+        override fun placeholderState(path: Path): WindowsCloudPlaceholderState = inspectEntry(path).placeholderState
+        override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection = inspectEntry(path)
         override fun allocatedBytes(path: Path): Long = unsupported()
         override fun lastAccessedAtEpochMillis(path: Path): Long = unsupported()
         override fun isPinned(path: Path): Boolean = unsupported()

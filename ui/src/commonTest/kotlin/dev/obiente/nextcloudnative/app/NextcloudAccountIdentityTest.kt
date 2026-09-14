@@ -98,7 +98,7 @@ class NextcloudAccountIdentityTest {
         val cache = NextcloudNotesCache()
         val upper = session()
         val lower = upper.copy(serverUrl = "https://cloud.example.test/cloud")
-        cache.storeList(upper, listOf(note(id = 1, title = "Upper")))
+        cache.storeList(upper, listOf(note(id = 1, title = "Upper")), cache.producer(upper))
 
         assertNotNull(cache.list(upper))
         assertNull(cache.list(lower))
