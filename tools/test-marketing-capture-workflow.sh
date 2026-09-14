@@ -67,10 +67,10 @@ for stale_gate in \
     fi
 done
 
-scope_detector_count="$(grep -Ec '^      - name: Detect (build scopes|Windows desktop changes)$' "$ci")"
+scope_detector_count="$(grep -Ec '^      - name: Detect (build scopes|Windows desktop changes|SQLite packaging changes)$' "$ci")"
 continued_detector_count="$(grep -Fc 'continue-on-error: true' "$ci")"
-if [[ "$scope_detector_count" -ne 2 || "$continued_detector_count" -ne 2 ]]; then
-    printf 'Build scope detection must degrade safely for both build jobs.\n' >&2
+if [[ "$scope_detector_count" -ne 3 || "$continued_detector_count" -ne 3 ]]; then
+    printf 'Build scope detection must degrade safely for all three build jobs.\n' >&2
     exit 1
 fi
 require_text "$ci" "steps.changes.outcome != 'success'"
