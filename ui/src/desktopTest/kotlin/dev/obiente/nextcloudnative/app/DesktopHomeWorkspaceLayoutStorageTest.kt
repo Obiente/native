@@ -9,9 +9,39 @@ import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopHomeWorkspaceLayoutStorageTest {
+    @Test
+    fun `account removal clears canonical and legacy workspace preferences without touching a peer`() {
+        val directory = Files.createTempDirectory("nextcloud-native-home-workspace-removal-test").toFile()
+        val node = "dev/obiente/nextcloudnative/test-home-workspace-${UUID.randomUUID()}"
+        val preferences = Preferences.userRoot().node(node)
+        val cleanupPreferences = Preferences.userRoot().node(node)
+        val storage = DesktopHomeWorkspaceLayoutStorage(cleanupPreferences, directory.resolve("preferences.lock"))
+        val canonical = "a".repeat(64)
+        val legacy = "b".repeat(64)
+        val retained = "c".repeat(64)
+        val removedKeys = listOf(canonical, legacy).flatMap(::workspacePreferenceKeys)
+        val retainedKeys = workspacePreferenceKeys(retained)
+        try {
+            removedKeys.forEach { key -> preferences.put(key, "removed") }
+            retainedKeys.forEach { key -> preferences.put(key, "retained") }
+            preferences.flush()
+
+            storage.removeAccount(canonical, legacy)
+            preferences.sync()
+
+            removedKeys.forEach { key -> assertNull(preferences.get(key, null), key) }
+            retainedKeys.forEach { key -> assertEquals("retained", preferences.get(key, null), key) }
+        } finally {
+            preferences.removeNode()
+            Preferences.userRoot().flush()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun `concurrent storage instances admit only one conditional promotion`() {
         val directory = Files.createTempDirectory("nextcloud-native-home-workspace-lock-test").toFile()
@@ -70,4 +100,7 @@ class DesktopHomeWorkspaceLayoutStorageTest {
             home.deleteRecursively()
         }
     }
+
+    private fun workspacePreferenceKeys(accountScopeDigest: String): List<String> =
+        homeWorkspaceAccountPersistenceKeys(accountScopeDigest).toList()
 }

@@ -12,10 +12,14 @@ import kotlinx.serialization.Serializable
 data class FileSyncLocalRoot(
     val localRootId: String,
     val displayName: String,
+    /** Opaque, non-secret platform reference suitable for saved UI state. Never a provider URI. */
+    val savedStateId: String? = null,
+    val accessRestored: Boolean = false,
 ) {
     init {
         require(localRootId.isSafeFileSyncCenterText(2_048))
         require(displayName.isSafeFileSyncCenterText(256))
+        require(savedStateId == null || savedStateId.isSafeFileSyncCenterText(256))
     }
 }
 

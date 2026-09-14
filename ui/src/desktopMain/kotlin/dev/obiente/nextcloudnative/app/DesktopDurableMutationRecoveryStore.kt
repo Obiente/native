@@ -98,6 +98,34 @@ internal class DesktopDurableMutationRecoveryStore(
         }.getOrDefault(false)
     }
 
+    fun removeAccount(accountScope: String) {
+        require(accountScope.isCanonicalGroupwareMutationAccountScope()) { "The mutation account scope is invalid." }
+        if (!Files.exists(root.toPath(), LinkOption.NOFOLLOW_LINKS)) return
+        val privacy = requirePrivateDirectory(root)
+        withExclusiveStoreLock(root, privacy) {
+            val targets = DurableMutationRecoveryKind.entries.flatMap { kind ->
+                val target = target(accountScope, kind)
+                listOf(target, File(root, ".${target.name}.part"))
+            }
+            var deleted = false
+            targets.forEach { candidate ->
+                val path = candidate.toPath()
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                    check(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(path)) {
+                        "Mutation recovery state is not a regular file."
+                    }
+                    requirePrivatePath(candidate, privacy, directory = false)
+                    check(Files.deleteIfExists(path)) { "Could not delete mutation recovery state." }
+                    deleted = true
+                }
+            }
+            if (deleted) syncDirectory(root, privacy)
+            check(targets.none { Files.exists(it.toPath(), LinkOption.NOFOLLOW_LINKS) }) {
+                "Could not remove all mutation recovery state for the account."
+            }
+        }
+    }
+
     private fun target(accountScope: String, kind: DurableMutationRecoveryKind): File {
         require(accountScope.isCanonicalGroupwareMutationAccountScope()) { "The mutation account scope is invalid." }
         return File(root, "${kind.storageKey}-$accountScope.json")

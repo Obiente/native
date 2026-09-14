@@ -88,3 +88,80 @@ internal fun LegacySessionMigrationUnavailable(
         }
     }
 }
+
+@Composable
+internal fun SessionLoadingRecoveryScreen(
+    state: NextcloudSessionLoadState,
+    onRetry: () -> Unit,
+    onSignInAgain: () -> Unit,
+) {
+    when (state) {
+        NextcloudSessionLoadState.SecureStorageUnavailable -> SecureSessionStorageUnavailable(onRetry, onSignInAgain)
+        NextcloudSessionLoadState.LegacyMigrationUnavailable -> LegacySessionMigrationUnavailable(onRetry, onSignInAgain)
+        is NextcloudSessionLoadState.AccountCleanupUnavailable -> AccountSessionCleanupUnavailable(state.reason, onRetry)
+        NextcloudSessionLoadState.StorageVersionUnsupported -> NewerSessionStorageUnavailable(onRetry)
+        NextcloudSessionLoadState.StorageMalformed -> MalformedSessionStorageUnavailable(onRetry)
+        is NextcloudSessionLoadState.Loaded -> Unit
+    }
+}
+
+@Composable
+private fun AccountSessionCleanupUnavailable(reason: NextcloudSessionCleanupReason, onRetry: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                if (reason == NextcloudSessionCleanupReason.Pending) "Account cleanup is pending"
+                else "Account cleanup needs attention",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                if (reason == NextcloudSessionCleanupReason.Pending)
+                    "An earlier account change needs to finish before this account can open. " +
+                        "Your saved sign-in and local files are retained. Close and reopen nati.ve to retry cleanup. " +
+                        "If cleanup stays blocked, contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL."
+                else "nati.ve cannot safely finish an earlier account change. " +
+                    "Your saved sign-in and local files are retained. " +
+                        "Contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL for help recovering this account.",
+            )
+            OutlinedButton(onClick = onRetry) { Text("Check again") }
+        }
+    }
+}
+
+@Composable
+private fun NewerSessionStorageUnavailable(onCheckAgain: () -> Unit) {
+    SessionRegistryRecoveryNotice(
+        title = "A compatible nati.ve version is needed",
+        message = "Your saved accounts were written by a newer app version and are retained. " +
+            "Reopen that version or install a compatible newer version. " +
+            "For recovery help, contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL.",
+        onCheckAgain = onCheckAgain,
+    )
+}
+
+@Composable
+private fun MalformedSessionStorageUnavailable(onCheckAgain: () -> Unit) {
+    SessionRegistryRecoveryNotice(
+        title = "Saved account data needs recovery",
+        message = "nati.ve could not read the saved account records. Existing account data and local files are retained. " +
+            "Contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL for help recovering this account.",
+        onCheckAgain = onCheckAgain,
+    )
+}
+
+@Composable
+private fun SessionRegistryRecoveryNotice(title: String, message: String, onCheckAgain: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(message)
+            OutlinedButton(onClick = onCheckAgain) { Text("Check again") }
+        }
+    }
+}

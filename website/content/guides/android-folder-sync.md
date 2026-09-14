@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-30
+lastUpdated: 2026-09-14
 captureScenarios: guide-android-folder-sync-locations, guide-android-folder-sync-rules, guide-android-folder-sync-status
 prerequisites: A connected Android account, A device folder you can safely test, Enough local and server storage for the first scan
 ---
 
 # Sync an Android device folder with Nextcloud
 
-**Last reviewed: 2026-08-30.** The software and published packages may have
+**Last reviewed: 2026-09-14.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -51,3 +51,17 @@ If both sides changed, open the pair and compare the device and Nextcloud type, 
 If a result is unknown after interruption, let the durable coordinator reconcile it rather than creating a second pair or repeatedly retrying. Use **Settings** in the pair detail to remove a sync. Removing the pair removes its configuration and schedule; the current implementation does not delete local or server files when the pair itself is removed.
 
 The **Review** setup step keeps direction, conflict policy and deletion policy visible before you start. In **Choose what syncs**, a partial checkbox means only some descendants are selected; opening that folder does not expand the sync scope. Removal is under the selected pair's **Settings** tab and still requires confirmation.
+
+### Recovery from an older Files-provider pair
+
+The source implementation rejects choosing nati.ve's own cloud Files provider as
+an Android device folder. If an older pair used that location, removal first
+finishes interrupted recovery before releasing file access.
+
+A preserved directory appears in its original Nextcloud parent with a name starting
+**Recovered folder -**. Open that parent in Files or on your server, review the
+folder, and keep it until you have confirmed that its contents are no longer needed.
+Recovery keeps the complete directory, including files changed or added during
+recovery. A failed move leaves recovery pending rather than overwriting another
+folder. These recovery changes are implemented in source; check the release notes
+for a published build containing them.

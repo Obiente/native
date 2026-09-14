@@ -10,6 +10,93 @@ import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
     @Test
+    fun `relocated backup-only recovery requires both identity and content evidence`() {
+        val root = Files.createTempDirectory("saf-relocated-backup-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val backup = AndroidSafOwnedDownloadTransaction(
+                finalName = "Removed.txt", token = FIRST_TOKEN,
+                backupDocumentIdentity = "content://provider/document/old-backup",
+                backupContentIdentity = "sha256:${"a".repeat(64)}",
+            )
+            val original = "content://provider/document/original"
+            val moved = "content://provider/document/moved"
+            val names = setOf("provider-backup-${backup.token}")
+            val stage = authenticatedRelocationTransaction()
+            val cases = listOf(
+                backup.copy(backupContentIdentity = null) to false,
+                backup.copy(backupDocumentIdentity = null) to false,
+                stage.copy(stageContentIdentity = null) to false,
+                stage.copy(stageDocumentIdentity = null) to false,
+                backup to true,
+                stage to true,
+                stage.copy(backupDocumentIdentity = backup.backupDocumentIdentity, backupContentIdentity = backup.backupContentIdentity) to true,
+            )
+            for ((transaction, attributable) in cases) {
+                store.forDirectory(original).add(transaction)
+                val index = store.indexed()
+                index.observeRecoveryNames(moved, names)
+                val matches = index.forDirectory(moved).transactions(names)
+                assertEquals(if (attributable) listOf(transaction) else emptyList(), matches)
+                store.forDirectory(original).remove(transaction)
+            }
+            store.forDirectory(original).add(backup)
+            val ambiguous = store.indexed()
+            ambiguous.observeRecoveryNames(moved, names)
+            ambiguous.observeRecoveryNames("content://provider/document/copied", names)
+            assertFailsWith<IllegalStateException> { ambiguous.observedPendingDirectoryIdentities() }
+            assertEquals(listOf(backup), store.pendingTransactions())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun `copied recovery tokens preserve ownership and reject every candidate`() {
+        val root = Files.createTempDirectory("saf-ambiguous-recovery-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val owned = authenticatedRelocationTransaction()
+            store.forDirectory("content://provider/document/original").add(owned)
+            val index = store.indexed()
+            val names = setOf("provider-stage-${owned.token}")
+            val candidates = listOf("content://provider/document/moved", "content://provider/document/copied")
+            candidates.forEach { index.observeRecoveryNames(it, names) }
+            assertFailsWith<IllegalStateException> { index.observedPendingDirectoryIdentities() }
+            candidates.forEach { candidate ->
+                assertFailsWith<IllegalStateException> { index.forDirectory(candidate).transactions(names) }
+            }
+            assertEquals(listOf(owned), store.pendingTransactions())
+            assertTrue(index.hasPendingTransactions())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `expanded discovery cannot reconcile another tree's legacy transaction`() {
+        val root = Files.createTempDirectory("saf-scoped-recovery-tokens-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val owned = authenticatedRelocationTransaction()
+            val unrelated = owned.copy(token = SECOND_TOKEN, finalName = "Unrelated.txt")
+            val original = "content://provider/document/original"
+            val relocated = "content://provider/document/elsewhere"
+            store.forDirectory(original).add(owned)
+            store.forDirectory(relocated).add(unrelated)
+            val index = store.indexed(setOf(owned.token))
+            val names = setOf("provider-stage-${owned.token}", "provider-stage-${unrelated.token}")
+            index.observeRecoveryNames(relocated, names)
+            index.observeRecoveryNames("content://provider/document/unrelated-copy", setOf("provider-stage-${unrelated.token}"))
+            index.observeRecoveryNames(relocated, names)
+            assertEquals(listOf(owned), index.forDirectory(relocated).transactions(names))
+            index.forDirectory(relocated).remove(owned)
+            assertFalse(index.hasPendingTransactions())
+            assertEquals(listOf(unrelated), store.pendingTransactions())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `pending ownership is isolated from unrelated SAF trees`() {
         val base = Files.createTempDirectory("saf-download-tree-index-").toFile()
         try {
@@ -61,6 +148,57 @@ class AndroidSafDownloadOwnershipIndexTest {
 
             assertTrue(scoped.hasPendingTransactions())
             assertEquals(listOf(transaction), scoped.indexed().forDirectory(parent).transactions())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `selected tree ignores only legacy ownership proven to belong elsewhere`() {
+        val unrelated = AndroidSafOwnedDownloadTransaction(
+            "Elsewhere.txt",
+            FIRST_TOKEN,
+            stageDocumentIdentity = "document:other-tree",
+        )
+        val unclassified = AndroidSafOwnedDownloadTransaction("Unknown.txt", SECOND_TOKEN)
+
+        assertFalse(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = false,
+                legacyTransactions = listOf(unclassified),
+                identityBelongsToTree = { null },
+            ),
+        )
+        assertTrue(
+            hasRelevantAndroidSafOwnedDownloadRecovery(
+                treeScopedPending = true,
+                legacyTransactions = listOf(unrelated),
+                identityBelongsToTree = { false },
+            ),
+        )
+    }
+
+    @Test
+    fun `selected tree reads legacy and tree scoped ownership separately`() {
+        val base = Files.createTempDirectory("saf-download-selected-tree-").toFile()
+        try {
+            val legacy = AndroidSafDownloadOwnershipStore(base)
+            val selected = androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/selected")
+            val legacyTransaction = AndroidSafOwnedDownloadTransaction("Legacy.txt", FIRST_TOKEN)
+            val selectedTransaction = AndroidSafOwnedDownloadTransaction("Selected.txt", SECOND_TOKEN)
+            legacy.forDirectory("content://provider/tree/other/document/parent").add(legacyTransaction)
+            selected.forDirectory("content://provider/tree/selected/document/parent").add(selectedTransaction)
+
+            assertEquals(listOf(legacyTransaction), selected.legacyPendingTransactions())
+            assertEquals(listOf(selectedTransaction, legacyTransaction), selected.pendingTransactions())
+            assertTrue(selected.hasTreeScopedPendingTransactions())
         } finally {
             base.deleteRecursively()
         }
@@ -206,10 +344,42 @@ class AndroidSafDownloadOwnershipIndexTest {
             index.observeRecoveryNames(relocatedScope, setOf(relocatedName))
 
             assertEquals(emptyList(), index.forDirectory(originalScope).transactions())
+            assertEquals(setOf(relocatedScope), index.observedPendingDirectoryIdentities())
             assertEquals(
                 listOf(transaction),
                 index.forDirectory(relocatedScope).transactions(setOf(relocatedName)),
             )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `indexed directory membership does not relist ownership rows`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-membership-").toFile()
+        try {
+            val pendingScope = "content://provider/tree/root/document/pending"
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory(pendingScope).add(authenticatedRelocationTransaction())
+            var listingCount = 0
+            val indexed = AndroidSafDownloadOwnershipStore(
+                directory = root,
+                listFiles = {
+                    listingCount += 1
+                    root.listFiles()
+                },
+            ).indexed()
+
+            repeat(20_000) { candidate ->
+                assertEquals(
+                    candidate == 17,
+                    indexed.hasPendingTransactionsForDirectory(
+                        if (candidate == 17) pendingScope else "content://provider/tree/root/document/$candidate",
+                    ),
+                )
+            }
+
+            assertEquals(1, listingCount)
         } finally {
             root.deleteRecursively()
         }

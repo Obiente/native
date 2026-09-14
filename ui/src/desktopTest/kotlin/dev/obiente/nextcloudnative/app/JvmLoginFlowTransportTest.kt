@@ -1,14 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
 class JvmLoginFlowTransportTest {
     @Test
-    fun `not found advertised path accepts approval from entered base path compatibility endpoint`() {
+    fun `not found advertised path accepts approval from entered base path compatibility endpoint`() = runBlocking {
         val endpoints = mutableListOf<String>()
         val execution = executeLoginPollHttp(
             challenge = challenge(
@@ -41,7 +44,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `dual not found responses keep probing without abandoning advertised route`() {
+    fun `dual not found responses keep probing without abandoning advertised route`() = runBlocking {
         val endpoints = mutableListOf<String>()
         val execution = executeLoginPollHttp(
             challenge = challenge(
@@ -82,7 +85,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `incompatible compatibility response leaves advertised pending route selected`() {
+    fun `incompatible compatibility response leaves advertised pending route selected`() = runBlocking {
         val execution = executeLoginPollHttp(
             challenge = challenge(
                 pollEndpoint = "https://cloud.example.test/login/v2/poll",
@@ -105,7 +108,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `pre exchange DNS failure probes pending compatibility endpoint without pinning it`() {
+    fun `pre exchange DNS failure probes pending compatibility endpoint without pinning it`() = runBlocking {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
         val endpoints = mutableListOf<String>()
         val execution = executeLoginPollHttp(
@@ -140,7 +143,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `pre exchange DNS failure selects compatibility endpoint after approval`() {
+    fun `pre exchange DNS failure selects compatibility endpoint after approval`() = runBlocking {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
         val execution = executeLoginPollHttp(
             challenge = challenge(
@@ -163,7 +166,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `incompatible fallback response preserves retryable advertised endpoint failure`() {
+    fun `incompatible fallback response preserves retryable advertised endpoint failure`() = runBlocking {
         listOf(405, 503).forEach { fallbackStatus ->
             var diagnostic: JvmNetworkFailureDiagnostic? = null
             val endpoints = mutableListOf<String>()
@@ -209,7 +212,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `failure after compatibility exchange is ambiguous`() {
+    fun `failure after compatibility exchange is ambiguous`() = runBlocking {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
         val execution = executeLoginPollHttp(
             challenge = challenge(
@@ -233,7 +236,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `malformed compatibility approval is never diagnosed as retry safe`() {
+    fun `malformed compatibility approval is never diagnosed as retry safe`() = runBlocking {
         val execution = executeLoginPollHttp(
             challenge = challenge(
                 pollEndpoint = "https://cloud.example.test/login/v2/poll",
@@ -257,6 +260,22 @@ class JvmLoginFlowTransportTest {
         ).fields.associate { it.name to it.value }
         assertEquals("true", fields["exchange_started"])
         assertEquals("false", fields["safe_to_retry"])
+    }
+
+    @Test
+    fun `poll cancellation is never detached or classified as a network failure`() = runBlocking {
+        assertFailsWith<CancellationException> {
+            executeLoginPollHttp(
+                challenge = challenge(
+                    pollEndpoint = "https://cloud.example.test/login/v2/poll",
+                    fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+                ),
+                fallbackAlreadySelected = false,
+                poll = { throw CancellationException("screen left composition") },
+                networkFailure = { null },
+            )
+        }
+        Unit
     }
 
     private fun challenge(pollEndpoint: String, fallbackEndpoint: String?) = LoginChallenge(

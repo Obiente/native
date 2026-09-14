@@ -60,6 +60,16 @@ internal class AndroidVirtualFileProxyCallback(
 
     @Synchronized
     override fun onRead(offset: Long, requestedSize: Int, data: ByteArray): Int {
+        val finishSourceUse = source.beginUse()
+            ?: throw OperationCanceledException("Virtual file read cancelled")
+        return try {
+            readWhileSourceIsRetained(offset, requestedSize, data)
+        } finally {
+            finishSourceUse()
+        }
+    }
+
+    private fun readWhileSourceIsRetained(offset: Long, requestedSize: Int, data: ByteArray): Int {
         if (released || cancelled.get() || !accessAllowed()) {
             throw OperationCanceledException("Virtual file read cancelled")
         }
@@ -107,6 +117,7 @@ internal class AndroidVirtualFileProxyCallback(
     fun cancel() {
         cancelled.set(true)
         runCatching(::closeSource)
+        onRelease()
     }
 
     private fun closeSource() {

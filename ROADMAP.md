@@ -256,6 +256,7 @@ DocumentsProvider alone is not advertised as sufficient for Obsidian until teste
 - Create, rename, move, copy, and delete update local state only after the remote result is known, or enter a visible pending/unknown state when the result is ambiguous.
 - `isChildDocument`, document path, recent, and search behavior are implemented and tested against the Android system picker.
 - App lock behavior is explicit: hiding roots is not enough if other apps retain URI grants. The security design documents which previously granted files remain readable and offers account removal/revocation guidance.
+- Account removal journals and commits a document-ID incarnation tombstone before deleting credentials. Credential recovery restores interrupted pre-commit retirements, while committed removals keep the tombstone. A later account with the same server and login receives new opaque IDs, so retained file and subtree grants cannot regain access.
 
 ### Acceptance criteria
 

@@ -428,8 +428,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-
-interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
+interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -623,8 +622,8 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String? = null
-
     suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
@@ -635,7 +634,6 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
         kind: DurableMutationRecoveryKind,
         expectedEncoded: String,
     ): Boolean = false
-
     /** Loads an account-scoped verified app contract without any cached user records. */
     suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -646,6 +644,7 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     suspend fun saveCachedDynamicAppDiscovery(
         session: NextcloudSession,
         discovery: DynamicDescriptorDiscovery,
+        producer: DynamicNativeMemoryCacheProducer? = null,
     ) = Unit
 
     /** Loads one exact account/app/action/record mutation staged before a non-idempotent send. */
@@ -674,12 +673,6 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
         actionId: String,
         targetRecordId: String,
     ) = Unit
-
-    fun loadSession(): NextcloudSession?
-
-    suspend fun saveSession(session: NextcloudSession)
-
-    suspend fun clearSession()
 
     fun openExternalUrl(url: String)
 
@@ -939,17 +932,17 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Unsupported(
         "Selective virtual folders are not available on this platform.",
     )
-
-    /** Opens the native folder chooser and persists a least-privilege folder grant. */
-    suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
-
+    suspend fun restoreFileSyncLocalRoot(session: NextcloudSession, reference: FileSyncLocalRoot): FileSyncLocalRoot? = reference
+    suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String? = null): FileSyncLocalRoot? = null
+    fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot): Boolean = true
+    fun retainFileSyncRootOnDispose(): Boolean = false
+    suspend fun reconcileFileSyncRootSetup(session: NextcloudSession, restoredLocalRoot: FileSyncLocalRoot?): Boolean = true
     /** Lists durable share-sheet uploads that still need progress or user review. */
     suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
         cursor: String?,
     ): IncomingShareRecoveryPage = IncomingShareRecoveryPage()
-
     /** Opens the platform-owned recovery surface for one durable share-sheet upload. */
     fun openIncomingShareRecovery(requestId: String) = Unit
 
@@ -1353,8 +1346,7 @@ interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     /**
      * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
      *
-     * Implementations attach the active account credentials, reject redirects, enforce both
-     * request and response limits, and never accept an arbitrary local path from shared code.
+     * Use supplied-session credentials for retained work, reject redirects and arbitrary paths, and enforce limits.
      */
     suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,
