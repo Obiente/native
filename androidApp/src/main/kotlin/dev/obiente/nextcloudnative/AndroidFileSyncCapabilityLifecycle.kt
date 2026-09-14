@@ -180,11 +180,13 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     private val store: AndroidFileSyncCapabilityStore,
     private val grants: AndroidFileSyncGrantAccess,
     private val processGeneration: String,
+    private val abandonedSelections: MutableSet<String> = linkedSetOf(),
 ) {
     constructor(context: Context) : this(
         AndroidFileSyncCapabilityStore(context.applicationContext),
         ContentResolverFileSyncGrantAccess(context.applicationContext.contentResolver),
         PROCESS_GENERATION,
+        ABANDONED_SELECTIONS,
     )
 
     fun acquire(
@@ -274,6 +276,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                     AndroidFileSyncCapabilityPhase.CleanupPending,
                 )
         } ?: return@synchronized false
+        abandonedSelections += record.id
         prepareAndFinishCleanup(record)
     }
 
@@ -349,6 +352,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
 
     fun reconcile(state: AndroidFileSyncPersistedState, reclaimUnrestoredReady: Boolean = false) = synchronized(LIFECYCLE_LOCK) {
         var records = store.list()
+        abandonedSelections.retainAll(records.map { it.id }.toSet())
         val safPairs = state.coordinator.pairs.filter { it.localRootId.startsWith("content://") }
         check(!hasConflictingOwnership(records, safPairs)) {
             "Folder capability ownership must be reconciled before changing sync pairs."
@@ -362,7 +366,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             val matchingPairs = safPairs.filter { it.localRootId == record.uri }
             val matchingIds = matchingPairs.mapTo(linkedSetOf(), FileSyncPair::id)
             when (record.phase) {
-                AndroidFileSyncCapabilityPhase.Acquiring -> if (record.processGeneration != processGeneration) {
+                AndroidFileSyncCapabilityPhase.Acquiring -> if (record.processGeneration != processGeneration || reclaimUnrestoredReady) {
                     if (matchingIds.isNotEmpty()) {
                         store.replace(record.id, record.phase) {
                             it.copy(
@@ -375,7 +379,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                         check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
-                AndroidFileSyncCapabilityPhase.Ready -> if (record.processGeneration != processGeneration) {
+                AndroidFileSyncCapabilityPhase.Ready -> if (record.processGeneration != processGeneration || record.id in abandonedSelections) {
                     if (matchingIds.isNotEmpty()) {
                         store.replace(record.id, record.phase) {
                             it.copy(
@@ -384,7 +388,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                                 pairIds = matchingIds,
                             )
                         }
-                    } else if (record.accountId == null || reclaimUnrestoredReady) {
+                    } else if (record.accountId == null || reclaimUnrestoredReady || record.id in abandonedSelections) {
                         check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
@@ -541,11 +545,12 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             true
         } catch (_: Exception) {
             try { store.list().none { it.id == record.id } } catch (_: Exception) { false }
-        }
+        }.also { removed -> if (removed) abandonedSelections.remove(record.id) }
     }
 
     private companion object {
         val LIFECYCLE_LOCK = Any()
+        val ABANDONED_SELECTIONS = linkedSetOf<String>()
         val PROCESS_GENERATION: String = UUID.randomUUID().toString()
     }
 }

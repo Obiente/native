@@ -192,6 +192,11 @@ Each boundary has a corresponding test responsibility:
   permission denial, confirmation, adaptive layout, and keyboard/touch access.
 - Platform tests cover credential stores, filesystem paths and providers,
   background scheduling, external handoff, packaging, and lifecycle recovery.
+
+Android folder capability cleanup uses a durable WorkManager retry schedule.
+A process restoration grace period protects pending folder drafts; abandoned
+acquisitions and committed pair removals retain cleanup evidence until access
+is released. Cleanup retries do not transfer or delete user file contents.
 - Live-server audits use synthetic disposable accounts, record exact tested
   versions, and remain separate from deterministic unit and integration tests.
 

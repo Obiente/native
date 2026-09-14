@@ -91,6 +91,44 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `restoration deadline reclaims a failed current process acquisition`() = runBlocking {
+        val fixture = fixture()
+        fixture.storage.failWritesFrom = 2
+        assertFailsWith<IllegalStateException> { fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes") }
+        assertEquals(AndroidFileSyncCapabilityPhase.Acquiring, fixture.store.list().single().phase)
+        fixture.storage.failWritesFrom = null
+        reconcileFileSyncCapabilitiesAfterRestoration(Mutex(), { state() }, fixture.lifecycle) {
+            assertTrue(fixture.grants.readGranted)
+        }
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted || fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `failed abandonment intent survives until the current process can persist cleanup`() {
+        val fixture = fixture()
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.storage.failWritesFrom = fixture.storage.writes + 1
+        assertFailsWith<IllegalStateException> { fixture.lifecycle.abandonSelection(ROOT_URI) }
+        fixture.storage.failWritesFrom = null
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted || fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `later background reconciliation finishes a committed removal after repeated failure`() {
+        val fixture = preparedCleanup()
+        fixture.grants.failRelease = true
+        assertFailsWith<IllegalStateException> { fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() } }
+        assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
+        fixture.grants.failRelease = false
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted || fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `opaque restoration claims the grant before the reclamation deadline`() = runBlocking {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)

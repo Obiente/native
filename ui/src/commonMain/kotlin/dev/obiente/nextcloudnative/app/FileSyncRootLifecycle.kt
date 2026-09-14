@@ -133,7 +133,7 @@ internal fun fileSyncRootDisposal(
     retainRoot: () -> Boolean = { false },
 ): () -> Unit = { if (!retainRoot()) currentRoot()?.let(abandon) }
 
-private fun tryAbandonFileSyncRoot(
+internal fun tryAbandonFileSyncRoot(
     root: FileSyncLocalRoot,
     abandon: (FileSyncLocalRoot) -> Boolean,
 ): Boolean = try {
