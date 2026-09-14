@@ -6,6 +6,7 @@ import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -160,6 +161,8 @@ internal suspend fun commitConfiguredFileSyncPairRemoval(
 internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
+    localRecoveryPaths: Set<String>,
+    providerRecoverySession: NextcloudSession? = null,
 ): Boolean {
     if (!localRootId.startsWith("content://")) return true
     val shouldContinue = androidFileSyncJobContinuation(currentCoroutineContext()[Job])
@@ -187,7 +190,20 @@ internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     }
     if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     val reconciled = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
-        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
+        if (
+            androidPickerUriRejection(localRootId, context.applicationContext.packageName) ==
+            AndroidPickerUriRejection.OwnDocumentsProvider
+        ) {
+            reconcileOwnProviderSafDownloadsBeforePairRemoval(
+                context = context,
+                localRootId = localRootId,
+                localRecoveryPaths = localRecoveryPaths,
+                shouldContinue = shouldContinue,
+                providerRecoverySession = providerRecoverySession,
+            )
+        } else {
+            createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
+        }
     }
     if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     return reconciled
@@ -231,22 +247,31 @@ internal fun releaseSafGrantAfterPairRemoval(
     }
 }
 
-internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String) {
-    AndroidFileSyncEngine.ENGINE_LOCK.withLock {
-        val store = AndroidFileSyncStore(context)
+internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String, providerRecoverySession: NextcloudSession? = null) {
+    val store = AndroidFileSyncStore(context)
+    fun accountPairs() = store.load().coordinator.pairs.filter { it.accountId == accountId }
+    val snapshot = AndroidFileSyncEngine.ENGINE_LOCK.withLock { accountPairs() }
+    if (snapshot.isEmpty()) return
+    withRecoveredFileSyncPairSnapshot(
+        lock = AndroidFileSyncEngine.ENGINE_LOCK,
+        snapshot = snapshot,
+        readCurrentSnapshot = ::accountPairs,
+        reconcile = { pair ->
+            reconcileSafDownloadsBeforePairRemoval(
+                context, pair.localRootId, androidSafOwnedDownloadRecoveryPaths(pair), providerRecoverySession,
+            )
+        },
+        onRecoveryRejected = { error("A local download still needs safe recovery. Run this folder sync before removing the account.") },
+        onSnapshotChanged = { error("Folder sync changed during recovery. Review it before removing the account.") },
+    ) {
         val current = store.load()
-        val (retiredPairs, retainedPairs) = current.coordinator.pairs.partition { pair ->
-            pair.accountId == accountId
-        }
-        if (retiredPairs.isEmpty()) return@withLock
+        val retainedPairs = current.coordinator.pairs.filter { it.accountId != accountId }
         val scheduler = AndroidFileSyncScheduler(context)
         val notifications = AndroidNotificationCoordinator(context)
         retireConfiguredFileSyncAccountPairs(
-            retiredPairs = retiredPairs,
+            retiredPairs = snapshot,
             retainedPairs = retainedPairs,
-            reconcileLocalDownloads = { pair ->
-                reconcileSafDownloadsBeforePairRemoval(context, pair.localRootId)
-            },
+            reconcileLocalDownloads = { true },
             cancelSchedule = { pair -> scheduler.cancel(pair.id) },
             cancelNotification = { pair ->
                 notifications.cancel(pair.accountId, androidFileSyncNotificationId(pair.id))
@@ -256,6 +281,64 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
                 releaseSafGrantAfterPairRemoval(context, localRootId, releasesLocalGrant = true)
             },
         )
+    }
+}
+
+internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
+    context: Context,
+    accountId: String,
+    providerRecoverySession: NextcloudSession,
+    accountLeaseHeld: Boolean = false,
+) {
+    val store = AndroidFileSyncStore(context)
+    fun accountPairs() = store.load().coordinator.pairs.filter { it.accountId == accountId }
+    if (AndroidFileSyncEngine.ENGINE_LOCK.withLock { accountPairs().isEmpty() }) return
+    val services = AndroidNextcloudServices(context.applicationContext)
+    withAndroidFileSyncAccountRecoveryLease(
+        expectedSession = providerRecoverySession,
+        resolveSession = { services.loadSession(providerRecoverySession.accountId) },
+        accountLeaseHeld = accountLeaseHeld,
+    ) {
+        val snapshot = AndroidFileSyncEngine.ENGINE_LOCK.withLock { accountPairs() }
+        withRecoveredFileSyncPairSnapshot(
+            lock = AndroidFileSyncEngine.ENGINE_LOCK,
+            snapshot = snapshot,
+            readCurrentSnapshot = ::accountPairs,
+            reconcile = { pair ->
+                reconcileSafDownloadsBeforePairRemoval(
+                    context, pair.localRootId, androidSafOwnedDownloadRecoveryPaths(pair), providerRecoverySession,
+                )
+            },
+            onRecoveryRejected = { error("A local download still needs safe recovery. Run this folder sync before removing the account.") },
+            onSnapshotChanged = { error("Folder sync changed during recovery. Review it before removing the account.") },
+            commit = {},
+        )
+    }
+}
+
+internal suspend fun <Result> withAndroidFileSyncAccountRecoveryLease(
+    expectedSession: NextcloudSession,
+    resolveSession: suspend () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    accountLeaseHeld: Boolean = false,
+    action: suspend () -> Result,
+): Result = if (accountLeaseHeld) action() else guard.withExactAccountSession(
+    expectedSession = expectedSession,
+    resolveSession = resolveSession,
+    unavailable = { error("The account changed before folder sync recovery could start.") },
+) { action() }
+
+internal suspend fun reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
+    pairs: List<FileSyncPair>,
+    accountId: String,
+    reconcileLocalDownloads: suspend (FileSyncPair) -> Boolean,
+) {
+    require(accountId.isNotBlank())
+    pairs.filter { pair -> pair.accountId == accountId }.forEach { pair ->
+        check(reconcileLocalDownloads(pair)) {
+            "A local download still needs safe recovery. Run this folder sync before removing the account."
+        }
+        currentCoroutineContext().ensureActive()
     }
 }
 

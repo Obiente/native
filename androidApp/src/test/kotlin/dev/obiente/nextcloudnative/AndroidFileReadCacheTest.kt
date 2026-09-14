@@ -12,8 +12,23 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class AndroidFileReadCacheTest {
+    @Test
+    fun providerRecoveryUsesTheAccountLeaseHeldByItsCaller() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "fixture-password")
+
+        guard.withAccount(NextcloudDocumentIds.accountKey(session)) {
+            withTimeout(1_000L) {
+                withRetainedAndroidAccountFileRead(
+                    session, { session }, guard, accountLeaseHeld = true,
+                ) {}
+            }
+        }
+    }
+
     @Test
     fun listingMetadataSurvivesProcessRestartWithFullDavIdentity() = withCache { root, cache ->
         val file = file("Notes/vault.md", "\"etag-1\"").copy(

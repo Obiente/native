@@ -300,6 +300,18 @@ staging files under the sync engine lock, while keeping user originals.
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
 
+Deferred Android provider recovery uses the supplied session under the account
+removal lease before credentials are persisted. A sync pair retains its SAF
+grant until its pending local transactions and retirement have completed.
+Provider reconciliation runs outside the sync engine lock. Before retiring an
+account or removing a pair, the engine reacquires its lock and verifies that the
+selected pair snapshots have not changed; unrelated account state is preserved.
+
+Legacy self-provider trees owned by a different account recover through their
+original provider URI and retained tree permission. Only a root matching the
+removing account may receive its supplied recovery session or a local authority
+rewrite. An unavailable original provider leaves recovery pending.
+
 Android queued uploads retain their rows while saved credentials require recovery.
 Malformed preference values, damaged ciphertext, and invalid decoded credential
 records pause timed retries when no usable or temporarily inaccessible fallback
@@ -307,3 +319,44 @@ remains. Temporary keystore failures continue retrying, including for inactive
 accounts. Unsupported credential versions require an upgrade. These policies are
 covered by deterministic Android unit tests; they do not establish device or
 release validation.
+
+When the removal session is bound to the local provider's account, pending owned
+recovery tokens are discovered from that account's root, including directories
+moved outside the old sync subtree. The scan retains its depth, count, ownership,
+content-authentication, and cancellation bounds. Cross-account or external
+provider recovery stays within the original tree grant.
+
+Expanded retirement discovery indexes only the selected tree's transactions and
+legacy transactions not proven to belong elsewhere. Seeing another tree's token
+in the same account or directory never authorizes its reconciliation.
+
+## Recovery authentication and retirement
+
+Android self-provider recovery bypasses unversioned offline content and cached
+fallback reads. It requires a network listing before accepting generation-matched
+virtual content or opening an ETag-bound range source. Account-wide recovery-token
+discovery rejects multiple observed locations for an owned token without retiring
+its ownership record; unrelated tokens remain outside the selected recovery scope.
+
+Recovery through another local account's legacy provider tree tries that account's
+lease without waiting and verifies its exact active session. The lease spans
+content authentication and reconciliation. It retains the original tree URI,
+grant and discovery scope while using authoritative provider reads. Busy,
+unavailable or unverified cross-profile accounts keep recovery pending. Ordinary
+external providers retain their existing grant behavior.
+
+Relocated recovery can be attributed by either an authenticated stage or an
+authenticated backup. Backup-only delete transactions do not require a stage;
+both the recorded document identity and content identity are still required,
+and multiple observed locations remain ambiguous.
+Path-changing stage IDs require the original stage name and matching recorded
+content. Renamed backup IDs require matching recorded content even when the name
+contains the recovery token. Unverified token-bearing candidates preserve the
+ownership row without authorizing a rename or deletion.
+
+Self-provider SAF recovery retains the exact ETag of a successfully completed
+content verification and uses it for the later delete or rename precondition.
+Failed or cancelled verification invalidates prior proof; a concurrent replacement
+cannot contribute its newer ETag to the mutation. Directory recovery without an
+authenticated aggregate generation remains pending and preserves its content.
+Ordinary external-provider access retains its original platform contract.

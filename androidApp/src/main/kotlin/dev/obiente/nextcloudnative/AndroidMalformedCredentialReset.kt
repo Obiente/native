@@ -9,6 +9,7 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
     cleanupJournal: AndroidAccountRemovalCleanupJournal,
     suspectEncrypted: String?,
     prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
+    revalidateAccountRemoval: suspend (NextcloudSession) -> Unit,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
     commitPreferences: (SharedPreferences.Editor) -> Unit,
     recordCleanupFailure: (Exception) -> Unit,
@@ -35,6 +36,7 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
             )
         },
         prepareAccountRemoval = prepareAccountRemoval,
+        revalidateAccountRemoval = revalidateAccountRemoval,
         commitSlotRemoval = { slot, cleanup ->
             commitPreferences(
                 cleanupJournal.prepareEdit(preferences.edit().remove(slot.preferenceKey), cleanup),
@@ -56,6 +58,7 @@ internal suspend fun retireUnregisteredAndroidAccountCredentialSlots(
     retryPreexistingCleanup: suspend (AndroidIndependentCredentialSlotReset) -> Unit = {},
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
+    revalidateAccountRemoval: suspend (NextcloudSession) -> Unit = {},
     commitSlotRemoval: suspend (AndroidIndependentCredentialSlotReset, AndroidPendingAccountRemovalCleanup) -> Unit,
     rollbackSlotRemoval: suspend (AndroidIndependentCredentialSlotReset) -> Unit,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
@@ -68,9 +71,13 @@ internal suspend fun retireUnregisteredAndroidAccountCredentialSlots(
             retryPreexistingCleanup(slot)
         }
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
-        withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) {
+        withPreparedAndroidAccountRemovalLease(
+            accountIdentity = NextcloudDocumentIds.accountKey(session),
+            guard = guard,
+            prepare = { prepareAccountRemoval(session) },
+            revalidate = { revalidateAccountRemoval(session) },
+        ) {
             removeRecoveredAndroidAccountCredentialData(
-                prepareAccountRemoval = { prepareAccountRemoval(session) },
                 removeQueuedUploads = { removeAccountOwnedState(session) },
                 clearRecoveredAccount = { commitSlotRemoval(slot, pendingCleanup) },
                 rollbackRecoveredAccount = {

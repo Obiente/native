@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
@@ -27,10 +28,16 @@ internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
     private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
+    providerRecoverySession: NextcloudSession? = null,
+    localRecoveryAuthority: String? = null,
+    preserveProviderTreeGrant: Boolean = false,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
     private val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocumentId)
+    private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(
+        androidRootBoundProviderRecoverySession(rootDocumentId, providerRecoverySession), localRecoveryAuthority, preserveProviderTreeGrant,
+    )
 
     init {
         require(rootId.startsWith("content://")) { "The local sync root is not a document-tree grant." }
@@ -70,11 +77,12 @@ internal class AndroidSafFileSyncLocalTree(
     private fun indexRecoveryLocations(
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
         shouldContinue: () -> Boolean,
+        discoveryRoot: Uri,
     ) {
         val pending = ArrayDeque<Pair<String, Uri>>()
         val visited = mutableSetOf<String>()
         var observedEntries = 0
-        pending += "" to rootUri
+        pending += "" to discoveryRoot
         while (pending.isNotEmpty()) {
             requireScanContinuation(shouldContinue)
             val (parentPath, parentUri) = pending.removeFirst()
@@ -98,11 +106,12 @@ internal class AndroidSafFileSyncLocalTree(
         }
     }
 
-    private fun indexRecoveryLocationsIfNeeded(
+    internal fun indexRecoveryLocationsIfNeeded(
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
         shouldContinue: () -> Boolean,
+        discoveryRoot: Uri = rootUri,
     ) = indexAndroidSafRecoveryLocationsIfNeeded(ownershipDirectory) {
-        indexRecoveryLocations(ownershipDirectory, shouldContinue)
+        indexRecoveryLocations(ownershipDirectory, shouldContinue, discoveryRoot)
     }
 
     override fun authenticateFileForReplacement(
@@ -485,10 +494,15 @@ internal class AndroidSafFileSyncLocalTree(
         document: AndroidLocalSyncDocument,
         shouldContinue: () -> Boolean,
     ): String {
-        return requireNotNull(resolver.openInputStream(document.uri)) {
-            "The local replacement item could not be opened for verification."
-        }.use { input ->
-            hashAndroidSafReplacementContent(input, document.entry.size, shouldContinue)
+        return providerRecovery.run(
+            document.uri,
+            AndroidDocumentsProviderRecoveryOperation.OpenRead,
+        ) { recoveryUri ->
+            requireNotNull(resolver.openInputStream(recoveryUri)) {
+                "The local replacement item could not be opened for verification."
+            }.use { input ->
+                hashAndroidSafReplacementContent(input, document.entry.size, shouldContinue)
+            }
         }
     }
 
@@ -571,7 +585,7 @@ internal class AndroidSafFileSyncLocalTree(
         return listedChildren.filter { it.uri in visibleUris }
     }
 
-    private fun downloadPublisher(
+    internal fun downloadPublisher(
         parentUri: Uri,
         parentPath: String,
         shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
@@ -594,10 +608,13 @@ internal class AndroidSafFileSyncLocalTree(
         ?.let { child -> androidSafReplacementContentIdentity(replacementSnapshot(child, shouldContinue)) }
 
     private fun rawChildren(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
-        val parentId = DocumentsContract.getDocumentId(parentUri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        val cursor = requireNotNull(resolver.query(childrenUri, PROJECTION, null, null, null)) {
-            "The local file provider could not list the selected folder."
+        val cursor = providerRecovery.run(
+            parentUri,
+            AndroidDocumentsProviderRecoveryOperation.QueryChildren,
+        ) { recoveryUri ->
+            requireNotNull(resolver.query(recoveryUri, PROJECTION, null, null, null)) {
+                "The local file provider could not list the selected folder."
+            }
         }
         return cursor.use {
             buildList {
@@ -636,34 +653,18 @@ internal class AndroidSafFileSyncLocalTree(
     private fun publicationDirectory(
         parentUri: Uri,
         parentPath: String,
-    ): AndroidSafPublicationDirectory<Uri> = object : AndroidSafPublicationDirectory<Uri> {
-        override fun documents(): List<AndroidSafPublicationDocument<Uri>> =
+    ): AndroidSafPublicationDirectory<Uri> = AndroidSafFileSyncPublicationDirectory(
+        resolver = resolver,
+        parentUri = parentUri,
+        documents = {
             rawChildren(parentUri, parentPath).map { document ->
                 AndroidSafPublicationDocument(document.uri, document.displayName)
             }
-
-        override fun createFile(displayName: String): Uri = requireNotNull(
-            DocumentsContract.createDocument(
-                resolver,
-                parentUri,
-                "application/octet-stream",
-                displayName,
-            ),
-        ) { "A staged local file could not be created." }
-
-        override fun createDirectory(displayName: String): Uri = requireNotNull(
-            createDirectoryDocument(parentUri, displayName),
-        ) { "A staged local folder could not be created." }
-
-        override fun writeFile(document: Uri, write: (OutputStream) -> Unit) {
-            writeDocument(document, write)
-        }
-
-        override fun rename(document: Uri, displayName: String): Uri? =
-            DocumentsContract.renameDocument(resolver, document, displayName)
-
-        override fun delete(document: Uri): Boolean = DocumentsContract.deleteDocument(resolver, document)
-    }
+        },
+        createDirectory = { displayName -> createDirectoryDocument(parentUri, displayName) },
+        writeDocument = ::writeDocument,
+        providerRecovery = providerRecovery,
+    )
 
     private fun createDirectoryDocument(parentUri: Uri, displayName: String): Uri? =
         DocumentsContract.createDocument(
