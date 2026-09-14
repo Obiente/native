@@ -66,6 +66,24 @@ class AndroidCleanupJournalRecoveryTest {
         assertTrue(fixture.journal.pending().isEmpty())
     }
 
+    @Test fun recoveryPreservesExistingOwnershipUntilItsCleanupSucceeds() = runBlocking {
+        val previous = pendingAndroidAccountRemovalCleanup(session).copy(workIdentity = "e".repeat(32), previewCacheIdentity = "e".repeat(64))
+        val fixture = JournalFixture(setOf(ANDROID_CLEANUP_RECOVERY_FENCE, encodeAndroidPendingAccountRemovalCleanup(previous)))
+        assertFailsWith<IllegalStateException> {
+            retryAndroidCleanupBeforeActivation(session, fixture.journal, { emptyList() }, {},
+                { _, identity, _, _, _ ->
+                    assertEquals(previous.workIdentity, identity)
+                    throw IllegalStateException("existing cleanup is incomplete")
+                }, {})
+        }
+        assertEquals(setOf(previous), fixture.journal.pending())
+        val cleaned = mutableListOf<String>()
+        retryAndroidCleanupBeforeActivation(session, fixture.journal, { emptyList() }, {},
+            { _, identity, _, _, _ -> cleaned += identity }, {})
+        assertEquals(listOf(previous.workIdentity, pendingAndroidAccountRemovalCleanup(session).workIdentity), cleaned)
+        assertEquals(setOf(session.accountId.storageKey), fixture.journal.snapshot().reviewedAccounts)
+    }
+
     @Test fun reviewedAccountHistoryIsBoundedAndNeverDropsFence() {
         var encoded = setOf(ANDROID_CLEANUP_RECOVERY_FENCE)
         repeat(100) { encoded = markAndroidCleanupAccountReviewed(encoded, it.toString(16).padStart(64, '0')) }

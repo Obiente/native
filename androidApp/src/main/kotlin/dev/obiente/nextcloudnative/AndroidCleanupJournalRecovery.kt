@@ -51,15 +51,22 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
     val requiresRecovery = snapshot.recoveryFence && session.accountId.storageKey !in snapshot.reviewedAccounts
     try {
         if (requiresRecovery) {
-            val pending = pendingAndroidAccountRemovalCleanup(session)
-            withAndroidAccountRemovalLease(session) {
-                journal.prepare(pending)
+            val cleanups = listOfNotNull(
+                pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups),
+                pendingAndroidAccountRemovalCleanup(session),
+            ).distinct()
+            withAndroidAccountRemovalLease(session, additionalAccountIdentities = cleanups.map { it.workIdentity }) {
+                // Retain old ownership until all scopes and their document incarnation are retired.
+                journal.prepare(cleanups.first())
                 prepareRemoval(session)
-                retryAndroidAccountOwnedStateCleanup(session, pending, retryCleanup)
+                cleanups.forEach { pending ->
+                    journal.prepare(pending)
+                    retryAndroidAccountOwnedStateCleanup(session, pending, retryCleanup)
+                }
                 completeRecovery(session)
-                journal.clear(pending.accountStorageKey)
-                journal.markReviewed(pending.accountStorageKey)
+                journal.clear(session.accountId.storageKey)
             }
+            journal.markReviewed(session.accountId.storageKey)
         } else {
             val pending = pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups) ?: return
             retryAndroidAccountRemovalCleanup(
