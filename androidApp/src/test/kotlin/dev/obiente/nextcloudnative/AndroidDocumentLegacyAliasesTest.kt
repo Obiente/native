@@ -41,4 +41,23 @@ class AndroidDocumentLegacyAliasesTest {
             failed.remember(replacement, original.copy(loginName = "bob"), NextcloudDocumentIncarnation.Legacy)
         }
     }
+
+    @Test
+    fun verifiedRecoveryRetiresMalformedAliasesAndRetainsOnlyKnownSessions() {
+        val key = original.accountId.storageKey
+        val incarnation = NextcloudDocumentIncarnation.Legacy
+        var encoded = "legacy\ninvalid"
+        val aliases = AndroidDocumentLegacyAliases({ encoded }, { _, value -> encoded = value; true })
+        assertTrue(aliases.readVerified(key, incarnation).isEmpty())
+        aliases.remember(replacement, original, incarnation)
+        assertEquals(setOf(NextcloudDocumentIds.accountKey(original), NextcloudDocumentIds.accountKey(replacement)),
+            aliases.read(key, incarnation))
+        aliases.clear(key)
+        assertEquals("removed", encoded)
+        val wrongType = AndroidDocumentLegacyAliases({ throw ClassCastException() }, { _, _ -> true })
+        assertTrue(wrongType.readVerified(key, incarnation).isEmpty())
+        val inaccessible = AndroidDocumentLegacyAliases({ throw java.io.IOException() }, { _, _ -> true })
+        assertFailsWith<java.io.IOException> { inaccessible.readVerified(key, incarnation) }
+        assertFailsWith<IllegalArgumentException> { aliases.readVerified("invalid", incarnation) }
+    }
 }

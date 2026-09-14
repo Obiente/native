@@ -573,20 +573,20 @@ internal fun notifyAndroidDocumentChanged(context: Context, session: NextcloudSe
             .activeIncarnation(session.documentProviderIncarnationAccountIdentity())
     }.getOrNull() ?: return
     val authority = nextcloudDocumentsAuthority(appContext.packageName)
-    appContext.contentResolver.notifyChange(
-        DocumentsContract.buildDocumentUri(
-            authority,
-            NextcloudDocumentIds.documentId(session, incarnation, path),
-        ),
-        null,
-    )
-    appContext.contentResolver.notifyChange(
-        DocumentsContract.buildChildDocumentsUri(
-            authority,
-            NextcloudDocumentIds.documentId(session, incarnation, NextcloudDocumentIds.parentPath(path)),
-        ),
-        null,
-    )
+    val aliases = AndroidDocumentLegacyAliases(appContext).readVerified(session.accountId.storageKey, incarnation)
+    for (key in androidDocumentNotificationAccountKeys(session, aliases)) {
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildDocumentUri(authority, NextcloudDocumentIds.documentId(key, incarnation, path)), null,
+        )
+        appContext.contentResolver.notifyChange(
+            DocumentsContract.buildChildDocumentsUri(
+                authority, NextcloudDocumentIds.documentId(key, incarnation, NextcloudDocumentIds.parentPath(path)),
+            ), null,
+        )
+    }
 }
 
 internal fun NextcloudSession.documentProviderIncarnationAccountIdentity(): String = accountId.storageKey
+
+internal fun androidDocumentNotificationAccountKeys(session: NextcloudSession, legacyAliases: Set<String>): Set<String> =
+    setOf(NextcloudDocumentIds.documentAccountKey(session), NextcloudDocumentIds.accountKey(session)) + legacyAliases

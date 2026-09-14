@@ -23,14 +23,9 @@ import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.File
-import java.io.FileOutputStream
 import java.io.FileNotFoundException
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import okhttp3.OkHttpClient
 import java.util.concurrent.atomic.AtomicInteger
-import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 /**
@@ -161,6 +156,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         if (reference.isRoot) throw FileNotFoundException("Folders cannot be opened as files.")
         val accountLease = acquireDocumentReadLease(session, reference.incarnation)
         try {
+            if (mode != "r") return withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
+                session, { services.loadSession(session.accountId) },
+            ) {
+                val account = resolveAccount(session)
+                val file = findDocument(session, account, reference.path, accountLeaseHeld = true)
+                if (file.isDirectory) throw FileNotFoundException("Folders cannot be opened as files.")
+                openWritableDocument(session, reference.incarnation, account, file, mode, signal, accountLease)
+            }
             if (mode == "r") {
                 offline.availableContent(session, reference.path)?.let { cached ->
                     signal?.throwIfCanceled()
@@ -179,9 +182,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     throw failure
                 }
             if (file.isDirectory) throw FileNotFoundException("Folders cannot be opened as files.")
-            if (mode != "r") return openWritableDocument(
-                session, reference.incarnation, account, file, mode, signal, accountLease,
-            )
             file.etag?.takeIf(String::isNotBlank)?.let { etag ->
                 virtualFiles.acquire(session, reference.path, expectedRemoteEtag = etag)?.let { lease ->
                     signal?.throwIfCanceled()
@@ -516,7 +516,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 recovered.releaseActive()
                 error("This retained local edit conflicts with a newer Nextcloud generation.")
             }
-            writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
+            writeback = recovered ?: createDurableAndroidDocumentWriteback(context, session, file, requireMutationEtag(file))
         } catch (failure: Throwable) {
             if (pathReserved) releaseAndroidDocumentWritebackSetup(accountLease) {
                 releaseAndroidDocumentWritebackPath(session, file.path)
@@ -605,64 +605,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         check(directory.isDirectory) { "Could not prepare local document staging." }
         return File.createTempFile("document-", ".stage", directory)
     }
-    private fun createDurableWriteback(
-        session: NextcloudSession,
-        file: NextcloudFile,
-        expectedEtag: String,
-    ): AndroidDocumentPendingWriteback {
-        val providerContext = requireNotNull(context) { "Provider context is unavailable." }
-        val recovery = File(providerContext.filesDir, RECOVERY_DIRECTORY).apply { mkdirs() }
-        check(recovery.isDirectory) { "Could not prepare document recovery storage." }
-        val staging = File.createTempFile("writeback-", ".stage", recovery)
-        val manifest = File(recovery, staging.name + ".json")
-        try {
-            val payload = JSONObject()
-                .put("version", 1)
-                .put("account", NextcloudDocumentIds.accountKey(session))
-                .put("path", file.path)
-                .put("etag", expectedEtag)
-                .put("displayName", file.name)
-                .put("stage", staging.name)
-                .put("startedAt", System.currentTimeMillis())
-                .put("ready", false)
-                .toString().encodeToByteArray()
-            check(payload.size <= MAX_WRITEBACK_MANIFEST_BYTES)
-            val temporary = File.createTempFile("manifest-", ".tmp", recovery)
-            try {
-                FileOutputStream(temporary).use { output ->
-                    output.write(payload)
-                    output.fd.sync()
-                }
-                try {
-                    Files.move(
-                        temporary.toPath(),
-                        manifest.toPath(),
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING,
-                    )
-                } catch (_: AtomicMoveNotSupportedException) {
-                    Files.move(
-                        temporary.toPath(),
-                        manifest.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING,
-                    )
-                }
-            } finally {
-                temporary.delete()
-            }
-            return AndroidDocumentPendingWriteback(
-                staging = staging,
-                manifest = manifest,
-                accountId = NextcloudDocumentIds.accountKey(session),
-                remotePath = file.path,
-                expectedRemoteEtag = expectedEtag,
-            )
-        } catch (failure: Throwable) {
-            staging.delete()
-            manifest.delete()
-            throw failure
-        }
-    }
 
     private fun retainFailedWriteback(writeback: AndroidDocumentPendingWriteback, failure: Throwable) {
         val wasRetained = writeback.staging.isFile && writeback.manifest.isFile
@@ -723,19 +665,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 )
             }
         val providerContext = context ?: return
-        val resolver = providerContext.contentResolver
-        val authority = nextcloudDocumentsAuthority(providerContext.packageName)
-        resolver.notifyChange(
-            DocumentsContract.buildDocumentUri(authority, NextcloudDocumentIds.documentId(session, incarnation, path)),
-            null,
-        )
-        resolver.notifyChange(
-            DocumentsContract.buildChildDocumentsUri(
-                authority,
-                NextcloudDocumentIds.documentId(session, incarnation, NextcloudDocumentIds.parentPath(path)),
-            ),
-            null,
-        )
+        notifyAndroidDocumentChanged(providerContext, session, path)
     }
     private fun MatrixCursor.addExternalHandoffRow(record: AndroidExternalFileHandoffRecord) {
         val file = record.file

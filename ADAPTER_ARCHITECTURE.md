@@ -304,3 +304,11 @@ staging files under the sync engine lock, while keeping user originals.
 
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
+
+Android document writeback initialization holds the credential operation lease
+through metadata resolution and durable staging. Descriptor lifetime uses the
+removal fence, and close-time commits revalidate the exact session. Retained edits
+use canonical local account ownership; verified historical manifest owners migrate
+without changing staged bytes. Document change notifications include verified
+incarnation-scoped legacy IDs. Malformed optional aliases cannot block canonical
+reauthentication, and removal may discard them only after incarnation retirement.

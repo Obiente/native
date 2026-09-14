@@ -89,13 +89,16 @@ internal object NextcloudDocumentIds {
         session: NextcloudSession,
         incarnation: NextcloudDocumentIncarnation,
         path: String,
-    ): String {
+    ): String = documentId(documentAccountKey(session), incarnation, path)
+
+    fun documentId(accountKey: String, incarnation: NextcloudDocumentIncarnation, path: String): String {
+        require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
         val normalizedPath = normalizePath(path)
         val encodedPath = encoder.encodeToString(normalizedPath.encodeToByteArray())
         return when (incarnation) {
-            NextcloudDocumentIncarnation.Legacy -> "$LEGACY_PREFIX:${documentAccountKey(session)}:$encodedPath"
+            NextcloudDocumentIncarnation.Legacy -> "$LEGACY_PREFIX:$accountKey:$encodedPath"
             is NextcloudDocumentIncarnation.Versioned ->
-                "$VERSIONED_PREFIX:${documentAccountKey(session)}:${incarnation.value}:$encodedPath"
+                "$VERSIONED_PREFIX:$accountKey:${incarnation.value}:$encodedPath"
         }
     }
 

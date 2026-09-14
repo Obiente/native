@@ -263,9 +263,11 @@ internal fun revokeAndroidAccountDocumentGrants(
     accountIdentity: String,
     accountStorageKey: String,
 ) {
-    val retired = AndroidDocumentProviderIncarnationStore(context).retiredIncarnation(accountStorageKey)
-        ?: NextcloudDocumentIncarnation.Legacy
-    val aliases = AndroidDocumentLegacyAliases(context).read(accountStorageKey, retired)
+    val retirement = AndroidDocumentProviderIncarnationStore(context).retiredIncarnation(accountStorageKey)
+    val retired = retirement ?: NextcloudDocumentIncarnation.Legacy
+    val aliasStore = AndroidDocumentLegacyAliases(context)
+    val aliases = if (retirement != null) aliasStore.readVerified(accountStorageKey, retired)
+        else aliasStore.read(accountStorageKey, retired)
     val rootIds = (aliases + accountIdentity).flatMap { alias ->
         androidAccountDocumentGrantRootIds(alias, accountStorageKey, retired)
     }.distinct()

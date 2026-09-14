@@ -27,6 +27,35 @@ class AndroidDocumentProviderReadAccessTest {
     private val replacementIncarnation = incarnation("2")
 
     @Test
+    fun writableInitializationKeepsCredentialsStableUntilStagingIsReady() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val initialized = CompletableDeferred<Unit>()
+        val finishStaging = java.util.concurrent.CountDownLatch(1)
+        var current = original
+        val setup = async(Dispatchers.IO) {
+            withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(original, { current }, guard) {
+                initialized.complete(Unit)
+                check(finishStaging.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                assertEquals(original, current)
+            }
+        }
+        initialized.await()
+        val rotation = async(start = CoroutineStart.UNDISPATCHED) {
+            guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+                current = original.copy(appPassword = "replacement-password")
+            }
+        }
+        try {
+            assertFalse(rotation.isCompleted)
+        } finally {
+            finishStaging.countDown()
+        }
+        setup.await()
+        rotation.await()
+        assertNotEquals(original, current)
+    }
+
+    @Test
     fun cachedDocumentContentUsesARevocableProxyCallback() {
         val content = Files.createTempFile("document-cache-proxy-", ".bin").toFile().apply {
             writeText("cached bytes")

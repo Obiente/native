@@ -26,11 +26,24 @@ internal class AndroidDocumentLegacyAliases(
         if (fields.first() != incarnation.key()) emptySet() else fields.drop(1).toSet()
     }
 
+    // Optional alias recovery never authorizes unknown identities. Ordinary lookup
+    // stays strict; only verified session identities may be added after recovery.
+    fun readVerified(accountKey: String, incarnation: NextcloudDocumentIncarnation): Set<String> {
+        require(ACCOUNT.matches(accountKey))
+        return try {
+            read(accountKey, incarnation)
+        } catch (_: ClassCastException) {
+            emptySet()
+        } catch (_: IllegalArgumentException) {
+            emptySet()
+        }
+    }
+
     fun remember(session: NextcloudSession, previous: NextcloudSession?, incarnation: NextcloudDocumentIncarnation) {
         synchronized(LOCK) {
             require(previous == null || previous.accountId == session.accountId)
             val accountKey = session.accountId.storageKey
-            val aliases = read(accountKey, incarnation) + listOfNotNull(previous, session).map(NextcloudDocumentIds::accountKey)
+            val aliases = readVerified(accountKey, incarnation) + listOfNotNull(previous, session).map(NextcloudDocumentIds::accountKey)
             check(aliases.size <= 64) { "Too many saved document identity aliases." }
             check(write(accountKey, (listOf(incarnation.key()) + aliases.sorted()).joinToString("\n"))) {
                 "Could not preserve existing document identities."
