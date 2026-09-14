@@ -58,7 +58,13 @@ import javax.swing.SwingUtilities
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-fun main(arguments: Array<String>) = runDesktopEntryPoint(arguments)
+fun main(arguments: Array<String>) {
+    if (arguments.contentEquals(arrayOf("--verify-sqlite-runtime"))) {
+        dev.obiente.nextcloudnative.app.verifyDesktopSqliteRuntime()
+        return
+    }
+    runDesktopEntryPoint(arguments)
+}
 
 @OptIn(ExperimentalComposeUiApi::class)
 internal fun runDesktopEntryPoint(
