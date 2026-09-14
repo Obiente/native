@@ -330,6 +330,7 @@ internal suspend fun reconcileQueuedDurableUploads(
     schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { false },
     cleanupCapability: suspend (AndroidDurableMultipartUploadJob) -> Unit,
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    recoverUploading: suspend (AndroidDurableMultipartUploadJob) -> Unit = { error("Upload recovery is unavailable.") },
 ): Boolean {
     var allScheduled = true
     jobs.filter { job -> job.requiresSchedulingRecovery(allowQueuedScheduling) }.forEach { job ->
@@ -337,7 +338,7 @@ internal suspend fun reconcileQueuedDurableUploads(
             if (job.capabilityCleanupPending) {
                 cleanupCapability(job)
             } else if (!schedulerOwns(job)) {
-                schedule(job)
+                if (job.state == DurableUploadState.Uploading) recoverUploading(job) else schedule(job)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -350,7 +351,8 @@ internal suspend fun reconcileQueuedDurableUploads(
 
 private fun AndroidDurableMultipartUploadJob.requiresSchedulingRecovery(
     allowQueuedScheduling: Boolean,
-): Boolean = capabilityCleanupPending || (allowQueuedScheduling && state == DurableUploadState.Queued)
+): Boolean = capabilityCleanupPending || state == DurableUploadState.Uploading ||
+    (allowQueuedScheduling && state == DurableUploadState.Queued)
 
 internal suspend fun retryQueuedDurableUploadScheduling(
     retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),
@@ -417,4 +419,20 @@ internal suspend fun persistAndScheduleDurableUpload(
         runCatching(requestRecovery)
     }
     return DurableUploadEnqueueResult.Queued(job.status())
+}
+
+// Serialize with Queued -> Uploading claims and re-read both authorities before retiring an orphan.
+internal suspend fun recoverOrphanedDurableUpload(
+    expected: AndroidDurableMultipartUploadJob,
+    load: (String) -> AndroidDurableMultipartUploadJob?,
+    schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean,
+    markUnknown: (String) -> AndroidDurableMultipartUploadJob?,
+    cleanupCapability: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    coordinator: AndroidDurableUploadStartCoordinator = ANDROID_DURABLE_UPLOAD_START_COORDINATOR,
+) = coordinator.withJob(expected.id) {
+    val current = load(expected.id) ?: return@withJob
+    if (current.accountId != expected.accountId || current.state != DurableUploadState.Uploading || schedulerOwns(current)) {
+        return@withJob
+    }
+    markUnknown(current.id)?.let { cleanupCapability(it) }
 }

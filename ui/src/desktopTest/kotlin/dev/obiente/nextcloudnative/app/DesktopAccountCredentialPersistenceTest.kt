@@ -610,9 +610,9 @@ class DesktopAccountCredentialPersistenceTest {
         preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodeNextcloudAccountRegistry(registry))
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
-        val restored = persistence(preferences, secrets, diagnostics).loadActiveSession()
+        val restored = loadNextcloudSessionSafely { persistence(preferences, secrets, diagnostics).loadActiveSession() }
 
-        assertNull(restored)
+        assertEquals(NextcloudSessionLoadState.SecureStorageUnavailable, restored)
         assertEquals(registry, decodeRegistry(preferences))
         assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
         assertEquals(listOf("ACCOUNT_CREDENTIAL_ACTIVE_MISMATCH"), diagnostics.mapNotNull { it.code })
@@ -646,7 +646,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(second)
         secrets.clear(desktopAccountSecretReference(second.accountId))
 
-        assertNull(persistence.loadActiveSession())
+        assertEquals(NextcloudSessionLoadState.SecureStorageUnavailable, loadNextcloudSessionSafely(persistence::loadActiveSession))
         assertTrue(persistence.removeAccount(second.accountId))
 
         val restarted = persistence(preferences, secrets)
