@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.accountRecord
 import kotlin.test.Test
@@ -12,6 +13,17 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class AndroidAccountRecoveryPriorityTest {
+    @Test
+    fun accountRegistryAdapterPreservesTheActiveAccount() {
+        val expected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(expected.accountRecord())
+
+        assertEquals(
+            AndroidExpectedAccountState.Active,
+            registry.asAccountRetentionSnapshot().expectedAccountState(NextcloudDocumentIds.accountKey(expected)),
+        )
+    }
+
     @Test
     fun scheduleRestorationRetriesOnlyWhenTheExpectedAccountMayStillBeActive() {
         val expected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
@@ -86,7 +98,7 @@ class AndroidAccountRecoveryPriorityTest {
     }
 
     @Test
-    fun accountRetirementRetainsPairMappingUntilEverySafGrantReleaseIsAttempted() = runBlocking {
+    fun accountRetirementPersistsAfterEveryGrantCleanupIsPrepared() = runBlocking {
         val retiredPairs = listOf(
             fileSyncPair("retired-a", "content://documents/first"),
             fileSyncPair("retired-b", "content://documents/second"),
@@ -96,19 +108,22 @@ class AndroidAccountRecoveryPriorityTest {
         assertFailsWith<IllegalStateException> {
             retireConfiguredFileSyncAccountPairs(
                 retiredPairs = retiredPairs,
-                retainedPairs = emptyList(),
                 reconcileLocalDownloads = { true },
                 cancelSchedule = {},
                 cancelNotification = {},
+                prepareLocalGrantCleanup = { pairId -> events += "prepare-$pairId" },
                 persistRetirement = { events += "persist-retirement" },
-                releaseLocalGrant = { localRootId ->
-                    events += "release-$localRootId"
-                    if (localRootId.endsWith("first")) error("synthetic grant release interruption")
+                finishLocalGrantCleanup = { pairId ->
+                    events += "finish-$pairId"
+                    if (pairId == "retired-a") error("synthetic grant release interruption")
                 },
             )
         }
 
-        assertEquals(listOf("release-content://documents/first"), events)
+        assertEquals(
+            listOf("prepare-retired-a", "prepare-retired-b", "persist-retirement", "finish-retired-a"),
+            events,
+        )
     }
 
     private fun fileSyncPair(id: String, localRootId: String) = FileSyncPair(

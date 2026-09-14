@@ -53,6 +53,10 @@ internal object PhotoTimelineUiStateRepository {
     }
 
     fun removeAccount(accountStorageKey: String) = gate.retireAccount(accountStorageKey) {
+        purgeRetiredAccount(accountStorageKey)
+    }
+
+    internal fun purgeRetiredAccount(accountStorageKey: String) = gate.withLock {
         accountStates.remove(accountStorageKey)?.retire()
     }
 }

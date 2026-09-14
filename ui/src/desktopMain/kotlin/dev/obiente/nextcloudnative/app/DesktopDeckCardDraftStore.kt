@@ -190,18 +190,17 @@ internal class DesktopDeckCardDraftStore(
             file.name.startsWith(accountDraftPrefix(accountStorageKey)) ||
                 file.name.startsWith(accountSubmittedPrefix(accountStorageKey))
         }.toMutableSet()
-        val encryptionKey = try {
-            keyProvider.encryptionKey()
-        } catch (_: Exception) {
-            null
-        }
-        if (encryptionKey != null) {
-            files.filter { file -> file.name.matches(LEGACY_DRAFT_FILE_PATTERN) }.forEach { file ->
+        val legacyFiles = files.filter { file -> file.name.matches(LEGACY_DRAFT_FILE_PATTERN) }
+        var unresolvedLegacyDraft = false
+        if (legacyFiles.isNotEmpty()) {
+            val encryptionKey = keyProvider.encryptionKey()
+            legacyFiles.forEach { file ->
                 val stored = try {
                     readAuthenticated(file, encryptionKey)
                 } catch (_: DesktopDeckDraftRecoveryException) {
-                    null
-                } ?: return@forEach
+                    unresolvedLegacyDraft = true
+                    return@forEach
+                }
                 if (
                     stored.accountStorageKey == null &&
                     stored.storageFileName == null &&
@@ -214,6 +213,9 @@ internal class DesktopDeckCardDraftStore(
         }
         check(targets.all(::deleteDurably)) {
             "Saved Deck card drafts for the account could not be removed."
+        }
+        check(!unresolvedLegacyDraft) {
+            "Legacy Deck drafts must be readable before account cleanup can finish."
         }
     }
 

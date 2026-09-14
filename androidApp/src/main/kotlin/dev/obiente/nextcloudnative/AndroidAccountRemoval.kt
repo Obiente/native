@@ -52,6 +52,33 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     )
 }
 
+internal suspend fun <Result> withPreparedAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    prepare: suspend () -> Unit,
+    revalidate: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result {
+    prepare()
+    return withAndroidAccountRemovalLease(accountIdentity, guard) {
+        revalidate()
+        action()
+    }
+}
+
+internal suspend fun <Result> withUnavailableAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    preflight: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result = withPreparedAndroidAccountRemovalLease(
+    accountIdentity = accountIdentity,
+    guard = guard,
+    prepare = preflight,
+    revalidate = preflight,
+    action = action,
+)
+
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,

@@ -16,11 +16,9 @@ internal object DeckWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<String, DeckWorkspaceMemorySnapshot>()
 
-    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
-        gate.producer(session.accountId.storageKey)
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? = gate.producer(key(session))
 
-    fun get(session: NextcloudSession): DeckWorkspaceMemorySnapshot? =
-        gate.read(session.accountId.storageKey, null) {
+    fun get(session: NextcloudSession): DeckWorkspaceMemorySnapshot? = gate.read(key(session), null) {
         val key = key(session)
         entries.remove(key)?.also { entries[key] = it }
     }
@@ -30,7 +28,7 @@ internal object DeckWorkspaceMemoryCache {
         value: DeckWorkspaceMemorySnapshot,
         producer: AccountPrivateMemoryProducer?,
     ) {
-        gate.mutate(session.accountId.storageKey, producer) {
+        gate.mutate(key(session), producer) {
             val key = key(session)
             entries.remove(key)
             entries[key] = value

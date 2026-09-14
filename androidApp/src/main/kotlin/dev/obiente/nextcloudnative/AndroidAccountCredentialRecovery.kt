@@ -9,6 +9,7 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.restoreNextcloudAccountRegistry
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 
 internal sealed interface AndroidAccountCredentialStoreRead {
@@ -363,6 +364,7 @@ internal fun resolveStoredAndroidAccountSession(
 
 internal const val ANDROID_ACCOUNT_SESSION_KEY = "encrypted_session"
 internal const val ANDROID_ACCOUNT_REGISTRY_KEY = "account_registry_v1"
+internal const val ANDROID_ACCOUNT_PREFERENCES_NAME = "nextcloud_native"
 internal const val ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX = "account_credential_v1:"
 internal const val ANDROID_QUARANTINED_SESSION_KEY = "encrypted_session_quarantine"
 internal const val ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY = "pending_account_removal_cleanup_v2"
@@ -371,3 +373,14 @@ internal val ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX = Mutex()
 
 private val ACCOUNT_STORAGE_KEY_PATTERN = Regex("[0-9a-f]{64}")
 private val WORK_IDENTITY_PATTERN = Regex("[0-9a-f]{32}")
+
+/** A verified aggregate remains usable when optional slot repair fails, except cancellation. */
+internal fun repairAndroidRecoveredCredentialSlot(repair: () -> Unit) {
+    try {
+        repair()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The verified aggregate is still authoritative; a later restore can repair this slot.
+    }
+}

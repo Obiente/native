@@ -154,6 +154,26 @@ for the component contracts and current consumers.
 
 ## Desktop product rules
 
+Interrupted account cleanup has a separate retry screen from unavailable secure
+storage. It preserves the saved sign-in and offers no sign-in reset action while
+cleanup is pending or its records need review. Unrecognized cleanup records direct
+the user to Obiente support for recovery guidance. Pending cleanup explains how to
+reopen the app for another cleanup attempt and contact support if it stays blocked;
+the screen's check action only reloads session state.
+
+Desktop credential-save recovery records persist a terminal marker before their
+identity fields are erased. Restart recovery can finish this cleanup at every
+interruption point without treating a completed save as an incomplete rollback.
+The deterministic preference-boundary test is
+`DesktopCompletedCredentialSaveCleanupTest`; this is source and test evidence,
+not a claim about a published installer.
+
+Desktop account cleanup remains pending when legacy Deck drafts cannot be
+attributed because the keyring or encrypted content is unreadable. Existing
+files are preserved. Restoring keyring access permits a cleanup retry; a
+permanently damaged legacy draft can continue blocking that cleanup until its
+ownership or deliberate removal is resolved. This does not claim automatic
+recovery of corrupt encrypted drafts.
 A desktop account registry written by a newer format blocks startup sign-in with
 compatibility guidance. Saved credentials and registry data remain unchanged;
 reopening a compatible app version is required instead of repeating browser login.
@@ -198,3 +218,14 @@ bundles; the DMG does not migrate an existing bundle automatically.
 These names describe source packaging configuration, not confirmation that a
 release containing it has been published. Check the
 [release artifacts](https://github.com/Obiente/native/releases) for availability.
+
+## Desktop SQLite runtime verification
+
+The JVM SQLite dependency is constrained to 2.6.2 because the 2.7.0 and 2.7.1
+artifacts omit the Intel macOS native library. `DesktopSqliteRuntimeTest` checks
+the native resources for each packaged desktop architecture and opens an
+in-memory database on the test host. An Intel macOS CI job validates relevant
+dependency and packaging changes. Nightly and prerelease macOS packages run their
+launcher with `--verify-sqlite-runtime`, before creating application services.
+This check does not inspect accounts or modify user databases. A resource check
+on one OS does not establish runtime validation on another OS.

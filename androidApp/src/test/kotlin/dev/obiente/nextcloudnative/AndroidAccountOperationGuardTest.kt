@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -452,6 +454,58 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun recoveryRangeSessionUsesHeldAccountLeaseWhileOrdinaryReadsStillValidateSession() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        var sourceOpened = false
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            guard.withAccount(NextcloudDocumentIds.accountKey(session)) {
+                val read = executor.submit<Boolean> {
+                    runBlocking {
+                        val rangeSession = openTrackedAndroidFileRangeSession(
+                            expectedSession = session,
+                            resolveSession = { session },
+                            activity = AndroidFileRangeSessionActivity(),
+                            guard = guard,
+                            coordinator = coordinator,
+                            accountLeaseHeld = true,
+                            openSource = {
+                                sourceOpened = true
+                                NextcloudFileRangeSession(8L, { _, length -> ByteArray(length) })
+                            },
+                        )
+                        try {
+                            rangeSession.read(0L, 1).size == 1
+                        } finally {
+                            rangeSession.close()
+                        }
+                    }
+                }
+                assertTrue(read.get(1, TimeUnit.SECONDS))
+
+            }
+            assertFailsWith<FileNotFoundException> {
+                openTrackedAndroidFileRangeSession(
+                    expectedSession = session,
+                    resolveSession = { session.copy(appPassword = "replacement-password") },
+                    activity = AndroidFileRangeSessionActivity(),
+                    guard = guard,
+                    coordinator = coordinator,
+                    accountLeaseHeld = false,
+                    openSource = { error("stale ordinary source must not open") },
+                )
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertTrue(sourceOpened)
+    }
+
+    @Test
     fun sameAccountReauthenticationDrainsOldPasswordRangeBeforeCredentialCommit() = runBlocking {
         val coordinator = AndroidFileRangeSessionCoordinator()
         val old = NextcloudSession("https://cloud.example.test", "alice", "old-password")
@@ -588,6 +642,111 @@ class AndroidAccountOperationGuardTest {
         mutationLease.close()
         withTimeout(1_000L) { transition.await() }
         assertTrue(published)
+    }
+
+    @Test
+    fun removalPreparationCanUseTheRetainedReadLeaseBeforeRemovalBecomesExclusive() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        val events = mutableListOf<String>()
+
+        withTimeout(1_000L) {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = {
+                    guard.withAccount(accountIdentity) { events += "provider-read" }
+                },
+                revalidate = { events += "revalidate" },
+            ) {
+                events += "remove"
+            }
+        }
+
+        assertEquals(listOf("provider-read", "revalidate", "remove"), events)
+    }
+
+    @Test
+    fun unavailableRemovalUsesOnlyCredentialFreePreflight() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val events = mutableListOf<String>()
+
+        withUnavailableAndroidAccountRemovalLease(
+            accountIdentity = "account-a",
+            guard = guard,
+            preflight = { events += "preflight" },
+        ) {
+            events += "remove"
+        }
+
+        assertEquals(listOf("preflight", "preflight", "remove"), events)
+    }
+
+    @Test
+    fun accountWorkStartedAfterPreparationMakesRemovalFailClosed() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalEntered = false
+        var competingLease: AndroidAccountOperationLease? = null
+
+        val failure = try {
+            assertFailsWith<IllegalStateException> {
+                withTimeout(1_000L) {
+                    withPreparedAndroidAccountRemovalLease(
+                        accountIdentity = accountIdentity,
+                        guard = guard,
+                        prepare = {
+                            competingLease = guard.acquireBlocking(accountIdentity)
+                        },
+                        revalidate = {},
+                    ) {
+                        removalEntered = true
+                    }
+                }
+            }
+        } finally {
+            competingLease?.close()
+        }
+
+        assertEquals(
+            "Finish or discard pending document changes before removing this account.",
+            failure.message,
+        )
+        assertFalse(removalEntered)
+    }
+
+    @Test
+    fun removalStateIsRevalidatedAfterTheAccountLeaseIsAcquired() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalReady = true
+        var removalEntered = false
+        var revalidationHeldLease = false
+
+        val failure = assertFailsWith<IllegalStateException> {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = { removalReady = false },
+                revalidate = {
+                    revalidationHeldLease = guard.tryWithAccount(
+                        accountIdentity,
+                        unavailable = { true },
+                        action = { false },
+                    )
+                    check(removalReady) { "Account state changed after preparation." }
+                },
+            ) {
+                removalEntered = true
+            }
+        }
+
+        assertEquals("Account state changed after preparation.", failure.message)
+        assertTrue(revalidationHeldLease)
+        assertFalse(removalEntered)
+        withTimeout(1_000L) {
+            guard.withAccount(accountIdentity) { }
+        }
     }
 
     @Test

@@ -40,12 +40,13 @@ internal fun MatrixCursor.addNextcloudDocumentRow(
     incarnation: NextcloudDocumentIncarnation,
     file: NextcloudFile?,
     rootTitle: String,
+    accountKey: String = NextcloudDocumentIds.documentAccountKey(session),
 ) {
     val isDirectory = file?.isDirectory ?: true
     val path = file?.path.orEmpty()
     val values = mapOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID to
-            NextcloudDocumentIds.documentId(session, incarnation, path),
+            NextcloudDocumentIds.documentId(accountKey, incarnation, path),
         DocumentsContract.Document.COLUMN_DISPLAY_NAME to (file?.name ?: rootTitle),
         DocumentsContract.Document.COLUMN_MIME_TYPE to when {
             isDirectory -> DocumentsContract.Document.MIME_TYPE_DIR

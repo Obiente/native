@@ -102,7 +102,12 @@ internal class AndroidDocumentProviderIncarnationStore(
     fun retireForRemoval(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement = synchronized(LOCK) {
         requireAccountIdentity(accountIdentity)
         requireNoPendingRetirement(accountIdentity)
-        val previousEncoded = read(accountIdentity)
+        val previousEncoded = try {
+            read(accountIdentity)
+        } catch (_: ClassCastException) {
+            // Preserve an invalid prior state in the journal so rollback cannot authorize legacy documents.
+            UNREADABLE_PREFERENCE_TYPE
+        }
         val incarnation = when (val record = decodeRecordOrNullOnMalformed(previousEncoded)) {
             null -> NextcloudDocumentIncarnation.Legacy
             is AndroidDocumentProviderIncarnationRecord.Active -> record.incarnation
@@ -120,6 +125,11 @@ internal class AndroidDocumentProviderIncarnationStore(
         persistEncoded(retirementJournalKey(accountIdentity), encodeAndroidDocumentProviderRetirement(retirement))
         persistEncoded(accountIdentity, retiredEncoded)
         retirement
+    }
+
+    fun resumePendingRemoval(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement? = synchronized(LOCK) {
+        requireAccountIdentity(accountIdentity)
+        readPendingRetirement(accountIdentity)?.also(::resumeStoredRetirement)
     }
 
     fun rollback(retirement: AndroidDocumentProviderIncarnationRetirement) = synchronized(LOCK) {
@@ -195,7 +205,7 @@ internal class AndroidDocumentProviderIncarnationStore(
                 requireAccountIdentity(accountIdentity)
                 val pending = readPendingRetirementForCredentialReset(accountIdentity)
                 if (pending != null) {
-                    resumeRetirementForCredentialReset(pending)
+                    resumeStoredRetirement(pending)
                     retirements += pending
                 } else {
                     when (val result = readRecordForCredentialReset(accountIdentity)) {
@@ -258,12 +268,19 @@ internal class AndroidDocumentProviderIncarnationStore(
         }
     }
 
-    private fun resumeRetirementForCredentialReset(retirement: AndroidDocumentProviderIncarnationRetirement) {
-        when (read(retirement.accountIdentity)) {
+    private fun resumeStoredRetirement(retirement: AndroidDocumentProviderIncarnationRetirement) {
+        when (readRetirementState(retirement)) {
             retirement.previousEncoded -> persistEncoded(retirement.accountIdentity, retirement.retiredEncoded)
             retirement.retiredEncoded -> Unit
-            else -> error("The document provider account incarnation changed during credential reset.")
+            else -> error("The document provider account incarnation changed during retirement recovery.")
         }
+    }
+
+    private fun readRetirementState(retirement: AndroidDocumentProviderIncarnationRetirement): String? = try {
+        read(retirement.accountIdentity)
+    } catch (failure: ClassCastException) {
+        if (retirement.previousEncoded != UNREADABLE_PREFERENCE_TYPE) throw failure
+        UNREADABLE_PREFERENCE_TYPE
     }
 
     private fun readRecordForCredentialReset(accountIdentity: String): AndroidDocumentProviderCredentialResetRecord = try {
@@ -330,11 +347,13 @@ internal class AndroidDocumentProviderIncarnationStore(
         retirement: AndroidDocumentProviderIncarnationRetirement,
         ownership: AndroidDocumentProviderAccountOwnership,
     ) {
-        val currentEncoded = read(retirement.accountIdentity)
+        val currentEncoded = readRetirementState(retirement)
         when (ownership) {
             AndroidDocumentProviderAccountOwnership.Present -> when (currentEncoded) {
                 retirement.retiredEncoded -> persistEncoded(retirement.accountIdentity, retirement.previousEncoded)
-                retirement.previousEncoded -> Unit
+                retirement.previousEncoded -> if (retirement.previousEncoded == UNREADABLE_PREFERENCE_TYPE) {
+                    persistEncoded(retirement.accountIdentity, UNREADABLE_PREFERENCE_TYPE)
+                }
                 else -> error("The document provider account incarnation changed during removal recovery.")
             }
             AndroidDocumentProviderAccountOwnership.Absent -> check(currentEncoded == retirement.retiredEncoded) {
@@ -347,6 +366,7 @@ internal class AndroidDocumentProviderIncarnationStore(
     }
 
     private companion object {
+        const val UNREADABLE_PREFERENCE_TYPE = "unreadable:preference-type"
         const val PREFERENCES_NAME = "documents-provider-incarnations-v1"
         const val RETIREMENT_JOURNAL_KEY_PREFIX = "retirement:"
         val ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{64}")

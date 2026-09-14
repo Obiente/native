@@ -27,7 +27,7 @@ internal fun withCurrentAndroidWritebackDiagnosticScope(
     try {
         val candidate = resolveSession()?.takeIf { it.accountId == captured.accountId } ?: return
         runBlocking {
-            guard.tryWithAccount(NextcloudDocumentIds.accountKey(candidate), unavailable = {}) {
+            guard.tryWithAccounts(androidAccountOperationIdentities(candidate), unavailable = {}) {
                 val current = resolveSession()
                 if (current == candidate) publish(NextcloudDocumentIds.accountKey(candidate))
             }

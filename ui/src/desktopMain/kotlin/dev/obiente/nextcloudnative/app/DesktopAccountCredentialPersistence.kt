@@ -198,6 +198,8 @@ internal class DesktopAccountCredentialPersistence(
                 restored.registry.activeAccount,
                 pendingLegacyCleanupAccount = legacy.accountRecord(),
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             recordCredentialDiagnostic(
                 code = "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED",
@@ -234,6 +236,10 @@ internal class DesktopAccountCredentialPersistence(
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
         val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         if (server == null && login == null && phase == null) return
+        if (phase == DESKTOP_CREDENTIAL_SAVE_CLEANUP_COMPLETED) {
+            clearPendingCredentialSave()
+            return
+        }
         if (server.isNullOrBlank() || login.isNullOrBlank()) {
             credentialRollbackRecoveryUnavailable()
         }
@@ -473,22 +479,11 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun clearPendingCredentialSave() {
-        val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
-        val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
-        val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
-        if (server == null && login == null) return
         try {
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_SERVER)
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN)
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_PHASE)
-            flushPreferences()
+            clearDesktopCompletedCredentialSave(preferences, flushPreferences)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, server)
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, login)
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_PHASE, phase)
-            runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
                 "account-credentials.recover",
@@ -572,6 +567,8 @@ internal class DesktopAccountCredentialPersistence(
                 username = session.loginName,
                 secret = session.appPassword.encodeToByteArray(),
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED", "account-credentials.persist")
             throw failure
@@ -597,6 +594,8 @@ internal class DesktopAccountCredentialPersistence(
 
     private fun loadSecretForRollback(reference: DesktopSecretReference): ByteArray? = try {
         secretStore.load(reference)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
         recordCredentialDiagnostic(
             "ACCOUNT_CREDENTIAL_STORE_READ_FAILED",
@@ -609,6 +608,8 @@ internal class DesktopAccountCredentialPersistence(
     private fun clearSecret(reference: DesktopSecretReference) {
         try {
             secretStore.clear(reference)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_CLEAR_FAILED", "account-credentials.remove")
             throw failure
@@ -690,16 +691,7 @@ internal class DesktopAccountCredentialPersistence(
         operation: String,
         failure: Throwable? = null,
     ) {
-        recordDiagnostic(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Warning,
-                component = SupportDiagnosticComponent.Authentication,
-                operation = operation,
-                outcome = "failed",
-                code = code,
-                exception = failure?.toNonSecretSupportDiagnosticExceptionDraft(),
-            ),
-        )
+        desktopAccountCredentialDiagnostic(code, operation, failure)?.let(recordDiagnostic)
     }
 
     private data class DesktopRegistryRead(

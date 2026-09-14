@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import java.nio.file.Files
@@ -16,6 +17,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -103,6 +105,8 @@ class AndroidDynamicApiCachePolicyTest {
                 val requestIdentity = "GET /dashboard/widgets"
                 val cache = DynamicApiResponseCache(root)
                 val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+                val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+                var retiredStorageKey: String? = null
                 val started = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
@@ -116,11 +120,18 @@ class AndroidDynamicApiCachePolicyTest {
                 }
                 started.await()
 
-                clearAndroidDynamicApiState(accountId, coalescer, cache)
+                clearAndroidDynamicApiState(
+                    accountId,
+                    coalescer,
+                    cache,
+                    session.accountId.storageKey,
+                    { retiredStorageKey = it },
+                )
                 release.complete(Unit)
 
                 assertFails { read.await() }
                 assertNull(cache.load(accountId, requestIdentity, 1_024))
+                assertEquals(session.accountId.storageKey, retiredStorageKey)
             } finally {
                 root.deleteRecursively()
             }
@@ -151,6 +162,37 @@ class AndroidDynamicApiCachePolicyTest {
                 coalescer.execute(accountId, requestIdentity, load = { error("must remain fenced") })
             }
             assertNull(cache.load(accountId, requestIdentity, 1_024))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `Android memory retirement survives a rejected disk cache purge`(): Unit = runBlocking {
+        val root = Files.createTempDirectory("android-dynamic-cache-rejected-cleanup-").toFile()
+        try {
+            val accountId = "e".repeat(64)
+            val accountDirectory = root.resolve(accountId).apply { mkdirs() }
+            accountDirectory.resolve("unsafe-entry").mkdir()
+            val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+            val cache = DynamicApiResponseCache(root)
+            val accountStorageKey = "f".repeat(64)
+            var retiredStorageKey: String? = null
+
+            assertFailsWith<IllegalStateException> {
+                clearAndroidDynamicApiState(
+                    accountId,
+                    coalescer,
+                    cache,
+                    accountStorageKey,
+                    { retiredStorageKey = it },
+                )
+            }
+
+            assertEquals(accountStorageKey, retiredStorageKey)
+            assertFailsWith<Exception> {
+                coalescer.execute(accountId, "GET /dashboard/widgets", load = { error("must remain fenced") })
+            }
         } finally {
             root.deleteRecursively()
         }

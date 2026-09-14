@@ -69,6 +69,18 @@ internal suspend fun removeDesktopAccountPrivateStorage(
     removeDesktopAccountVirtualFilePreferences(preferences, accountId)
 }
 
+internal fun reactivateDesktopAccountPrivateCaches(
+    cleanup: DesktopAccountSyncPairCleanup,
+    discovery: DesktopDynamicDiscoveryCache,
+    files: DesktopFileReadCache,
+) {
+    cleanup.accountStorageKey?.let { accountStorageKey ->
+        discovery.activateAccount(accountStorageKey)
+        AccountPrivateMemoryLifecycle.activateAccount(accountStorageKey)
+    }
+    files.activateAccount(cleanup.accountId)
+}
+
 internal fun removeDesktopAccountVirtualFilePreferences(preferences: Preferences, accountId: String) {
     preferences.remove(virtualFileProviderPreferenceKey(accountId))
     preferences.remove(virtualFileProviderRootPreferenceKey(accountId))
@@ -83,6 +95,32 @@ internal fun virtualFileProviderRootPreferenceKey(accountId: String): String =
 internal fun virtualFileCachePreferenceKey(prefix: String, accountId: String): String {
     require(prefix == KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX || prefix == KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX)
     return desktopAccountPreferenceKey(prefix, accountId)
+}
+
+internal fun desktopVirtualFileProviderLocation(
+    preferences: Preferences,
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): VirtualFileProviderLocation {
+    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
+        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
+    val parent = stored?.parentFile
+    return if (folderName != null && parent != null) {
+        VirtualFileProviderLocation(parent.absolutePath, folderName)
+    } else {
+        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
+    }
+}
+
+internal fun desktopLinuxVirtualFileMountPoint(
+    preferences: Preferences,
+    accountId: String,
+): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
+    File(location.parentPath, location.folderName).absoluteFile.normalize()
 }
 
 private fun desktopAccountPreferenceKey(prefix: String, accountId: String): String {

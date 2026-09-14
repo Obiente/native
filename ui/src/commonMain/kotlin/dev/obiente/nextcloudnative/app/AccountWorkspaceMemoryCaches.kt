@@ -1,5 +1,12 @@
 package dev.obiente.nextcloudnative.app
 
+internal enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
+    Never("No expiry", null),
+    OneHour("1 hour", 60L * 60L),
+    FourHours("4 hours", 4L * 60L * 60L),
+    OneDay("24 hours", 24L * 60L * 60L),
+}
+
 internal sealed interface CalendarLoadState {
     data object Loading : CalendarLoadState
     data class Ready(
@@ -10,6 +17,13 @@ internal sealed interface CalendarLoadState {
     ) : CalendarLoadState
     data class Error(val message: String) : CalendarLoadState
 }
+
+internal fun calendarReadyMatchesRequest(
+    readyMonth: CalendarMonth,
+    readyWindow: GroupwareDavTimeWindow,
+    requestedMonth: CalendarMonth,
+    requestedWindow: GroupwareDavTimeWindow,
+): Boolean = readyMonth == requestedMonth && readyWindow == requestedWindow
 
 internal object CalendarWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
@@ -69,8 +83,7 @@ internal object UserStatusWorkspaceMemoryCache {
     private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
 
-    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
-        gate.producer(session.accountId.storageKey)
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? = gate.producer(session.accountId.storageKey)
 
     fun get(session: NextcloudSession): UserStatusSurfaceState.Available? =
         gate.read(session.accountId.storageKey, null) {
@@ -186,7 +199,7 @@ internal fun removeUserStatusWorkspaceMemory(accountStorageKey: String) =
     UserStatusWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 
 internal fun removeNextcloudNativeWorkspaceMemory(accountStorageKey: String) {
-    PhotoTimelineUiStateRepository.removeAccount(accountStorageKey)
+    PhotoTimelineUiStateRepository.purgeRetiredAccount(accountStorageKey)
     ActivityWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
     TalkWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 }

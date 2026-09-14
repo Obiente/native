@@ -792,13 +792,6 @@ fun NativeGroupwareCalendarScreen(
     }
 }
 
-internal fun calendarReadyMatchesRequest(
-    readyMonth: CalendarMonth,
-    readyWindow: GroupwareDavTimeWindow,
-    requestedMonth: CalendarMonth,
-    requestedWindow: GroupwareDavTimeWindow,
-): Boolean = readyMonth == requestedMonth && readyWindow == requestedWindow
-
 @Composable
 private fun CalendarError(message: String, retry: () -> Unit) {
     Column(

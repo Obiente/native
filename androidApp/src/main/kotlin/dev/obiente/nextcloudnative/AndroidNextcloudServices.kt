@@ -14,7 +14,6 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
-import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
 import dev.obiente.nextcloudnative.app.AcquiredContractKind
 import dev.obiente.nextcloudnative.app.DeckAttachment
@@ -208,7 +207,6 @@ import dev.obiente.nextcloudnative.app.requireSafeFileRangeEtag
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.DynamicDescriptorDiscovery
-import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES
 import dev.obiente.nextcloudnative.app.decodePersistedDynamicDiscovery
 import dev.obiente.nextcloudnative.app.encodePersistedDynamicDiscovery
 import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
@@ -216,7 +214,6 @@ import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
 import dev.obiente.nextcloudnative.app.MediaSearchDavTransportResponse
-import dev.obiente.nextcloudnative.app.MediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.MemoriesPreferredTimelineReadService
 import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationLoadResult
 import dev.obiente.nextcloudnative.app.MemoriesTimelineNavigationSnapshot
@@ -228,6 +225,7 @@ import dev.obiente.nextcloudnative.app.RawMediaSearchCompatibilityPolicy
 import dev.obiente.nextcloudnative.app.isRawPhoto
 import dev.obiente.nextcloudnative.app.mergeMediaSearchResultPages
 import dev.obiente.nextcloudnative.app.photoMediaCarryoverScope
+import dev.obiente.nextcloudnative.app.sharedMediaTimelineDavCarryoverStore
 import dev.obiente.nextcloudnative.app.toPhotoTimelineEntryOrNull
 import dev.obiente.nextcloudnative.app.normalizeSystemTagsDavResponse
 import dev.obiente.nextcloudnative.app.parseNextcloudFileSharingCapabilities
@@ -381,7 +379,7 @@ internal class AndroidNextcloudServices(
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
     private val activity = context as? Activity
-    private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
+    private val preferences = appContext.getSharedPreferences(ANDROID_ACCOUNT_PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val httpClient = OkHttpClient.Builder()
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
@@ -436,10 +434,9 @@ internal class AndroidNextcloudServices(
         )
     }
     private val nativeMediaPreviewDecodeMutex = Mutex()
-    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
-    private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
-        executeNextcloudApi(session, request)
-    }
+    internal fun isDurableUploadAccountResolutionAvailable() = preferences.durableUploadAccountResolutionAvailable()
+    internal fun durableUploadAccountRegistry() = accountCredentials.durableUploadAccountRegistry()
+    private val memoriesTimeline = MemoriesPreferredTimelineReadService(::executeNextcloudApi)
     private val fileSyncEngine = AndroidFileSyncEngine(appContext)
     private val mediaSyncFolderDetector = AndroidMediaSyncFolderDetector(appContext)
     private val externalFileHandoff = AndroidExternalFileHandoff(appContext)
@@ -449,7 +446,7 @@ internal class AndroidNextcloudServices(
         requestPermissions = requestPlatformPermissions,
     )
     private val projectContent = AndroidProjectContentClient(appContext, activity)
-    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
+    private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext, localUploadPicker)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -462,6 +459,7 @@ internal class AndroidNextcloudServices(
         diagnostics = supportDiagnostics,
         client = httpClient,
     )
+    private val dynamicAccountActivation = AndroidDynamicAccountActivation(dynamicApiRequestCoalescer)
     private val accountCredentials = AndroidAccountCredentialController(
         context = appContext,
         preferences = preferences,
@@ -480,8 +478,7 @@ internal class AndroidNextcloudServices(
         retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
         retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,
         activatePersistedAccount = { session ->
-            dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(session))
-            AccountPrivateMemoryLifecycle.activateAccount(session.accountId.storageKey)
+            dynamicAccountActivation.afterCredentialSave(session)
             dynamicDiscoveryCache.activateAccount(session.accountId.storageKey)
         },
     )
@@ -502,7 +499,6 @@ internal class AndroidNextcloudServices(
             supportsSeekableRemoteStreaming = true,
         ),
     )
-
     override fun platformCapabilities(): List<PlatformCapabilityStatus> = platformCapabilities.statuses()
 
     override fun requestPlatformCapability(capability: PlatformCapability): Boolean =
@@ -1033,7 +1029,7 @@ internal class AndroidNextcloudServices(
             }
         }
         if (file.size == null) {
-            return externalFileHandoff.launchStreamedRemote(
+            return externalFileHandoff.launchStreamedRemote(generation = generation,
                 file = file,
                 action = action,
                 capability = capability,
@@ -1047,7 +1043,7 @@ internal class AndroidNextcloudServices(
                 )
             }
         }
-        return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
+        return externalFileHandoff.launch(generation, file, action, capability) { maximumBytes ->
             downloadFile(session, userId, file.path, maximumBytes)
         }
     }
@@ -1135,7 +1131,7 @@ internal class AndroidNextcloudServices(
             ocsApiRequest = true,
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
+        return externalFileHandoff.launchDetached(captureAndroidExternalFileHandoffGeneration(session) { loadSession() }, attachment, action, capability) { output, maximumBytes ->
             downloadAndroidDetachedFile(
                 noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
                 output, maximumBytes, USER_AGENT,
@@ -1330,8 +1326,8 @@ internal class AndroidNextcloudServices(
     internal suspend fun listFilesWhileAccountLeaseHeld(
         session: NextcloudSession,
         userId: String,
-        path: String,
-    ): List<NextcloudFile> = listFilesWithSource(session, userId, path, accountLeaseHeld = true).files
+        path: String, requireNetwork: Boolean = false,
+    ): List<NextcloudFile> = listFilesWithSource(session, userId, path, accountLeaseHeld = true).filesForProviderRecovery(requireNetwork)
 
     private suspend fun listFilesWithSource(
         session: NextcloudSession,
@@ -1646,12 +1642,14 @@ internal class AndroidNextcloudServices(
             freedBytes = freed,
         )
     }
-
-    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
-        checkNotNull(fileSyncRootPicker) {
-            "The native folder chooser is not available from this Android component."
-        }.choose(initialRootHint)
-
+    override suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String?): FileSyncLocalRoot? =
+        checkNotNull(fileSyncRootPicker) { "The native folder chooser is not available from this Android component." }
+            .choose(session, ::loadSession, initialRootHint)
+    override fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = fileSyncRootPicker?.abandon(localRoot) ?: true
+    override suspend fun restoreFileSyncLocalRoot(session: NextcloudSession, reference: FileSyncLocalRoot) = restoreAndroidFileSyncRoot(appContext, session, reference)
+    override fun retainFileSyncRootOnDispose(): Boolean = activity?.isChangingConfigurations == true
+    override suspend fun reconcileFileSyncRootSetup(session: NextcloudSession, restoredLocalRoot: FileSyncLocalRoot?) =
+        withContext(Dispatchers.IO) { reconcileRestoredFileSyncSetup(appContext, session, restoredLocalRoot) }
     override suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
@@ -1660,7 +1658,6 @@ internal class AndroidNextcloudServices(
 
     override fun openIncomingShareRecovery(requestId: String) =
         openAndroidIncomingShareRecovery(appContext, requestId)
-
     override suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery =
         withContext(Dispatchers.IO) {
             mediaSyncFolderDetector.discover()
@@ -1867,11 +1864,12 @@ internal class AndroidNextcloudServices(
                 shouldSearchRaw = { files ->
                     rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
                 },
-                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverStore = sharedMediaTimelineDavCarryoverStore,
                 carryoverAccountScope = photoMediaCarryoverScope(
                     accountScope = NextcloudDocumentIds.cacheAccountId(session),
                     owner = queryOwner,
                 ),
+                carryoverAccountId = session.accountId,
             )
             return PhotoTimelinePage(
                 entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
@@ -1899,6 +1897,7 @@ internal class AndroidNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = NextcloudDocumentIds.cacheAccountId(session),
             monthResolver = monthResolver,
         )
@@ -2339,6 +2338,27 @@ internal class AndroidNextcloudServices(
         path: String,
         size: Long,
         expectedEtag: String,
+    ): NextcloudFileRangeSession = openFileRangeSession(
+        session, userId, path, size, expectedEtag, accountLeaseHeld = false,
+    )
+
+    internal fun openFileRangeSessionWhileAccountLeaseHeld(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+    ): NextcloudFileRangeSession = openFileRangeSession(
+        session, userId, path, size, expectedEtag, accountLeaseHeld = true,
+    )
+
+    private fun openFileRangeSession(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        size: Long,
+        expectedEtag: String,
+        accountLeaseHeld: Boolean,
     ): NextcloudFileRangeSession {
         require(size > 0L) { "The file range session size must be positive." }
         val safeEtag = requireSafeFileRangeEtag(expectedEtag)
@@ -2346,7 +2366,10 @@ internal class AndroidNextcloudServices(
         val authorization = androidFileRangeAuthorization(session)
         val closed = AtomicBoolean(false)
         val activity = AndroidFileRangeSessionActivity()
-        return openTrackedAndroidFileRangeSession(session, { loadSession(session.accountId) }, activity) {
+        return openTrackedAndroidFileRangeSession(
+            session, { loadSession(session.accountId) }, activity,
+            accountLeaseHeld = accountLeaseHeld,
+        ) {
             NextcloudFileRangeSession(
             size = size,
             readBlock = { offset, length ->
@@ -2612,7 +2635,7 @@ internal class AndroidNextcloudServices(
         val specification = fileVersionContentRequest(userId, fileId, version.id)
         val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
         val listedVersionEtag = version.etag
-        return externalFileHandoff.launchStreamedRemote(historicalCopy, action, capability) { output, maximumBytes ->
+        return externalFileHandoff.launchStreamedRemote(captureAndroidExternalFileHandoffGeneration(session) { loadSession() }, historicalCopy, action, capability) { output, maximumBytes ->
             downloadAndroidDetachedFile(
                 noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
                 output, maximumBytes, USER_AGENT,
@@ -2855,7 +2878,6 @@ internal class AndroidNextcloudServices(
     override fun releaseLocalUploadFile(file: LocalUploadFile) {
         localUploadPicker?.release(file)
     }
-
     override suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,
         request: NextcloudMultipartUploadRequest,
@@ -2906,12 +2928,11 @@ internal class AndroidNextcloudServices(
             }
         }
     }
-
     override suspend fun enqueueDurableMultipartUpload(
         session: NextcloudSession,
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
-    ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
+    ): DurableUploadEnqueueResult = durableMultipartUploads.runEnqueueWithCancellationCleanup(request.file) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
             resolveSession = ::loadSession,
@@ -3433,7 +3454,7 @@ internal class AndroidNextcloudServices(
             session = session,
             ocsRequest = true,
         )
-        check(response.status in 200..299) { "Nextcloud API request failed (HTTP ${response.status})." }
+        if (response.status !in 200..299) throw AndroidOcsRequestFailure(response.status)
         return JSONObject(response.text)
     }
 
@@ -3880,29 +3901,6 @@ internal class AndroidNextcloudServices(
             <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>
         """.trimIndent()
         val NON_APP_CAPABILITIES = setOf("core", "theming")
-    }
-}
-
-internal class AndroidFileRangeUnsupportedException(message: String) : Exception(message)
-
-internal suspend fun probeSeekableExternalHandoffGeneration(
-    file: NextcloudFile,
-    verifyEmptyGeneration: suspend () -> Unit,
-    openRangeSession: (size: Long, etag: String) -> NextcloudFileRangeSession,
-): Boolean {
-    val size = file.size ?: return false
-    val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
-    if (size == 0L) {
-        verifyEmptyGeneration()
-        return true
-    }
-    val rangeSession = openRangeSession(size, etag)
-    return try {
-        rangeSession.read(0L, 1).size == 1
-    } catch (_: AndroidFileRangeUnsupportedException) {
-        false
-    } finally {
-        rangeSession.close()
     }
 }
 

@@ -15,6 +15,8 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
     commitPreferences: (SharedPreferences.Editor) -> Unit,
     recordCleanupFailure: (Exception) -> Unit,
     clearInvalidStore: suspend (String?) -> Unit,
+    recoverAccountRemoval: suspend (NextcloudSession) -> Unit,
+    revalidateAccountRemoval: suspend (NextcloudSession) -> Unit,
 ) {
     requireAndroidIndependentCredentialStateCanBeExplicitlyReset(
         preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null),
@@ -37,6 +39,8 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
             )
         },
         prepareAccountRemoval = prepareAccountRemoval,
+        recoverAccountRemoval = recoverAccountRemoval,
+        revalidateAccountRemoval = revalidateAccountRemoval,
         rollbackPreparedRemoval = { retirement -> rollbackAndroidAccountRemoval(context, retirement) },
         completePreparedRemoval = { retirement, accountStorageKey ->
             cleanupJournal.completeDocumentRetirement(context, retirement, accountStorageKey)
@@ -65,6 +69,8 @@ internal suspend fun <Retirement : Any> retireUnregisteredAndroidAccountCredenti
     prepareAccountRemoval: suspend (NextcloudSession) -> Retirement,
     rollbackPreparedRemoval: suspend (Retirement) -> Unit,
     completePreparedRemoval: suspend (Retirement, String) -> Unit,
+    recoverAccountRemoval: suspend (NextcloudSession) -> Unit = {},
+    revalidateAccountRemoval: suspend (NextcloudSession) -> Unit = {},
     commitSlotRemoval: suspend (AndroidIndependentCredentialSlotReset, AndroidPendingAccountRemovalCleanup) -> Unit,
     rollbackSlotRemoval: suspend (AndroidIndependentCredentialSlotReset) -> Unit,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
@@ -74,10 +80,16 @@ internal suspend fun <Retirement : Any> retireUnregisteredAndroidAccountCredenti
     slots.forEach { slot ->
         val session = slot.session
         if (session.accountId.storageKey in preexistingCleanupAccountStorageKeys) {
-            retryPreexistingCleanup(slot)
+            withAndroidAccountRemovalLease(session, guard, lifetimeGuard) {
+                retryPreexistingCleanup(slot)
+            }
         }
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
-        withAndroidAccountRemovalLease(session, guard, lifetimeGuard) {
+        withPreparedAndroidAccountRemovalLease(
+            session, guard, lifetimeGuard,
+            prepare = { recoverAccountRemoval(session) },
+            revalidate = { revalidateAccountRemoval(session) },
+        ) {
             var retirement: Retirement? = null
             removeRecoveredAndroidAccountCredentialData(
                 prepareAccountRemoval = { retirement = prepareAccountRemoval(session) },

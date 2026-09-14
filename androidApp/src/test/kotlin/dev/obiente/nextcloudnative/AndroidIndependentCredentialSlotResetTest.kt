@@ -72,10 +72,15 @@ class AndroidIndependentCredentialSlotResetTest {
         val presentSlots = mutableSetOf(first.preferenceKey, second.preferenceKey)
         val tombstones = mutableSetOf<String>()
         val completedRetirements = mutableListOf<String>()
+        val guard = AndroidAccountOperationGuard()
 
         retireUnregisteredAndroidAccountCredentialSlots(
             slots = listOf(first, second),
-            guard = AndroidAccountOperationGuard(),
+            guard = guard,
+            recoverAccountRemoval = { session ->
+                guard.withAccount(NextcloudDocumentIds.accountKey(session)) { events += "recover-${session.loginName}" }
+            },
+            revalidateAccountRemoval = { session -> events += "revalidate-${session.loginName}" },
             prepareAccountRemoval = { session ->
                 events += "prepare-${session.loginName}"
                 session.accountId.storageKey
@@ -101,7 +106,10 @@ class AndroidIndependentCredentialSlotResetTest {
         )
 
         assertEquals(
-            listOf("prepare-alice", "commit-alice", "cleanup-alice", "prepare-bob", "commit-bob", "cleanup-bob"),
+            listOf(
+                "recover-alice", "revalidate-alice", "prepare-alice", "commit-alice", "cleanup-alice",
+                "recover-bob", "revalidate-bob", "prepare-bob", "commit-bob", "cleanup-bob",
+            ),
             events,
         )
         assertTrue(presentSlots.isEmpty())
@@ -182,6 +190,7 @@ class AndroidIndependentCredentialSlotResetTest {
     fun rollbackRestoredSlotRetriesPreexistingTombstoneBeforeResettingIt() = runBlocking {
         val slot = resetSlot(NextcloudSession("https://one.example.test", "alice", "first-secret"))
         val tombstones = mutableSetOf(slot.session.accountId.storageKey)
+        val guard = AndroidAccountOperationGuard()
         var retryFails = true
         var commitAttempted = false
 
@@ -190,10 +199,11 @@ class AndroidIndependentCredentialSlotResetTest {
                 slots = listOf(slot),
                 preexistingCleanupAccountStorageKeys = tombstones.toSet(),
                 retryPreexistingCleanup = {
+                    assertTrue(guard.tryWithAccounts(androidAccountOperationIdentities(it.session), { true }, { false }))
                     if (retryFails) error("synthetic persisted cleanup failure")
                     tombstones -= it.session.accountId.storageKey
                 },
-                guard = AndroidAccountOperationGuard(),
+                guard = guard,
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = {},
                 completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
@@ -214,7 +224,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 slots = listOf(slot),
                 preexistingCleanupAccountStorageKeys = tombstones.toSet(),
                 retryPreexistingCleanup = { tombstones -= it.session.accountId.storageKey },
-                guard = AndroidAccountOperationGuard(),
+                guard = guard,
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = {},
                 completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },

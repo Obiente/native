@@ -22,7 +22,7 @@ internal suspend fun loadAndroidAccountFileListing(
     val read: suspend () -> NextcloudFileListing = {
         readAndroidAccountFileListing(cache, NextcloudDocumentIds.accountKey(session), path, request)
     }
-    return if (accountLeaseHeld) read() else withRetainedAndroidAccountFileRead(session, resolveSession, guard, read)
+    return if (accountLeaseHeld) read() else withRetainedAndroidAccountFileRead(session, resolveSession, guard, read = read)
 }
 
 private suspend fun readAndroidAccountFileListing(
@@ -54,4 +54,27 @@ internal fun requireAndroidDocumentDirectory(
 ) {
     if (reference.isRoot) return
     require(findDocument(reference.path).isDirectory) { "The selected parent is not a folder." }
+}
+
+internal fun NextcloudFileListing.filesForProviderRecovery(requireNetwork: Boolean): List<NextcloudFile> {
+    check(!requireNetwork || source == NextcloudFileListingSource.Network) {
+        "Folder recovery requires a confirmed server listing."
+    }
+    return files
+}
+
+internal suspend fun loadAndroidProviderChildren(
+    recoveryAuthorized: Boolean,
+    read: suspend () -> List<NextcloudFile>,
+    cached: () -> List<NextcloudFile>,
+    storedDirectory: () -> Boolean,
+): List<NextcloudFile> = try {
+    read()
+} catch (cancelled: kotlinx.coroutines.CancellationException) {
+    throw cancelled
+} catch (failure: Exception) {
+    if (recoveryAuthorized) throw failure
+    val children = cached()
+    if (children.isNotEmpty() || storedDirectory()) children
+    else throw java.io.FileNotFoundException("Could not load this Nextcloud folder.").also { it.initCause(failure) }
 }

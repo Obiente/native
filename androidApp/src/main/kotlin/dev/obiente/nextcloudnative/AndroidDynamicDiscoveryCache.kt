@@ -53,7 +53,14 @@ internal class AndroidDynamicDiscoveryCache(private val root: File) {
         }
     }
 
-    fun retireAccount(accountStorageKey: String, cacheAccountId: String?) = synchronized(lock) {
+    fun retireAccount(
+        accountStorageKey: String,
+        cacheAccountId: String?,
+        legacyCacheAccountId: String? = null,
+    ) = synchronized(lock) {
+        require(cacheAccountId == null || cacheAccountId.matches(ACCOUNT_CACHE_ID))
+        require(legacyCacheAccountId == null || legacyCacheAccountId.matches(ACCOUNT_CACHE_ID))
+        require(cacheAccountId != null || legacyCacheAccountId != null) { "The removed account cache identity is required." }
         if (retiredAccounts.add(accountStorageKey)) {
             accountIncarnations[accountStorageKey] = (accountIncarnations[accountStorageKey] ?: 0L) + 1L
         }
@@ -63,7 +70,12 @@ internal class AndroidDynamicDiscoveryCache(private val root: File) {
         files.forEach { file -> check(file.isFile && file.name.matches(ACCOUNT_CACHE_FILE)) {
             "The dynamic contract cache contains an unexpected entry."
         } }
-        files.filter { cacheAccountId == null || it.name.startsWith("$cacheAccountId-") }
+        files.filter {
+            val storedIdentity = it.name.substringBefore('-')
+            storedIdentity == cacheAccountId || storedIdentity == legacyCacheAccountId ||
+                // The legacy document identity is the first half of the full cache digest.
+                cacheAccountId == null && legacyCacheAccountId != null && storedIdentity.startsWith(legacyCacheAccountId)
+        }
             .forEach { file ->
                 check(file.delete() || !file.exists()) { "Could not clear the dynamic contract cache." }
             }

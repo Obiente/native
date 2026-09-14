@@ -14,16 +14,24 @@ internal suspend fun retryAndroidDocumentCleanupBeforeActivation(
     recordFailure: (Exception) -> Unit,
 ) {
     var retirement: AndroidDocumentProviderIncarnationRetirement? = null
+    val incarnationStore = AndroidDocumentProviderIncarnationStore(context)
     retryAndroidCleanupBeforeActivation(
         session, journal, loadAccounts,
-        prepareRemoval = { retirement = prepareRemoval(it) },
+        prepareRemoval = {
+            retirement = incarnationStore.resumePendingRemoval(it.documentProviderIncarnationAccountIdentity())
+                ?: prepareRemoval(it)
+        },
         retryCleanup = retryCleanup,
         recordFailure = recordFailure,
+        rollbackRecovery = {
+            incarnationStore.resumePendingRemoval(it.documentProviderIncarnationAccountIdentity())
+                ?.let(incarnationStore::rollback)
+        },
         completeRecovery = {
             // Fence recovery can retain the account registry entry. Its old grants
             // still need a retired incarnation before a fresh one can be published.
             renewRecoveredAndroidDocumentIncarnation(
-                AndroidDocumentProviderIncarnationStore(context), requireNotNull(retirement),
+                incarnationStore, requireNotNull(retirement),
             )
         },
     )

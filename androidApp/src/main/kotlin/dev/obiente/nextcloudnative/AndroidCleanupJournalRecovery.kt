@@ -51,6 +51,7 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
     retryCleanup: suspend (NextcloudSession, String, String?, String?, String?) -> Unit,
     recordFailure: (Exception) -> Unit,
     completeRecovery: suspend (NextcloudSession) -> Unit = {},
+    rollbackRecovery: suspend (NextcloudSession) -> Unit = {},
 ) {
     val snapshot = journal.snapshot()
     requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
@@ -76,11 +77,20 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
             journal.markReviewed(session.accountId.storageKey, retainedAccounts)
         } else {
             val pending = pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups) ?: return
-            retryAndroidAccountRemovalCleanup(
-                accountOwnedByRegistry = androidAccountRemovalCleanupOwnedByRegistry(pending, loadAccounts()),
-                removeAccountOwnedWork = { retryAndroidAccountOwnedStateCleanup(session, pending, retryCleanup) },
-                clearCleanup = { journal.clear(pending.accountStorageKey) },
-            )
+            withAndroidAccountRemovalLease(session, additionalAccountIdentities = listOf(pending.workIdentity)) {
+                val accountOwnedByRegistry = androidAccountRemovalCleanupOwnedByRegistry(pending, loadAccounts())
+                retryAndroidAccountRemovalCleanup(
+                    accountOwnedByRegistry = accountOwnedByRegistry,
+                    removeAccountOwnedWork = {
+                        prepareRemoval(session)
+                        retryAndroidAccountOwnedStateCleanup(session, pending, retryCleanup)
+                    },
+                    clearCleanup = {
+                        if (accountOwnedByRegistry == true) rollbackRecovery(session) else completeRecovery(session)
+                        journal.clear(pending.accountStorageKey)
+                    },
+                )
+            }
         }
     } catch (cancelled: CancellationException) {
         throw cancelled

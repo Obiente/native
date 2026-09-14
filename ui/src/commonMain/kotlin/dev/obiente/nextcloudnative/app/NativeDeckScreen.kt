@@ -30,6 +30,7 @@ fun NativeDeckScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val workspaceProducer = remember(session) { DeckWorkspaceMemoryCache.producer(session) }
     val retainedWorkspace = remember(session) { DeckWorkspaceMemoryCache.get(session) }
     var state by remember(session) {
         mutableStateOf<DeckWorkspaceState>(retainedWorkspace?.state ?: DeckWorkspaceState.Loading)
@@ -82,7 +83,6 @@ fun NativeDeckScreen(
         requestedBoardId,
         requestedCardId,
     ) {
-        val cacheProducer = DeckWorkspaceMemoryCache.producer(session)
         DeckWorkspaceMemoryCache.store(
             session,
             DeckWorkspaceMemorySnapshot(
@@ -94,7 +94,7 @@ fun NativeDeckScreen(
                 requestedBoardId = requestedBoardId,
                 requestedCardId = requestedCardId,
             ),
-            cacheProducer,
+            workspaceProducer,
         )
     }
 

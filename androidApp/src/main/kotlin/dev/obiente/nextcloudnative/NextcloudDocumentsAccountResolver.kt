@@ -78,6 +78,8 @@ internal class NextcloudDocumentsAccountResolver(
         return account
     }
 
+    fun diagnosticSessionForAccountKey(accountKey: String): NextcloudSession = requireAccount(accountKey).session
+
     private fun requireAccount(accountKey: String): ResolvedNextcloudDocumentsAccount {
         val matches = listAccounts().filter { record -> accountKey in record.documentAccountKeys() || accountKey in verifiedLegacyAliases(record.id) }
         require(matches.size == 1) { "The document account is missing or ambiguous." }

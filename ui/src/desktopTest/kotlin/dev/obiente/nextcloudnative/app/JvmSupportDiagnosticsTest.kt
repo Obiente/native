@@ -340,7 +340,12 @@ class JvmSupportDiagnosticsTest {
         assertTrue(ready.await(10L, TimeUnit.SECONDS))
         start.countDown()
         workers.shutdown()
-        assertTrue(workers.awaitTermination(30L, TimeUnit.SECONDS))
+        val completed = try {
+            workers.awaitTermination(30L, TimeUnit.SECONDS)
+        } finally {
+            workers.shutdownNow()
+        }
+        assertTrue(completed)
 
         assertEquals(160, diagnostics.summary().eventCount)
         assertEquals(160, diagnostics(root).summary().eventCount)

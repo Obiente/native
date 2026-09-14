@@ -85,6 +85,72 @@ class AndroidCleanupJournalRecoveryTest {
         assertEquals(setOf(session.accountId.storageKey), fixture.journal.snapshot().reviewedAccounts)
     }
 
+    @Test fun knownTombstoneRetryOwnsCanonicalAndHistoricalOperationLeases() = runBlocking {
+        val pending = pendingAndroidAccountRemovalCleanup(session).copy(workIdentity = "e".repeat(32), previewCacheIdentity = "e".repeat(64))
+        val fixture = JournalFixture(setOf(encodeAndroidPendingAccountRemovalCleanup(pending)))
+        var cleaned = false
+        retryAndroidCleanupBeforeActivation(session, fixture.journal, { emptyList() }, {},
+            { _, _, _, _, _ ->
+                (androidAccountOperationIdentities(session) + pending.workIdentity).forEach { identity ->
+                    assertTrue(ANDROID_ACCOUNT_OPERATION_GUARD.tryWithAccount(identity, { true }, { false }))
+                }
+                cleaned = true
+            }, {})
+        assertTrue(cleaned)
+        assertTrue(fixture.journal.pending().isEmpty())
+    }
+
+    @Test fun knownCleanupKeepsJournalUntilIncarnationRenewalSucceeds() = runBlocking {
+        val fixture = JournalFixture(setOf(encodeAndroidPendingAccountRemovalCleanup(pendingAndroidAccountRemovalCleanup(session))))
+        val records = mutableMapOf<String, String>()
+        var rejectRenewal = false
+        val store = AndroidDocumentProviderIncarnationStore(
+            read = records::get,
+            commit = { key, value ->
+                if (rejectRenewal && key == session.accountId.storageKey && value?.startsWith("1:active:") == true) false
+                else { if (value == null) records.remove(key) else records[key] = value; true }
+            }, keys = { records.keys.toSet() },
+        )
+        val original = store.prepareForAccountSave(session.accountId.storageKey, false)
+        store.retireForRemoval(session.accountId.storageKey)
+        var retirement: AndroidDocumentProviderIncarnationRetirement? = null
+        var cleaned = 0
+        suspend fun retry() = retryAndroidCleanupBeforeActivation(session, fixture.journal, { emptyList() },
+            { retirement = store.resumePendingRemoval(it.accountId.storageKey) ?: store.retireForRemoval(it.accountId.storageKey) },
+            { _, _, _, _, _ -> cleaned++ }, {},
+            completeRecovery = { renewRecoveredAndroidDocumentIncarnation(store, requireNotNull(retirement)) },
+        )
+        rejectRenewal = true
+        assertFailsWith<IllegalStateException> { retry() }
+        assertEquals(1, fixture.journal.pending().size)
+        assertFailsWith<IllegalStateException> { store.activeIncarnation(session.accountId.storageKey) }
+        rejectRenewal = false
+        retry()
+        retry()
+        assertEquals(2, cleaned)
+        assertTrue(store.activeIncarnation(session.accountId.storageKey) != original)
+        assertTrue(fixture.journal.pending().isEmpty())
+    }
+
+    @Test fun registryRetainedAccountRollsBackIncarnationBeforeClearingKnownJournal() = runBlocking {
+        val fixture = JournalFixture(setOf(encodeAndroidPendingAccountRemovalCleanup(pendingAndroidAccountRemovalCleanup(session))))
+        val records = mutableMapOf<String, String>()
+        val store = AndroidDocumentProviderIncarnationStore(records::get,
+            { key, value -> if (value == null) records.remove(key) else records[key] = value; true },
+            { records.keys.toSet() },
+        )
+        val original = store.prepareForAccountSave(session.accountId.storageKey, false)
+        store.retireForRemoval(session.accountId.storageKey)
+        retryAndroidCleanupBeforeActivation(session, fixture.journal, { listOf(session.accountRecord()) },
+            { error("retained account must not be retired again") },
+            { _, _, _, _, _ -> error("retained account must not be cleaned") }, {},
+            completeRecovery = { error("retained incarnation must not be renewed") },
+            rollbackRecovery = { store.rollback(requireNotNull(store.resumePendingRemoval(it.accountId.storageKey))) },
+        )
+        assertEquals(original, store.activeIncarnation(session.accountId.storageKey))
+        assertTrue(fixture.journal.pending().isEmpty())
+    }
+
     @Test fun replacingOneOfSixtyFourAccountsPreservesEveryRetainedReview() = runBlocking {
         val accounts = (0 until 64).map { NextcloudSession("https://cloud.example.test", "reviewed-$it", "synthetic-secret") }
         var encoded = setOf(ANDROID_CLEANUP_RECOVERY_FENCE)

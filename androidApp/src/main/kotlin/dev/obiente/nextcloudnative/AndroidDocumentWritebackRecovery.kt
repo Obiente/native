@@ -91,9 +91,10 @@ internal inline fun <Result> withAndroidDocumentWritebackCommitWhileLifetimeLeas
 internal inline fun <Result> withAndroidDocumentMutation(
     session: NextcloudSession,
     noinline loadCurrentSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     action: (NextcloudSession) -> Result,
 ): Result {
-    val lease = acquireAndroidDocumentMutationAccountLease(session, loadCurrentSession)
+    val lease = acquireAndroidDocumentMutationAccountLease(session, loadCurrentSession, guard)
     return try {
         action(session)
     } finally {

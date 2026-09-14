@@ -1,8 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
+import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
-import dev.obiente.nextcloudnative.app.AccountPrivateMemoryCleanup
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.removeAndroidHomeWorkspaceAccountPreferences
@@ -37,15 +37,22 @@ internal class AndroidAccountOwnedStateCleanup(
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     suspend fun remove(session: NextcloudSession) {
+        AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val cacheIdentity = NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
             cacheIdentity,
             clearPreviewAccount,
             listOf(
-                { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
-                { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
+                {
+                    fenceAndroidDynamicApiStateForRemoval(
+                        cacheIdentity,
+                        dynamicApiState.coalescer,
+                        dynamicApiState.cache,
+                        session.accountId.storageKey,
+                    )
+                },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -56,7 +63,10 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                    { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -65,7 +75,6 @@ internal class AndroidAccountOwnedStateCleanup(
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
                 { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
-                { AccountPrivateMemoryCleanup.removeAccount(session.accountId.storageKey) },
             ),
         )
     }
@@ -77,17 +86,18 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String?,
         legacyAccountScopeDigest: String?,
     ) {
+        AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
+        val cacheIdentity = previewCacheIdentity ?: NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
-            previewCacheIdentity,
+            cacheIdentity,
             clearPreviewAccount,
             listOf(
                 {
-                    previewCacheIdentity?.let { identity ->
-                        fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
-                    }
+                    fenceAndroidDynamicApiStateForRemoval(
+                        cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache, session.accountId.storageKey,
+                    )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
-                { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -98,7 +108,10 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                    { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -106,8 +119,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
-                { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
-                { AccountPrivateMemoryCleanup.removeAccount(session.accountId.storageKey) },
+                { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
             ),
         )
     }
@@ -119,17 +131,24 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String? = null,
         legacyAccountScopeDigest: String? = null,
     ) {
+        AndroidFileSyncRootAcquisitionGenerations.retireCanonical(accountStorageKey)
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
             clearPreviewAccount,
             listOf(
                 {
-                    previewCacheIdentity?.let { identity ->
-                        fenceAndroidDynamicApiStateForRemoval(identity, dynamicApiState.coalescer, dynamicApiState.cache)
+                    if (previewCacheIdentity == null) {
+                        AccountPrivateMemoryLifecycle.retireAccount(accountStorageKey)
+                    } else {
+                        fenceAndroidDynamicApiStateForRemoval(
+                            previewCacheIdentity,
+                            dynamicApiState.coalescer,
+                            dynamicApiState.cache,
+                            accountStorageKey,
+                        )
                     }
                 },
-                { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
-                { removeAndroidAccountDiagnosticsAndGrants(appContext, accountStorageKey, accountIdentity, removeSupportAccount) },
+                { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity, accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -140,7 +159,10 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                    { removeAndroidAccountDiagnosticsAndGrants(appContext, accountStorageKey, accountIdentity, removeSupportAccount) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -149,7 +171,6 @@ internal class AndroidAccountOwnedStateCleanup(
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
                 { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
-                { AccountPrivateMemoryCleanup.removeAccount(accountStorageKey) },
             ),
         )
     }
@@ -159,14 +180,21 @@ internal suspend fun <T> clearAndroidDynamicApiState(
     accountIdentity: String,
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
-) = coalescer.fenceAccount(accountIdentity) { cache.invalidateAccount(accountIdentity) }
+    accountStorageKey: String? = null,
+    retireMemoryAccount: (String) -> Unit = AccountPrivateMemoryLifecycle::retireAccount,
+) = coalescer.fenceAccount(accountIdentity) {
+    accountStorageKey?.let(retireMemoryAccount)
+    cache.invalidateAccount(accountIdentity)
+}
 
 internal suspend fun <T> fenceAndroidDynamicApiStateForRemoval(
     accountIdentity: String,
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
+    accountStorageKey: String? = null,
+    retireMemoryAccount: (String) -> Unit = AccountPrivateMemoryLifecycle::retireAccount,
 ) = withContext(NonCancellable) {
-    clearAndroidDynamicApiState(accountIdentity, coalescer, cache)
+    clearAndroidDynamicApiState(accountIdentity, coalescer, cache, accountStorageKey, retireMemoryAccount)
 }
 
 internal suspend fun runAndroidAccountOwnedStateCleanups(
@@ -178,4 +206,12 @@ internal suspend fun runAndroidAccountOwnedStateCleanups(
         previewCacheIdentity?.let(clearPreviewAccount)
     }
     runAndroidAccountRemovalCleanups(cleanups + previewCleanup)
+}
+
+internal suspend fun retireAndroidFileSyncBeforeGrantRevocation(
+    retire: suspend () -> Unit,
+    revoke: suspend () -> Unit,
+) {
+    retire()
+    revoke()
 }

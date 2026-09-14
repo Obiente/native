@@ -192,8 +192,45 @@ Each boundary has a corresponding test responsibility:
   permission denial, confirmation, adaptive layout, and keyboard/touch access.
 - Platform tests cover credential stores, filesystem paths and providers,
   background scheduling, external handoff, packaging, and lifecycle recovery.
+
+Android folder capability cleanup uses demand-driven one-time WorkManager work.
+Empty stores and committed pairs do not keep cleanup work alive. Outstanding
+selections retain a retry owner until bound or abandoned; reconciliation preserves
+selections already delivered to an open setup.
+Folder-picker acquisition and durable scheduling run on the picker's owned IO
+scope, with result delivery on Main and cancellation cleanup retained on IO.
+Provider metadata queries run without account leases. Before taking a persisted
+grant, acquisition rechecks the exact active session and cancellation under both
+account identity leases. Account retirement invalidates outstanding chooser
+generations before cleanup, including failed cleanup; re-adding the same account
+does not revive an earlier chooser result, including equivalent server URL spellings.
+The canonical generation is retired even when cleanup no longer has credentials.
+A cancelled chooser retains its request
+slot until the platform returns its result, preventing delivery to a newer request.
+New acquisitions and cleanup requests schedule recovery, and unfinished cleanup
+retains bounded WorkManager backoff.
+A process restoration grace period protects pending folder drafts only while
+acquiring or ready selections remain after reconciliation; completed setup and
+cleanup return without waiting. A cancelled pair save preserves authoritative
+ownership recovery and then rethrows cancellation, even when the save committed.
+Abandoned acquisitions and committed pair removals retain cleanup evidence until access
+is released. Cleanup retries do not transfer or delete user file contents.
 - Live-server audits use synthetic disposable accounts, record exact tested
   versions, and remain separate from deterministic unit and integration tests.
+A durably removed Android folder-sync pair reports completion while its previously
+scheduled capability recovery worker retries any remaining permission cleanup.
+Ambiguous coordinator saves still require authoritative confirmation of removal.
+Account retirement remains strict until its capability cleanup finishes, including
+current-process acquiring selections. Under the coordinator lock, authoritative
+pair snapshots reclaim ownerless current-process capability records after failed
+ownership transitions; configured pairs retain their grants. An unavailable
+restored grant abandons its exact saved reference without clearing a newer draft.
+Cancellation from grant, storage, and cipher adapters remains cancellation rather
+than being reported as damaged recovery metadata or deferred cleanup.
+Reconciliation records independent cleanup progress before reporting a failed
+provider, so one unavailable grant cannot indefinitely retain unrelated grants.
+A legacy shared root can regain expired access only for an account that still
+owns a recorded pair at that exact root in the authoritative coordinator.
 
 A bug fix adds the smallest regression test at the layer where the invariant
 failed. Tests should assert public behavior, not copied implementation details.
@@ -301,6 +338,9 @@ the fence and pending work, and new malformed rows invalidate earlier recovery
 decisions. This does not discard unresolved local document changes. Desktop
 account removal also verifies retirement of recognized temporary file-sync
 staging files under the sync engine lock, while keeping user originals.
+When a prepared removal is rolled back against retained credentials, desktop
+reopens both memory and persisted app-contract caches. Producers captured before
+retirement remain invalid after that recovery.
 
 Android cleanup review markers are pruned against the retained account registry,
 then the account being recovered is recorded. Removing or replacing another
@@ -335,7 +375,9 @@ Remote Android handoff producers capture a process generation under the current
 session guard before probing or staging. Account cleanup invalidates that
 generation even if durable clearing fails. Registration and managed-content
 publication check it under the registry lock, so late producers cannot republish
-cleared account metadata or content. The durable cleanup marker separately fences
+cleared account metadata or content. Memory, streamed, Deck attachment, and historical
+version fallbacks guard private staging creation/promotion and the final external-app
+launch with the same generation; downloads run outside the registry lock. The durable cleanup marker separately fences
 restoration after a failed clear and process restart.
 
 Retained-writeback diagnostics resolve the account's current session separately
@@ -351,3 +393,119 @@ for that canonical account and incarnation. Both diagnostic sinks must finish
 before document grants and alias provenance are retired. A failure preserves
 those aliases for restart recovery; unrelated accounts and unknown hashes are
 never inferred to belong to the removed account.
+Deferred Android provider recovery uses the supplied session under the account
+removal lease before credentials are persisted. A sync pair retains its SAF
+grant until its pending local transactions and retirement have completed.
+Provider reconciliation runs outside the sync engine lock. Before retiring an
+account or removing a pair, the engine reacquires its lock and verifies that the
+selected pair snapshots have not changed; unrelated account state is preserved.
+
+Legacy self-provider trees owned by a different account recover through their
+original provider URI and retained tree permission. Only a root matching the
+removing account may receive its supplied recovery session or a local authority
+rewrite. An unavailable original provider leaves recovery pending.
+
+Android queued uploads retain their rows while saved credentials require recovery.
+Malformed preference values, damaged ciphertext, and invalid decoded credential
+records pause timed retries when no usable or temporarily inaccessible fallback
+remains. Temporary keystore failures continue retrying, including for inactive
+accounts. A malformed registry with a missing or permanently damaged aggregate
+also pauses retries; temporary aggregate access failures remain retryable.
+Unsupported credential versions require an upgrade. These policies are
+covered by deterministic Android unit tests; they do not establish device or
+release validation.
+
+When the removal session is bound to the local provider's account, pending owned
+recovery tokens are discovered from that account's root, including directories
+moved outside the old sync subtree. The scan retains its depth, count, ownership,
+content-authentication, and cancellation bounds. Cross-account or external
+provider recovery stays within the original tree grant.
+
+Expanded retirement discovery indexes only the selected tree's transactions and
+legacy transactions not proven to belong elsewhere. Seeing another tree's token
+in the same account or directory never authorizes its reconciliation.
+
+## Recovery authentication and retirement
+
+Android self-provider recovery bypasses unversioned offline content and cached
+fallback reads. It requires a network listing before accepting generation-matched
+virtual content or opening an ETag-bound range source. Account-wide recovery-token
+discovery rejects multiple observed locations for an owned token without retiring
+its ownership record; unrelated tokens remain outside the selected recovery scope.
+
+Recovery through another local account's legacy provider tree tries that account's
+lease without waiting and verifies its exact active session. The lease spans
+content authentication and reconciliation. It retains the original tree URI,
+grant and discovery scope while using authoritative provider reads. Busy,
+unavailable or unverified cross-profile accounts keep recovery pending. Ordinary
+external providers retain their existing grant behavior.
+
+Relocated recovery can be attributed by either an authenticated stage or an
+authenticated backup. Backup-only delete transactions do not require a stage;
+both the recorded document identity and content identity are still required,
+and multiple observed locations remain ambiguous.
+Path-changing stage IDs require the original stage name and matching recorded
+content. Renamed backup IDs require matching recorded content even when the name
+contains the recovery token. Unverified token-bearing candidates preserve the
+ownership row without authorizing a rename or deletion.
+
+Self-provider SAF recovery retains the exact ETag of a successfully completed
+content verification and uses it for the later delete or rename precondition.
+Failed or cancelled verification invalidates prior proof; a concurrent replacement
+cannot contribute its newer ETag to the mutation. Directory verification captures the authoritative collection generation before
+reading the complete tree. Restoration uses that original generation. Cleanup
+preserves a directory with a conditional, no-overwrite MOVE to a visible recovery
+name instead of recursively deleting descendants that may have changed meanwhile.
+Ordinary external-provider access retains its original platform contract.
+
+Android account removal and folder recovery share one verified authority boundary.
+A supplied recovery session may address canonical document IDs or explicitly
+retained historical aliases only for the exact active or retired incarnation.
+The caller holds the account operation lease; recovery does not reload ordinary
+credentials or acquire a second blocking account lease. Cross-account recovery
+tries both canonical and legacy operation identities and remains pending when busy.
+Recovery listings preserve the validated parent identity so alias-scoped durable
+ownership can still find relocated children. Download retirement and the grouped
+diagnostic/grant cleanup execute in one failure boundary: unresolved downloads
+preserve grants and verified alias provenance for the next attempt.
+
+A failed document cleanup retry resumes its validated incarnation-retirement token
+in the same process. A mistyped preference retains a durable invalid prior state
+for fail-closed rollback; storage I/O and cancellation errors still propagate.
+Directory recovery folders use `Recovered folder - <unique suffix>` in
+the original server parent. Failed or ambiguous moves retain a recovery path;
+original and unrelated destination content is never overwritten.
+
+Document/root resolver failures resolve a retained account's diagnostic session
+independently of the rejected document incarnation. Canonical document keys and
+verified aliases never become diagnostic storage keys themselves. Publication
+holds the current canonical/raw operation lease through the diagnostic sink's
+generation capture; missing, ambiguous, removed, or busy accounts publish nothing.
+Android folder-sync schedule restoration validates the exact session while holding
+its account operation lease, including server discovery. Permanent protocol or
+malformed-state failures stop the one-time job; temporary transport failures get
+at most two retries, including truncated network responses. A typed local-store
+truncation failure stops retries. Configured pairs remain intact for explicit recovery.
+
+Credential-free legacy account cleanup uses the recorded document identity to
+match that account's legacy and full discovery-cache digests. A missing full
+digest is never a wildcard for other accounts' persisted contracts.
+
+Desktop legacy credential migration propagates cancellation without returning an
+active session or classifying cancellation as a credential-store failure. The
+original legacy secret remains available for a later successful migration.
+
+Cancelled external-handoff registration retains the persisted record across IO
+result delivery so it can revoke the capability and discard its staged copy
+before propagating cancellation. Android optional credential-slot repair also
+propagates cancellation before publishing its aggregate-backed session.
+
+Before document retirement, malformed optional aliases do not block recovery
+through the verified current canonical account. Unknown historical aliases remain
+unauthorized, and alias-storage IO failures still leave recovery pending.
+
+Large external-handoff staging validates its captured generation before file
+creation and promotion; network downloads remain outside the registry lock.
+
+Ordinary reconciliation keeps live reselections abandonable; account retirement
+adopts matching configured-pair ownership before retiring drafts.

@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
-import javax.swing.SwingUtilities
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -131,32 +130,6 @@ private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
-
-private fun desktopVirtualFileProviderLocation(
-    preferences: Preferences,
-    accountId: String,
-    userHome: File = File(System.getProperty("user.home")),
-): VirtualFileProviderLocation {
-    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
-        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
-        ?.let(::File)
-        ?.absoluteFile
-        ?.normalize()
-    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
-    val parent = stored?.parentFile
-    return if (folderName != null && parent != null) {
-        VirtualFileProviderLocation(parent.absolutePath, folderName)
-    } else {
-        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
-    }
-}
-
-private fun desktopLinuxVirtualFileMountPoint(
-    preferences: Preferences,
-    accountId: String,
-): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
-    File(location.parentPath, location.folderName).absoluteFile.normalize()
-}
 
 private data class DesktopVirtualFileCacheTiers(
     val configuration: VirtualFileCacheTierConfiguration,
@@ -784,7 +757,6 @@ class DesktopNextcloudServices(
         desktopContractCacheDirectory("responses"),
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
-    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
     }
@@ -826,7 +798,7 @@ class DesktopNextcloudServices(
         accountId: String,
         cache: DesktopVirtualRangeCache,
     ) {
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) return
         if (sessionClearing) return
         if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
         if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
@@ -1345,7 +1317,7 @@ class DesktopNextcloudServices(
         if (!isLinuxDesktop()) return
         session ?: return
         val accountId = desktopFileCacheAccountId(session)
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId, session.accountId.storageKey)) return
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice
@@ -1681,7 +1653,9 @@ class DesktopNextcloudServices(
         }
         val accountId = desktopFileCacheAccountId(session)
         val cacheProducer = fileReadCache.producer(accountId)
-        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return unknownCleanupStateRejection()
+        accountSyncPairCleanupJournal.accountActivationBlock(accountId, session.accountId.storageKey)?.let {
+            return desktopAccountCleanupStateRejection(it)
+        }
         runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
             return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
         }
@@ -2388,7 +2362,7 @@ class DesktopNextcloudServices(
         true
     }
 
-    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
+    override suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String?): FileSyncLocalRoot? =
         fileSyncEngine.chooseLocalRoot(initialRootHint)
 
     override suspend fun loadFileSyncCenter(
@@ -2707,8 +2681,8 @@ class DesktopNextcloudServices(
                     ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
-                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) {
-                    return@syncRun FileSyncCenterActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
+                accountSyncPairCleanupJournal.accountActivationBlock(accountId, session.accountId.storageKey)?.let {
+                    return@syncRun FileSyncCenterActionResult.Rejected(it.message)
                 }
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
                     return@syncRun FileSyncCenterActionResult.Rejected(
@@ -3801,7 +3775,7 @@ class DesktopNextcloudServices(
             )
         }
         requireDesktopAccountActivationAllowed(
-            accountSyncPairCleanupJournal.blocksAccountActivation(accountId, accountStorageKey),
+            accountSyncPairCleanupJournal.accountActivationBlock(accountId, accountStorageKey),
         )
     }
     private suspend fun retryPendingAccountSyncPairCleanups() =
@@ -3814,8 +3788,7 @@ class DesktopNextcloudServices(
         )
 
     private fun reactivateDesktopMemoryAfterAbortedRemoval(cleanup: DesktopAccountSyncPairCleanup) {
-        cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::activateAccount)
-        fileReadCache.activateAccount(cleanup.accountId)
+        reactivateDesktopAccountPrivateCaches(cleanup, dynamicDiscoveryCache, fileReadCache)
     }
 
     private fun schedulePendingAccountSyncPairCleanupRetry() = serviceScope.launch {
@@ -3834,7 +3807,9 @@ class DesktopNextcloudServices(
     private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
         val accountId = cleanup.accountId
         dynamicDiscoveryCache.retireAccount(cleanup.accountStorageKey, accountId)
-        clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        clearDesktopDynamicApiState(
+            accountId, dynamicApiRequestCoalescer, dynamicApiReadCache, cleanup.accountStorageKey,
+        )
         supportIntake.removeAccount(accountId)
         supportDiagnostics.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
@@ -4277,11 +4252,12 @@ class DesktopNextcloudServices(
                 shouldSearchRaw = { files ->
                     rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
                 },
-                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverStore = sharedMediaTimelineDavCarryoverStore,
                 carryoverAccountScope = photoMediaCarryoverScope(
                     accountScope = desktopFileCacheAccountId(session),
                     owner = queryOwner,
                 ),
+                carryoverAccountId = session.accountId,
             )
             return PhotoTimelinePage(
                 entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
@@ -4309,6 +4285,7 @@ class DesktopNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = desktopFileCacheAccountId(session),
             monthResolver = monthResolver,
         )

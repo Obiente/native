@@ -162,3 +162,13 @@ internal fun openAndroidDocumentVirtualFileLease(
     signal = signal,
     onReleased = lease.release,
 )
+
+internal fun requireAndroidCurrentDocumentIncarnation(
+    session: NextcloudSession,
+    incarnation: NextcloudDocumentIncarnation,
+    activeIncarnation: (String) -> NextcloudDocumentIncarnation,
+) {
+    require(activeIncarnation(session.documentProviderIncarnationAccountIdentity()) == incarnation) {
+        "The document belongs to an earlier account incarnation."
+    }
+}

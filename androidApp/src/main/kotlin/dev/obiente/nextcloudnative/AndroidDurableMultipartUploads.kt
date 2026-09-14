@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
-import androidx.work.CoroutineWorker
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -9,7 +8,6 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
 import androidx.work.WorkManager
-import androidx.work.WorkerParameters
 import androidx.work.await
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
@@ -21,24 +19,23 @@ import dev.obiente.nextcloudnative.app.MultipartTextField
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
-import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
-import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
-import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
-import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
-import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
-import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
-import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal class AndroidDurableMultipartUploads(context: Context) {
+internal class AndroidDurableMultipartUploads(
+    context: Context,
+    localUploadPicker: AndroidLocalUploadPicker? = null,
+) {
     private val appContext = context.applicationContext
+    private val picker = localUploadPicker ?: AndroidLocalUploadPicker(appContext)
     private val store = AndroidDurableMultipartUploadStore(appContext)
+    private val workManager = WorkManager.getInstance(appContext)
 
     suspend fun enqueue(
         session: NextcloudSession,
@@ -46,9 +43,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         request: NextcloudMultipartUploadRequest,
     ): DurableUploadEnqueueResult {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        val picker = AndroidLocalUploadPicker(appContext)
-        var storedJob: AndroidDurableMultipartUploadJob? = null
-        return runCatching {
+        return try {
             val safeRequest = request.requireSafe()
             picker.requirePersisted(safeRequest.file)
             val job = AndroidDurableMultipartUploadJob(
@@ -60,17 +55,15 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                 state = DurableUploadState.Queued,
                 message = null,
             )
-            store.add(job)
-            storedJob = job
-            schedule(job).await()
-            DurableUploadEnqueueResult.Queued(job.status())
-        }.getOrElse { error ->
-            storedJob?.let { job ->
-                runCatching { store.remove(job.id) }
-            }
-            if (!store.hasActiveSelection(request.file.selectionId)) {
-                picker.release(request.file)
-            }
+            persistAndScheduleDurableUpload(
+                job = job,
+                persist = store::add,
+                schedule = { queued -> schedule(queued).await() },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            releaseIfUnowned(request.file)
             DurableUploadEnqueueResult.Rejected(
                 error.message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS)
                     ?: "The background upload could not be scheduled.",
@@ -78,29 +71,85 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         }
     }
 
-    fun statuses(session: NextcloudSession, scope: DurableUploadScope): List<DurableUploadStatus> =
-        store.list(NextcloudDocumentIds.accountKey(session), scope)
-            .asSequence()
-            .onEach { job ->
-                if (job.state == DurableUploadState.Queued) {
-                    runCatching { schedule(job) }
-                }
-            }
+    fun releaseIfUnowned(file: LocalUploadFile): Boolean = releaseUnownedDurableUploadSelection(
+        selectionId = file.selectionId,
+        hasActiveSelection = store::hasActiveSelection,
+        releaseSelection = { picker.release(file) },
+        markOwnershipCheckPending = { picker.markOwnershipCheckPending(file) },
+    )
+
+    suspend fun <Result> runEnqueueWithCancellationCleanup(
+        file: LocalUploadFile,
+        enqueue: suspend () -> Result,
+    ): Result = runDurableUploadEnqueueWithCancellationCleanup(
+        enqueue = { withContext(Dispatchers.IO) { enqueue() } },
+        releaseUnownedSelection = { releaseIfUnowned(file) },
+    )
+
+    fun statuses(session: NextcloudSession, scope: DurableUploadScope): List<DurableUploadStatus> {
+        val jobs = store.list(NextcloudDocumentIds.accountKey(session), scope)
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(jobs)
+        return jobs.asSequence()
             .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
             .take(MAX_VISIBLE_UPLOADS_PER_RESOURCE)
             .map(AndroidDurableMultipartUploadJob::status)
             .toList()
+    }
 
     suspend fun resumeQueuedForAccount(accountId: String) {
         queuedDurableUploadsForAccount(store.list(), accountId).forEach { job ->
             try {
-                schedule(job, ExistingWorkPolicy.APPEND_OR_REPLACE).await()
+                replaceDeferredDurableUploadWork(
+                    expected = job,
+                    load = store::find,
+                    replace = { queued ->
+                        schedule(queued, DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY).await()
+                    },
+                )
             } catch (cancelled: CancellationException) {
+                runCatching { requestQueuedDurableUploadSchedulingRecovery() }
                 throw cancelled
             } catch (_: Exception) {
-                // The queue stays authoritative; status refresh or a later activation can retry.
+                requestQueuedDurableUploadSchedulingRecovery()
             }
         }
+    }
+
+    suspend fun reconcileQueuedUploads(
+        allowQueuedScheduling: Boolean = true,
+        schedulingRecoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
+            ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
+    ): Boolean {
+        val (jobs, capabilitiesRecovered) = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
+            val snapshot = store.list()
+            val retainedSelectionIds = durableUploadCapabilityRetainedSelectionIds(snapshot)
+            snapshot to picker.reconcileCapabilities(retainedSelectionIds)
+        }
+        val schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { job ->
+            workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id)).first().any { !it.state.isFinished }
+        }
+        val cleanup: suspend (AndroidDurableMultipartUploadJob) -> Unit = { job ->
+            check(reconcileTerminalDurableUploadCapabilityCleanup(
+                release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
+                complete = { store.completeCapabilityCleanup(job.id) },
+            )) { "The durable upload capability cleanup remains pending." }
+        }
+        val uploadsRecovered = reconcileQueuedDurableUploads(
+            jobs = jobs,
+            allowQueuedScheduling = allowQueuedScheduling,
+            schedulerOwns = schedulerOwns,
+            cleanupCapability = cleanup,
+            recoverUploading = { job ->
+                recoverOrphanedDurableUpload(job, store::find, schedulerOwns, { id ->
+                    store.transition(id, DurableUploadState.Uploading, DurableUploadState.OutcomeUnknown,
+                        "The upload stopped before its result was saved. Check the card before uploading again.")
+                }, cleanup)
+            },
+            schedule = { job ->
+                schedulingRecoverySignal.scheduleUnlessBackedOff(job.id) { schedule(job) }?.await()
+            },
+        )
+        return capabilitiesRecovered && uploadsRecovered
     }
 
     fun dismiss(session: NextcloudSession, scope: DurableUploadScope, uploadId: String): Boolean {
@@ -112,23 +161,24 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         ) {
             return false
         }
-        if (!AndroidLocalUploadPicker(appContext).release(job.request.file)) return false
-        store.remove(uploadId)
-        return true
+        return dismissTerminalDurableUploadStatus(
+            release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
+            removeStatus = { store.remove(uploadId) },
+        )
     }
 
     private fun schedule(
         job: AndroidDurableMultipartUploadJob,
         policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
     ): Operation =
-        WorkManager.getInstance(appContext).enqueueUniqueWork(
+        workManager.enqueueUniqueWork(
             durableUploadWorkName(job.id),
             policy,
             OneTimeWorkRequestBuilder<DeckAttachmentUploadWorker>()
                 .setInputData(Data.Builder().putString(DeckAttachmentUploadWorker.KEY_JOB_ID, job.id).build())
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .setRequiredNetworkType(networkTypeForDurableUploadWork(job))
                         .build(),
                 )
                 .build(),
@@ -139,218 +189,89 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     }
 }
 
-internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
-
-internal class DeckAttachmentUploadWorker(
-    appContext: Context,
-    params: WorkerParameters,
-) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
-        val store = AndroidDurableMultipartUploadStore(applicationContext)
-        val initial = store.find(jobId) ?: return@withContext Result.success()
-        val picker = AndroidLocalUploadPicker(applicationContext)
-        if (initial.state.afterProcessRecovery() != initial.state) {
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Uploading,
-                target = DurableUploadState.OutcomeUnknown,
-                message = "The app restarted while this upload was in progress. Check the card before uploading again.",
-            )
-            picker.release(initial.request.file)
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "process-recovery",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return@withContext Result.success()
+internal fun releaseUnownedDurableUploadSelection(
+    selectionId: String,
+    hasActiveSelection: (String) -> Boolean,
+    releaseSelection: () -> Boolean,
+    markOwnershipCheckPending: () -> Boolean = { false },
+): Boolean = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
+    val active = try {
+        hasActiveSelection(selectionId)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        try {
+            markOwnershipCheckPending()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The capability remains in its previous fail-closed state.
         }
-        if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
-
-        return@withContext uploadQueuedJob(store, initial, picker, jobId)
+        return@synchronized false
     }
-
-    private suspend fun uploadQueuedJob(
-        store: AndroidDurableMultipartUploadStore,
-        initial: AndroidDurableMultipartUploadJob,
-        picker: AndroidLocalUploadPicker,
-        jobId: String,
-    ): Result = ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(initial.accountId) {
-        performQueuedUpload(store, initial, picker, jobId)
-    }
-
-    private suspend fun performQueuedUpload(
-        store: AndroidDurableMultipartUploadStore,
-        initial: AndroidDurableMultipartUploadJob,
-        picker: AndroidLocalUploadPicker,
-        jobId: String,
-    ): Result {
-        val accountServices = AndroidNextcloudServices(applicationContext)
-        val session = accountServices.loadSession()
-        if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
-            when (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot())) {
-                DurableUploadAccountMismatchOutcome.RetryAccountRecovery -> {
-                    recordUploadDiagnostic(
-                        severity = SupportDiagnosticSeverity.Warning,
-                        outcome = "account-retry",
-                        accountId = initial.accountId,
-                        jobId = jobId,
-                    )
-                    return Result.retry()
-                }
-                DurableUploadAccountMismatchOutcome.DeferAccountActivation -> {
-                    recordUploadDiagnostic(
-                        severity = SupportDiagnosticSeverity.Warning,
-                        outcome = "account-deferred",
-                        accountId = initial.accountId,
-                        jobId = jobId,
-                    )
-                    return Result.success()
-                }
-                DurableUploadAccountMismatchOutcome.AccountUnavailable -> Unit
-            }
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Queued,
-                target = DurableUploadState.Failed,
-                message = "The account used for this upload is no longer available.",
-            )
-            picker.release(initial.request.file)
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "account-unavailable",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return Result.failure()
-        }
-        val capabilityReady = runCatching {
-            picker.requirePersisted(initial.request.file)
-            picker.open(initial.request.file).use { }
-        }.isSuccess
-        if (!capabilityReady) {
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Queued,
-                target = DurableUploadState.Failed,
-                message = "The selected file is no longer available. Select it again to retry.",
-            )
-            picker.release(initial.request.file)
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "source-unavailable",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return Result.failure()
-        }
-        val started = store.transition(
-            jobId,
-            expected = DurableUploadState.Queued,
-            target = DurableUploadState.Uploading,
-            message = null,
-        ) ?: return Result.success()
-        val services = AndroidNextcloudServices(
-            applicationContext,
-            localUploadPicker = picker,
-            accountMutationLeaseHeld = true,
-        )
-        val outcome = runCatching {
-            services.executeNextcloudMultipartUpload(session, started.request)
-        }
-        outcome.onSuccess { response ->
-            val state = durableUploadStateForHttpResponse(response.status)
-            val message = when (state) {
-                DurableUploadState.Completed -> null
-                DurableUploadState.Failed ->
-                    "The server rejected this upload (HTTP ${response.status})."
-                DurableUploadState.OutcomeUnknown ->
-                    "The server returned HTTP ${response.status}, but the upload result is unknown. " +
-                        "Check the card before uploading again."
-                DurableUploadState.Queued,
-                DurableUploadState.Uploading,
-                -> error("The upload response state is invalid.")
-            }
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Uploading,
-                target = state,
-                message = message,
-            )
-            if (state != DurableUploadState.Completed) {
-                recordUploadDiagnostic(
-                    severity = SupportDiagnosticSeverity.Warning,
-                    outcome = when (state) {
-                        DurableUploadState.Failed -> "rejected"
-                        DurableUploadState.OutcomeUnknown -> "outcome-unknown"
-                        DurableUploadState.Completed,
-                        DurableUploadState.Queued,
-                        DurableUploadState.Uploading,
-                        -> error("Only failed upload states are diagnosed here.")
-                    },
-                    accountId = initial.accountId,
-                    jobId = jobId,
-                    code = "HTTP:${response.status}",
-                )
-            }
-            picker.release(started.request.file)
-        }.onFailure { failure ->
-            // Once the request body starts, a transport exception cannot prove whether the server
-            // created the attachment. Never replay it automatically and risk a duplicate.
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Uploading,
-                target = DurableUploadState.OutcomeUnknown,
-                message = "The upload result is unknown. Check the card before uploading again.",
-            )
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Error,
-                outcome = "outcome-unknown",
-                accountId = initial.accountId,
-                jobId = jobId,
-                failure = failure,
-            )
-            picker.release(started.request.file)
-        }
-        return Result.success()
-    }
-
-    private fun recordUploadDiagnostic(
-        severity: SupportDiagnosticSeverity,
-        outcome: String,
-        accountId: String,
-        jobId: String,
-        code: String? = null,
-        failure: Throwable? = null,
-    ) {
-        AndroidSupportDiagnostics.get(applicationContext).recordForAccountIdentity(
-            accountId,
-            SupportDiagnosticEventDraft(
-                severity = severity,
-                component = SupportDiagnosticComponent.Media,
-                operation = "media.durable-upload",
-                outcome = outcome,
-                code = code,
-                fields = listOf(
-                    SupportDiagnosticFieldDraft("job", jobId, SupportDiagnosticValuePrivacy.Identifier),
-                ),
-                exception = failure?.toSupportDiagnosticExceptionDraft(),
-            ),
-        )
-    }
-
-    internal companion object {
-        const val KEY_JOB_ID = "job_id"
+    if (active) return@synchronized false
+    try {
+        releaseSelection()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
     }
 }
 
-internal fun queuedDurableUploadsForAccount(
+internal suspend fun <Result> runDurableUploadEnqueueWithCancellationCleanup(
+    enqueue: suspend () -> Result,
+    releaseUnownedSelection: () -> Unit,
+): Result = try {
+    enqueue()
+} catch (cancelled: CancellationException) {
+    runCatching(releaseUnownedSelection)
+    throw cancelled
+}
+
+internal val DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY = ExistingWorkPolicy.REPLACE
+
+internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
+
+internal fun networkTypeForDurableUploadWork(job: AndroidDurableMultipartUploadJob): NetworkType {
+    require(job.state == DurableUploadState.Queued && !job.capabilityCleanupPending) {
+        "Only a queued durable upload can use network-constrained upload work."
+    }
+    return NetworkType.CONNECTED
+}
+
+internal fun requestDurableUploadSchedulingRecoveryForQueuedStatuses(
     jobs: List<AndroidDurableMultipartUploadJob>,
-    accountId: String,
-): List<AndroidDurableMultipartUploadJob> = jobs.filter { job ->
-    job.accountId == accountId && job.state == DurableUploadState.Queued
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
+) {
+    if (jobs.any { job -> job.state == DurableUploadState.Queued }) requestRecovery()
+}
+
+internal fun reconcileTerminalDurableUploadCapabilityCleanup(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+    complete: () -> Unit,
+): Boolean {
+    if (releaseOrQuarantineDurableUploadCapability(release)) {
+        complete()
+        return true
+    }
+    return false
+}
+
+internal fun releaseOrQuarantineDurableUploadCapability(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+): Boolean {
+    var quarantined = false
+    return release { quarantined = true } || quarantined
+}
+
+internal fun dismissTerminalDurableUploadStatus(
+    release: (onQuarantined: () -> Unit) -> Boolean,
+    removeStatus: () -> Unit,
+): Boolean {
+    if (!releaseOrQuarantineDurableUploadCapability(release)) return false
+    removeStatus()
+    return true
 }
 
 internal data class AndroidDurableMultipartUploadJob(
@@ -361,6 +282,7 @@ internal data class AndroidDurableMultipartUploadJob(
     val request: NextcloudMultipartUploadRequest,
     val state: DurableUploadState,
     val message: String?,
+    val capabilityCleanupPending: Boolean = false,
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
 ) {
     init {
@@ -376,6 +298,9 @@ internal data class AndroidDurableMultipartUploadJob(
         require(message == null || message.length <= MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS) {
             "The durable upload message is too long."
         }
+        require(!capabilityCleanupPending || state.isTerminal()) {
+            "Only a terminal durable upload can have pending capability cleanup."
+        }
     }
 
     fun status(): DurableUploadStatus = DurableUploadStatus(
@@ -386,6 +311,15 @@ internal data class AndroidDurableMultipartUploadJob(
         message = message,
     )
 }
+
+internal fun durableUploadCapabilityRetainedSelectionIds(
+    jobs: Iterable<AndroidDurableMultipartUploadJob>,
+): Set<String> = jobs.asSequence()
+    .filter { job ->
+        job.state == DurableUploadState.Queued || job.state == DurableUploadState.Uploading
+    }
+    .map { job -> job.request.file.selectionId }
+    .toSet()
 
 internal data class AndroidDurableUploadResource(
     val feature: String,
@@ -442,7 +376,7 @@ internal class AndroidDurableMultipartUploadStore(
     fun hasActiveSelection(selectionId: String): Boolean = synchronized(LOCK) {
         readAll().any {
             it.request.file.selectionId == selectionId &&
-                !it.state.isTerminal()
+                it.mustRetain()
         }
     }
 
@@ -455,6 +389,14 @@ internal class AndroidDurableMultipartUploadStore(
         val removed = current.filter { job -> job.accountId == accountId }
         if (removed.isNotEmpty()) writeAll(current.filterNot { job -> job.accountId == accountId })
         removed
+    }
+
+    fun completeCapabilityCleanup(id: String) = synchronized(LOCK) {
+        val current = readAll().toMutableList()
+        val index = current.indexOfFirst { job -> job.id == id }
+        if (index < 0 || !current[index].capabilityCleanupPending) return@synchronized
+        current[index] = current[index].copy(capabilityCleanupPending = false)
+        writeAll(pruneDurableUploadJobs(current))
     }
 
     fun transition(
@@ -472,6 +414,7 @@ internal class AndroidDurableMultipartUploadStore(
         val updated = current[index].copy(
             state = target,
             message = message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS),
+            capabilityCleanupPending = target.isTerminal(),
             updatedAtEpochMillis = System.currentTimeMillis(),
         )
         current[index] = updated
@@ -482,11 +425,30 @@ internal class AndroidDurableMultipartUploadStore(
     private fun readAll(): List<AndroidDurableMultipartUploadJob> {
         val encrypted = try {
             storage.read()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
-            throw AndroidDurableMultipartUploadRecoveryException(failure)
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                if (failure is ClassCastException) {
+                    DurableUploadQueueRecoveryDisposition.Quarantine
+                } else {
+                    DurableUploadQueueRecoveryDisposition.Retry
+                },
+            )
         } ?: return emptyList()
+        val decrypted = try {
+            cipher.decrypt(encrypted)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                durableUploadQueueDecryptionDisposition(failure),
+            )
+        }
         return try {
-            val array = JSONArray(cipher.decrypt(encrypted))
+            val array = JSONArray(decrypted)
             check(array.length() <= MAX_STORED_UPLOADS) {
                 "The durable upload queue contains too many rows."
             }
@@ -499,8 +461,13 @@ internal class AndroidDurableMultipartUploadStore(
                 "The durable upload queue contains duplicate rows."
             }
             jobs
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
-            throw AndroidDurableMultipartUploadRecoveryException(failure)
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                DurableUploadQueueRecoveryDisposition.Quarantine,
+            )
         }
     }
 
@@ -541,8 +508,14 @@ internal interface AndroidDurableMultipartUploadCipher {
     fun decrypt(value: String): String
 }
 
+internal enum class DurableUploadQueueRecoveryDisposition {
+    Retry,
+    Quarantine,
+}
+
 internal class AndroidDurableMultipartUploadRecoveryException(
     cause: Exception,
+    val disposition: DurableUploadQueueRecoveryDisposition = DurableUploadQueueRecoveryDisposition.Retry,
 ) : IllegalStateException(
     "The saved background upload queue is unavailable. Its recovery data was left unchanged.",
     cause,
@@ -577,6 +550,12 @@ internal fun requireCanAddDurableUpload(
     require(current.none { it.id == job.id }) {
         "The attachment upload id is already in use."
     }
+    require(
+        current.count(AndroidDurableMultipartUploadJob::mustRetain) <
+            AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS,
+    ) {
+        "Background upload cleanup must finish before another upload can be queued."
+    }
     require(active.size < AndroidDurableMultipartUploadStore.MAX_ACTIVE_UPLOADS) {
         "Too many attachment uploads are already pending."
     }
@@ -604,12 +583,15 @@ internal fun requireCanAddDurableUpload(
 internal fun pruneDurableUploadJobs(
     jobs: List<AndroidDurableMultipartUploadJob>,
 ): List<AndroidDurableMultipartUploadJob> {
-    val active = jobs.filterNot { it.state.isTerminal() }
-    val terminal = jobs.filter { it.state.isTerminal() }
+    val retained = jobs.filter(AndroidDurableMultipartUploadJob::mustRetain)
+    val terminal = jobs.filterNot(AndroidDurableMultipartUploadJob::mustRetain)
         .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
-        .take((AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS - active.size).coerceAtLeast(0))
-    return (active + terminal).sortedBy(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
+        .take((AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS - retained.size).coerceAtLeast(0))
+    return (retained + terminal).sortedBy(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
 }
+
+private fun AndroidDurableMultipartUploadJob.mustRetain(): Boolean =
+    !state.isTerminal() || capabilityCleanupPending
 
 private fun DurableUploadState.isTerminal(): Boolean =
     this == DurableUploadState.Completed ||
@@ -653,6 +635,7 @@ private fun AndroidDurableMultipartUploadJob.toJson(): JSONObject = JSONObject()
     .put("itemId", resource.itemId)
     .put("state", state.name)
     .put("message", message)
+    .put("capabilityCleanupPending", capabilityCleanupPending)
     .put("updatedAt", updatedAtEpochMillis)
     .put("method", request.method.name)
     .put("relativePath", request.relativePath)
@@ -727,8 +710,18 @@ private fun JSONObject.toJob(): AndroidDurableMultipartUploadJob {
         request = request,
         state = DurableUploadState.valueOf(getString("state")),
         message = if (isNull("message")) null else getString("message"),
+        capabilityCleanupPending = readCapabilityCleanupPending(),
         updatedAtEpochMillis = getLong("updatedAt"),
     )
+}
+
+private fun JSONObject.readCapabilityCleanupPending(): Boolean {
+    if (!has("capabilityCleanupPending")) return false
+    val persisted = get("capabilityCleanupPending")
+    check(persisted is Boolean) {
+        "The persisted capability cleanup marker is not a boolean."
+    }
+    return persisted
 }
 
 internal fun resolveDurableUploadResource(

@@ -14,15 +14,12 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
-import dev.obiente.nextcloudnative.app.sharedJvmStagingSpaceReservations
-import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
 import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.validateDeckAttachmentHandoff
 import dev.obiente.nextcloudnative.app.validateDownloadedExternalFile
 import dev.obiente.nextcloudnative.app.validateExternalFileHandoff
-import dev.obiente.nextcloudnative.app.verifyDownloadedDeckAttachmentSize
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -63,9 +60,13 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     ): ExternalFileHandoffResult {
         val registeredFile = externalHandoffFile(file, staged?.mimeType)
         val record = try {
-            withContext(Dispatchers.IO) {
-                AndroidExternalFileHandoffRegistry.register(session, registeredFile, expectedGeneration = generation)
-            }
+            registerAndroidExternalFileHandoff(
+                register = { AndroidExternalFileHandoffRegistry.register(session, registeredFile, expectedGeneration = generation) },
+                revoke = { AndroidExternalFileHandoffRegistry.revoke(it.documentId) },
+                discardStagedCopy = { staged?.file?.parentFile?.deleteRecursively(); Unit },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: AndroidExternalFileHandoffRevokedException) {
             staged?.file?.parentFile?.deleteRecursively()
             return ExternalFileHandoffResult.Unsupported("The account changed before the file could be opened. Open it again.")
@@ -123,6 +124,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             )
         }
         return launchUri(
+            generation = generation,
             uri = uri,
             mimeType = sanitizeExternalMimeType(record.file.mimeType),
             displayName = sanitizeExternalFileName(record.file.name),
@@ -136,6 +138,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     }
 
     suspend fun launch(
+        generation: AndroidExternalFileHandoffGeneration,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -151,7 +154,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                     rejection,
                 )
             }
-            val stagedFile = stagePrivateCopy(file.name, content.bytes)
+            val stagedFile = stageAndroidExternalHandoffBytes(context.cacheDir, file.name, content.bytes, generation)
             val declaredMime = sanitizeExternalMimeType(file.mimeType)
             val responseMime = sanitizeExternalMimeType(content.mimeType)
             val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
@@ -159,7 +162,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         }
         if (staged is StagedExternalFile.Rejected) return staged.result
         staged as StagedExternalFile.Ready
-        return launchStaged(staged, action)
+        return launchStaged(staged, action, generation)
     }
 
     suspend fun launchLargeStagedRemote(
@@ -176,7 +179,8 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         )
         val staged = try {
             withContext(Dispatchers.IO) {
-                stageLargeRemoteCopy(file, expectedBytes, download)
+                stageAndroidLargeExternalHandoffCopy(context.cacheDir, file, expectedBytes, generation, download)
+                    .let { StagedExternalFile.Ready(it.file, it.mimeType) }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -189,6 +193,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     }
 
     suspend fun launchStreamedRemote(
+        generation: AndroidExternalFileHandoffGeneration,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -197,16 +202,18 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         validateExternalFileHandoff(file, action, capability)?.let { return it }
         val staged = withContext(Dispatchers.IO) {
             stageStreamedCopy(
+                generation = generation,
                 sourceName = file.name,
                 declaredMimeType = file.mimeType,
                 declaredByteCount = file.size,
                 download = download,
             )
         }
-        return launchStaged(staged, action)
+        return launchStaged(staged, action, generation)
     }
 
     suspend fun launchDetached(
+        generation: AndroidExternalFileHandoffGeneration,
         attachment: DeckAttachment,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -218,18 +225,20 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         validateDeckAttachmentHandoff(attachment, action, capability)?.let { return it }
         val staged = withContext(Dispatchers.IO) {
             stageStreamedCopy(
+                generation = generation,
                 sourceName = attachment.name,
                 declaredMimeType = attachment.mimeType,
                 declaredByteCount = attachment.byteCount,
                 download = download,
             )
         }
-        return launchStaged(staged, action)
+        return launchStaged(staged, action, generation)
     }
 
     private suspend fun launchStaged(
         staged: StagedExternalFile.Ready,
         action: ExternalFileHandoffAction,
+        generation: AndroidExternalFileHandoffGeneration,
     ): ExternalFileHandoffResult {
         val authority = context.packageName + EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX
         val uri = try {
@@ -247,6 +256,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             )
         }
         return launchUri(
+            generation = generation,
             uri = uri,
             mimeType = staged.mimeType,
             displayName = staged.file.name,
@@ -256,6 +266,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     }
 
     private suspend fun launchUri(
+        generation: AndroidExternalFileHandoffGeneration,
         uri: Uri,
         mimeType: String,
         displayName: String,
@@ -264,8 +275,13 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     ): ExternalFileHandoffResult {
         return withContext(Dispatchers.Main) {
             try {
-                context.startActivity(buildChooser(action, uri, mimeType, displayName))
+                AndroidExternalFileHandoffRegistry.withGeneration(generation) {
+                    context.startActivity(buildChooser(action, uri, mimeType, displayName))
+                }
                 ExternalFileHandoffResult.Launched(action)
+            } catch (_: AndroidExternalFileHandoffRevokedException) {
+                withContext(NonCancellable + Dispatchers.IO) { onFailure() }
+                ExternalFileHandoffResult.Unsupported("The account changed before the file could be opened. Open it again.")
             } catch (_: ActivityNotFoundException) {
                 onFailure()
                 ExternalFileHandoffResult.NoCompatibleApplication(action)
@@ -282,142 +298,11 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         sourceName: String,
         declaredMimeType: String?,
         declaredByteCount: Long?,
+        generation: AndroidExternalFileHandoffGeneration,
         download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
-    ): StagedExternalFile.Ready {
-        val root = File(context.cacheDir, EXTERNAL_SHARE_CACHE_DIRECTORY)
-        check(root.isDirectory || root.mkdirs()) { "Could not create the private external-share cache." }
-        val canonicalRoot = root.canonicalFile
-        pruneExternalShareCache(canonicalRoot, declaredByteCount ?: 0L)
-        val reservation = sharedJvmStagingSpaceReservations.reserve(
-            storageKey = jvmStagingStorageKey(canonicalRoot),
-            usableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
-            declaredByteCount = declaredByteCount,
-            reserveBytes = dev.obiente.nextcloudnative.app.STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
-        )
-        reservation.use {
-            val maximumBytes = reservation.maximumBytes
-            val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
-            check(operationDirectory.mkdir()) { "Could not create a private external-share directory." }
-            check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-share directory." }
-            val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-            check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
-                "Unsafe external-share filename."
-            }
-            val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
-            try {
-                val downloaded = FileOutputStream(temporary).use { output ->
-                    download(output, maximumBytes).also {
-                        output.fd.sync()
-                    }
-                }
-                check(downloaded.byteCount in 0L..maximumBytes)
-                verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
-                check(temporary.length() == downloaded.byteCount) {
-                    "The external-share cache copy is incomplete."
-                }
-                check(!target.exists() && temporary.renameTo(target)) {
-                    "Could not publish the external-share cache copy."
-                }
-                check(target.setWritable(false, true) || !target.canWrite()) {
-                    "Could not make the detached attachment read-only."
-                }
-                val declaredMime = sanitizeExternalMimeType(declaredMimeType)
-                val responseMime = sanitizeExternalMimeType(downloaded.mimeType)
-                val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
-                return StagedExternalFile.Ready(target, mimeType)
-            } catch (failure: Throwable) {
-                temporary.delete()
-                operationDirectory.deleteRecursively()
-                throw failure
-            }
-        }
-    }
-
-    private suspend fun stageLargeRemoteCopy(
-        file: NextcloudFile,
-        expectedBytes: Long,
-        download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
-    ): StagedExternalFile.Ready {
-        val root = File(context.cacheDir, EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY)
-        val operationDirectory = synchronized(LARGE_EXTERNAL_SHARE_CACHE_LOCK) {
-            check(root.isDirectory || root.mkdirs()) { "Could not create the large-file handoff cache." }
-            val canonicalRoot = root.canonicalFile
-            prepareLargeExternalShareCache(
-                root = canonicalRoot,
-                requiredBytes = expectedBytes,
-                protectedDirectoryNames = AndroidExternalFileHandoffRegistry.activeManagedContentDirectoryNames(),
-            )
-            val availableAfterReservations = androidLargeExternalHandoffAvailableBytes(
-                root = canonicalRoot,
-                availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
-            )
-            check(
-                androidLargeExternalHandoffFitsCapacity(
-                    requiredBytes = expectedBytes,
-                    availableBytes = availableAfterReservations,
-                ),
-            ) { "There is not enough free space for the temporary external-file copy." }
-            createLargeExternalShareOperationDirectory(canonicalRoot, expectedBytes)
-        }
-        val target = File(operationDirectory, sanitizeExternalFileName(file.name))
-        check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-file name." }
-        val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
-        try {
-            val downloaded = FileOutputStream(temporary).use { output ->
-                download(output, expectedBytes).also { output.fd.sync() }
-            }
-            check(downloaded.byteCount == expectedBytes && temporary.length() == expectedBytes) {
-                "The temporary external-file copy is incomplete."
-            }
-            RandomAccessFile(File(operationDirectory, LARGE_EXTERNAL_SHARE_RESERVATION_FILE), "rw").use { marker ->
-                marker.setLength(0L)
-                marker.fd.sync()
-            }
-            check(!target.exists() && temporary.renameTo(target)) {
-                "Could not publish the temporary external-file copy."
-            }
-            check(target.setWritable(false, true) || !target.canWrite()) {
-                "Could not make the temporary external-file copy read-only."
-            }
-            val declaredMime = sanitizeExternalMimeType(file.mimeType)
-            val responseMime = sanitizeExternalMimeType(downloaded.mimeType)
-            val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
-            return StagedExternalFile.Ready(target, mimeType)
-        } catch (failure: Throwable) {
-            temporary.delete()
-            operationDirectory.deleteRecursively()
-            throw failure
-        }
-    }
-
-    private fun stagePrivateCopy(sourceName: String, bytes: ByteArray): File {
-        val root = File(context.cacheDir, EXTERNAL_SHARE_CACHE_DIRECTORY)
-        check(root.isDirectory || root.mkdirs()) { "Could not create the private external-share cache." }
-        val canonicalRoot = root.canonicalFile
-        pruneExternalShareCache(canonicalRoot, bytes.size.toLong())
-
-        val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
-        check(operationDirectory.mkdir()) { "Could not create a private external-share directory." }
-        check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-share directory." }
-
-        val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-        check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-share filename." }
-        val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
-        try {
-            FileOutputStream(temporary).use { output ->
-                output.write(bytes)
-                output.fd.sync()
-            }
-            check(temporary.length() == bytes.size.toLong()) { "The external-share cache copy is incomplete." }
-            check(!target.exists() && temporary.renameTo(target)) { "Could not publish the external-share cache copy." }
-            target.setWritable(false, true)
-            return target
-        } catch (failure: Throwable) {
-            temporary.delete()
-            operationDirectory.deleteRecursively()
-            throw failure
-        }
-    }
+    ): StagedExternalFile.Ready = stageAndroidExternalHandoffStream(
+        context.cacheDir, sourceName, declaredMimeType, declaredByteCount, generation, download,
+    ).let { StagedExternalFile.Ready(it.file, it.mimeType) }
 
     private fun buildChooser(
         action: ExternalFileHandoffAction,
@@ -657,8 +542,8 @@ private fun elapsedAtLeast(nowMillis: Long, thenMillis: Long, durationMillis: Lo
     nowMillis >= thenMillis && nowMillis - thenMillis >= durationMillis
 
 internal const val EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX = ".sharedfiles"
-private const val EXTERNAL_SHARE_CACHE_DIRECTORY = "external-share"
-private const val EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY = "external-large-share"
+internal const val EXTERNAL_SHARE_CACHE_DIRECTORY = "external-share"
+internal const val EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY = "external-large-share"
 internal const val LARGE_EXTERNAL_SHARE_RESERVATION_FILE = ".reservation"
 private const val MAX_EXTERNAL_SHARE_CACHE_BYTES = 256L * 1024L * 1024L
 private const val DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
@@ -667,4 +552,3 @@ private const val LARGE_EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 10
 private const val EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L
 private const val EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L
 private const val GENERIC_MIME_TYPE = "application/octet-stream"
-private val LARGE_EXTERNAL_SHARE_CACHE_LOCK = Any()

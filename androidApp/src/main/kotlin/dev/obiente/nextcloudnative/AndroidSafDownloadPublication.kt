@@ -28,6 +28,9 @@ internal interface AndroidSafDownloadOwnership {
 
 internal interface AndroidSafDownloadOwnershipDirectory {
     fun hasPendingTransactions(): Boolean
+    fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean =
+        forDirectory(directoryIdentity).transactions().isNotEmpty()
+    fun observedPendingDirectoryIdentities(): Set<String> = emptySet()
     fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership
     fun observeRecoveryNames(directoryIdentity: String, observedNames: Set<String>) = Unit
 }
@@ -357,7 +360,12 @@ internal class AndroidSafDownloadPublisher<Document>(
         if (transaction.stageDocumentIdentity != null) return transaction
         val documents = directory.documents()
         val stage = documents.singleOrNull { it.displayName == transaction.stageName }
-            ?: recoveryDocuments(transaction, documents).singleOrNull()
+            ?: recoveryDocuments(transaction, documents).takeIf {
+                transaction.backupDocumentIdentity == null ||
+                    originalDocumentIsFinal(transaction, documents.singleOrNull { it.displayName == transaction.finalName })
+            }?.singleOrNull {
+                transaction.stageContentIdentity != null && contentIdentity(it.document) == transaction.stageContentIdentity
+            }
             ?: return transaction
         return transaction.copy(stageDocumentIdentity = stage.documentIdentity).also(ownership::replace)
     }
@@ -385,6 +393,9 @@ internal class AndroidSafDownloadPublisher<Document>(
                 document.displayName != transaction.finalName &&
                 (transaction.stageContentIdentity == null ||
                     contentIdentity(document.document) == transaction.stageContentIdentity)
+        } ?: documents.singleOrNull { document ->
+            document.displayName == transaction.stageName && transaction.stageContentIdentity != null &&
+                contentIdentity(document.document) == transaction.stageContentIdentity
         }
     }
 
@@ -408,7 +419,9 @@ internal class AndroidSafDownloadPublisher<Document>(
                     document.displayName != transaction.backupName &&
                     document.displayName != transaction.generatedBackupName &&
                     document.displayName != transaction.stageName &&
-                    document.displayName != transaction.finalName
+                    document.displayName != transaction.finalName &&
+                    transaction.backupContentIdentity != null &&
+                    contentIdentity(document.document) == transaction.backupContentIdentity
             }
         }
     }
@@ -454,6 +467,7 @@ internal class AndroidSafDownloadPublisher<Document>(
         backup: AndroidSafPublicationDocument<Document>,
     ): AndroidSafOwnedDownloadTransaction {
         val restoredDocument = try {
+            requireNotNull(contentIdentity(backup.document)) { "The protected local item could not be verified for restoration." }
             requireNotNull(directory.rename(backup.document, transaction.finalName)) {
                 "The protected local item could not be restored."
             }
@@ -570,6 +584,7 @@ internal class AndroidSafDownloadPublisher<Document>(
         transaction: AndroidSafOwnedDownloadTransaction,
         backup: AndroidSafPublicationDocument<Document>,
     ): Boolean {
+        requireNotNull(contentIdentity(backup.document)) { "The changed backup could not be verified for preservation." }
         val preservedDocument = requireNotNull(directory.rename(backup.document, transaction.changedBackupName)) {
             "The changed local backup could not be preserved as a conflict."
         }
@@ -591,6 +606,7 @@ internal class AndroidSafDownloadPublisher<Document>(
         transaction: AndroidSafOwnedDownloadTransaction,
         final: AndroidSafPublicationDocument<Document>,
     ) {
+        requireNotNull(contentIdentity(final.document)) { "The concurrent local item could not be verified for preservation." }
         val preservedDocument = requireNotNull(directory.rename(final.document, transaction.changedBackupName)) {
             "The concurrent local item could not be preserved as a conflict."
         }
@@ -645,6 +661,10 @@ internal class AndroidSafDownloadPublisher<Document>(
             stageDocument(transaction) == null &&
             documentNamed(transaction.stageName) == null &&
             recoveryDocuments(transaction).isEmpty() &&
+            directory.documents().none {
+                transaction.token in it.displayName && it.displayName != transaction.finalName &&
+                    !(it.displayName == transaction.backupName && originalDocumentIsFinal(transaction, final))
+            } &&
             backupDocument(transaction) == null &&
             (!transaction.backupProtected || transaction.publicationCompleted)
         ) {

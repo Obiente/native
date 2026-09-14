@@ -17,7 +17,12 @@ internal suspend fun <T> clearDesktopDynamicApiState(
     accountId: String,
     coalescer: DynamicApiRequestCoalescer<T>,
     cache: DynamicApiResponseCache,
-) = coalescer.fenceAccount(accountId) { cache.invalidateAccount(accountId) }
+    accountStorageKey: String? = null,
+    retireMemoryAccount: (String) -> Unit = AccountPrivateMemoryLifecycle::retireAccount,
+) = coalescer.fenceAccount(accountId) {
+    accountStorageKey?.let(retireMemoryAccount)
+    cache.invalidateAccount(accountId)
+}
 
 internal fun desktopPendingDynamicMutationDirectory(
     osName: String = System.getProperty("os.name").orEmpty(),

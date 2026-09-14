@@ -25,14 +25,37 @@ internal class AndroidSafDownloadOwnershipStore(
         ownershipFiles().isNotEmpty()
     }
 
+    fun hasTreeScopedPendingTransactions(): Boolean = synchronized(LOCK) {
+        ownershipFiles(directory, listFiles).isNotEmpty()
+    }
+
+    fun pendingTransactions(): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+        ownershipRows(includeAll = true).map(StoredOwnershipRow::transaction)
+    }
+
+    fun legacyPendingTransactions(): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+        ownershipRows(files = legacyOwnershipFiles(), includeAll = true).map(StoredOwnershipRow::transaction)
+    }
+
+    override fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
+        val scope = scopeDigest(directoryIdentity)
+        ownershipFiles().any { file -> ownershipReference(file)?.scope == scope }
+    }
+
     override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
         require(directoryIdentity.isNotBlank())
         return ScopedOwnership(scopeDigest(directoryIdentity))
     }
 
-    fun indexed(): AndroidSafDownloadOwnershipDirectory = synchronized(LOCK) {
+    fun indexed(allowedTokens: Set<String>? = null): AndroidSafDownloadOwnershipDirectory = synchronized(LOCK) {
         val files = ownershipFiles()
-        IndexedOwnershipDirectory(files.mapNotNull(::ownershipReference), files.size)
+        val references = files.map { file ->
+            checkNotNull(ownershipReference(file)) {
+                "SAF download recovery row name is invalid."
+            }
+        }
+        val selected = references.filter { allowedTokens == null || it.token in allowedTokens }
+        IndexedOwnershipDirectory(selected, selected.size)
     }
 
     private inner class IndexedOwnershipDirectory(
@@ -43,6 +66,8 @@ internal class AndroidSafDownloadOwnershipStore(
         private val referencesByToken = references.associateByTo(mutableMapOf()) { reference -> reference.token }
         private val rowsByToken = mutableMapOf<String, StoredOwnershipRow>()
         private val observedScopesByToken = mutableMapOf<String, MutableSet<String>>()
+        private val observedDirectoryIdentitiesByScope = mutableMapOf<String, String>()
+        private val observedNamesByScope = mutableMapOf<String, Set<String>>()
 
         init {
             check(referencesByToken.size == references.size) {
@@ -52,9 +77,29 @@ internal class AndroidSafDownloadOwnershipStore(
 
         override fun hasPendingTransactions(): Boolean = referencesByToken.isNotEmpty()
 
+        override fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
+            val scope = scopeDigest(directoryIdentity)
+            IndexedScopedOwnership(scope).transactions(observedNamesByScope[scope].orEmpty()).isNotEmpty()
+        }
+
+        override fun observedPendingDirectoryIdentities(): Set<String> = synchronized(LOCK) {
+            requireUnambiguousLocations()
+            observedDirectoryIdentitiesByScope.mapNotNullTo(linkedSetOf()) { (scope, identity) ->
+                identity.takeIf {
+                    IndexedScopedOwnership(scope).transactions(observedNamesByScope[scope].orEmpty()).isNotEmpty()
+                }
+            }
+        }
+
         override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
             require(directoryIdentity.isNotBlank())
             return IndexedScopedOwnership(scopeDigest(directoryIdentity))
+        }
+
+        private fun requireUnambiguousLocations() {
+            check(observedScopesByToken.none { (token, scopes) -> token in referencesByToken && scopes.size > 1 }) {
+                "SAF download recovery has multiple possible locations."
+            }
         }
 
         override fun observeRecoveryNames(
@@ -62,6 +107,8 @@ internal class AndroidSafDownloadOwnershipStore(
             observedNames: Set<String>,
         ) = synchronized(LOCK) {
             val scope = scopeDigest(directoryIdentity)
+            observedDirectoryIdentitiesByScope[scope] = directoryIdentity
+            observedNamesByScope[scope] = observedNames.toSet()
             observedRecoveryTokens(observedNames).forEach { token ->
                 observedScopesByToken.getOrPut(token, ::mutableSetOf).add(scope)
             }
@@ -73,20 +120,21 @@ internal class AndroidSafDownloadOwnershipStore(
             override fun transactions(
                 observedNames: Set<String>,
             ): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+                requireUnambiguousLocations()
                 val tokens = observedRecoveryTokens(observedNames)
                 val references = buildList {
                     referencesByScope[scope].orEmpty().filterTo(this) { reference ->
                         val observedScopes = observedScopesByToken[reference.token].orEmpty()
                         observedScopes.isEmpty() ||
                             scope in observedScopes ||
-                            !indexedRow(reference).transaction.hasAuthenticatedRelocatedStageEvidence()
+                            !indexedRow(reference).transaction.hasAuthenticatedRelocationEvidence()
                     }
                     tokens.mapNotNullTo(this) { token -> referencesByToken[token] }
                 }.distinctBy { reference -> reference.token }
                 references.map(::indexedRow).filter { row ->
                     row.scope == scope ||
                         row.transaction.token in tokens &&
-                        row.transaction.hasAuthenticatedRelocatedStageEvidence()
+                        row.transaction.hasAuthenticatedRelocationEvidence()
                 }.map(StoredOwnershipRow::transaction)
                     .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })
             }
@@ -151,8 +199,9 @@ internal class AndroidSafDownloadOwnershipStore(
         }
     }
 
-    private fun AndroidSafOwnedDownloadTransaction.hasAuthenticatedRelocatedStageEvidence(): Boolean =
-        stageDocumentIdentity != null && stageContentIdentity != null
+    private fun AndroidSafOwnedDownloadTransaction.hasAuthenticatedRelocationEvidence(): Boolean =
+        stageDocumentIdentity != null && stageContentIdentity != null ||
+            backupDocumentIdentity != null && backupContentIdentity != null
 
     private inner class ScopedOwnership(
         private val scope: String,
@@ -165,7 +214,7 @@ internal class AndroidSafDownloadOwnershipStore(
                 .filter { row ->
                     row.scope == scope ||
                         row.transaction.token in tokens &&
-                        row.transaction.hasAuthenticatedRelocatedStageEvidence()
+                        row.transaction.hasAuthenticatedRelocationEvidence()
                 }
                 .map(StoredOwnershipRow::transaction)
                 .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })
@@ -240,9 +289,11 @@ internal class AndroidSafDownloadOwnershipStore(
     private fun ownershipRows(
         scope: String? = null,
         tokens: Set<String> = emptySet(),
-    ): List<StoredOwnershipRow> = ownershipFiles()
+        files: List<File> = ownershipFiles(),
+        includeAll: Boolean = false,
+    ): List<StoredOwnershipRow> = files
         .mapNotNull(::ownershipReference)
-        .filter { reference -> reference.scope == scope || reference.token in tokens }
+        .filter { reference -> includeAll || reference.scope == scope || reference.token in tokens }
         .map { reference ->
             val transaction = readRow(reference.file)
             check(transaction.token == reference.token) { "SAF download recovery row name is invalid." }
@@ -251,10 +302,13 @@ internal class AndroidSafDownloadOwnershipStore(
 
     private fun ownershipFiles(): List<File> = buildList {
         addAll(ownershipFiles(directory, listFiles))
-        legacyDirectory?.takeIf { it != directory }?.let { legacy ->
-            addAll(ownershipFiles(legacy, legacy::listFiles))
-        }
+        addAll(legacyOwnershipFiles())
     }.distinctBy(File::getAbsolutePath)
+
+    private fun legacyOwnershipFiles(): List<File> = legacyDirectory
+        ?.takeIf { it != directory }
+        ?.let { legacy -> ownershipFiles(legacy, legacy::listFiles) }
+        .orEmpty()
 
     private fun ownershipFiles(
         rowDirectory: File,
