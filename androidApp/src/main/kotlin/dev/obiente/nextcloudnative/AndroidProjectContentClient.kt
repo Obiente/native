@@ -8,7 +8,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppDistributionChannel
@@ -35,6 +34,7 @@ import dev.obiente.nextcloudnative.app.manifestUrl
 import dev.obiente.nextcloudnative.app.parseAndroidDirectRelease
 import dev.obiente.nextcloudnative.app.parseAndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.parseProjectNewsFeed
+import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import dev.obiente.nextcloudnative.app.validateAndroidDirectRelease
 import java.io.File
 import java.io.FileOutputStream
@@ -344,11 +344,27 @@ internal class AndroidProjectContentClient(
         val temporary = File(updateDirectory, "${staged.name}.part")
         cleanupAndroidUpdatePackages(
             directory = updateDirectory,
-            activePartial = temporary,
+            activePackages = setOf(temporary, staged),
         )
         updateCancellationRequested = false
         var diagnosticStage = "download"
         return try {
+            if (staged.isFile) {
+                mutableUpdateState.value = AppUpdateInstallState.Verifying(
+                    versionName = release.versionName,
+                    versionCode = release.versionCode,
+                )
+                diagnosticStage = "verification"
+                val reusable = runCatchingPreservingCancellation {
+                    verifyDownloadedApk(release, staged)
+                }.isSuccess
+                if (reusable) {
+                    diagnosticStage = "installer-handoff"
+                    return openAndroidUpdateInstaller(appContext, foregroundActivity, release, staged, mutableUpdateState)
+                }
+                check(staged.delete()) { "Could not discard an invalid cached update." }
+            }
+            diagnosticStage = "download"
             val resumedFromBytes = settleUpdatePartial(
                 file = temporary,
                 expectedSize = release.apkSize,
@@ -388,25 +404,7 @@ internal class AndroidProjectContentClient(
             if (staged.exists()) check(staged.delete())
             check(temporary.renameTo(staged)) { "Could not stage the verified update." }
             diagnosticStage = "installer-handoff"
-            val uri = FileProvider.getUriForFile(
-                appContext,
-                "${appContext.packageName}.sharedfiles",
-                staged,
-            )
-            withContext(Dispatchers.Main.immediate) {
-                foregroundActivity.startActivity(
-                    Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-                        setDataAndType(uri, "application/vnd.android.package-archive")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                    },
-                )
-            }
-            mutableUpdateState.value = AppUpdateInstallState.ConfirmationOpened(
-                versionName = release.versionName,
-                versionCode = release.versionCode,
-            )
-            AppUpdateInstallResult.ConfirmationOpened
+            openAndroidUpdateInstaller(appContext, foregroundActivity, release, staged, mutableUpdateState)
         } catch (_: UpdateDownloadCancelledException) {
             val retainedBytes = settleUpdatePartial(
                 file = temporary,
@@ -782,15 +780,17 @@ internal fun settleUpdatePartial(
 
 internal fun cleanupAndroidUpdatePackages(
     directory: File,
-    activePartial: File,
+    activePackages: Set<File>,
 ): Int {
     if (!directory.isDirectory) return 0
-    val activePath = activePartial.toPath().toAbsolutePath().normalize()
+    val activePaths = activePackages.mapTo(mutableSetOf()) {
+        it.toPath().toAbsolutePath().normalize()
+    }
     var removed = 0
     directory.listFiles().orEmpty().forEach { candidate ->
         if (
             candidate.androidUpdatePackageVersionCode() != null &&
-            candidate.toPath().toAbsolutePath().normalize() != activePath &&
+            candidate.toPath().toAbsolutePath().normalize() !in activePaths &&
             Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
         ) {
             check(candidate.delete()) { "Could not clear an obsolete Android update package." }

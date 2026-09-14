@@ -48,6 +48,16 @@ class NextcloudSessionLoadingTest {
     }
 
     @Test
+    fun cleanupRecoveryPreservesItsReasonWithoutPretendingStorageIsLocked() {
+        NextcloudSessionCleanupReason.entries.forEach { reason ->
+            assertEquals(
+                NextcloudSessionLoadState.AccountCleanupUnavailable(reason),
+                loadNextcloudSessionSafely { throw NextcloudSessionCleanupUnavailableException(reason) },
+            )
+        }
+    }
+
+    @Test
     fun cancellationRemainsControlFlow() {
         assertFailsWith<CancellationException> {
             loadNextcloudSessionSafely { throw CancellationException("cancelled") }

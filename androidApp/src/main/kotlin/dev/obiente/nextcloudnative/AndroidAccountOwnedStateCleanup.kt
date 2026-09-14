@@ -51,8 +51,9 @@ internal class AndroidAccountOwnedStateCleanup(
                         session.accountId.storageKey,
                     )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -84,24 +85,19 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String?,
         legacyAccountScopeDigest: String?,
     ) {
+        val cacheIdentity = previewCacheIdentity ?: NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
-            previewCacheIdentity,
+            cacheIdentity,
             clearPreviewAccount,
             listOf(
                 {
-                    if (previewCacheIdentity == null) {
-                        AccountPrivateMemoryLifecycle.retireAccount(session.accountId.storageKey)
-                    } else {
-                        fenceAndroidDynamicApiStateForRemoval(
-                            previewCacheIdentity,
-                            dynamicApiState.coalescer,
-                            dynamicApiState.cache,
-                            session.accountId.storageKey,
-                        )
-                    }
+                    fenceAndroidDynamicApiStateForRemoval(
+                        cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache, session.accountId.storageKey,
+                    )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -121,7 +117,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
-                { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
+                { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
             ),
         )
     }
@@ -151,6 +147,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 },
                 { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
                 { removeSupportAccount(accountIdentity) },
+                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,

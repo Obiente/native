@@ -251,9 +251,12 @@ internal fun <Permission> durableUploadMalformedPeerCleanupDisposition(
     targetPermission: Permission,
     samePermission: (Permission, Permission) -> Boolean,
     targetGrantPreExisting: Boolean = false,
+    priorUnownedPeerDigests: Set<String> = emptySet(),
 ): DurableUploadMalformedPeerCleanupDisposition {
     if (targetGrantPreExisting) return DurableUploadMalformedPeerCleanupDisposition.Proceed
-    val peers = malformedPeers.toList()
+    // A missing grant at acquisition proves older unidentified rows did not own it.
+    // Later corruption or a recovered matching URI still receives normal protection.
+    val peers = malformedPeers.filterNot { it.permission == null && uploadPeerEvidenceKey(it.selectionId) in priorUnownedPeerDigests }
     if (peers.any { peer -> peer.selectionId != targetSelectionId && peer.permission == null }) {
         return DurableUploadMalformedPeerCleanupDisposition.Quarantine
     }

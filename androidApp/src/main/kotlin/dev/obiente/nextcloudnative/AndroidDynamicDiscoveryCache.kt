@@ -53,7 +53,12 @@ internal class AndroidDynamicDiscoveryCache(private val root: File) {
         }
     }
 
-    fun retireAccount(accountStorageKey: String, cacheAccountId: String?) = synchronized(lock) {
+    fun retireAccount(
+        accountStorageKey: String,
+        cacheAccountId: String?,
+        legacyCacheAccountId: String? = null,
+    ) = synchronized(lock) {
+        require(legacyCacheAccountId == null || legacyCacheAccountId.matches(ACCOUNT_CACHE_ID))
         if (retiredAccounts.add(accountStorageKey)) {
             accountIncarnations[accountStorageKey] = (accountIncarnations[accountStorageKey] ?: 0L) + 1L
         }
@@ -63,7 +68,10 @@ internal class AndroidDynamicDiscoveryCache(private val root: File) {
         files.forEach { file -> check(file.isFile && file.name.matches(ACCOUNT_CACHE_FILE)) {
             "The dynamic contract cache contains an unexpected entry."
         } }
-        files.filter { cacheAccountId == null || it.name.startsWith("$cacheAccountId-") }
+        files.filter {
+            cacheAccountId == null || it.name.startsWith("$cacheAccountId-") ||
+                legacyCacheAccountId != null && it.name.startsWith("$legacyCacheAccountId-")
+        }
             .forEach { file ->
                 check(file.delete() || !file.exists()) { "Could not clear the dynamic contract cache." }
             }

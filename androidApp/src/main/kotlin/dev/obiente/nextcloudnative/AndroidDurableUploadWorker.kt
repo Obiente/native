@@ -12,7 +12,6 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
-import java.io.FileNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,14 +31,16 @@ internal class DeckAttachmentUploadWorker(
         },
     ) {
         withContext(Dispatchers.IO) {
-            executeDurableUploadWork()
+            withDurableUploadQueueRecovery(onRetry = { Result.retry() }, onQuarantine = { Result.success() }) {
+                executeDurableUploadWork()
+            }
         }
     }
 
     private suspend fun executeDurableUploadWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
             ?: return Result.failure()
-        val store = AndroidDurableMultipartUploadStore(applicationContext)
+        val store = constructDurableUploadQueueOwner { AndroidDurableMultipartUploadStore(applicationContext) }
         val initial = store.find(jobId) ?: return Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {
@@ -58,7 +59,7 @@ internal class DeckAttachmentUploadWorker(
             return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                 releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                 releasedResult = Result.success(),
                 retainedResult = Result.retry(),
             )
@@ -67,7 +68,7 @@ internal class DeckAttachmentUploadWorker(
             return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                 releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                 releasedResult = Result.success(),
                 retainedResult = Result.retry(),
             )
@@ -92,13 +93,18 @@ internal class DeckAttachmentUploadWorker(
         jobId: String,
     ): Result {
         val services = AndroidNextcloudServices(applicationContext)
-        if (!services.isDurableUploadAccountResolutionAvailable()) return Result.retry()
+        // Malformed or future registry formats need recovery, not a timed retry.
+        // Keep the queued row and capability; account activation reschedules it.
+        if (!services.isDurableUploadAccountResolutionAvailable()) return Result.success()
         val accountResolution = resolveDurableUploadSessionWithRegistryRecovery(
             expectedAccountId = initial.accountId,
             readRegistry = services::durableUploadAccountRegistry,
             recoverRegistry = { services.loadSession() },
             loadSession = services::loadSession,
         )
+        if (accountResolution == DurableUploadAccountResolution.CredentialUnavailable &&
+            durableUploadCredentialNeedsRecovery(applicationContext, services.listAccounts(), initial.accountId)
+        ) return Result.success()
         val session = when (accountResolution) {
             is DurableUploadAccountResolution.Available -> accountResolution.session
             DurableUploadAccountResolution.RegistryUnavailable -> {
@@ -140,7 +146,7 @@ internal class DeckAttachmentUploadWorker(
                     },
                     releaseSelection = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                     recordFailure = {
                         recordUploadDiagnostic(
                             severity = SupportDiagnosticSeverity.Warning,
@@ -173,7 +179,7 @@ internal class DeckAttachmentUploadWorker(
                 resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                     releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                     releasedResult = Result.failure(),
                     retainedResult = Result.retry(),
                 )
@@ -272,7 +278,7 @@ internal class DeckAttachmentUploadWorker(
         return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
             releaseCapability = { onQuarantined -> picker.release(started.request.file, onQuarantined) },
             completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-            onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+            onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
             releasedResult = Result.success(),
             retainedResult = Result.retry(),
         )
@@ -380,8 +386,6 @@ internal suspend fun <Result> processQueuedDurableUploadSource(
     } catch (failure: AndroidLocalUploadCapabilityReadException) {
         return onProviderUnavailable(failure)
     } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
-        return onCapabilityUnavailable()
-    } catch (_: FileNotFoundException) {
         return onCapabilityUnavailable()
     } catch (_: SecurityException) {
         return onCapabilityUnavailable()

@@ -26,7 +26,7 @@ class DesktopCredentialRollbackCompletionTest {
                 persistence.loadActiveSession()
             }
 
-            assertEquals("rollback-completed", fixture.preferences.get(PHASE_KEY, null))
+            assertNull(fixture.preferences.get(PHASE_KEY, null))
             assertEquals(fixture.original.appPassword, fixture.primarySecret())
             assertNull(fixture.secrets.load(fixture.rollbackReference))
             fixture.assertRestartRecovered()
@@ -97,7 +97,7 @@ class DesktopCredentialRollbackCompletionTest {
             persistence.saveSession(fixture.original.copy(appPassword = "replacement-password"))
         }
 
-        assertEquals("rollback-completed", fixture.preferences.get(PHASE_KEY, null))
+        assertNull(fixture.preferences.get(PHASE_KEY, null))
         assertNull(fixture.secrets.load(fixture.rollbackReference))
         fixture.assertRestartRecovered()
     }
