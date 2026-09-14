@@ -304,7 +304,7 @@ internal fun NativeAppSchema.forDynamicContractVersion(
 
 private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
-private val mediaViewerNavigationRepository = MediaViewerNavigationRepository()
+private val mediaViewerNavigationRepository = sharedMediaViewerNavigationRepository
 
 private inline fun <reified T : Enum<T>> enumSaver() = Saver<T, String>(
     save = { value -> value.name },
@@ -1580,13 +1580,13 @@ private fun AuthenticatedApp(
         returnTo: Screen,
         sourceMembers: List<NextcloudFile> = media,
         navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
-    ): Screen.MediaViewer {
+    ): Screen {
         val route = mediaViewerNavigationRepository.register(
-            media = media,
+            accountId = session.accountId, media = media,
             selected = selected,
             sourceMembers = sourceMembers,
             navigationIdentityBySourceIdentity = navigationIdentityBySourceIdentity,
-        )
+        ) ?: return returnTo
         return Screen.MediaViewer(
             navigationKey = route.key,
             selectedIndex = route.selectedIndex,
@@ -1971,7 +1971,7 @@ private fun AuthenticatedApp(
             is Screen.Chat -> screen = Screen.Talk
             is Screen.NoteEditor -> screen = Screen.Notes
             is Screen.MediaViewer -> {
-                mediaViewerNavigationRepository.release(current.navigationKey)
+                mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                 screen = current.returnTo
             }
             is Screen.FileInfo -> screen = Screen.Files(current.parentPath)
@@ -2455,7 +2455,7 @@ private fun AuthenticatedApp(
                 selectedIndex = current.selectedIndex,
                 selectedSourceIndex = current.selectedSourceIndex,
             )
-            val snapshot = mediaViewerNavigationRepository.resolve(route)
+            val snapshot = mediaViewerNavigationRepository.resolve(session.accountId, route)
             if (snapshot == null) {
                 LaunchedEffect(current.navigationKey) {
                     screen = current.returnTo
@@ -2473,7 +2473,7 @@ private fun AuthenticatedApp(
                     sharingCapabilities = serverInfo?.fileSharing
                         ?: NextcloudFileSharingCapabilities.Unavailable,
                     onSelect = { selected ->
-                        mediaViewerNavigationRepository.select(route, selected)?.let { next ->
+                        mediaViewerNavigationRepository.select(session.accountId, route, selected)?.let { next ->
                             screen = current.copy(
                                 selectedIndex = next.selectedIndex,
                                 selectedSourceIndex = next.selectedSourceIndex,
@@ -2481,11 +2481,11 @@ private fun AuthenticatedApp(
                         }
                     },
                     onSourceRemoved = {
-                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                         screen = current.returnTo
                     },
                     onClose = {
-                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                         screen = current.returnTo
                     },
                     navigationRequest = pendingEditorNavigationRequest,

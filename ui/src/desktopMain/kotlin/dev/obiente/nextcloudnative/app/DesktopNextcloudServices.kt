@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
-import javax.swing.SwingUtilities
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -758,7 +757,6 @@ class DesktopNextcloudServices(
         desktopContractCacheDirectory("responses"),
     )
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
-    private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
     }
@@ -4255,11 +4253,12 @@ class DesktopNextcloudServices(
                 shouldSearchRaw = { files ->
                     rawPreviouslyObserved || files.any(NextcloudFile::isRawPhoto)
                 },
-                carryoverStore = mediaTimelineCarryoverStore,
+                carryoverStore = sharedMediaTimelineDavCarryoverStore,
                 carryoverAccountScope = photoMediaCarryoverScope(
                     accountScope = desktopFileCacheAccountId(session),
                     owner = queryOwner,
                 ),
+                carryoverAccountId = session.accountId,
             )
             return PhotoTimelinePage(
                 entries = page.files.mapNotNull(NextcloudFile::toPhotoTimelineEntryOrNull),
@@ -4287,6 +4286,7 @@ class DesktopNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = desktopFileCacheAccountId(session),
             monthResolver = monthResolver,
         )

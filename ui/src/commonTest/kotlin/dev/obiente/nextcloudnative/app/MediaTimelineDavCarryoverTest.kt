@@ -99,6 +99,7 @@ class MediaTimelineDavCarryoverTest {
                 shouldSearchRaw = { false },
                 carryoverStore = store,
                 carryoverAccountScope = "account-a",
+                carryoverAccountId = account('a'),
             )
 
         val first = load(null)
@@ -173,7 +174,11 @@ class MediaTimelineDavCarryoverTest {
         )
         val firstCursor = PhotoTimelineCursor("first")
         val secondCursor = PhotoTimelineCursor("second")
-        val firstGeneration = store.beginAccountGeneration("account-a")
+        val firstAccount = account('a')
+        val firstProducer = requireNotNull(store.producer(firstAccount))
+        val firstGeneration = requireNotNull(
+            store.beginAccountGeneration(firstAccount, "account-a", firstProducer),
+        )
         val carryover = MediaTimelineDavCarryover(
             mapOf(
                 MediaTimelinePartitionKey.Mime(MediaSearchDavPartition.VideoMime) to
@@ -184,15 +189,22 @@ class MediaTimelineDavCarryoverTest {
             ),
         )
 
-        store.put("account-a", firstGeneration, firstCursor, carryover)
-        store.put("account-a", firstGeneration, secondCursor, carryover)
+        store.put(firstAccount, "account-a", firstGeneration, firstCursor, carryover, firstProducer)
+        store.put(firstAccount, "account-a", firstGeneration, secondCursor, carryover, firstProducer)
 
-        assertNull(store.take("account-a", firstGeneration, firstCursor))
-        assertEquals(carryover, store.take("account-a", firstGeneration, secondCursor))
+        assertNull(store.take(firstAccount, "account-a", firstGeneration, firstCursor, firstProducer))
+        assertEquals(
+            carryover,
+            store.take(firstAccount, "account-a", firstGeneration, secondCursor, firstProducer),
+        )
 
-        val secondGeneration = store.beginAccountGeneration("account-b")
+        val secondAccount = account('b')
+        val secondProducer = requireNotNull(store.producer(secondAccount))
+        val secondGeneration = requireNotNull(
+            store.beginAccountGeneration(secondAccount, "account-b", secondProducer),
+        )
         assertTrue(secondGeneration > firstGeneration)
-        assertNull(store.take("account-a", firstGeneration, secondCursor))
+        assertNull(store.take(firstAccount, "account-a", firstGeneration, secondCursor, firstProducer))
         assertFailsWith<IllegalArgumentException> {
             MediaTimelinePartitionCarryover(
                 files = List(PHOTO_TIMELINE_PARTITION_PAGE_SIZE + 1) { index ->
@@ -202,6 +214,72 @@ class MediaTimelineDavCarryoverTest {
             )
         }
         Unit
+    }
+
+    @Test
+    fun `retirement purges every scope for one account and preserves another`() {
+        val store = MediaTimelineDavCarryoverStore()
+        val removed = account('c')
+        val retained = account('d')
+        val removedProducer = requireNotNull(store.producer(removed))
+        val retainedProducer = requireNotNull(store.producer(retained))
+        val timelineScope = "removed|photos:timeline"
+        val folderScope = "removed|photos:folder-inventory"
+        val retainedScope = "retained|photos:timeline"
+        val timelineGeneration = requireNotNull(
+            store.beginAccountGeneration(removed, timelineScope, removedProducer),
+        )
+        val folderGeneration = requireNotNull(
+            store.beginAccountGeneration(removed, folderScope, removedProducer),
+        )
+        val retainedGeneration = requireNotNull(
+            store.beginAccountGeneration(retained, retainedScope, retainedProducer),
+        )
+        val cursor = PhotoTimelineCursor("cursor")
+        val carryover = carryover()
+        assertFailsWith<IllegalArgumentException> {
+            store.beginAccountGeneration(removed, timelineScope, retainedProducer)
+        }
+        store.put(removed, timelineScope, timelineGeneration, cursor, carryover, removedProducer)
+        store.put(removed, folderScope, folderGeneration, cursor, carryover, removedProducer)
+        store.put(retained, retainedScope, retainedGeneration, cursor, carryover, retainedProducer)
+
+        store.purgeRetiredAccount(removed.storageKey)
+
+        assertNull(store.take(removed, timelineScope, timelineGeneration, cursor, removedProducer))
+        assertNull(store.take(removed, folderScope, folderGeneration, cursor, removedProducer))
+        assertEquals(
+            carryover,
+            store.take(retained, retainedScope, retainedGeneration, cursor, retainedProducer),
+        )
+    }
+
+    @Test
+    fun `retirement and reactivation reject late carryover completions from the old incarnation`() {
+        val gate = AccountPrivateMemoryGate()
+        val store = MediaTimelineDavCarryoverStore(gate)
+        val account = account('e')
+        val scope = "account-e"
+        val cursor = PhotoTimelineCursor("cursor")
+        val carryover = carryover()
+        val oldProducer = requireNotNull(store.producer(account))
+        requireNotNull(store.beginAccountGeneration(account, scope, oldProducer))
+
+        gate.retireAccount(account.storageKey) { store.purgeRetiredAccount(account.storageKey) }
+
+        assertNull(store.producer(account))
+        assertNull(store.beginAccountGeneration(account, scope, oldProducer))
+
+        gate.activateAccount(account.storageKey)
+        val currentProducer = requireNotNull(store.producer(account))
+        val currentGeneration = requireNotNull(
+            store.beginAccountGeneration(account, scope, currentProducer),
+        )
+        store.put(account, scope, currentGeneration, cursor, carryover, oldProducer)
+        assertNull(store.take(account, scope, currentGeneration, cursor, currentProducer))
+
+        store.put(account, scope, currentGeneration, cursor, carryover, currentProducer)
+        assertEquals(carryover, store.take(account, scope, currentGeneration, cursor, currentProducer))
     }
 
     private class TimelineFixture {
@@ -229,6 +307,7 @@ class MediaTimelineDavCarryoverTest {
             cursor: PhotoTimelineCursor?,
             carryoverStore: MediaTimelineDavCarryoverStore? = null,
             accountScope: String? = null,
+            accountId: NextcloudAccountId? = carryoverStore?.let { account('a') },
         ): MediaTimelineDavPage = collectMediaTimelineDavPage(
             userId = "account",
             cursor = cursor,
@@ -254,10 +333,23 @@ class MediaTimelineDavCarryoverTest {
             shouldSearchRaw = { false },
             carryoverStore = carryoverStore,
             carryoverAccountScope = accountScope,
+            carryoverAccountId = accountId,
         )
     }
 
     companion object {
+        private fun account(marker: Char) = NextcloudAccountId(marker.toString().repeat(64))
+
+        private fun carryover() = MediaTimelineDavCarryover(
+            mapOf(
+                MediaTimelinePartitionKey.Mime(MediaSearchDavPartition.VideoMime) to
+                    MediaTimelinePartitionCarryover(
+                        files = listOf(file(50L, "Photos/carried.mp4", 100L, "video/mp4")),
+                        remoteCursorAfterFetched = null,
+                    ),
+            ),
+        )
+
         private fun file(
             id: Long,
             path: String,
