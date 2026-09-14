@@ -2608,52 +2608,41 @@ private fun AuthenticatedApp(
                 },
             )
         }
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
-                RootShell(
-                    presentation = presentation,
-                    selected = destination,
-                    desktopWorkspaceKind = if (screen == Screen.Root) {
-                        NextcloudDesktopWorkspaceKind.Root
-                    } else {
-                        NextcloudDesktopWorkspaceKind.AppWorkspace
-                    },
-                    navigationEnabled = !groupwareMutationInProgress,
-                    onSelected = { selected ->
-                        inlineEditorNavigation.navigate {
-                            if (!groupwareMutationInProgress) {
-                                leaveAppWorkspace()
-                                destination = selected
-                                screen = Screen.Root
-                            }
-                        }
-                    },
-                    identity = desktopIdentity,
-                    activeAppId = appWorkspaceNavigation.activeAppId,
-                    onOpenApp = { appId ->
-                        if (!groupwareMutationInProgress) {
-                            serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
-                                openApp(app, destination)
-                            }
-                        }
-                    },
-                    content = {
-                        val appId = appWorkspaceNavigation.activeAppId
-                        if (appId != null && screen != Screen.Root) {
-                            appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
-                                screenContent()
-                            }
+        AppWorkspaceState(
+            holder = appWorkspaceSaveableStateHolder,
+            appId = appWorkspaceNavigation.activeAppId?.takeIf { screen != Screen.Root },
+        ) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
+                    RootShell(
+                        presentation = presentation,
+                        selected = destination,
+                        desktopWorkspaceKind = if (screen == Screen.Root) {
+                            NextcloudDesktopWorkspaceKind.Root
                         } else {
-                            screenContent()
-                        }
-                    },
-                )
-            } else {
-                val appId = appWorkspaceNavigation.activeAppId
-                if (appId != null && screen != Screen.Root) {
-                    appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
-                        screenContent()
-                    }
+                            NextcloudDesktopWorkspaceKind.AppWorkspace
+                        },
+                        navigationEnabled = !groupwareMutationInProgress,
+                        onSelected = { selected ->
+                            inlineEditorNavigation.navigate {
+                                if (!groupwareMutationInProgress) {
+                                    leaveAppWorkspace()
+                                    destination = selected
+                                    screen = Screen.Root
+                                }
+                            }
+                        },
+                        identity = desktopIdentity,
+                        activeAppId = appWorkspaceNavigation.activeAppId,
+                        onOpenApp = { appId ->
+                            if (!groupwareMutationInProgress) {
+                                serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
+                                    openApp(app, destination)
+                                }
+                            }
+                        },
+                        content = screenContent,
+                    )
                 } else {
                     screenContent()
                 }
