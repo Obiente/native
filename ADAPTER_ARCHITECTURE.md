@@ -297,6 +297,20 @@ decisions. This does not discard unresolved local document changes. Desktop
 account removal also verifies retirement of recognized temporary file-sync
 staging files under the sync engine lock, while keeping user originals.
 
+Android cleanup review markers are pruned against the retained account registry,
+then the account being recovered is recorded. Removing or replacing another
+account must not evict a retained account's marker and repeat cleanup of its
+offline pins or drafts. If registry ownership is unavailable, recovery keeps the
+existing markers until a readable registry can establish which accounts remain.
+
+An unsupported desktop account registry produces a distinct startup state before
+credential recovery runs. It preserves the registry and secrets and directs the
+user to reopen a compatible app version, rather than opening a login flow whose
+save would be rejected by the same version fence.
+Malformed desktop registry data without a legacy recovery session produces a
+separate support-recovery state and preserves existing data. The established
+repair path from a valid legacy session remains available.
+
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
 
@@ -304,6 +318,19 @@ Android queued uploads retain their rows while saved credentials require recover
 Malformed preference values, damaged ciphertext, and invalid decoded credential
 records pause timed retries when no usable or temporarily inaccessible fallback
 remains. Temporary keystore failures continue retrying, including for inactive
-accounts. Unsupported credential versions require an upgrade. These policies are
+accounts. A malformed registry with a missing or permanently damaged aggregate
+also pauses retries; temporary aggregate access failures remain retryable.
+Unsupported credential versions require an upgrade. These policies are
 covered by deterministic Android unit tests; they do not establish device or
 release validation.
+
+Android external file handoffs capture a process generation under the active
+account operation guard before probing or staging a file. Clearing handoffs
+invalidates that generation even when persisted cleanup fails. Registration
+and staged-content publication check the captured generation under the registry
+lock, so work started before account removal cannot publish a later handoff.
+
+Android folder-sync schedule restoration validates the exact session while holding
+its account operation lease, including server discovery. Permanent protocol or
+malformed-state failures stop the one-time job; temporary transport failures get
+at most two retries. Configured pairs remain intact for explicit recovery.
