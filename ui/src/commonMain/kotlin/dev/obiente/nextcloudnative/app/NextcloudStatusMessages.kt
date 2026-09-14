@@ -111,19 +111,20 @@ private fun AccountSessionCleanupUnavailable(reason: NextcloudSessionCleanupReas
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                if (reason == NextcloudSessionCleanupReason.Pending) "Finishing account cleanup"
+                if (reason == NextcloudSessionCleanupReason.Pending) "Account cleanup is pending"
                 else "Account cleanup needs attention",
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
                 if (reason == NextcloudSessionCleanupReason.Pending)
                     "An earlier account change needs to finish before this account can open. " +
-                        "Your saved sign-in and local files are retained. Try again after cleanup finishes."
+                        "Your saved sign-in and local files are retained. Close and reopen nati.ve to retry cleanup. " +
+                        "If cleanup stays blocked, contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL."
                 else "nati.ve cannot safely finish an earlier account change. " +
                     "Your saved sign-in and local files are retained. " +
                         "Contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL for help recovering this account.",
             )
-            OutlinedButton(onClick = onRetry) { Text("Try again") }
+            OutlinedButton(onClick = onRetry) { Text("Check again") }
         }
     }
 }
