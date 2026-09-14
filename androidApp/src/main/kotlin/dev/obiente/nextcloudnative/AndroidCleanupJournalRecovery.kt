@@ -29,11 +29,17 @@ internal fun quarantineAndroidCleanupJournal(encoded: Set<String>): AndroidClean
     return AndroidCleanupJournalQuarantine(active + ANDROID_CLEANUP_RECOVERY_FENCE, malformed)
 }
 
-internal fun markAndroidCleanupAccountReviewed(encoded: Set<String>, accountStorageKey: String): Set<String> {
+internal fun markAndroidCleanupAccountReviewed(
+    encoded: Set<String>,
+    accountStorageKey: String,
+    retainedAccountStorageKeys: Set<String>?,
+): Set<String> {
     require(ACCOUNT_KEY.matches(accountStorageKey))
     requireAndroidAccountRemovalCleanupJournalAllowsActivation(restoreAndroidPendingAccountRemovalCleanups(encoded))
     val retained = encoded.filterTo(linkedSetOf()) { !it.startsWith(REVIEWED_PREFIX) }
-    val reviewed = (androidCleanupReviewedAccounts(encoded) - accountStorageKey).toList().takeLast(63)
+    val reviewed = androidCleanupReviewedAccounts(encoded).let { existing ->
+        retainedAccountStorageKeys?.let(existing::intersect) ?: existing
+    }
     return retained + (reviewed + accountStorageKey).map { REVIEWED_PREFIX + it }
 }
 
@@ -50,6 +56,7 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
     val requiresRecovery = snapshot.recoveryFence && session.accountId.storageKey !in snapshot.reviewedAccounts
     try {
         if (requiresRecovery) {
+            val retainedAccounts = loadAccounts()?.mapTo(linkedSetOf()) { it.id.storageKey }
             val cleanups = listOfNotNull(
                 pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups),
                 pendingAndroidAccountRemovalCleanup(session),
@@ -63,7 +70,7 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
                     journal.clear(pending.accountStorageKey)
                 }
             }
-            journal.markReviewed(session.accountId.storageKey)
+            journal.markReviewed(session.accountId.storageKey, retainedAccounts)
         } else {
             val pending = pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups) ?: return
             retryAndroidAccountRemovalCleanup(

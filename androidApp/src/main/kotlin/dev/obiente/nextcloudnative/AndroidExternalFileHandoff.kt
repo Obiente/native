@@ -40,6 +40,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
 
     suspend fun launchRemote(
         session: NextcloudSession,
+        generation: AndroidExternalFileHandoffGeneration,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -50,11 +51,12 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "This file does not provide the size and version needed for seekable streaming.",
             )
         }
-        return registerAndLaunchRemote(session, file, action)
+        return registerAndLaunchRemote(session, generation, file, action)
     }
 
     private suspend fun registerAndLaunchRemote(
         session: NextcloudSession,
+        generation: AndroidExternalFileHandoffGeneration,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         staged: StagedExternalFile.Ready? = null,
@@ -62,8 +64,11 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         val registeredFile = externalHandoffFile(file, staged?.mimeType)
         val record = try {
             withContext(Dispatchers.IO) {
-                AndroidExternalFileHandoffRegistry.register(session, registeredFile)
+                AndroidExternalFileHandoffRegistry.register(session, registeredFile, expectedGeneration = generation)
             }
+        } catch (_: AndroidExternalFileHandoffRevokedException) {
+            staged?.file?.parentFile?.deleteRecursively()
+            return ExternalFileHandoffResult.Unsupported("The account changed before the file could be opened. Open it again.")
         } catch (_: AndroidExternalFileHandoffStoreException) {
             staged?.file?.parentFile?.deleteRecursively()
             return ExternalFileHandoffResult.Unsupported(
@@ -78,7 +83,9 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         if (staged != null) {
             try {
                 withContext(Dispatchers.IO) {
-                    publishLargeExternalHandoffContent(staged.file, record.documentId)
+                    AndroidExternalFileHandoffRegistry.withGeneration(generation) {
+                        publishLargeExternalHandoffContent(staged.file, record.documentId)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 withContext(NonCancellable + Dispatchers.IO) {
@@ -157,6 +164,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
 
     suspend fun launchLargeStagedRemote(
         session: NextcloudSession,
+        generation: AndroidExternalFileHandoffGeneration,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -177,7 +185,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "The file could not be cached for another app. Check the connection and available storage, then try again.",
             )
         }
-        return registerAndLaunchRemote(session, file, action, staged)
+        return registerAndLaunchRemote(session, generation, file, action, staged)
     }
 
     suspend fun launchStreamedRemote(

@@ -23,12 +23,17 @@ internal fun durableUploadCredentialNeedsRecovery(
     read: (String) -> String?,
     decrypt: (String) -> String,
     accountId: NextcloudAccountId? = null,
+    missingIsDamaged: Boolean = false,
 ): Boolean {
     var damaged = false
     var retryable = false
     for (key in keys) {
         try {
-            val encrypted = read(key) ?: continue
+            val encrypted = read(key)
+            if (encrypted == null) {
+                if (missingIsDamaged) damaged = true
+                continue
+            }
             val restored = decodeAndroidAccountCredentialState(decrypt(encrypted))
             if (restored.unsupportedVersion != null) return true
             if (restored.state == null) {

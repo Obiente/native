@@ -25,6 +25,7 @@ internal class DesktopAccountCredentialPersistence(
     private val malformedCredentialRemovalJournalReported = AtomicBoolean(false)
 
     fun loadActiveSession(): NextcloudSession? {
+        requireSupportedDesktopRegistryForSessionLoad(readRegistry().unsupportedVersion, ::recordCredentialDiagnostic)
         retryPendingCredentialSave()
         retryPendingCredentialRemoval()
         retryPendingLegacyCredentialCleanup()
@@ -187,7 +188,7 @@ internal class DesktopAccountCredentialPersistence(
             recordCredentialDiagnostic(code, "account-registry.restore")
         }
         if (read.unsupportedVersion) return null
-        legacy ?: return null
+        legacy ?: return desktopSessionWithoutLegacyRecovery(read.encoded != null)
         if (!restored.needsPersistence) return legacy
         try {
             val encodedRegistry = prepareRegistry(restored.registry)
