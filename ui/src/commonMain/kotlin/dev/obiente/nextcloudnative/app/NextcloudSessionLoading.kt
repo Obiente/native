@@ -10,7 +10,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal open class NextcloudSessionStorageUnavailableException(
+open class NextcloudSessionStorageUnavailableException(
     message: String,
     cause: Throwable? = null,
 ) : IllegalStateException(message, cause)
@@ -22,12 +22,20 @@ internal class NextcloudSessionLegacyMigrationUnavailableException(
     cause,
 )
 
+internal enum class NextcloudSessionCleanupReason { Pending, NeedsReview }
+
+internal class NextcloudSessionCleanupUnavailableException(
+    val reason: NextcloudSessionCleanupReason,
+) : IllegalStateException("Account cleanup has not completed.")
+
 internal sealed interface NextcloudSessionLoadState {
     data class Loaded(val session: NextcloudSession?) : NextcloudSessionLoadState
 
     data object SecureStorageUnavailable : NextcloudSessionLoadState
 
     data object LegacyMigrationUnavailable : NextcloudSessionLoadState
+
+    data class AccountCleanupUnavailable(val reason: NextcloudSessionCleanupReason) : NextcloudSessionLoadState
 }
 
 internal class NextcloudSessionLoadCoordinator(
@@ -72,6 +80,8 @@ internal fun loadNextcloudSessionSafely(
     NextcloudSessionLoadState.Loaded(loadSession())
 } catch (failure: CancellationException) {
     throw failure
+} catch (failure: NextcloudSessionCleanupUnavailableException) {
+    NextcloudSessionLoadState.AccountCleanupUnavailable(failure.reason)
 } catch (_: NextcloudSessionLegacyMigrationUnavailableException) {
     NextcloudSessionLoadState.LegacyMigrationUnavailable
 } catch (_: NextcloudSessionStorageUnavailableException) {

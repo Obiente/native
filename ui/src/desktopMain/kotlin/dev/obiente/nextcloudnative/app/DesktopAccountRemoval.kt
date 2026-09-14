@@ -37,8 +37,15 @@ internal fun loadDesktopSessionAfterCleanupGate(
     load: () -> NextcloudSession?,
     publish: (NextcloudSession) -> Unit,
 ): NextcloudSession? {
-    requireDesktopAccountActivationAllowed(cleanupJournal.blocksAllAccountActivation())
-    record?.let(cleanupJournal::requireAccountActivationAllowed)
+    val block = cleanupJournal.blocksAllAccountActivation() ?: record?.let {
+        cleanupJournal.accountActivationBlock(desktopFileCacheAccountId(it), it.id.storageKey)
+    }
+    if (block != null) throw NextcloudSessionCleanupUnavailableException(
+        when (block) {
+            DesktopAccountActivationBlock.PendingCleanup -> NextcloudSessionCleanupReason.Pending
+            DesktopAccountActivationBlock.UnknownJournalData -> NextcloudSessionCleanupReason.NeedsReview
+        },
+    )
     return load()?.also(publish)
 }
 

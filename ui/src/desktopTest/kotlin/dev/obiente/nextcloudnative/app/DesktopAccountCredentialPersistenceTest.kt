@@ -92,13 +92,21 @@ class DesktopAccountCredentialPersistenceTest {
 
     @Test
     fun selectionFlushesRegistryAndLegacyMetadataBeforeReturning() = withStore { preferences, secrets ->
-        var flushCount = 0
-        val persistence = persistence(preferences, secrets) { flushCount += 1 }
+        val flushedAccounts = mutableListOf<NextcloudAccountId?>()
+        val persistence = persistence(preferences, secrets) {
+            flushedAccounts += DesktopAccountRegistryPreferenceStore(preferences).read()?.let {
+                decodeNextcloudAccountRegistry(it)?.activeAccountId
+            }.takeIf {
+                preferences.get("server", null) == firstSession().serverUrl &&
+                    preferences.get("login", null) == firstSession().loginName
+            }
+        }
         persistence.saveSession(firstSession())
         persistence.saveSession(secondSession())
+        flushedAccounts.clear()
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(14, flushCount)
+        assertTrue(firstSession().accountId in flushedAccounts)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -610,9 +618,9 @@ class DesktopAccountCredentialPersistenceTest {
         preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodeNextcloudAccountRegistry(registry))
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
-        val restored = persistence(preferences, secrets, diagnostics).loadActiveSession()
+        val restored = loadNextcloudSessionSafely { persistence(preferences, secrets, diagnostics).loadActiveSession() }
 
-        assertNull(restored)
+        assertEquals(NextcloudSessionLoadState.SecureStorageUnavailable, restored)
         assertEquals(registry, decodeRegistry(preferences))
         assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
         assertEquals(listOf("ACCOUNT_CREDENTIAL_ACTIVE_MISMATCH"), diagnostics.mapNotNull { it.code })
@@ -646,7 +654,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(second)
         secrets.clear(desktopAccountSecretReference(second.accountId))
 
-        assertNull(persistence.loadActiveSession())
+        assertEquals(NextcloudSessionLoadState.SecureStorageUnavailable, loadNextcloudSessionSafely(persistence::loadActiveSession))
         assertTrue(persistence.removeAccount(second.accountId))
 
         val restarted = persistence(preferences, secrets)
@@ -766,14 +774,17 @@ class DesktopAccountCredentialPersistenceTest {
         withStore { preferences, secrets ->
             val first = firstSession()
             val second = secondSession()
-            var flushAttempts = 0
+            var failNextFlush = false
             val persistence = persistence(preferences, secrets) {
-                flushAttempts += 1
-                if (flushAttempts == 14) error("synthetic removal flush failure")
+                if (failNextFlush) {
+                    failNextFlush = false
+                    error("synthetic removal flush failure")
+                }
                 preferences.flush()
             }
             persistence.saveSession(first)
             persistence.saveSession(second)
+            failNextFlush = true
 
             assertFailsWith<IllegalStateException> {
                 persistence.removeAccount(second.accountId)

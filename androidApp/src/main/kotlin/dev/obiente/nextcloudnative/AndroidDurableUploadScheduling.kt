@@ -44,6 +44,7 @@ internal const val ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS = 60
 internal data class AndroidDurableUploadSchedulingRecoveryBatch(
     val immediate: Boolean,
     val workIdsToAwait: Map<String, UUID>,
+    val cleanup: Boolean = false,
 )
 
 internal sealed interface AndroidDurableUploadSchedulingRecoveryStep {
@@ -60,12 +61,20 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     private val monitor = Any()
     private val wakeups = Channel<Unit>(Channel.CONFLATED)
     private var immediatePending = false
+    private var cleanupPending = false
     private val workIdsToAwait = linkedMapOf<String, UUID>()
     private val backedOffWorkIds = mutableMapOf<String, UUID>()
 
     fun request() {
         synchronized(monitor) {
             immediatePending = true
+            wakeups.trySend(Unit)
+        }
+    }
+
+    fun requestCleanup() {
+        synchronized(monitor) {
+            cleanupPending = true
             wakeups.trySend(Unit)
         }
     }
@@ -97,7 +106,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
     }
 
     fun tryTakePending(): AndroidDurableUploadSchedulingRecoveryBatch? = synchronized(monitor) {
-        if (!immediatePending && workIdsToAwait.isEmpty()) null else takeBatchLocked()
+        if (!immediatePending && !cleanupPending && workIdsToAwait.isEmpty()) null else takeBatchLocked()
     }
 
     suspend fun runUntilRequested(
@@ -128,7 +137,9 @@ internal class AndroidDurableUploadSchedulingRecoverySignal(
         return AndroidDurableUploadSchedulingRecoveryBatch(
             immediate = immediatePending,
             workIdsToAwait = workIdsToAwait.toMap(),
+            cleanup = cleanupPending,
         ).also {
+            cleanupPending = false
             immediatePending = false
             workIdsToAwait.clear()
         }
@@ -140,6 +151,10 @@ internal val ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL =
 
 internal fun requestQueuedDurableUploadSchedulingRecovery() {
     ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.request()
+}
+
+internal fun requestQueuedDurableUploadCleanupRecovery() {
+    ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.requestCleanup()
 }
 
 internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(jobId: String, workId: UUID) {
@@ -165,7 +180,7 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
     var recoveryRetryDeadlineMillis: Long? = null
 
     fun addRequests(batch: AndroidDurableUploadSchedulingRecoveryBatch) {
-        immediatePending = immediatePending || batch.immediate
+        immediatePending = immediatePending || batch.immediate || batch.cleanup
         batch.workIdsToAwait.forEach { (jobId, workId) ->
             if (workIdsToAwait.put(jobId, workId) != workId) {
                 followUpDeadlinesMillis[jobId] =
@@ -177,11 +192,11 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
 
     suspend fun recoverOnce() {
         val recovered = recover()
-        // Cleanup can request recovery itself. Coalesce signals raised during this pass into
-        // a timed retry instead of letting the same failure bypass every worker deadline.
+        // Only known cleanup requests are coalesced. An external enqueue failure may refer
+        // to a job absent from this pass's snapshot, so it must trigger another pass immediately.
         val pending = recoverySignal.tryTakePending()
-        if (pending != null) addRequests(pending.copy(immediate = false))
-        recoveryRetryDeadlineMillis = if (recovered && pending?.immediate != true) {
+        if (pending != null) addRequests(pending.copy(cleanup = false))
+        recoveryRetryDeadlineMillis = if (recovered && pending?.cleanup != true) {
             null
         } else {
             monotonicTimeMillis() + workerFailureFollowUpDelayMillis
@@ -330,6 +345,7 @@ internal suspend fun reconcileQueuedDurableUploads(
     schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { false },
     cleanupCapability: suspend (AndroidDurableMultipartUploadJob) -> Unit,
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    recoverUploading: suspend (AndroidDurableMultipartUploadJob) -> Unit = { error("Upload recovery is unavailable.") },
 ): Boolean {
     var allScheduled = true
     jobs.filter { job -> job.requiresSchedulingRecovery(allowQueuedScheduling) }.forEach { job ->
@@ -337,7 +353,7 @@ internal suspend fun reconcileQueuedDurableUploads(
             if (job.capabilityCleanupPending) {
                 cleanupCapability(job)
             } else if (!schedulerOwns(job)) {
-                schedule(job)
+                if (job.state == DurableUploadState.Uploading) recoverUploading(job) else schedule(job)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -350,7 +366,8 @@ internal suspend fun reconcileQueuedDurableUploads(
 
 private fun AndroidDurableMultipartUploadJob.requiresSchedulingRecovery(
     allowQueuedScheduling: Boolean,
-): Boolean = capabilityCleanupPending || (allowQueuedScheduling && state == DurableUploadState.Queued)
+): Boolean = capabilityCleanupPending || state == DurableUploadState.Uploading ||
+    (allowQueuedScheduling && state == DurableUploadState.Queued)
 
 internal suspend fun retryQueuedDurableUploadScheduling(
     retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),
@@ -417,4 +434,20 @@ internal suspend fun persistAndScheduleDurableUpload(
         runCatching(requestRecovery)
     }
     return DurableUploadEnqueueResult.Queued(job.status())
+}
+
+// Serialize with Queued -> Uploading claims and re-read both authorities before retiring an orphan.
+internal suspend fun recoverOrphanedDurableUpload(
+    expected: AndroidDurableMultipartUploadJob,
+    load: (String) -> AndroidDurableMultipartUploadJob?,
+    schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean,
+    markUnknown: (String) -> AndroidDurableMultipartUploadJob?,
+    cleanupCapability: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    coordinator: AndroidDurableUploadStartCoordinator = ANDROID_DURABLE_UPLOAD_START_COORDINATOR,
+) = coordinator.withJob(expected.id) {
+    val current = load(expected.id) ?: return@withJob
+    if (current.accountId != expected.accountId || current.state != DurableUploadState.Uploading || schedulerOwns(current)) {
+        return@withJob
+    }
+    markUnknown(current.id)?.let { cleanupCapability(it) }
 }

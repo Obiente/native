@@ -279,3 +279,31 @@ text must not hide these actions or bypass read-only and recurrence guards.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
+
+### Recovery of saved account access
+
+Android and desktop startup distinguish an unreadable saved sign-in from a new
+installation. The native recovery screen offers retry and an explicit sign-in
+reset; background account lookup still returns unavailable without activating
+unreadable credentials. Unsupported credential versions remain protected from
+reset by older builds.
+
+An explicit Android reset preserves malformed account-removal journal rows in
+private storage and writes a durable recovery fence before removing them from
+the active journal. Each account remains unavailable until its owned-state
+cleanup completes using that account's supplied session. Failed cleanup retains
+the fence and pending work, and new malformed rows invalidate earlier recovery
+decisions. This does not discard unresolved local document changes. Desktop
+account removal also verifies retirement of recognized temporary file-sync
+staging files under the sync engine lock, while keeping user originals.
+
+These are source and deterministic-test guarantees, not claims that a published
+installer already includes the behavior.
+
+Android queued uploads retain their rows while saved credentials require recovery.
+Malformed preference values, damaged ciphertext, and invalid decoded credential
+records pause timed retries when no usable or temporarily inaccessible fallback
+remains. Temporary keystore failures continue retrying, including for inactive
+accounts. Unsupported credential versions require an upgrade. These policies are
+covered by deterministic Android unit tests; they do not establish device or
+release validation.

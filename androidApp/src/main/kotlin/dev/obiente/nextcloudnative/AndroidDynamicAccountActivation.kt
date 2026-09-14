@@ -10,7 +10,7 @@ internal class AndroidDynamicAccountActivation(
     private val activateMemory: (String) -> Unit = AccountPrivateMemoryLifecycle::activateAccount,
 ) {
     suspend fun afterCredentialSave(persistedSession: NextcloudSession) {
-        activateMemory(persistedSession.accountId.storageKey)
         coalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(persistedSession))
+        activateMemory(persistedSession.accountId.storageKey)
     }
 }

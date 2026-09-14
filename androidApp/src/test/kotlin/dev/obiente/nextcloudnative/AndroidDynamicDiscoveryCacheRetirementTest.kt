@@ -43,6 +43,26 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
     }
 
     @Test
+    fun `retirement removes both known generations without clearing another account`() {
+        val root = Files.createTempDirectory("dynamic-discovery-prefixes").toFile()
+        val cache = AndroidDynamicDiscoveryCache(root)
+        val account = "a".repeat(64)
+        val current = "1".repeat(64)
+        val legacy = "2".repeat(32)
+        val unrelated = "3".repeat(64)
+        try {
+            cache.save(account, current, "deck", "current", producerForTest(account, 0L))
+            cache.save(account, legacy, "deck", "legacy", producerForTest(account, 0L))
+            cache.save("b".repeat(64), unrelated, "deck", "retained", producerForTest("b".repeat(64), 0L))
+            cache.retireAccount(account, current, legacy)
+            cache.activateAccount(account)
+            assertNull(cache.load(account, current, "deck"))
+            assertNull(cache.load(account, legacy, "deck"))
+            assertEquals("retained", cache.load("b".repeat(64), unrelated, "deck"))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun `legacy cleanup without a persisted cache identity removes all discovery metadata`() {
         val root = Files.createTempDirectory("dynamic-discovery-legacy").toFile()
         val cache = AndroidDynamicDiscoveryCache(root)

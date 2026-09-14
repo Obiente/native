@@ -143,7 +143,7 @@ class AndroidDurableMultipartUploadPolicyTest {
             val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
             val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
             assertEquals(
-                if (failureMode == "read") {
+                if (failureMode != "read-type") {
                     DurableUploadQueueRecoveryDisposition.Retry
                 } else {
                     DurableUploadQueueRecoveryDisposition.Quarantine

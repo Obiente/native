@@ -361,7 +361,7 @@ class DesktopDeckCardDraftStoreTest {
     }
 
     @Test
-    fun `account removal preserves unreadable and other account legacy drafts`() =
+    fun `account removal preserves unreadable legacy drafts and remains pending`() =
         withStore { root, key, store ->
             val alice = session()
             val bob = session(login = "bob")
@@ -379,12 +379,34 @@ class DesktopDeckCardDraftStoreTest {
             )
             writeLegacyDraft(attributable, key, aliceDraft)
 
-            store.removeAccount(alice.accountId.storageKey, desktopFileCacheAccountId(alice))
+            assertFailsWith<IllegalStateException> {
+                store.removeAccount(alice.accountId.storageKey, desktopFileCacheAccountId(alice))
+            }
 
             assertTrue(aliceLegacy.exists())
             assertTrue(bobLegacy.exists())
             assertFalse(attributable.exists())
         }
+
+    @Test
+    fun `legacy account cleanup retries after the keyring recovers`() = withStore { root, key, store ->
+        val account = session()
+        val draft = persisted(cardId = 93L)
+        val legacy = root.resolve(store.legacyStorageFileName(desktopFileCacheAccountId(account), draft.key))
+        writeLegacyDraft(legacy, key, draft)
+        val unavailable = DesktopDeckCardDraftStore(root, DesktopDeckDraftKeyProvider {
+            error("Synthetic keyring outage")
+        })
+
+        assertFailsWith<IllegalStateException> {
+            unavailable.removeAccount(account.accountId.storageKey, desktopFileCacheAccountId(account))
+        }
+        assertTrue(legacy.exists())
+        store.removeAccount(account.accountId.storageKey, desktopFileCacheAccountId(account))
+        store.migrateLegacyEntries(account)
+        assertNull(store.load(account, draft.key))
+        assertFalse(legacy.exists())
+    }
 
     @Test
     fun `keyring failure does not delete a valid encrypted draft`() =

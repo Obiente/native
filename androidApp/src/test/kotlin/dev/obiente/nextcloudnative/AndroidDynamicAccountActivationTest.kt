@@ -17,7 +17,14 @@ class AndroidDynamicAccountActivationTest {
         var activatedMemoryAccount: String? = null
         val activation = AndroidDynamicAccountActivation(
             coalescer = coalescer,
-            activateMemory = { activatedMemoryAccount = it },
+            activateMemory = {
+                assertEquals(200, runBlocking {
+                    coalescer.execute(cacheAccountId, "GET /activation-boundary", load = {
+                        NextcloudApiResponse(200, byteArrayOf(), null, null)
+                    }).status
+                })
+                activatedMemoryAccount = it
+            },
         )
 
         activation.afterCredentialSave(session)

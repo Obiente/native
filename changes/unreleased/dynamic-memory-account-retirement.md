@@ -1,6 +1,6 @@
-category: fix
+category: security
 issue: 172
-pull: none
+pull: 455
 platforms: android, desktop
 user-facing: yes
 
