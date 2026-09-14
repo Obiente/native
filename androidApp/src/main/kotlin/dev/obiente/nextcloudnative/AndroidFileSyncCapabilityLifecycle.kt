@@ -43,7 +43,7 @@ internal data class AndroidFileSyncCapabilityRecord(
 }
 
 internal class AndroidFileSyncCapabilityRecoveryException(cause: Exception) : IllegalStateException(
-    "Saved folder access metadata is unavailable. No folder permissions were changed.",
+    "Saved folder access metadata is unavailable. Folder permissions may still need recovery.",
     cause,
 )
 
@@ -184,6 +184,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     private val deliveredSelections: MutableSet<String> = linkedSetOf(),
     private val requestRecovery: () -> Unit = {},
     private val requestedAbandonments: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet(),
+    private val loadConfiguredPairs: () -> List<FileSyncPair> = { emptyList() },
 ) {
     constructor(context: Context) : this(
         AndroidFileSyncCapabilityStore(context.applicationContext),
@@ -193,6 +194,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         DELIVERED_SELECTIONS,
         { requestAndroidFileSyncCapabilityRecovery(context.applicationContext) },
         REQUESTED_ABANDONMENTS,
+        { AndroidFileSyncStore(context.applicationContext).load().coordinator.pairs },
     )
 
     fun hasRecoveryWork(): Boolean = synchronized(LIFECYCLE_LOCK) {
@@ -209,11 +211,31 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         displayName: String,
     ): FileSyncLocalRoot = synchronized(LIFECYCLE_LOCK) {
         val preExisting = grants.exactGrant(exactUri)
-        val existing = store.list().singleOrNull { it.uri == exactUri }
-        if (existing?.phase == AndroidFileSyncCapabilityPhase.Owned && existing.accountId == accountId &&
+        var existing = store.list().singleOrNull { it.uri == exactUri }
+        if (existing == null) {
+            val legacyPairs = loadConfiguredPairs().filter { it.localRootId == exactUri }
+            if (legacyPairs.isNotEmpty()) {
+                require(legacyPairs.any { it.accountId == accountId.value }) { "This folder belongs to another account." }
+                val adopted = AndroidFileSyncCapabilityRecord(
+                    id = UUID.randomUUID().toString(), uri = exactUri, displayName = displayName,
+                    phase = AndroidFileSyncCapabilityPhase.Owned, processGeneration = processGeneration,
+                    preExistingReadGrant = false, preExistingWriteGrant = false,
+                    accountId = legacyPairs.singleAccountOwner(), pairIds = legacyPairs.mapTo(linkedSetOf(), FileSyncPair::id),
+                )
+                store.add(adopted)
+                existing = adopted
+            }
+        }
+        val retained = existing
+        val ownsExisting = retained?.accountId == accountId ||
+            (retained?.phase == AndroidFileSyncCapabilityPhase.Owned && retained.accountId == null &&
+                loadConfiguredPairs().any { pair ->
+                    pair.id in retained.pairIds && pair.localRootId == exactUri && pair.accountId == accountId.value
+                })
+        if (retained?.phase == AndroidFileSyncCapabilityPhase.Owned && ownsExisting &&
             (!preExisting.read || !preExisting.write)
         ) {
-            store.replace(existing.id, existing.phase) {
+            store.replace(retained.id, retained.phase) {
                 it.copy(
                     preExistingReadGrant = it.preExistingReadGrant && preExisting.read,
                     preExistingWriteGrant = it.preExistingWriteGrant && preExisting.write,
@@ -222,7 +244,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             grants.takeExactReadWriteGrant(exactUri)
             val restored = grants.exactGrant(exactUri)
             check(restored.read && restored.write) { "The folder provider did not restore read and write access." }
-            return@synchronized FileSyncLocalRoot(exactUri, displayName, existing.id, accessRestored = true)
+            return@synchronized FileSyncLocalRoot(exactUri, displayName, retained.id, accessRestored = true)
         }
         val record = AndroidFileSyncCapabilityRecord(
             id = UUID.randomUUID().toString(),
@@ -354,12 +376,22 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     fun finishPairCleanupOrRetry(
         pairId: String,
         load: () -> AndroidFileSyncPersistedState,
-    ) = synchronized(LIFECYCLE_LOCK) {
-        val pending = store.list().singleOrNull {
-            pairId in it.pairIds && it.phase == AndroidFileSyncCapabilityPhase.CleanupPending
-        } ?: return@synchronized
-        if (finishCleanup(pending)) return@synchronized
-        reconcile(load())
+    ) {
+        try {
+            synchronized(LIFECYCLE_LOCK) {
+                val pending = store.list().singleOrNull {
+                    pairId in it.pairIds && it.phase == AndroidFileSyncCapabilityPhase.CleanupPending
+                } ?: return
+                if (finishCleanup(pending)) return
+                reconcile(load())
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (load().coordinator.pairs.any { it.id == pairId }) throw failure
+            // Removal is committed. The recovery owner was scheduled before the
+            // cleanup intent and retains the remaining grant cleanup across restart.
+        }
     }
 
     fun persistPairRemoval(
@@ -390,7 +422,8 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            false
+            // Confirmed removal is complete even if its durable grant cleanup is pending.
+            true
         }
     }
 
@@ -405,12 +438,24 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         check(!hasConflictingOwnership(records, safPairs)) {
             "Folder capability ownership must be reconciled before changing sync pairs."
         }
+        var recoveryFailure: Exception? = null
+        fun attemptRecovery(action: () -> Unit) {
+            try {
+                action()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (recoveryFailure == null) recoveryFailure = failure
+            }
+        }
         safPairs.groupBy(FileSyncPair::localRootId).forEach { (uri, matches) ->
-            if (records.none { it.uri == uri }) adoptLegacyCapability(uri, matches, state.localDisplayNames)
+            attemptRecovery {
+                if (records.none { it.uri == uri }) adoptLegacyCapability(uri, matches, state.localDisplayNames)
+            }
         }
         records = store.list()
-        records.forEach { original ->
-            val record = store.list().firstOrNull { it.id == original.id } ?: return@forEach
+        records.forEach { original -> attemptRecovery {
+            val record = store.list().firstOrNull { it.id == original.id } ?: return@attemptRecovery
             val matchingPairs = safPairs.filter { it.localRootId == record.uri }
             val matchingIds = matchingPairs.mapTo(linkedSetOf(), FileSyncPair::id)
             when (record.phase) {
@@ -459,8 +504,11 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                     }
                 }
             }
-        }
+        } }
+        recoveryFailure?.let { throw it }
+        Unit
     }
+
 
     fun reconcileRestoredSetup(
         accountId: AndroidFileSyncCapabilityAccountId,

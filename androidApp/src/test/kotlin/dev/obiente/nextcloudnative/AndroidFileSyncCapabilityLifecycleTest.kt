@@ -201,7 +201,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
     fun `later background reconciliation finishes a committed removal after repeated failure`() {
         val fixture = preparedCleanup()
         fixture.grants.failRelease = true
-        assertFailsWith<IllegalStateException> { fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() } }
+        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() }
         assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
         fixture.grants.failRelease = false
         fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
@@ -651,6 +651,33 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `either recorded owner can reauthorize a legacy shared root`() {
+        val owners = listOf(pair(), pair(id = OTHER_PAIR_ID).copy(accountId = "other-account"))
+        for (owner in owners) for (previouslyAdopted in listOf(false, true)) {
+            val fixture = fixture(readGranted = previouslyAdopted, writeGranted = previouslyAdopted, loadConfiguredPairs = { owners })
+            fixture.lifecycle.reconcile(state(*owners.toTypedArray()))
+            fixture.grants.readGranted = false
+            fixture.grants.writeGranted = false
+            val restored = fixture.lifecycle.acquire(AndroidFileSyncCapabilityAccountId(owner.accountId), ROOT_URI, "Notes")
+            assertTrue(restored.accessRestored)
+            assertEquals(setOf(PAIR_ID, OTHER_PAIR_ID), fixture.store.list().single().pairIds)
+            assertTrue(fixture.grants.readGranted && fixture.grants.writeGranted)
+        }
+    }
+
+    @Test
+    fun `an unrelated or stale legacy owner cannot retake a shared root grant`() {
+        val owners = listOf(pair(), pair(id = OTHER_PAIR_ID).copy(accountId = "other-account"))
+        val fixture = fixture(readGranted = true, writeGranted = true, loadConfiguredPairs = { owners.filter { it.id == OTHER_PAIR_ID } })
+        fixture.lifecycle.reconcile(state(*owners.toTypedArray()))
+        fixture.grants.readGranted = false
+        fixture.grants.writeGranted = false
+        assertFailsWith<IllegalArgumentException> { fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes") }
+        assertFailsWith<IllegalArgumentException> { fixture.lifecycle.acquire(AndroidFileSyncCapabilityAccountId("unrelated"), ROOT_URI, "Notes") }
+        assertFalse(fixture.grants.readGranted || fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `legacy duplicates adopt a ready grant without releasing it`() {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)
@@ -900,6 +927,31 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `a failed provider does not starve an independent pending cleanup`() {
+        val fixture = preparedCleanup()
+        val first = fixture.store.list().single()
+        fixture.store.add(first.copy(id = java.util.UUID.randomUUID().toString(), uri = "$ROOT_URI-other", pairIds = emptySet()))
+        fixture.grants.failQueryUri = ROOT_URI
+        assertFailsWith<IllegalStateException> { fixture.lifecycle.reconcile(state()) }
+        assertEquals(listOf(first.id), fixture.store.list().map { it.id })
+        assertTrue(fixture.lifecycle.hasRecoveryWork())
+    }
+
+    @Test
+    fun `ambiguous save reports committed removal while grant cleanup remains pending`() {
+        val fixture = preparedCleanup()
+        fixture.grants.failRelease = true
+        fixture.lifecycle.persistPairRemoval(PAIR_ID, load = { state() }) {
+            error("save failed after commit")
+        }
+        assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
+        assertTrue(fixture.lifecycle.hasRecoveryWork())
+        fixture.grants.failRelease = false
+        fixture.lifecycle.reconcile(state())
+        assertTrue(fixture.store.list().isEmpty())
+    }
+
+    @Test
     fun `pair cleanup retries an unavailable grant query against authoritative removal`() {
         val fixture = preparedCleanup()
         fixture.grants.failQueryCount = 1
@@ -947,11 +999,12 @@ class AndroidFileSyncCapabilityLifecycleTest {
         readGranted: Boolean = false,
         writeGranted: Boolean = false,
         requestRecovery: () -> Unit = {},
+        loadConfiguredPairs: () -> List<FileSyncPair> = { emptyList() },
     ): Fixture {
         val storage = FakeStorage()
         val store = AndroidFileSyncCapabilityStore(storage, IdentityCipher)
         val grants = FakeGrantAccess(readGranted, writeGranted)
-        return Fixture(storage, store, grants, AndroidFileSyncCapabilityLifecycle(store, grants, generation, requestRecovery = requestRecovery))
+        return Fixture(storage, store, grants, AndroidFileSyncCapabilityLifecycle(store, grants, generation, requestRecovery = requestRecovery, loadConfiguredPairs = loadConfiguredPairs))
     }
 
     private fun pair(id: String = PAIR_ID, localRootId: String = ROOT_URI) = FileSyncPair(
@@ -1013,6 +1066,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
         var readGranted: Boolean,
         var writeGranted: Boolean,
     ) : AndroidFileSyncGrantAccess {
+        var failQueryUri: String? = null
         var failQuery = false
         var failQueryCount = 0
         var failRelease = false
@@ -1022,7 +1076,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
 
         override fun exactGrant(uri: String): AndroidFileSyncGrantState {
             events += "query"
-            if (failQuery || failQueryCount > 0) {
+            if (failQuery || uri == failQueryUri || failQueryCount > 0) {
                 failQueryCount = (failQueryCount - 1).coerceAtLeast(0)
                 error("grant metadata unavailable")
             }

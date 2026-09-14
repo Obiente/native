@@ -206,6 +206,13 @@ acquisitions and committed pair removals retain cleanup evidence until access
 is released. Cleanup retries do not transfer or delete user file contents.
 - Live-server audits use synthetic disposable accounts, record exact tested
   versions, and remain separate from deterministic unit and integration tests.
+A durably removed Android folder-sync pair reports completion while its previously
+scheduled capability recovery worker retries any remaining permission cleanup.
+Ambiguous coordinator saves still require authoritative confirmation of removal.
+Reconciliation records independent cleanup progress before reporting a failed
+provider, so one unavailable grant cannot indefinitely retain unrelated grants.
+A legacy shared root can regain expired access only for an account that still
+owns a recorded pair at that exact root in the authoritative coordinator.
 
 A bug fix adds the smallest regression test at the layer where the invariant
 failed. Tests should assert public behavior, not copied implementation details.
