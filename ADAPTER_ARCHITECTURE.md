@@ -344,3 +344,12 @@ content authentication and reconciliation. It retains the original tree URI,
 grant and discovery scope while using authoritative provider reads. Busy,
 unavailable or unverified cross-profile accounts keep recovery pending. Ordinary
 external providers retain their existing grant behavior.
+
+Relocated recovery can be attributed by either an authenticated stage or an
+authenticated backup. Backup-only delete transactions do not require a stage;
+both the recorded document identity and content identity are still required,
+and multiple observed locations remain ambiguous.
+Path-changing stage IDs require the original stage name and matching recorded
+content. Renamed backup IDs require matching recorded content even when the name
+contains the recovery token. Unverified token-bearing candidates preserve the
+ownership row without authorizing a rename or deletion.

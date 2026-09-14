@@ -10,6 +10,46 @@ import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
     @Test
+    fun `relocated backup-only recovery requires both identity and content evidence`() {
+        val root = Files.createTempDirectory("saf-relocated-backup-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val backup = AndroidSafOwnedDownloadTransaction(
+                finalName = "Removed.txt", token = FIRST_TOKEN,
+                backupDocumentIdentity = "content://provider/document/old-backup",
+                backupContentIdentity = "sha256:${"a".repeat(64)}",
+            )
+            val original = "content://provider/document/original"
+            val moved = "content://provider/document/moved"
+            val names = setOf("provider-backup-${backup.token}")
+            val stage = authenticatedRelocationTransaction()
+            val cases = listOf(
+                backup.copy(backupContentIdentity = null) to false,
+                backup.copy(backupDocumentIdentity = null) to false,
+                stage.copy(stageContentIdentity = null) to false,
+                stage.copy(stageDocumentIdentity = null) to false,
+                backup to true,
+                stage to true,
+                stage.copy(backupDocumentIdentity = backup.backupDocumentIdentity, backupContentIdentity = backup.backupContentIdentity) to true,
+            )
+            for ((transaction, attributable) in cases) {
+                store.forDirectory(original).add(transaction)
+                val index = store.indexed()
+                index.observeRecoveryNames(moved, names)
+                val matches = index.forDirectory(moved).transactions(names)
+                assertEquals(if (attributable) listOf(transaction) else emptyList(), matches)
+                store.forDirectory(original).remove(transaction)
+            }
+            store.forDirectory(original).add(backup)
+            val ambiguous = store.indexed()
+            ambiguous.observeRecoveryNames(moved, names)
+            ambiguous.observeRecoveryNames("content://provider/document/copied", names)
+            assertFailsWith<IllegalStateException> { ambiguous.observedPendingDirectoryIdentities() }
+            assertEquals(listOf(backup), store.pendingTransactions())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun `copied recovery tokens preserve ownership and reject every candidate`() {
         val root = Files.createTempDirectory("saf-ambiguous-recovery-").toFile()
         try {
