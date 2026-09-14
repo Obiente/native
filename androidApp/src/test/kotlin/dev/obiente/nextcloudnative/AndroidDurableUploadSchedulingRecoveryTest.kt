@@ -126,7 +126,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                 recover = {
                     recoveryRuns += 1
                     assertTrue(recoveryRuns <= 3, "Cleanup signals must not spin ahead of the worker deadline")
-                    recoverySignal.request()
+                    recoverySignal.requestCleanup()
                     recoverySignal.scheduleUnlessBackedOff("job-1") { scheduled += "job-1" }
                     if (scheduled.isNotEmpty()) throw expected
                     false
@@ -163,7 +163,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
             monitorQueuedDurableUploadScheduling(
                 recover = {
                     recoveryRuns += 1
-                    recoverySignal.request()
+                    recoverySignal.requestCleanup()
                     if (recoveryRuns == 2) {
                         assertEquals(listOf(60_000L), waits)
                         throw expected
@@ -182,6 +182,33 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertTrue(actual === expected)
         assertEquals(2, recoveryRuns)
         assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
+    fun `external enqueue failure during cleanup reconciliation gets an immediate fresh snapshot`() = runBlocking {
+        val signal = AndroidDurableUploadSchedulingRecoverySignal()
+        val jobPersisted = CompletableDeferred<Unit>()
+        val firstSnapshot = CompletableDeferred<Unit>()
+        val stop = CancellationException("recovered new job")
+        var passes = 0
+        val monitoring = async {
+            assertFailsWith<CancellationException> {
+                monitorQueuedDurableUploadScheduling(recover = {
+                    passes++
+                    if (passes == 1) {
+                        firstSnapshot.complete(Unit)
+                        jobPersisted.await()
+                        signal.requestCleanup()
+                        true
+                    } else throw stop
+                }, wait = { error("An external request must not wait for cleanup backoff") }, recoverySignal = signal)
+            }
+        }
+        firstSnapshot.await()
+        signal.request()
+        jobPersisted.complete(Unit)
+        assertTrue(monitoring.await() === stop)
+        assertEquals(2, passes)
     }
 
     @Test

@@ -144,7 +144,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
                         },
                         isPermissionAbsent = { exactReadPermissionIsAbsent(uri) },
                         removeCapability = { removeMetadata(token) },
-                        onRollbackRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                        onRollbackRetained = ::requestQueuedDurableUploadCleanupRecovery,
                     )
                     cancelledAfterAcquire = !finalizeDurableUploadCapabilityDelivery(
                         publishReady = {
@@ -211,7 +211,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         PENDING_CLEANUP_SELECTIONS += file.selectionId
         selections[file.selectionId] = cleanupPending
         if (!durableUploadCleanupStep { persist(cleanupPending) }) {
-            requestQueuedDurableUploadSchedulingRecovery()
+            requestQueuedDurableUploadCleanupRecovery()
             return@synchronized false
         }
         val snapshot = try {
@@ -259,7 +259,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             if (released) {
                 selections.remove(file.selectionId)
             } else {
-                requestQueuedDurableUploadSchedulingRecovery()
+                requestQueuedDurableUploadCleanupRecovery()
             }
         }
     }
@@ -281,7 +281,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         val ownershipCheckPending = source.copy(phase = CapabilityPhase.OwnershipCheckPending)
         selections[file.selectionId] = ownershipCheckPending
         val persisted = durableUploadCleanupStep { persist(ownershipCheckPending) }
-        requestQueuedDurableUploadSchedulingRecovery()
+        requestQueuedDurableUploadCleanupRecovery()
         persisted
     }
 
@@ -300,7 +300,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         }
         if (snapshot.recoveryQuarantined) return@synchronized true
         if (!snapshot.scanComplete) {
-            requestQueuedDurableUploadSchedulingRecovery()
+            requestQueuedDurableUploadCleanupRecovery()
             return@synchronized false
         }
         val capabilities = snapshot.capabilities.toMutableMap()
@@ -444,7 +444,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
 
     private fun retainCapabilityCleanup(selectionId: String): Boolean {
         PENDING_CLEANUP_SELECTIONS += selectionId
-        return retainDurableUploadCapabilityCleanup(::requestQueuedDurableUploadSchedulingRecovery)
+        return retainDurableUploadCapabilityCleanup(::requestQueuedDurableUploadCleanupRecovery)
     }
 
     private fun quarantineCapabilityCleanup(selectionId: String, onQuarantined: () -> Unit): Boolean {
@@ -472,7 +472,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         if (snapshot.malformedCapabilities.isNotEmpty()) {
             PENDING_CLEANUP_SELECTIONS += snapshot.malformedCapabilities.keys
             if (snapshot.malformedCapabilities.values.any(::malformedDurableUploadCapabilityCanBecomeActionable)) {
-                requestQueuedDurableUploadSchedulingRecovery()
+                requestQueuedDurableUploadCleanupRecovery()
             }
         }
         return snapshot
