@@ -20,6 +20,13 @@ class AndroidDurableUploadQueueRecoveryTest {
         }
     }
 
+    @Test fun workerRetriesKeystoreFailureDuringStoreConstruction() = runBlocking {
+        val outcome = withDurableUploadQueueRecovery({ "retry" }, { "preserve" }) {
+            constructDurableUploadQueueOwner { throw IOException("keystore unavailable during construction") }
+        }
+        assertEquals("retry", outcome)
+    }
+
     @Test fun workerDefersInitialQueueReadAndPreservesCancellation() = runBlocking {
         for (disposition in DurableUploadQueueRecoveryDisposition.entries) {
             val outcome = withDurableUploadQueueRecovery({ "retry" }, { "preserve" }) {

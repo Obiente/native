@@ -28,7 +28,7 @@ internal class DeckAttachmentUploadWorker(
     private suspend fun executeWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
             ?: return@withContext Result.failure()
-        val store = AndroidDurableMultipartUploadStore(applicationContext)
+        val store = constructDurableUploadQueueOwner { AndroidDurableMultipartUploadStore(applicationContext) }
         val initial = store.find(jobId) ?: return@withContext Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {

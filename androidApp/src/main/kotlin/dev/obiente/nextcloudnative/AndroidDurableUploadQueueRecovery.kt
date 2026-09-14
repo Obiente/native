@@ -35,3 +35,12 @@ internal suspend fun <Result> withDurableUploadQueueRecovery(
         DurableUploadQueueRecoveryDisposition.Quarantine -> onQuarantine()
     }
 }
+
+// Store construction opens Android Keystore too, before the first encrypted row is read.
+internal fun <Owner> constructDurableUploadQueueOwner(create: () -> Owner): Owner = try {
+    create()
+} catch (cancelled: kotlinx.coroutines.CancellationException) {
+    throw cancelled
+} catch (failure: Exception) {
+    throw AndroidDurableMultipartUploadRecoveryException(failure, durableUploadQueueDecryptionDisposition(failure))
+}
