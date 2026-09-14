@@ -339,7 +339,7 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `inactive retained account defers when its credential is temporarily unavailable`() {
+    fun `inactive retained account retries when its credential is temporarily unavailable`() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -353,7 +353,7 @@ class AndroidDurableMultipartUploadPolicyTest {
             loadSession = { null },
         )
 
-        assertEquals(DurableUploadAccountResolution.DeferAccountActivation, resolution)
+        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolution)
     }
 
     @Test
