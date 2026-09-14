@@ -136,6 +136,8 @@ internal fun recoverFailedFileSyncPairSave(
 ): Boolean {
     val commitIsPresent = try {
         load().coordinator.pairs.any { it.id == pairId }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (_: Exception) {
         return false
     }
@@ -156,11 +158,20 @@ internal fun bindAndPersistFileSyncPair(
         bindReady()
         persist()
     } catch (failure: Exception) {
-        try {
-            if (recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)) return
+        val committed = try {
+            recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)
+        } catch (cancelled: CancellationException) {
+            if (failure is CancellationException) {
+                if (cancelled !== failure) failure.addSuppressed(cancelled)
+                throw failure
+            }
+            cancelled.addSuppressed(failure)
+            throw cancelled
         } catch (cleanupFailure: Exception) {
             failure.addSuppressed(cleanupFailure)
+            false
         }
+        if (committed && failure !is CancellationException) return
         throw failure
     }
 }

@@ -161,6 +161,26 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `completed setup and cleanup skip the restoration grace period`() = runBlocking {
+        for (scenario in listOf("empty", "owned", "cleanup")) {
+            val fixture = fixture()
+            val persisted = if (scenario == "owned") state(pair()) else state()
+            if (scenario != "empty") {
+                fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+                fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
+                if (scenario == "cleanup") fixture.lifecycle.preparePairCleanup(PAIR_ID)
+            }
+            reconcileFileSyncCapabilitiesAfterRestoration(Mutex(), { persisted }, fixture.lifecycle) {
+                error("Completed $scenario recovery must not wait for restoration")
+            }
+            assertFalse(fixture.lifecycle.hasRestorableSetup())
+            assertFalse(fixture.lifecycle.hasRecoveryWork())
+            if (scenario == "owned") assertTrue(fixture.grants.readGranted && fixture.grants.writeGranted)
+            else assertTrue(fixture.store.list().isEmpty())
+        }
+    }
+
+    @Test
     fun `restoration window reclaims unclaimed ready grants without requiring a screen`() = runBlocking {
         val fixture = fixture(generation = NEW_GENERATION)
         fixture.seedReady(OLD_GENERATION)

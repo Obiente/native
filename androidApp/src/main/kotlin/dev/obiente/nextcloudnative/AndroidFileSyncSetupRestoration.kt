@@ -27,6 +27,7 @@ internal suspend fun reconcileFileSyncCapabilitiesAfterRestoration(
     waitForRestoration: suspend () -> Unit = { delay(60_000L) },
 ) {
     reconcileFileSyncCapabilities(lock, load, capabilities, onFailure = onFailure)
+    if (!lock.withLock { capabilities.hasRestorableSetup() }) return
     waitForRestoration()
     reconcileFileSyncCapabilities(lock, load, capabilities, reclaimUnrestoredReady = true, onFailure = onFailure)
 }

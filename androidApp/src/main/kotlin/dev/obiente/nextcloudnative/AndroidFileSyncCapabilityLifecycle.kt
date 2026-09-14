@@ -209,6 +209,10 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         }
     }
 
+    fun hasRestorableSetup(): Boolean = synchronized(LIFECYCLE_LOCK) {
+        store.list().any { it.phase == AndroidFileSyncCapabilityPhase.Acquiring || it.phase == AndroidFileSyncCapabilityPhase.Ready }
+    }
+
     fun acquire(
         accountId: AndroidFileSyncCapabilityAccountId,
         exactUri: String,

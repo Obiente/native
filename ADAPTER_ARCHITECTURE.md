@@ -201,8 +201,11 @@ Folder-picker acquisition and durable scheduling run on the picker's owned IO
 scope, with result delivery on Main and cancellation cleanup retained on IO.
 New acquisitions and cleanup requests schedule recovery, and unfinished cleanup
 retains bounded WorkManager backoff.
-A process restoration grace period protects pending folder drafts; abandoned
-acquisitions and committed pair removals retain cleanup evidence until access
+A process restoration grace period protects pending folder drafts only while
+acquiring or ready selections remain after reconciliation; completed setup and
+cleanup return without waiting. A cancelled pair save preserves authoritative
+ownership recovery and then rethrows cancellation, even when the save committed.
+Abandoned acquisitions and committed pair removals retain cleanup evidence until access
 is released. Cleanup retries do not transfer or delete user file contents.
 - Live-server audits use synthetic disposable accounts, record exact tested
   versions, and remain separate from deterministic unit and integration tests.
