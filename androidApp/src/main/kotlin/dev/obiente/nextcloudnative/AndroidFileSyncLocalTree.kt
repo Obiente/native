@@ -76,11 +76,12 @@ internal class AndroidSafFileSyncLocalTree(
     private fun indexRecoveryLocations(
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
         shouldContinue: () -> Boolean,
+        discoveryRoot: Uri,
     ) {
         val pending = ArrayDeque<Pair<String, Uri>>()
         val visited = mutableSetOf<String>()
         var observedEntries = 0
-        pending += "" to rootUri
+        pending += "" to discoveryRoot
         while (pending.isNotEmpty()) {
             requireScanContinuation(shouldContinue)
             val (parentPath, parentUri) = pending.removeFirst()
@@ -107,8 +108,9 @@ internal class AndroidSafFileSyncLocalTree(
     internal fun indexRecoveryLocationsIfNeeded(
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
         shouldContinue: () -> Boolean,
+        discoveryRoot: Uri = rootUri,
     ) = indexAndroidSafRecoveryLocationsIfNeeded(ownershipDirectory) {
-        indexRecoveryLocations(ownershipDirectory, shouldContinue)
+        indexRecoveryLocations(ownershipDirectory, shouldContinue, discoveryRoot)
     }
 
     override fun authenticateFileForReplacement(

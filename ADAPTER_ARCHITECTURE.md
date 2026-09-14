@@ -316,3 +316,9 @@ remains. Temporary keystore failures continue retrying, including for inactive
 accounts. Unsupported credential versions require an upgrade. These policies are
 covered by deterministic Android unit tests; they do not establish device or
 release validation.
+
+When the removal session is bound to the local provider's account, pending owned
+recovery tokens are discovered from that account's root, including directories
+moved outside the old sync subtree. The scan retains its depth, count, ownership,
+content-authentication, and cancellation bounds. Cross-account or external
+provider recovery stays within the original tree grant.

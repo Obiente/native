@@ -14,6 +14,22 @@ import kotlin.test.assertNull
 
 class AndroidProviderRecoverySafetyTest {
     @Test
+    fun relocatedOwnedFilesAreDiscoverableOutsideTheOldSubtreeOnlyWithBoundAccountAccess() {
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val oldRoot = NextcloudDocumentIds.documentId(session, "original/subtree")
+        val movedDirectory = NextcloudDocumentIds.documentId(session, "elsewhere/moved")
+        val discoveryRoot = androidSafRetirementDiscoveryRoot(oldRoot, session)
+        kotlin.test.assertEquals(NextcloudDocumentIds.rootId(session), discoveryRoot)
+        kotlin.test.assertNotNull(androidSafOwnedDownloadRecoveryDirectory(discoveryRoot, movedDirectory))
+        kotlin.test.assertNull(androidSafOwnedDownloadRecoveryDirectory(oldRoot, movedDirectory))
+        kotlin.test.assertEquals(oldRoot, androidSafRetirementDiscoveryRoot(oldRoot, null))
+        kotlin.test.assertEquals(oldRoot, androidSafRetirementDiscoveryRoot(oldRoot, session.copy(loginName = "bob")))
+        kotlin.test.assertNull(androidSafOwnedDownloadRecoveryDirectory(
+            discoveryRoot, NextcloudDocumentIds.documentId(session.copy(loginName = "bob"), "elsewhere/moved"),
+        ))
+    }
+
+    @Test
     fun legacyTreeRecoveryBindsOnlyTheAccountOwningItsDocument() {
         val removing = NextcloudSession("https://cloud.example.test", "alice", "password")
         val other = removing.copy(loginName = "bob")

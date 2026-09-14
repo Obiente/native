@@ -147,6 +147,9 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
 ) {
     val appContext = context.applicationContext
     val treeUri = Uri.parse(localRootId)
+    val discoveryRootId = androidSafRetirementDiscoveryRoot(
+        DocumentsContract.getTreeDocumentId(treeUri), providerRecoverySession,
+    )
     val ownership = createAndroidSafDownloadOwnershipStore(appContext, localRootId)
     val indexedOwnership = ownership.indexed()
     val localTree = AndroidSafFileSyncLocalTree(
@@ -200,14 +203,17 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         reconcileRecordedThenDiscoveredAndroidSafDownloadDirectories(
             recordedCandidates = recordedCandidates,
             discoverCandidates = {
-                localTree.indexRecoveryLocationsIfNeeded(indexedOwnership, shouldContinue)
+                localTree.indexRecoveryLocationsIfNeeded(
+                    indexedOwnership, shouldContinue,
+                    DocumentsContract.buildDocumentUriUsingTree(treeUri, discoveryRootId),
+                )
                 indexedOwnership.observedPendingDirectoryIdentities().mapNotNull { identity ->
                     val directoryUri = runCatching { Uri.parse(identity) }.getOrNull()
                         ?: return@mapNotNull null
                     val documentId = runCatching { DocumentsContract.getDocumentId(directoryUri) }.getOrNull()
                         ?: return@mapNotNull null
                     androidSafOwnedDownloadRecoveryDirectory(
-                        rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
+                        rootDocumentId = discoveryRootId,
                         directoryDocumentId = documentId,
                     )?.let { candidate -> candidate to directoryUri }
                 }
@@ -228,3 +234,8 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         ),
     ) { "A local download still needs safe recovery." }
 }
+
+/** Expand token discovery only when this process owns the account-bound recovery session. */
+internal fun androidSafRetirementDiscoveryRoot(rootDocumentId: String, session: NextcloudSession?): String =
+    androidRootBoundProviderRecoverySession(rootDocumentId, session)?.let(NextcloudDocumentIds::rootId)
+        ?: rootDocumentId
