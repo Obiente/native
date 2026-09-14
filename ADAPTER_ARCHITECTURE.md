@@ -334,3 +334,7 @@ Android folder-sync schedule restoration validates the exact session while holdi
 its account operation lease, including server discovery. Permanent protocol or
 malformed-state failures stop the one-time job; temporary transport failures get
 at most two retries. Configured pairs remain intact for explicit recovery.
+
+Credential-free legacy account cleanup uses the recorded document identity to
+match that account's legacy and full discovery-cache digests. A missing full
+digest is never a wildcard for other accounts' persisted contracts.

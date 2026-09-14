@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.DynamicNativeMemoryCacheProducer
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -63,25 +65,39 @@ class AndroidDynamicDiscoveryCacheRetirementTest {
     }
 
     @Test
-    fun `legacy cleanup without a persisted cache identity removes all discovery metadata`() {
+    fun `legacy cleanup without a full cache identity preserves unrelated contracts`() {
         val root = Files.createTempDirectory("dynamic-discovery-legacy").toFile()
         val cache = AndroidDynamicDiscoveryCache(root)
+        val removed = NextcloudSession("https://cloud.example.test", "removed", "unused")
+        val retained = NextcloudSession("https://cloud.example.test", "retained", "unused")
+        val current = NextcloudDocumentIds.cacheAccountId(removed)
+        val legacy = NextcloudDocumentIds.accountKey(removed)
+        val unrelated = NextcloudDocumentIds.cacheAccountId(retained)
         try {
-            cache.save(
-                "a".repeat(64), "1".repeat(64), "deck", "first",
-                producerForTest("a".repeat(64), 0L),
-            )
-            cache.save(
-                "b".repeat(64), "2".repeat(64), "talk", "second",
-                producerForTest("b".repeat(64), 0L),
-            )
+            cache.save(removed.accountId.storageKey, current, "deck", "current", producerForTest(removed.accountId.storageKey, 0L))
+            cache.save(removed.accountId.storageKey, legacy, "deck", "legacy", producerForTest(removed.accountId.storageKey, 0L))
+            cache.save(retained.accountId.storageKey, unrelated, "talk", "retained", producerForTest(retained.accountId.storageKey, 0L))
+            root.resolve("$current-deck.json.part").writeText("unfinished")
 
-            cache.retireAccount("a".repeat(64), null)
+            cache.retireAccount(removed.accountId.storageKey, null, legacy)
+            cache.activateAccount(removed.accountId.storageKey)
 
-            assertTrue(root.listFiles().orEmpty().isEmpty())
-        } finally {
-            root.deleteRecursively()
-        }
+            assertNull(cache.load(removed.accountId.storageKey, current, "deck"))
+            assertNull(cache.load(removed.accountId.storageKey, legacy, "deck"))
+            assertEquals("retained", cache.load(retained.accountId.storageKey, unrelated, "talk"))
+            assertEquals(setOf("$unrelated-talk.json"), root.listFiles().orEmpty().map { it.name }.toSet())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun `missing every cache identity refuses cleanup rather than deleting another account`() {
+        val root = Files.createTempDirectory("dynamic-discovery-unknown").toFile()
+        val cache = AndroidDynamicDiscoveryCache(root)
+        try {
+            cache.save("b".repeat(64), "2".repeat(64), "talk", "retained", producerForTest("b".repeat(64), 0L))
+            assertFailsWith<IllegalArgumentException> { cache.retireAccount("a".repeat(64), null) }
+            assertEquals("retained", cache.load("b".repeat(64), "2".repeat(64), "talk"))
+        } finally { root.deleteRecursively() }
     }
 
     private fun producerForTest(accountStorageKey: String, incarnation: Long): DynamicNativeMemoryCacheProducer =
