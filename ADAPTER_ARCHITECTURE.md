@@ -323,3 +323,11 @@ generation even if durable clearing fails. Registration and managed-content
 publication check it under the registry lock, so late producers cannot republish
 cleared account metadata or content. The durable cleanup marker separately fences
 restoration after a failed clear and process restart.
+
+Retained-writeback diagnostics resolve the account's current session separately
+from the descriptor's captured session. Publication tries the current account
+operation lease and rechecks the exact session before enqueueing the diagnostic.
+Enqueueing captures the sink's account generation synchronously; the asynchronous
+sink rejects retired or stale generations under its persistence lock.
+Removal, further rotation or a busy lease skips this optional event rather than
+retaining a path-bearing event under an obsolete account scope.

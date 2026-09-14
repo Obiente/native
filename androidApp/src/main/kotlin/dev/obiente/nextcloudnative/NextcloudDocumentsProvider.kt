@@ -607,20 +607,15 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     }
 
     private fun retainFailedWriteback(session: NextcloudSession, writeback: AndroidDocumentPendingWriteback, failure: Throwable) {
-        val wasRetained = writeback.staging.isFile && writeback.manifest.isFile
-        Log.e(
-            LOG_TAG,
-            if (wasRetained) "Document commit failed; local staged content and recovery metadata were retained."
-            else "Document commit failed and durable recovery storage is incomplete.",
-            failure,
-        )
-        recordProviderFailure(
-            operation = "documents.writeback",
-            failure = failure,
-            accountIdentity = NextcloudDocumentIds.accountKey(session),
-            remotePath = writeback.remotePath,
-            fields = listOf(SupportDiagnosticFieldDraft("recovery_complete", wasRetained.toString())),
-        )
+        retainAndroidDocumentWritebackFailure(session, writeback, failure, { services.loadSession(session.accountId) }) { scope, wasRetained ->
+            recordProviderFailure(
+                operation = "documents.writeback",
+                failure = failure,
+                accountIdentity = scope,
+                remotePath = writeback.remotePath,
+                fields = listOf(SupportDiagnosticFieldDraft("recovery_complete", wasRetained.toString())),
+            )
+            }
     }
 
     private fun requireMutationEtag(file: NextcloudFile): String = file.etag?.takeIf(String::isNotBlank)
