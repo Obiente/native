@@ -199,6 +199,8 @@ internal fun decodeAndroidPendingAccountRemovalCleanup(
 internal data class RestoredAndroidPendingAccountRemovalCleanups(
     val cleanups: Set<AndroidPendingAccountRemovalCleanup>,
     val malformedEntryCount: Int,
+    val recoveryFence: Boolean = false,
+    val reviewedAccounts: Set<String> = emptySet(),
 )
 
 internal fun restoreAndroidPendingAccountRemovalCleanups(
@@ -207,10 +209,12 @@ internal fun restoreAndroidPendingAccountRemovalCleanups(
     val cleanups = linkedSetOf<AndroidPendingAccountRemovalCleanup>()
     var malformedEntryCount = 0
     encoded.forEach { entry ->
+        if (isAndroidCleanupRecoveryMetadata(entry)) return@forEach
         val cleanup = decodeAndroidPendingAccountRemovalCleanup(entry)
         if (cleanup == null) malformedEntryCount += 1 else cleanups += cleanup
     }
-    return RestoredAndroidPendingAccountRemovalCleanups(cleanups, malformedEntryCount)
+    return RestoredAndroidPendingAccountRemovalCleanups(cleanups, malformedEntryCount,
+        ANDROID_CLEANUP_RECOVERY_FENCE in encoded, androidCleanupReviewedAccounts(encoded))
 }
 
 internal fun pendingAndroidAccountRemovalCleanupForSession(

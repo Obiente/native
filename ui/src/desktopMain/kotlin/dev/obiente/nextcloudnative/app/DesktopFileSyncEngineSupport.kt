@@ -64,9 +64,15 @@ internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativeP
     return listOf(root, relative).filter(String::isNotBlank).joinToString("/")
 }
 
-internal fun reclaimDesktopFileSyncStages(stagingRoot: File): Int {
-    if (!stagingRoot.isDirectory) return 0
-    return stagingRoot.listFiles().orEmpty().count { candidate ->
+internal fun reclaimDesktopFileSyncStages(stagingRoot: File, requireComplete: Boolean = false): Int {
+    if (!Files.exists(stagingRoot.toPath(), LinkOption.NOFOLLOW_LINKS)) return 0
+    if (!Files.isDirectory(stagingRoot.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        check(!requireComplete) { "The sync staging location could not be safely inspected." }
+        return 0
+    }
+    val children = stagingRoot.listFiles()
+    check(children != null || !requireComplete) { "The sync staging location could not be inspected." }
+    return children.orEmpty().count { candidate ->
         if (!Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) return@count false
         val name = candidate.name
         val prefix = DESKTOP_FILE_SYNC_STAGE_PREFIXES.firstOrNull { ownedPrefix ->
@@ -74,7 +80,9 @@ internal fun reclaimDesktopFileSyncStages(stagingRoot: File): Int {
         } ?: return@count false
         val token = name.removePrefix("nextcloud-native-$prefix-").removeSuffix(".tmp")
         if (!name.endsWith(".tmp") || runCatching { UUID.fromString(token) }.isFailure) return@count false
-        candidate.delete()
+        candidate.delete().also { deleted ->
+            check(deleted || !requireComplete) { "A temporary sync file could not be retired." }
+        }
     }
 }
 
@@ -205,4 +213,9 @@ internal fun desktopFileSyncStagingDirectory(): File {
     val cacheRoot = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)?.let(::File)
         ?: File(System.getProperty("user.home"), ".cache")
     return File(cacheRoot, "nextcloud-native/file-sync-staging")
+}
+
+internal fun removeDesktopSyncAccountWithStages(store: DesktopFileSyncStore, stagingRoot: File, accountId: String) {
+    reclaimDesktopFileSyncStages(stagingRoot, requireComplete = true)
+    store.removeDesktopFileSyncAccountPairs(accountId)
 }

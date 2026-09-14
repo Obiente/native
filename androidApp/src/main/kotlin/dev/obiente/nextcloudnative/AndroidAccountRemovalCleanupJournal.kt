@@ -17,7 +17,7 @@ internal class AndroidAccountRemovalCleanupJournal(
         return restored
     }
 
-    private fun readEncoded(): Set<String> = try {
+    internal fun readEncoded(): Set<String> = try {
             preferences.getStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, emptySet()).orEmpty()
         } catch (failure: Exception) {
             runCatching(recordMalformed)
@@ -26,6 +26,27 @@ internal class AndroidAccountRemovalCleanupJournal(
                 failure,
             )
         }
+
+    fun quarantineMalformedForReset() {
+        val encoded = readEncoded()
+        val recovery = quarantineAndroidCleanupJournal(encoded) ?: return
+        val previous = preferences.getStringSet(ANDROID_CLEANUP_QUARANTINE_KEY, emptySet()).orEmpty()
+        check(previous.size + recovery.quarantined.size <= 128 &&
+            (previous + recovery.quarantined).sumOf { it.length.toLong() } <= 65_536) {
+            "The preserved cleanup records need local recovery before resetting again."
+        }
+        commit(preferences.edit()
+            .putStringSet(ANDROID_CLEANUP_QUARANTINE_KEY, previous + recovery.quarantined)
+            .putStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, recovery.active))
+    }
+
+    fun markReviewed(accountStorageKey: String) {
+        val encoded = readEncoded()
+        commit(preferences.edit().putStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
+            markAndroidCleanupAccountReviewed(encoded, accountStorageKey)))
+    }
+
+    fun prepare(pending: AndroidPendingAccountRemovalCleanup) = commit(prepareEdit(preferences.edit(), pending))
 
     fun prepareEdit(
         editor: SharedPreferences.Editor,
@@ -84,6 +105,7 @@ internal inline fun <Session> restoreAndroidSessionAfterRemovalCleanup(
     }
     if (
         snapshot.malformedEntryCount > 0 ||
+        (snapshot.recoveryFence && accountId.storageKey !in snapshot.reviewedAccounts) ||
         snapshot.cleanups.any { cleanup -> cleanup.accountStorageKey == accountId.storageKey }
     ) return null
     return restoreSession()
@@ -119,7 +141,7 @@ internal fun removeAndroidAccountRemovalCleanup(
     var malformedFound = false
     val remaining = encoded.filterTo(linkedSetOf()) { entry ->
         val cleanup = decodeAndroidPendingAccountRemovalCleanup(entry)
-        if (cleanup == null) {
+        if (isAndroidCleanupRecoveryMetadata(entry)) true else if (cleanup == null) {
             malformedFound = true
             true
         } else {
