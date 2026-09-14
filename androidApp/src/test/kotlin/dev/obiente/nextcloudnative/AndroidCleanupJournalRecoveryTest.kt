@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.accountRecord
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -28,7 +29,7 @@ class AndroidCleanupJournalRecoveryTest {
     }
 
     @Test fun onlyVerifiedAccountCanResumeAndNewCorruptionInvalidatesPriorDecisions() {
-        val reviewed = markAndroidCleanupAccountReviewed(setOf(ANDROID_CLEANUP_RECOVERY_FENCE), session.accountId.storageKey)
+        val reviewed = markAndroidCleanupAccountReviewed(setOf(ANDROID_CLEANUP_RECOVERY_FENCE), session.accountId.storageKey, emptySet())
         val snapshot = restoreAndroidPendingAccountRemovalCleanups(reviewed)
         assertEquals(session, restoreAndroidSessionAfterRemovalCleanup(session.accountId, { snapshot }) { session })
         assertNull(restoreAndroidSessionAfterRemovalCleanup(other.accountId, { snapshot }) { other })
@@ -84,11 +85,58 @@ class AndroidCleanupJournalRecoveryTest {
         assertEquals(setOf(session.accountId.storageKey), fixture.journal.snapshot().reviewedAccounts)
     }
 
-    @Test fun reviewedAccountHistoryIsBoundedAndNeverDropsFence() {
+    @Test fun replacingOneOfSixtyFourAccountsPreservesEveryRetainedReview() = runBlocking {
+        val accounts = (0 until 64).map { NextcloudSession("https://cloud.example.test", "reviewed-$it", "synthetic-secret") }
         var encoded = setOf(ANDROID_CLEANUP_RECOVERY_FENCE)
-        repeat(100) { encoded = markAndroidCleanupAccountReviewed(encoded, it.toString(16).padStart(64, '0')) }
-        assertEquals(64, restoreAndroidPendingAccountRemovalCleanups(encoded).reviewedAccounts.size)
+        val originalKeys = accounts.mapTo(linkedSetOf()) { it.accountId.storageKey }
+        accounts.forEach { encoded = markAndroidCleanupAccountReviewed(encoded, it.accountId.storageKey, originalKeys) }
+        // Removing the newest account used to evict the oldest retained account's marker.
+        val retained = accounts.dropLast(1)
+        val fixture = JournalFixture(encoded)
+        var cleanupCount = 0
+        retryAndroidCleanupBeforeActivation(session, fixture.journal, { retained.map { it.accountRecord() } }, {},
+            { _, _, _, _, _ -> cleanupCount++ }, {})
+        val expected = retained.mapTo(linkedSetOf()) { it.accountId.storageKey } + session.accountId.storageKey
+        assertEquals(expected, fixture.journal.snapshot().reviewedAccounts)
+        retained.forEach { account ->
+            retryAndroidCleanupBeforeActivation(account, fixture.journal, { (retained + session).map { it.accountRecord() } },
+                { error("A retained account must not repeat cleanup") },
+                { _, _, _, _, _ -> error("A retained account must not lose private state") }, {})
+        }
+        assertEquals(1, cleanupCount)
+        assertTrue(fixture.journal.snapshot().recoveryFence)
+    }
+
+    @Test fun unavailableRegistryDoesNotPruneExistingReviews() = runBlocking {
+        val encoded = markAndroidCleanupAccountReviewed(setOf(ANDROID_CLEANUP_RECOVERY_FENCE), other.accountId.storageKey, emptySet())
+        val fixture = JournalFixture(encoded)
+        retryAndroidCleanupBeforeActivation(session, fixture.journal, { null }, {}, { _, _, _, _, _ -> }, {})
+        assertEquals(setOf(session.accountId.storageKey, other.accountId.storageKey), fixture.journal.snapshot().reviewedAccounts)
+    }
+
+    @Test fun reviewedHistoryOnlyRetainsRegistryAccountsAndTheCurrentAttempt() {
+        var encoded = setOf(ANDROID_CLEANUP_RECOVERY_FENCE)
+        val retained = ArrayDeque<String>()
+        repeat(100) {
+            val key = it.toString(16).padStart(64, '0')
+            if (retained.size == 64) retained.removeFirst()
+            retained.addLast(key)
+            encoded = markAndroidCleanupAccountReviewed(encoded, key, retained.toSet())
+            assertEquals(retained.toSet(), androidCleanupReviewedAccounts(encoded))
+        }
         assertTrue(ANDROID_CLEANUP_RECOVERY_FENCE in encoded)
+    }
+
+    @Test fun missingRegistryDoesNotBlockAReplacementAfterSixtyFourReviews() {
+        val keys = (0 until 64).mapTo(linkedSetOf()) { it.toString(16).padStart(64, '0') }
+        var encoded = setOf(ANDROID_CLEANUP_RECOVERY_FENCE)
+        keys.forEach { encoded = markAndroidCleanupAccountReviewed(encoded, it, keys) }
+        val replacement = "f".repeat(64)
+        encoded = markAndroidCleanupAccountReviewed(encoded, replacement, null)
+        assertEquals(keys + replacement, androidCleanupReviewedAccounts(encoded))
+        // A subsequently readable registry establishes which historical markers can be pruned.
+        encoded = markAndroidCleanupAccountReviewed(encoded, replacement, setOf(replacement))
+        assertEquals(setOf(replacement), androidCleanupReviewedAccounts(encoded))
     }
 
     private class JournalFixture(initial: Set<String>) {
