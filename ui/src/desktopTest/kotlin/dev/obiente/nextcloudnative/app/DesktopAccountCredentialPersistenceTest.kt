@@ -215,7 +215,7 @@ class DesktopAccountCredentialPersistenceTest {
                 session.appPassword.encodeToByteArray(),
             )
 
-            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+            assertFailsWith<NextcloudSessionStorageVersionUnsupportedException> {
                 persistence(preferences, secrets).loadActiveSession()
             }
 
@@ -345,9 +345,8 @@ class DesktopAccountCredentialPersistenceTest {
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
         val persistence = persistence(preferences, secrets, diagnostics)
-        val restored = persistence.loadActiveSession()
-
-        assertNull(restored)
+        assertFailsWith<NextcloudSessionStorageVersionUnsupportedException> { persistence.loadActiveSession() }
+        assertEquals(NextcloudSessionLoadState.StorageVersionUnsupported, loadNextcloudSessionSafely(persistence::loadActiveSession))
         assertTrue(persistence.listAccounts().isEmpty())
         assertNull(persistence.activeAccountId())
         assertEquals(futureRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
@@ -379,6 +378,8 @@ class DesktopAccountCredentialPersistenceTest {
         val persistence = persistence(preferences, secrets, diagnostics)
 
         assertEquals(DesktopAccountOwnership.Unknown, persistence.accountOwnership(desktopFileCacheAccountId(session)))
+        assertFailsWith<NextcloudSessionStorageMalformedException> { persistence.loadActiveSession() }
+        assertEquals(NextcloudSessionLoadState.StorageMalformed, loadNextcloudSessionSafely(persistence::loadActiveSession))
         assertFailsWith<IllegalStateException> { persistence.saveSession(session) }
 
         assertEquals(malformedRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
