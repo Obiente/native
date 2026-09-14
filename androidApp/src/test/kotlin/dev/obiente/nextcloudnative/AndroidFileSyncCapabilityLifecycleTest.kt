@@ -66,6 +66,87 @@ class AndroidFileSyncCapabilityLifecycleTest {
     }
 
     @Test
+    fun `grace period reclaims ambiguously committed Ready but retains delivered setup`() {
+        val abandoned = fixture()
+        abandoned.storage.failWritesFrom = 2
+        abandoned.storage.persistOnlyWriteNumber = 2
+        assertFailsWith<IllegalStateException> { abandoned.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes") }
+        assertEquals(AndroidFileSyncCapabilityPhase.Ready, abandoned.store.list().single().phase)
+        abandoned.storage.failWritesFrom = null
+        abandoned.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertTrue(abandoned.store.list().isEmpty())
+
+        val delivered = fixture()
+        delivered.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        delivered.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertEquals(AndroidFileSyncCapabilityPhase.Ready, delivered.store.list().single().phase)
+        assertTrue(delivered.lifecycle.hasRecoveryWork())
+    }
+
+    @Test
+    fun `recovery stops after cleanup and empty stores need no worker`() {
+        val fixture = fixture()
+        assertFalse(fixture.lifecycle.hasRecoveryWork())
+        fixture.seedReady(OLD_GENERATION)
+        assertTrue(fixture.lifecycle.hasRecoveryWork())
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertFalse(fixture.lifecycle.hasRecoveryWork())
+    }
+
+    @Test
+    fun `new acquisition and abandonment request recovery without idle polling`() {
+        var requests = 0
+        val fixture = fixture(requestRecovery = { requests += 1 })
+        assertEquals(0, requests)
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        assertEquals(1, requests)
+        fixture.grants.failRelease = true
+        assertFalse(fixture.lifecycle.abandonSelection(ROOT_URI))
+        assertEquals(2, requests)
+        assertTrue(fixture.lifecycle.hasRecoveryWork())
+    }
+
+    @Test
+    fun `ambiguous removal does not claim success for a retained or unreadable pair`() {
+        val fixture = preparedCleanup()
+        assertFailsWith<IllegalStateException> {
+            fixture.lifecycle.persistPairRemoval(PAIR_ID, load = { state(pair()) }) { error("uncommitted") }
+        }
+        assertTrue(fixture.grants.readGranted)
+        assertFailsWith<IllegalStateException> {
+            fixture.lifecycle.persistPairRemoval(PAIR_ID, load = { error("unreadable") }) { error("unknown") }
+        }
+        assertTrue(fixture.grants.readGranted)
+    }
+
+    @Test
+    fun `UI abandonment marker lets the durable worker reclaim a delivered setup`() {
+        val fixture = fixture()
+        val root = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.requestSelectionAbandonment(checkNotNull(root.savedStateId))
+        assertEquals(AndroidFileSyncCapabilityPhase.Ready, fixture.store.list().single().phase)
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.lifecycle.hasRecoveryWork())
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+    }
+
+    @Test
+    fun `late cancellation cannot abandon a replacement selection at the same URI`() {
+        val fixture = fixture()
+        val original = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        fixture.lifecycle.requestSelectionAbandonment(checkNotNull(original.savedStateId))
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        val replacement = fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        assertTrue(original.savedStateId != replacement.savedStateId)
+        assertTrue(fixture.lifecycle.abandonSelection(checkNotNull(original.savedStateId)))
+        fixture.lifecycle.reconcile(state(), reclaimUnrestoredReady = true)
+        assertEquals(replacement.savedStateId, fixture.store.list().single().id)
+        assertTrue(fixture.grants.readGranted && fixture.grants.writeGranted)
+    }
+
+    @Test
     fun `expired owned grant can be reauthorized without creating another pair`() {
         val fixture = fixture()
         fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
@@ -809,10 +890,8 @@ class AndroidFileSyncCapabilityLifecycleTest {
         fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID)
         fixture.lifecycle.preparePairCleanup(PAIR_ID)
 
-        assertFailsWith<IllegalStateException> {
-            fixture.lifecycle.persistPairRemoval(load = { state() }) {
-                error("save reported failure after commit")
-            }
+        fixture.lifecycle.persistPairRemoval(PAIR_ID, load = { state() }) {
+            error("save reported failure after commit")
         }
 
         assertTrue(fixture.store.list().isEmpty())
@@ -867,11 +946,12 @@ class AndroidFileSyncCapabilityLifecycleTest {
         generation: String = NEW_GENERATION,
         readGranted: Boolean = false,
         writeGranted: Boolean = false,
+        requestRecovery: () -> Unit = {},
     ): Fixture {
         val storage = FakeStorage()
         val store = AndroidFileSyncCapabilityStore(storage, IdentityCipher)
         val grants = FakeGrantAccess(readGranted, writeGranted)
-        return Fixture(storage, store, grants, AndroidFileSyncCapabilityLifecycle(store, grants, generation))
+        return Fixture(storage, store, grants, AndroidFileSyncCapabilityLifecycle(store, grants, generation, requestRecovery = requestRecovery))
     }
 
     private fun pair(id: String = PAIR_ID, localRootId: String = ROOT_URI) = FileSyncPair(
@@ -914,13 +994,14 @@ class AndroidFileSyncCapabilityLifecycleTest {
         var failWriteNumber: Int? = null
         var failWritesFrom: Int? = null
         var persistFailedWrite = false
+        var persistOnlyWriteNumber: Int? = null
 
         override fun read(): String? = value
 
         override fun write(value: String): Boolean {
             writes += 1
             if (writes == failWriteNumber || writes >= (failWritesFrom ?: Int.MAX_VALUE)) {
-                if (persistFailedWrite) this.value = value
+                if (persistFailedWrite || writes == persistOnlyWriteNumber) this.value = value
                 return false
             }
             this.value = value

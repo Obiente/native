@@ -181,13 +181,27 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     private val grants: AndroidFileSyncGrantAccess,
     private val processGeneration: String,
     private val abandonedSelections: MutableSet<String> = linkedSetOf(),
+    private val deliveredSelections: MutableSet<String> = linkedSetOf(),
+    private val requestRecovery: () -> Unit = {},
+    private val requestedAbandonments: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet(),
 ) {
     constructor(context: Context) : this(
         AndroidFileSyncCapabilityStore(context.applicationContext),
         ContentResolverFileSyncGrantAccess(context.applicationContext.contentResolver),
         PROCESS_GENERATION,
         ABANDONED_SELECTIONS,
+        DELIVERED_SELECTIONS,
+        { requestAndroidFileSyncCapabilityRecovery(context.applicationContext) },
+        REQUESTED_ABANDONMENTS,
     )
+
+    fun hasRecoveryWork(): Boolean = synchronized(LIFECYCLE_LOCK) {
+        store.list().any { record ->
+            record.phase == AndroidFileSyncCapabilityPhase.Acquiring ||
+                record.phase == AndroidFileSyncCapabilityPhase.CleanupPending ||
+                record.phase == AndroidFileSyncCapabilityPhase.Ready
+        }
+    }
 
     fun acquire(
         accountId: AndroidFileSyncCapabilityAccountId,
@@ -221,6 +235,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             accountId = accountId,
         )
         try {
+            requestRecovery()
             store.add(record)
             if (!preExisting.read || !preExisting.write) grants.takeExactReadWriteGrant(exactUri)
             val acquired = grants.exactGrant(exactUri)
@@ -230,6 +245,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             store.replace(record.id, AndroidFileSyncCapabilityPhase.Acquiring) {
                 it.copy(phase = AndroidFileSyncCapabilityPhase.Ready)
             }
+            deliveredSelections += record.id
             FileSyncLocalRoot(exactUri, displayName, savedStateId = record.id)
         } catch (failure: Exception) {
             recoverAcquisition(record.id)
@@ -246,6 +262,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             val grant = grants.exactGrant(record.uri)
             if (!grant.read || !grant.write) return@synchronized null
             store.replace(record.id, record.phase) { it.copy(processGeneration = processGeneration) }
+            deliveredSelections += record.id
             FileSyncLocalRoot(record.uri, record.displayName, savedStateId = record.id)
         }
 
@@ -264,23 +281,36 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         }
     }
 
-    fun abandonSelection(localRootId: String): Boolean = synchronized(LIFECYCLE_LOCK) {
-        val records = store.list()
-        if (records.none { it.uri == localRootId || it.id == localRootId }) return@synchronized true
-        val record = records.singleOrNull {
-            (it.uri == localRootId || it.id == localRootId) &&
-                it.pairIds.isEmpty() &&
-                it.phase in setOf(
-                    AndroidFileSyncCapabilityPhase.Acquiring,
-                    AndroidFileSyncCapabilityPhase.Ready,
-                    AndroidFileSyncCapabilityPhase.CleanupPending,
-                )
-        } ?: return@synchronized false
-        abandonedSelections += record.id
-        prepareAndFinishCleanup(record)
+    fun requestSelectionAbandonment(reference: String) {
+        requestedAbandonments += reference
+    }
+
+    fun abandonSelection(localRootId: String): Boolean {
+        requestSelectionAbandonment(localRootId)
+        return synchronized(LIFECYCLE_LOCK) {
+            val records = store.list()
+            if (records.none { it.uri == localRootId || it.id == localRootId }) {
+                requestedAbandonments.remove(localRootId)
+                return@synchronized true
+            }
+            val record = records.singleOrNull {
+                (it.uri == localRootId || it.id == localRootId) &&
+                    it.pairIds.isEmpty() &&
+                    it.phase in setOf(
+                        AndroidFileSyncCapabilityPhase.Acquiring,
+                        AndroidFileSyncCapabilityPhase.Ready,
+                        AndroidFileSyncCapabilityPhase.CleanupPending,
+                    )
+            } ?: return@synchronized false
+            requestRecovery()
+            deliveredSelections.remove(record.id)
+            abandonedSelections += record.id
+            prepareAndFinishCleanup(record)
+        }
     }
 
     fun abandonUncommittedPair(pairId: String): Boolean = synchronized(LIFECYCLE_LOCK) {
+        requestRecovery()
         val record = store.list().singleOrNull {
             pairId in it.pairIds && it.phase == AndroidFileSyncCapabilityPhase.Owned
         } ?: return@synchronized false
@@ -295,6 +325,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     }
 
     fun preparePairCleanup(pairId: String): Boolean = synchronized(LIFECYCLE_LOCK) {
+        requestRecovery()
         val record = store.list().singleOrNull { pairId in it.pairIds }
             ?: return@synchronized false
         when (record.phase) {
@@ -332,27 +363,44 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
     }
 
     fun persistPairRemoval(
+        pairId: String,
         load: () -> AndroidFileSyncPersistedState,
         persist: () -> Unit,
     ) = try {
         persist()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
-        recoverAmbiguousPairRemoval(load)
-        throw failure
+        if (!recoverAmbiguousPairRemoval(pairId, load)) throw failure
+        Unit
     }
 
-    private fun recoverAmbiguousPairRemoval(load: () -> AndroidFileSyncPersistedState) = synchronized(LIFECYCLE_LOCK) {
+    private fun recoverAmbiguousPairRemoval(pairId: String, load: () -> AndroidFileSyncPersistedState): Boolean = synchronized(LIFECYCLE_LOCK) {
         val authoritative = try {
             load()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
-            return@synchronized
+            return@synchronized false
         }
-        runCatching { reconcile(authoritative) }
+        if (authoritative.coordinator.pairs.any { it.id == pairId }) return@synchronized false
+        try {
+            reconcile(authoritative)
+            true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun reconcile(state: AndroidFileSyncPersistedState, reclaimUnrestoredReady: Boolean = false) = synchronized(LIFECYCLE_LOCK) {
         var records = store.list()
         abandonedSelections.retainAll(records.map { it.id }.toSet())
+        deliveredSelections.retainAll(records.map { it.id }.toSet())
+        requestedAbandonments.retainAll(records.flatMap { listOf(it.id, it.uri) }.toSet())
+        records.filter { it.id in requestedAbandonments || it.uri in requestedAbandonments }
+            .forEach { abandonedSelections += it.id }
         val safPairs = state.coordinator.pairs.filter { it.localRootId.startsWith("content://") }
         check(!hasConflictingOwnership(records, safPairs)) {
             "Folder capability ownership must be reconciled before changing sync pairs."
@@ -379,7 +427,9 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                         check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
-                AndroidFileSyncCapabilityPhase.Ready -> if (record.processGeneration != processGeneration || record.id in abandonedSelections) {
+                AndroidFileSyncCapabilityPhase.Ready -> if (record.processGeneration != processGeneration || record.id in abandonedSelections ||
+                    (reclaimUnrestoredReady && record.id !in deliveredSelections)
+                ) {
                     if (matchingIds.isNotEmpty()) {
                         store.replace(record.id, record.phase) {
                             it.copy(
@@ -439,6 +489,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                     record.phase == AndroidFileSyncCapabilityPhase.Ready
             }
         }
+        if (restored != null) deliveredSelections += restored.id
         if (restored != null && restored.processGeneration != processGeneration) {
             store.replace(restored.id, AndroidFileSyncCapabilityPhase.Ready) {
                 it.copy(processGeneration = processGeneration)
@@ -545,12 +596,20 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
             true
         } catch (_: Exception) {
             try { store.list().none { it.id == record.id } } catch (_: Exception) { false }
-        }.also { removed -> if (removed) abandonedSelections.remove(record.id) }
+        }.also { removed ->
+            if (removed) {
+                abandonedSelections.remove(record.id)
+                requestedAbandonments.remove(record.id)
+                requestedAbandonments.remove(record.uri)
+            }
+        }
     }
 
     private companion object {
         val LIFECYCLE_LOCK = Any()
         val ABANDONED_SELECTIONS = linkedSetOf<String>()
+        val DELIVERED_SELECTIONS = linkedSetOf<String>()
+        val REQUESTED_ABANDONMENTS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         val PROCESS_GENERATION: String = UUID.randomUUID().toString()
     }
 }

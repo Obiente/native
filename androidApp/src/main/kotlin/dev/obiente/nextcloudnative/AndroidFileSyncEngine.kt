@@ -358,7 +358,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 persistRemoval = {
                     capabilities.preparePairCleanup(pairId)
                     val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
-                    capabilities.persistPairRemoval(store::loadAndReconcileUploadCleanups) {
+                    capabilities.persistPairRemoval(pairId, store::loadAndReconcileUploadCleanups) {
                         store.save(current.copy(coordinator = remaining, localDisplayNames = current.localDisplayNames - pairId))
                     }
                 },

@@ -7,7 +7,7 @@ import kotlin.test.assertEquals
 
 class AndroidDurableUploadAccountResolutionTest {
     @Test
-    fun `inactive retained account defers when its credential is temporarily unavailable`() {
+    fun `inactive retained account retries when its credential is temporarily unavailable`() {
         val retainedSession = fixtureSession()
 
         val resolution = resolveDurableUploadSession(
@@ -16,7 +16,7 @@ class AndroidDurableUploadAccountResolutionTest {
             loadSession = { null },
         )
 
-        assertEquals(DurableUploadAccountResolution.DeferAccountActivation, resolution)
+        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolution)
     }
 
     @Test

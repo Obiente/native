@@ -57,6 +57,8 @@ internal class FileSyncSetupDraftState private constructor(
             val root = when (saved[1]) {
                 "0" -> null
                 "1" -> runCatching { FileSyncLocalRoot(saved[2], saved[3], savedStateId = saved[2]) }.getOrNull() ?: return null
+                "2" -> saved[2].takeIf { it.startsWith("media-store://primary/") }
+                    ?.let { runCatching { FileSyncLocalRoot(it, saved[3]) }.getOrNull() } ?: return null
                 else -> return null
             }
             val remotePath = when (saved[5]) {
@@ -79,12 +81,18 @@ internal class FileSyncSetupDraftState private constructor(
 }
 
 internal fun FileSyncSetupDraftState.savedState(): List<String>? {
-    val root = localRoot.value?.takeIf { it.savedStateId != null }
+    val root = localRoot.value?.takeIf { it.savedStateId != null || it.localRootId.startsWith("media-store://primary/") }
+    val rootKind = when {
+        root == null -> "0"
+        root.savedStateId != null -> "1"
+        else -> "2"
+    }
+    val rootReference = root?.let { it.savedStateId ?: it.localRootId }.orEmpty()
     val remote = remotePath.value
     val saved = listOf(
         SAVED_SETUP_VERSION,
-        if (root == null) "0" else "1",
-        root?.savedStateId.orEmpty(),
+        rootKind,
+        rootReference,
         root?.displayName.orEmpty(),
         mediaSuggestionJson.value.orEmpty(),
         if (remote == null) "0" else "1",
@@ -96,8 +104,8 @@ internal fun FileSyncSetupDraftState.savedState(): List<String>? {
     if (saved.sumOf(String::length) <= MAX_SAVED_SETUP_CHARACTERS) return saved
     return listOf(
         SAVED_SETUP_VERSION,
-        if (root == null) "0" else "1",
-        root?.savedStateId.orEmpty(),
+        rootKind,
+        rootReference,
         root?.displayName.orEmpty(),
         "",
         "0",

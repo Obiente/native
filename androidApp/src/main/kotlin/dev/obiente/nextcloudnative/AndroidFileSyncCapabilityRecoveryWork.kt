@@ -3,8 +3,8 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.await
@@ -13,7 +13,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -25,35 +26,55 @@ internal fun startAndroidFileSyncCapabilityRecovery(
 ) {
     scope.launch {
         try {
-            val request = PeriodicWorkRequestBuilder<AndroidFileSyncCapabilityRecoveryWorker>(15, TimeUnit.MINUTES)
-                .setInitialDelay(1, TimeUnit.MINUTES)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
-                .build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                "file-sync-capability-cleanup-v1", ExistingPeriodicWorkPolicy.KEEP, request,
-            ).await()
+            // Retire the old unconditional periodic schedule after upgrading.
+            WorkManager.getInstance(context).cancelUniqueWork("file-sync-capability-cleanup-v1").await()
+            AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+                capabilities.reconcile(load())
+                if (capabilities.hasRecoveryWork()) requestAndroidFileSyncCapabilityRecovery(context)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            android.util.Log.w("FolderCapabilityRecovery", "Could not schedule durable folder access cleanup.", failure)
+            // A failed immediate cleanup must still have a durable retry owner.
+            try {
+                requestAndroidFileSyncCapabilityRecovery(context)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (schedulingFailure: Exception) {
+                failure.addSuppressed(schedulingFailure)
+            }
+            android.util.Log.w("FolderCapabilityRecovery", "Folder access cleanup is awaiting recovery.", failure)
         }
-        reconcileFileSyncCapabilitiesAfterRestoration(AndroidFileSyncEngine.ENGINE_LOCK, load, capabilities)
     }
+}
+
+internal fun requestAndroidFileSyncCapabilityRecovery(context: Context) {
+    val request = OneTimeWorkRequestBuilder<AndroidFileSyncCapabilityRecoveryWorker>()
+        .setInitialDelay(1, TimeUnit.MINUTES)
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+        .build()
+    // Append preserves a new request arriving while the previous worker finishes.
+    val operation = WorkManager.getInstance(context).enqueueUniqueWork(
+        "file-sync-capability-cleanup-v2", ExistingWorkPolicy.APPEND_OR_REPLACE, request,
+    )
+    // This boundary runs on the owned IO path, never the Activity result callback.
+    runBlocking { withTimeout(30_000L) { operation.await() } }
 }
 
 internal class AndroidFileSyncCapabilityRecoveryWorker(context: Context, parameters: WorkerParameters) :
     CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            val capabilities = AndroidFileSyncCapabilityLifecycle(applicationContext)
+            val store = AndroidFileSyncStore(applicationContext)
             // A worker may start the process before the activity restores its draft.
-            delay(60_000L)
+            reconcileFileSyncCapabilitiesAfterRestoration(
+                AndroidFileSyncEngine.ENGINE_LOCK, store::loadAndReconcileUploadCleanups, capabilities,
+                onFailure = { throw it },
+            )
             AndroidFileSyncEngine.ENGINE_LOCK.withLock {
-                AndroidFileSyncCapabilityLifecycle(applicationContext).reconcile(
-                    AndroidFileSyncStore(applicationContext).loadAndReconcileUploadCleanups(),
-                    reclaimUnrestoredReady = true,
-                )
+                if (capabilities.hasRecoveryWork()) Result.retry() else Result.success()
             }
-            Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

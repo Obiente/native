@@ -6,6 +6,11 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.result.ActivityResultLauncher
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -17,9 +22,11 @@ import kotlin.coroutines.resume
  * storage access for SAF-backed pairs.
  */
 internal class AndroidFileSyncRootPicker(
-    private val context: Context,
+    context: Context,
     private val capabilities: AndroidFileSyncCapabilityLifecycle = AndroidFileSyncCapabilityLifecycle(context),
 ) {
+    private val acquisitionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val appContext = context.applicationContext
     private var launcher: ActivityResultLauncher<Uri?>? = null
     private var pending: PendingFileSyncRootSelection? = null
 
@@ -52,21 +59,29 @@ internal class AndroidFileSyncRootPicker(
             continuation.resume(null)
             return
         }
-        val result = runCatching {
-            capabilities.acquire(
-                selection.accountId,
-                uri.toString(),
-                queryDisplayName(context.contentResolver, uri),
-            )
-        }
-        result.onSuccess { localRoot ->
-            resumeFileSyncRootSelection(continuation, localRoot, capabilities::abandonSelection)
-        }
-            .onFailure { continuation.cancel(it) }
+        acquireFileSyncRootForDelivery(
+            scope = acquisitionScope,
+            continuation = continuation,
+            acquire = {
+                capabilities.acquire(
+                    selection.accountId,
+                    uri.toString(),
+                    queryDisplayName(appContext.contentResolver, uri),
+                )
+            },
+            abandon = capabilities::abandonSelection,
+        )
     }
 
-    fun abandon(localRootId: String): Boolean =
-        abandonAndroidFileSyncRoot(localRootId, capabilities::abandonSelection)
+    fun abandon(root: FileSyncLocalRoot): Boolean {
+        if (root.savedStateId == null && !root.localRootId.startsWith("content://")) return true
+        val reference = root.savedStateId ?: root.localRootId
+        capabilities.requestSelectionAbandonment(reference)
+        acquisitionScope.launch(NonCancellable) {
+            reclaimUndeliveredFileSyncRoot(reference, capabilities::abandonSelection)
+        }
+        return true
+    }
 
     private fun queryDisplayName(resolver: ContentResolver, treeUri: Uri): String {
         val documentId = DocumentsContract.getTreeDocumentId(treeUri)

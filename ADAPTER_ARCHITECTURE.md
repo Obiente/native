@@ -193,7 +193,14 @@ Each boundary has a corresponding test responsibility:
 - Platform tests cover credential stores, filesystem paths and providers,
   background scheduling, external handoff, packaging, and lifecycle recovery.
 
-Android folder capability cleanup uses a durable WorkManager retry schedule.
+Android folder capability cleanup uses demand-driven one-time WorkManager work.
+Empty stores and committed pairs do not keep cleanup work alive. Outstanding
+selections retain a retry owner until bound or abandoned; reconciliation preserves
+selections already delivered to an open setup.
+Folder-picker acquisition and durable scheduling run on the picker's owned IO
+scope, with result delivery on Main and cancellation cleanup retained on IO.
+New acquisitions and cleanup requests schedule recovery, and unfinished cleanup
+retains bounded WorkManager backoff.
 A process restoration grace period protects pending folder drafts; abandoned
 acquisitions and committed pair removals retain cleanup evidence until access
 is released. Cleanup retries do not transfer or delete user file contents.
@@ -304,3 +311,11 @@ staging files under the sync engine lock, while keeping user originals.
 
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
+
+Android queued uploads retain their rows while saved credentials require recovery.
+Malformed preference values, damaged ciphertext, and invalid decoded credential
+records pause timed retries when no usable or temporarily inaccessible fallback
+remains. Temporary keystore failures continue retrying, including for inactive
+accounts. Unsupported credential versions require an upgrade. These policies are
+covered by deterministic Android unit tests; they do not establish device or
+release validation.

@@ -82,6 +82,29 @@ class FileSyncRootLifecycleTest {
     }
 
     @Test
+    fun `detected media setup survives recreation without a SAF capability`() {
+        val root = FileSyncLocalRoot("media-store://primary/DCIM/Camera", "Camera")
+        val draft = FileSyncSetupDraftState().apply {
+            localRoot.value = root
+            mediaSuggestionJson.value = "synthetic suggestion"
+            configurationJson.value = "synthetic configuration"
+        }
+        val restored = assertNotNull(FileSyncSetupDraftState.restore(assertNotNull(draft.savedState())))
+        assertEquals(root, restored.localRoot.value)
+        assertEquals(draft.configurationJson.value, restored.configurationJson.value)
+    }
+
+    @Test
+    fun `media setup discriminator rejects provider capability references`() {
+        val draft = FileSyncSetupDraftState().apply {
+            localRoot.value = FileSyncLocalRoot("media-store://primary/DCIM/Camera", "Camera")
+        }
+        val saved = assertNotNull(draft.savedState()).toMutableList()
+        saved[2] = "content://example.documents/tree/private"
+        assertNull(FileSyncSetupDraftState.restore(saved))
+    }
+
+    @Test
     fun `failed abandonment keeps the root available for retry`() {
         val root = FileSyncLocalRoot("content://example.documents/tree/notes", "Notes", savedStateId = "opaque-record-id")
         val draft = FileSyncSetupDraftState().apply {

@@ -1676,7 +1676,7 @@ internal class AndroidNextcloudServices(
     override suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String?): FileSyncLocalRoot? =
         checkNotNull(fileSyncRootPicker) { "The native folder chooser is not available from this Android component." }
             .choose(AndroidFileSyncCapabilityAccountId(NextcloudDocumentIds.accountKey(session)), initialRootHint)
-    override fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = fileSyncRootPicker?.abandon(localRoot.localRootId) ?: true
+    override fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = fileSyncRootPicker?.abandon(localRoot) ?: true
     override suspend fun restoreFileSyncLocalRoot(session: NextcloudSession, reference: FileSyncLocalRoot) = restoreAndroidFileSyncRoot(appContext, session, reference)
     override fun retainFileSyncRootOnDispose(): Boolean = activity?.isChangingConfigurations == true
     override suspend fun reconcileFileSyncRootSetup(session: NextcloudSession, restoredLocalRoot: FileSyncLocalRoot?) =

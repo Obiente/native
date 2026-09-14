@@ -23,9 +23,10 @@ internal suspend fun reconcileFileSyncCapabilitiesAfterRestoration(
     lock: Mutex,
     load: () -> AndroidFileSyncPersistedState,
     capabilities: AndroidFileSyncCapabilityLifecycle,
+    onFailure: (Exception) -> Unit = {},
     waitForRestoration: suspend () -> Unit = { delay(60_000L) },
 ) {
-    reconcileFileSyncCapabilities(lock, load, capabilities)
+    reconcileFileSyncCapabilities(lock, load, capabilities, onFailure = onFailure)
     waitForRestoration()
-    reconcileFileSyncCapabilities(lock, load, capabilities, reclaimUnrestoredReady = true)
+    reconcileFileSyncCapabilities(lock, load, capabilities, reclaimUnrestoredReady = true, onFailure = onFailure)
 }

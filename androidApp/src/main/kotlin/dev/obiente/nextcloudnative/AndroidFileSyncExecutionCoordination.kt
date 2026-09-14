@@ -103,14 +103,16 @@ internal suspend fun reconcileFileSyncCapabilities(
     load: () -> AndroidFileSyncPersistedState,
     capabilities: AndroidFileSyncCapabilityLifecycle,
     reclaimUnrestoredReady: Boolean = false,
+    onFailure: (Exception) -> Unit = {},
 ) {
     lock.withLock {
         try {
             capabilities.reconcile(load(), reclaimUnrestoredReady)
         } catch (failure: CancellationException) {
             throw failure
-        } catch (_: Exception) {
-            // Fail closed. A later process retries without releasing from incomplete metadata.
+        } catch (failure: Exception) {
+            // Callers with a durable retry owner propagate failure; UI recovery can defer it.
+            onFailure(failure)
         }
     }
 }
