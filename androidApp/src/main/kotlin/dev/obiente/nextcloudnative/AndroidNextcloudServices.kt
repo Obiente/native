@@ -1003,18 +1003,18 @@ internal class AndroidNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        val fileSize = file.size
+        val generation = captureAndroidExternalFileHandoffGeneration(session) { loadSession() }
         if (file.canUseSeekableRemoteHandoff(capability)) {
             if (probeSeekableExternalHandoff(session, userId, file)) {
-                return externalFileHandoff.launchRemote(
+                return externalFileHandoff.launchRemote(generation = generation,
                     session = session,
                     file = file,
                     action = action,
                     capability = capability,
                 )
             }
-            if (fileSize != null && fileSize > capability.maximumInMemoryFileBytes) {
-                return externalFileHandoff.launchLargeStagedRemote(
+            if ((file.size ?: 0L) > capability.maximumInMemoryFileBytes) {
+                return externalFileHandoff.launchLargeStagedRemote(generation = generation,
                     session = session,
                     file = file,
                     action = action,
@@ -1030,7 +1030,7 @@ internal class AndroidNextcloudServices(
                 }
             }
         }
-        if (fileSize == null) {
+        if (file.size == null) {
             return externalFileHandoff.launchStreamedRemote(
                 file = file,
                 action = action,
@@ -3457,7 +3457,7 @@ internal class AndroidNextcloudServices(
             session = session,
             ocsRequest = true,
         )
-        check(response.status in 200..299) { "Nextcloud API request failed (HTTP ${response.status})." }
+        if (response.status !in 200..299) throw AndroidOcsRequestFailure(response.status)
         return JSONObject(response.text)
     }
 

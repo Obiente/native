@@ -177,25 +177,25 @@ internal class AndroidFileSyncScheduleRestorationWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val expectedAccountId = inputData.getString(KEY_ACCOUNT_ID)?.takeIf(String::isNotBlank)
             ?: return@withContext Result.failure()
-        val services = AndroidNextcloudServices(applicationContext)
-        val accountSnapshot = services.accountRetentionSnapshot()
-        val session = services.loadSession()
-            ?.takeIf { restored -> isAndroidFileSyncScheduleRestorationCurrent(expectedAccountId, restored) }
-            ?: return@withContext if (shouldRetryAndroidFileSyncScheduleRestoration(expectedAccountId, accountSnapshot)) {
-                Result.retry()
-            } else {
-                Result.success()
-            }
-        runCatching {
-            val userId = services.loadServerInfo(session).userId
-            services.loadFileSyncCenter(session, userId)
-        }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { failure ->
-                rethrowAndroidFileSyncCancellation(failure)
-                scheduleRestorationFailureDisposition(runAttemptCount).toWorkerResult()
-            },
-        )
+        try {
+            val services = AndroidNextcloudServices(applicationContext)
+            val accountSnapshot = services.accountRetentionSnapshot()
+            val session = services.loadSession()
+                ?.takeIf { restored -> isAndroidFileSyncScheduleRestorationCurrent(expectedAccountId, restored) }
+                ?: return@withContext if (shouldRetryAndroidFileSyncScheduleRestoration(expectedAccountId, accountSnapshot)) {
+                    scheduleRestorationFailureDisposition(runAttemptCount).toWorkerResult()
+                } else Result.success()
+            restoreAndroidFileSyncScheduleWhileCurrent(
+                expectedSession = session,
+                resolveSession = { services.loadSession() },
+                runAttemptCount = runAttemptCount,
+            ) { current ->
+                val userId = services.loadServerInfo(current).userId
+                services.loadFileSyncCenter(current, userId)
+            }.toWorkerResult()
+        } catch (failure: Exception) {
+            scheduleRestorationFailureDisposition(runAttemptCount, failure).toWorkerResult()
+        }
     }
 
     internal companion object {
@@ -220,10 +220,6 @@ internal fun shouldRetryAndroidFileSyncScheduleRestoration(
     -> false
 }
 
-internal fun scheduleRestorationFailureDisposition(runAttemptCount: Int): BackgroundSyncWorkerDisposition {
-    require(runAttemptCount >= 0)
-    return BackgroundSyncWorkerDisposition.Retry
-}
 
 internal fun syncConflictNotificationDetail(conflictCount: Int): String {
     require(conflictCount > 0)

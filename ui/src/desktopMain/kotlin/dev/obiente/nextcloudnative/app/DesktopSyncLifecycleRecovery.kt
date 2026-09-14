@@ -20,7 +20,9 @@ internal suspend fun reconcileDesktopBackgroundSession(
         is NextcloudSessionLoadState.Loaded -> loaded.session
         is NextcloudSessionLoadState.AccountCleanupUnavailable,
         NextcloudSessionLoadState.SecureStorageUnavailable,
-        NextcloudSessionLoadState.LegacyMigrationUnavailable -> return false
+        NextcloudSessionLoadState.LegacyMigrationUnavailable,
+        NextcloudSessionLoadState.StorageMalformed,
+        NextcloudSessionLoadState.StorageVersionUnsupported -> return false
     }
     try {
         reconcile(session)
