@@ -145,7 +145,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         )
                     }
                 },
-                { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity, accountIdentity) },
                 { removeSupportAccount(accountIdentity) },
                 { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
