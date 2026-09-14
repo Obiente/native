@@ -120,7 +120,8 @@ private fun AccountSessionCleanupUnavailable(reason: NextcloudSessionCleanupReas
                     "An earlier account change needs to finish before this account can open. " +
                         "Your saved sign-in and local files are retained. Try again after cleanup finishes."
                 else "nati.ve cannot safely finish an earlier account change. " +
-                    "Your saved sign-in and local files are retained. Resolve the cleanup problem, then try again.",
+                    "Your saved sign-in and local files are retained. " +
+                        "Contact Obiente support at $DEFAULT_OBIENTE_SUPPORT_URL for help recovering this account.",
             )
             OutlinedButton(onClick = onRetry) { Text("Try again") }
         }
