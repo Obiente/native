@@ -3602,8 +3602,6 @@ class DesktopNextcloudServices(
         var quiescedWindowsCloudFiles: WindowsCloudFilesProvider? = null
         var linuxFileSystemQuiesced = false
         var windowsCloudFilesQuiesced = false
-        var providerPreferenceAccountId: String? = null
-        var providerWasEnabledBeforeRemoval = false
         var remoteRevocationAttempted = false
         var credentialRemovalStatus: Boolean? = false
         var removalFailure: Throwable? = null
@@ -3641,12 +3639,6 @@ class DesktopNextcloudServices(
                 windowsCloudFilesQuiesced = quiescedWindowsCloudFiles?.quiesceWritesForAccountRemoval() == true
                 check(quiescedWindowsCloudFiles == null || windowsCloudFilesQuiesced) {
                     "Finish local Windows Cloud Files changes before removing this account."
-                }
-                accountId?.let { currentAccountId ->
-                    providerPreferenceAccountId = currentAccountId
-                    val key = virtualFileProviderPreferenceKey(currentAccountId)
-                    providerWasEnabledBeforeRemoval = preferences.getBoolean(key, false)
-                    setDesktopVirtualFileProviderPreference(preferences, currentAccountId, enabled = false)
                 }
                 accountId
                     ?.also { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
@@ -3787,9 +3779,7 @@ class DesktopNextcloudServices(
             )
             if (reopen) {
                 val recoveryFailure = recoverDesktopAccountAfterPrecommitFailure(
-                    restoreProviderPreference = { providerPreferenceAccountId?.let {
-                        setDesktopVirtualFileProviderPreference(preferences, it, providerWasEnabledBeforeRemoval)
-                    } },
+                    restoreProviderPreference = {},
                     resumeVirtualFileSystem = { if (linuxFileSystemQuiesced) quiescedLinuxFileSystem?.resumeWrites() },
                     resumeWindowsCloudFiles = {
                         if (windowsCloudFilesQuiesced) quiescedWindowsCloudFiles?.resumeWritesAfterAccountRemovalFailure()
@@ -3846,6 +3836,7 @@ class DesktopNextcloudServices(
         dynamicDiscoveryCache.retireAccount(cleanup.accountStorageKey, accountId)
         clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
         supportIntake.removeAccount(accountId)
+        supportDiagnostics.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }

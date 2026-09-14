@@ -1229,7 +1229,7 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
-    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsStorage = rememberAccountHomeWorkspaceStorage(session)
     val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
     val appPinsPersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
     val appPinsAccountScope = appPinsPersistenceScopes.current
