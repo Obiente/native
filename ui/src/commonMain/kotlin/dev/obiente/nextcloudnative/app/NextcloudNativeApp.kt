@@ -2573,6 +2573,11 @@ private fun AuthenticatedApp(
                 },
             )
         }
+        val workspaceContent = rememberAppWorkspaceContent(
+            holder = appWorkspaceSaveableStateHolder,
+            appId = appWorkspaceNavigation.activeAppId?.takeIf { screen != Screen.Root },
+            screen = screen, content = screenContent,
+        )
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
                 RootShell(
@@ -2602,26 +2607,10 @@ private fun AuthenticatedApp(
                             }
                         }
                     },
-                    content = {
-                        val appId = appWorkspaceNavigation.activeAppId
-                        if (appId != null && screen != Screen.Root) {
-                            appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
-                                screenContent()
-                            }
-                        } else {
-                            screenContent()
-                        }
-                    },
+                    content = workspaceContent,
                 )
             } else {
-                val appId = appWorkspaceNavigation.activeAppId
-                if (appId != null && screen != Screen.Root) {
-                    appWorkspaceSaveableStateHolder.SaveableStateProvider("app:$appId") {
-                        screenContent()
-                    }
-                } else {
-                    screenContent()
-                }
+                workspaceContent()
             }
         }
     }

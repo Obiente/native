@@ -203,6 +203,14 @@ jobs:
           fi
           exit "${status}"
 
+      - name: Verify packaged macOS SQLite runtime
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          launcher=$(find ui/build/compose/binaries/main/app -type f -path '*/Contents/MacOS/nati.ve' -print -quit)
+          test -n "$launcher"
+          "$launcher" --verify-sqlite-runtime
+
       - name: Verify unsigned Windows MSI
         if: matrix.platform == 'windows'
         shell: pwsh
