@@ -88,3 +88,41 @@ internal fun LegacySessionMigrationUnavailable(
         }
     }
 }
+
+@Composable
+internal fun SessionLoadingRecoveryScreen(
+    state: NextcloudSessionLoadState,
+    onRetry: () -> Unit,
+    onSignInAgain: () -> Unit,
+) {
+    when (state) {
+        NextcloudSessionLoadState.SecureStorageUnavailable -> SecureSessionStorageUnavailable(onRetry, onSignInAgain)
+        NextcloudSessionLoadState.LegacyMigrationUnavailable -> LegacySessionMigrationUnavailable(onRetry, onSignInAgain)
+        is NextcloudSessionLoadState.AccountCleanupUnavailable -> AccountSessionCleanupUnavailable(state.reason, onRetry)
+        is NextcloudSessionLoadState.Loaded -> Unit
+    }
+}
+
+@Composable
+private fun AccountSessionCleanupUnavailable(reason: NextcloudSessionCleanupReason, onRetry: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                if (reason == NextcloudSessionCleanupReason.Pending) "Finishing account cleanup"
+                else "Account cleanup needs attention",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                if (reason == NextcloudSessionCleanupReason.Pending)
+                    "An earlier account change needs to finish before this account can open. " +
+                        "Your saved sign-in and local files are retained. Try again after cleanup finishes."
+                else "nati.ve cannot safely finish an earlier account change. " +
+                    "Your saved sign-in and local files are retained. Resolve the cleanup problem, then try again.",
+            )
+            OutlinedButton(onClick = onRetry) { Text("Try again") }
+        }
+    }
+}

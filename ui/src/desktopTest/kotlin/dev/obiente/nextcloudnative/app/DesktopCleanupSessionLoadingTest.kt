@@ -18,7 +18,7 @@ class DesktopCleanupSessionLoadingTest {
             fun load() = loadNextcloudSessionSafely {
                 loadDesktopSessionAfterCleanupGate(session.accountRecord(), journal, { session }, { publications++ })
             }
-            assertEquals(NextcloudSessionLoadState.SecureStorageUnavailable, load())
+            assertEquals(NextcloudSessionLoadState.AccountCleanupUnavailable(NextcloudSessionCleanupReason.Pending), load())
             assertEquals(0, publications)
             journal.clear(identity)
             assertEquals(NextcloudSessionLoadState.Loaded(session), load())

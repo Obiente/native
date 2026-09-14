@@ -40,7 +40,12 @@ internal fun loadDesktopSessionAfterCleanupGate(
     val block = cleanupJournal.blocksAllAccountActivation() ?: record?.let {
         cleanupJournal.accountActivationBlock(desktopFileCacheAccountId(it), it.id.storageKey)
     }
-    if (block != null) throw NextcloudSessionStorageUnavailableException(block.message)
+    if (block != null) throw NextcloudSessionCleanupUnavailableException(
+        when (block) {
+            DesktopAccountActivationBlock.PendingCleanup -> NextcloudSessionCleanupReason.Pending
+            DesktopAccountActivationBlock.UnknownJournalData -> NextcloudSessionCleanupReason.NeedsReview
+        },
+    )
     return load()?.also(publish)
 }
 

@@ -154,6 +154,10 @@ for the component contracts and current consumers.
 
 ## Desktop product rules
 
+Interrupted account cleanup has a separate retry screen from unavailable secure
+storage. It preserves the saved sign-in and offers no sign-in reset action while
+cleanup is pending or its records need review.
+
 Desktop credential-save recovery records persist a terminal marker before their
 identity fields are erased. Restart recovery can finish this cleanup at every
 interruption point without treating a completed save as an incomplete rollback.

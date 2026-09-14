@@ -31,14 +31,16 @@ internal class DeckAttachmentUploadWorker(
         },
     ) {
         withContext(Dispatchers.IO) {
-            executeDurableUploadWork()
+            withDurableUploadQueueRecovery(onRetry = { Result.retry() }, onQuarantine = { Result.success() }) {
+                executeDurableUploadWork()
+            }
         }
     }
 
     private suspend fun executeDurableUploadWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
             ?: return Result.failure()
-        val store = AndroidDurableMultipartUploadStore(applicationContext)
+        val store = constructDurableUploadQueueOwner { AndroidDurableMultipartUploadStore(applicationContext) }
         val initial = store.find(jobId) ?: return Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {
@@ -57,7 +59,7 @@ internal class DeckAttachmentUploadWorker(
             return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                 releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                 releasedResult = Result.success(),
                 retainedResult = Result.retry(),
             )
@@ -66,7 +68,7 @@ internal class DeckAttachmentUploadWorker(
             return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                 releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                 completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                 releasedResult = Result.success(),
                 retainedResult = Result.retry(),
             )
@@ -144,7 +146,7 @@ internal class DeckAttachmentUploadWorker(
                     },
                     releaseSelection = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                     recordFailure = {
                         recordUploadDiagnostic(
                             severity = SupportDiagnosticSeverity.Warning,
@@ -177,7 +179,7 @@ internal class DeckAttachmentUploadWorker(
                 resultAfterDurableUploadCapabilityReleaseOrQuarantine(
                     releaseCapability = { onQuarantined -> picker.release(initial.request.file, onQuarantined) },
                     completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
                     releasedResult = Result.failure(),
                     retainedResult = Result.retry(),
                 )
@@ -276,7 +278,7 @@ internal class DeckAttachmentUploadWorker(
         return resultAfterDurableUploadCapabilityReleaseOrQuarantine(
             releaseCapability = { onQuarantined -> picker.release(started.request.file, onQuarantined) },
             completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
-            onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+            onCleanupRetained = ::requestQueuedDurableUploadCleanupRecovery,
             releasedResult = Result.success(),
             retainedResult = Result.retry(),
         )

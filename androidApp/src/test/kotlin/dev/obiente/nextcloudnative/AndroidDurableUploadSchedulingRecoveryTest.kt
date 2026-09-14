@@ -126,7 +126,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
                 recover = {
                     recoveryRuns += 1
                     assertTrue(recoveryRuns <= 3, "Cleanup signals must not spin ahead of the worker deadline")
-                    recoverySignal.request()
+                    recoverySignal.requestCleanup()
                     recoverySignal.scheduleUnlessBackedOff("job-1") { scheduled += "job-1" }
                     if (scheduled.isNotEmpty()) throw expected
                     false
@@ -163,7 +163,7 @@ class AndroidDurableUploadSchedulingRecoveryTest {
             monitorQueuedDurableUploadScheduling(
                 recover = {
                     recoveryRuns += 1
-                    recoverySignal.request()
+                    recoverySignal.requestCleanup()
                     if (recoveryRuns == 2) {
                         assertEquals(listOf(60_000L), waits)
                         throw expected
@@ -182,6 +182,33 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertTrue(actual === expected)
         assertEquals(2, recoveryRuns)
         assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
+    fun `external enqueue failure during cleanup reconciliation gets an immediate fresh snapshot`() = runBlocking {
+        val signal = AndroidDurableUploadSchedulingRecoverySignal()
+        val jobPersisted = CompletableDeferred<Unit>()
+        val firstSnapshot = CompletableDeferred<Unit>()
+        val stop = CancellationException("recovered new job")
+        var passes = 0
+        val monitoring = async {
+            assertFailsWith<CancellationException> {
+                monitorQueuedDurableUploadScheduling(recover = {
+                    passes++
+                    if (passes == 1) {
+                        firstSnapshot.complete(Unit)
+                        jobPersisted.await()
+                        signal.requestCleanup()
+                        true
+                    } else throw stop
+                }, wait = { error("An external request must not wait for cleanup backoff") }, recoverySignal = signal)
+            }
+        }
+        firstSnapshot.await()
+        signal.request()
+        jobPersisted.complete(Unit)
+        assertTrue(monitoring.await() === stop)
+        assertEquals(2, passes)
     }
 
     @Test
@@ -570,6 +597,45 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertTrue(actual === expected)
         assertEquals(listOf(firstWorkId, secondWorkId), awaitedWorkIds)
         assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
+    fun `orphaned uploading becomes unknown without scheduling even when account scheduling is paused`() = runBlocking {
+        var current = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        var cleaned = false
+        val recovered = reconcileQueuedDurableUploads(
+            jobs = listOf(current), allowQueuedScheduling = false,
+            schedulerOwns = { false }, cleanupCapability = { error("Not terminal yet") },
+            schedule = { error("An ambiguous upload must never be repeated") },
+            recoverUploading = { expected -> recoverOrphanedDurableUpload(expected, { current }, { false }, {
+                current = current.copy(state = DurableUploadState.OutcomeUnknown, capabilityCleanupPending = true)
+                current
+            }, { cleaned = true }) },
+        )
+        assertTrue(recovered)
+        assertTrue(cleaned)
+        assertEquals(DurableUploadState.OutcomeUnknown, current.state)
+    }
+
+    @Test
+    fun `upload recovery rechecks ownership and rejects stale rows`() = runBlocking {
+        val expected = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        listOf(expected, expected.copy(state = DurableUploadState.Completed), fixtureQueuedJob(2)).forEach { current ->
+            recoverOrphanedDurableUpload(expected, { current }, { true },
+                { error("Owned or stale uploads must not be changed") }, { error("No cleanup") })
+        }
+    }
+
+    @Test
+    fun `failed orphan transition keeps reconciliation pending and cancellation escapes`() = runBlocking {
+        val job = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        assertFalse(reconcileQueuedDurableUploads(listOf(job), cleanupCapability = {}, schedule = {},
+            recoverUploading = { throw java.io.IOException("temporary storage failure") }))
+        assertFailsWith<CancellationException> {
+            reconcileQueuedDurableUploads(listOf(job), cleanupCapability = {}, schedule = {},
+                recoverUploading = { throw CancellationException("cancelled") })
+        }
+        Unit
     }
 
     private fun fixtureQueuedJob(index: Int): AndroidDurableMultipartUploadJob {

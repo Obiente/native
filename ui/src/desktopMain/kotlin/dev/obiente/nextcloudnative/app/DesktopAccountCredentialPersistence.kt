@@ -33,7 +33,7 @@ internal class DesktopAccountCredentialPersistence(
             return restoreLegacySession(read)
         }
         val active = read.registry.activeAccount ?: return null
-        return loadSession(active.id)
+        return loadSession(active.id) ?: throw NextcloudSessionStorageUnavailableException("The saved account secret is unavailable. Retry or reset its sign-in.")
     }
 
     fun listAccounts(): List<NextcloudAccountRecord> {

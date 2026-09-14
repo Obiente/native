@@ -52,7 +52,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         session.accountId.storageKey,
                     )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 { removeSupportAccount(accountIdentity) },
                 { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
@@ -97,7 +97,7 @@ internal class AndroidAccountOwnedStateCleanup(
                         cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache, session.accountId.storageKey,
                     )
                 },
-                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
+                { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity, accountIdentity) },
                 { removeSupportAccount(accountIdentity) },
                 { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
                 {
