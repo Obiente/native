@@ -20,6 +20,12 @@ internal class DeckAttachmentUploadWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        withDurableUploadQueueRecovery(onRetry = { Result.retry() }, onQuarantine = { Result.success() }) {
+            executeWork()
+        }
+    }
+
+    private suspend fun executeWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
             ?: return@withContext Result.failure()
         val store = AndroidDurableMultipartUploadStore(applicationContext)
