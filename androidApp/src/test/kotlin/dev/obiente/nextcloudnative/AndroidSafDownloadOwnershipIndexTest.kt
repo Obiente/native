@@ -10,6 +10,28 @@ import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
     @Test
+    fun `copied recovery tokens preserve ownership and reject every candidate`() {
+        val root = Files.createTempDirectory("saf-ambiguous-recovery-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val owned = authenticatedRelocationTransaction()
+            store.forDirectory("content://provider/document/original").add(owned)
+            val index = store.indexed()
+            val names = setOf("provider-stage-${owned.token}")
+            val candidates = listOf("content://provider/document/moved", "content://provider/document/copied")
+            candidates.forEach { index.observeRecoveryNames(it, names) }
+            assertFailsWith<IllegalStateException> { index.observedPendingDirectoryIdentities() }
+            candidates.forEach { candidate ->
+                assertFailsWith<IllegalStateException> { index.forDirectory(candidate).transactions(names) }
+            }
+            assertEquals(listOf(owned), store.pendingTransactions())
+            assertTrue(index.hasPendingTransactions())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `expanded discovery cannot reconcile another tree's legacy transaction`() {
         val root = Files.createTempDirectory("saf-scoped-recovery-tokens-").toFile()
         try {
@@ -22,6 +44,8 @@ class AndroidSafDownloadOwnershipIndexTest {
             store.forDirectory(relocated).add(unrelated)
             val index = store.indexed(setOf(owned.token))
             val names = setOf("provider-stage-${owned.token}", "provider-stage-${unrelated.token}")
+            index.observeRecoveryNames(relocated, names)
+            index.observeRecoveryNames("content://provider/document/unrelated-copy", setOf("provider-stage-${unrelated.token}"))
             index.observeRecoveryNames(relocated, names)
             assertEquals(listOf(owned), index.forDirectory(relocated).transactions(names))
             index.forDirectory(relocated).remove(owned)

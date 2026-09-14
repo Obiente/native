@@ -1,4 +1,3 @@
-androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidFileSyncEngine.kt|851
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4230
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidProjectContentClient.kt|985
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/NextcloudDocumentsProvider.kt|986

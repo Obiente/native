@@ -30,12 +30,13 @@ internal class AndroidSafFileSyncLocalTree(
     private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
     providerRecoverySession: NextcloudSession? = null,
     localRecoveryAuthority: String? = null,
+    preserveProviderTreeGrant: Boolean = false,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
     private val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocumentId)
     private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(
-        androidRootBoundProviderRecoverySession(rootDocumentId, providerRecoverySession), localRecoveryAuthority,
+        androidRootBoundProviderRecoverySession(rootDocumentId, providerRecoverySession), localRecoveryAuthority, preserveProviderTreeGrant,
     )
 
     init {

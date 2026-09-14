@@ -303,6 +303,9 @@ installer already includes the behavior.
 Deferred Android provider recovery uses the supplied session under the account
 removal lease before credentials are persisted. A sync pair retains its SAF
 grant until its pending local transactions and retirement have completed.
+Provider reconciliation runs outside the sync engine lock. Before retiring an
+account or removing a pair, the engine reacquires its lock and verifies that the
+selected pair snapshots have not changed; unrelated account state is preserved.
 
 Legacy self-provider trees owned by a different account recover through their
 original provider URI and retained tree permission. Only a root matching the
@@ -326,3 +329,18 @@ provider recovery stays within the original tree grant.
 Expanded retirement discovery indexes only the selected tree's transactions and
 legacy transactions not proven to belong elsewhere. Seeing another tree's token
 in the same account or directory never authorizes its reconciliation.
+
+## Recovery authentication and retirement
+
+Android self-provider recovery bypasses unversioned offline content and cached
+fallback reads. It requires a network listing before accepting generation-matched
+virtual content or opening an ETag-bound range source. Account-wide recovery-token
+discovery rejects multiple observed locations for an owned token without retiring
+its ownership record; unrelated tokens remain outside the selected recovery scope.
+
+Recovery through another local account's legacy provider tree tries that account's
+lease without waiting and verifies its exact active session. The lease spans
+content authentication and reconciliation. It retains the original tree URI,
+grant and discovery scope while using authoritative provider reads. Busy,
+unavailable or unverified cross-profile accounts keep recovery pending. Ordinary
+external providers retain their existing grant behavior.

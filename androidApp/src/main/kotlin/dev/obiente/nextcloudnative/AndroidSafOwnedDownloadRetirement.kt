@@ -145,10 +145,30 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
     shouldContinue: () -> Boolean,
     providerRecoverySession: NextcloudSession?,
 ) {
+    val tree = Uri.parse(localRootId)
+    val root = DocumentsContract.getTreeDocumentId(tree)
+    if (androidRootBoundProviderRecoverySession(root, providerRecoverySession) != null) {
+        reconcileBoundProviderSafDownloads(context, localRootId, localRecoveryPaths, shouldContinue, providerRecoverySession, false)
+    } else {
+        val services = AndroidNextcloudServices(context.applicationContext)
+        withAndroidCrossAccountProviderRecovery(root, tree.authority == nextcloudDocumentsAuthority(context.packageName), services::loadSession) { session ->
+            reconcileBoundProviderSafDownloads(context, localRootId, localRecoveryPaths, shouldContinue, session, true)
+        }
+    }
+}
+
+private fun reconcileBoundProviderSafDownloads(
+    context: Context,
+    localRootId: String,
+    localRecoveryPaths: Set<String>,
+    shouldContinue: () -> Boolean,
+    providerRecoverySession: NextcloudSession?,
+    preserveTreeGrant: Boolean,
+) {
     val appContext = context.applicationContext
     val treeUri = Uri.parse(localRootId)
     val discoveryRootId = androidSafRetirementDiscoveryRoot(
-        DocumentsContract.getTreeDocumentId(treeUri), providerRecoverySession,
+        DocumentsContract.getTreeDocumentId(treeUri), providerRecoverySession.takeUnless { preserveTreeGrant },
     )
     val ownership = createAndroidSafDownloadOwnershipStore(appContext, localRootId)
     val localTree = AndroidSafFileSyncLocalTree(
@@ -157,6 +177,7 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         downloadOwnershipStore = ownership,
         providerRecoverySession = providerRecoverySession,
         localRecoveryAuthority = nextcloudDocumentsAuthority(appContext.packageName),
+        preserveProviderTreeGrant = preserveTreeGrant,
     )
     val recordedDocumentIds = ownership.pendingTransactions().asSequence()
         .flatMap { transaction ->

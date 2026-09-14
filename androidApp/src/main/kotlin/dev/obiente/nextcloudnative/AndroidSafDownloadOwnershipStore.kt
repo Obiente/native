@@ -83,6 +83,7 @@ internal class AndroidSafDownloadOwnershipStore(
         }
 
         override fun observedPendingDirectoryIdentities(): Set<String> = synchronized(LOCK) {
+            requireUnambiguousLocations()
             observedDirectoryIdentitiesByScope.mapNotNullTo(linkedSetOf()) { (scope, identity) ->
                 identity.takeIf {
                     IndexedScopedOwnership(scope).transactions(observedNamesByScope[scope].orEmpty()).isNotEmpty()
@@ -93,6 +94,12 @@ internal class AndroidSafDownloadOwnershipStore(
         override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
             require(directoryIdentity.isNotBlank())
             return IndexedScopedOwnership(scopeDigest(directoryIdentity))
+        }
+
+        private fun requireUnambiguousLocations() {
+            check(observedScopesByToken.none { (token, scopes) -> token in referencesByToken && scopes.size > 1 }) {
+                "SAF download recovery has multiple possible locations."
+            }
         }
 
         override fun observeRecoveryNames(
@@ -113,6 +120,7 @@ internal class AndroidSafDownloadOwnershipStore(
             override fun transactions(
                 observedNames: Set<String>,
             ): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+                requireUnambiguousLocations()
                 val tokens = observedRecoveryTokens(observedNames)
                 val references = buildList {
                     referencesByScope[scope].orEmpty().filterTo(this) { reference ->

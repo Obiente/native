@@ -14,6 +14,20 @@ import kotlin.test.assertNull
 
 class AndroidProviderRecoverySafetyTest {
     @Test
+    fun recoveryNeverAuthenticatesAnUnversionedOfflineOrFailureFallbackCopy() {
+        for (cacheKind in listOf("offline pin", "virtual fallback after failed lookup")) {
+            var openedStaleCopy = false
+            val recovered = readAndroidUnversionedProviderContent(recoveryAuthorized = true) {
+                openedStaleCopy = true
+                "old content from $cacheKind"
+            }
+            assertNull(recovered)
+            kotlin.test.assertFalse(openedStaleCopy)
+            assertEquals("ordinary cached content", readAndroidUnversionedProviderContent(false) { "ordinary cached content" })
+        }
+    }
+
+    @Test
     fun relocatedOwnedFilesAreDiscoverableOutsideTheOldSubtreeOnlyWithBoundAccountAccess() {
         val session = NextcloudSession("https://cloud.example.test", "alice", "password")
         val oldRoot = NextcloudDocumentIds.documentId(session, "original/subtree")

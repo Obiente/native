@@ -36,6 +36,7 @@ private val ANDROID_DOCUMENTS_PROVIDER_RECOVERY_PERMITS =
 internal class AndroidDocumentsProviderRecoveryAccess(
     private val session: NextcloudSession?,
     private val localAuthority: String? = null,
+    private val preserveTreeGrant: Boolean = false,
 ) {
     fun <Result> run(
         document: Uri,
@@ -50,6 +51,7 @@ internal class AndroidDocumentsProviderRecoveryAccess(
             buildChildDocumentsUri = { id -> DocumentsContract.buildChildDocumentsUriUsingTree(document, id) },
         )
         val bound = session ?: return action(ordinaryUri)
+        if (preserveTreeGrant) return withAndroidDocumentsProviderRecoveryPermit(bound, documentId, operation) { action(ordinaryUri) }
         val authority = androidLocalRecoveryAuthority(requireNotNull(document.authority), requireNotNull(localAuthority))
         val recoveryUri = androidDocumentsProviderRecoveryUri(
             documentId = documentId,

@@ -37,7 +37,6 @@ import dev.obiente.nextcloudnative.app.currentFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.failFileSyncOperation
 import dev.obiente.nextcloudnative.app.fileSyncContentVerificationCandidates
 import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
-import dev.obiente.nextcloudnative.app.removeFileSyncPair
 import dev.obiente.nextcloudnative.app.resolveFileSyncDecisions
 import dev.obiente.nextcloudnative.app.retryFileSyncOperation
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
@@ -301,76 +300,8 @@ internal class AndroidFileSyncEngine(context: Context) {
     }
 
     suspend fun removePair(session: NextcloudSession, userId: String, pairId: String): FileSyncCenterActionResult =
-        ENGINE_LOCK.withLock {
-            val current = store.load()
-            val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
-                ?: return@withLock FileSyncCenterActionResult.Rejected(
-                    "The folder sync pair no longer exists.",
-                )
-            if (pair.accountId != NextcloudDocumentIds.accountKey(session)) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                    "This folder sync pair belongs to another account.",
-                )
-            }
-            val releasesLocalGrant = pair.localRootId.startsWith("content://") &&
-                current.coordinator.pairs.none { it.id != pairId && it.localRootId == pair.localRootId }
-            var cleanedCoordinator: FileSyncCoordinatorState? = null
-            var remoteCleanupRejected = false
-            val removed = removeConfiguredFileSyncPair(
-                reconcileLocalDownloads = {
-                    reconcileSafDownloadsBeforePairRemoval(appContext, pair.localRootId, androidSafOwnedDownloadRecoveryPaths(pair))
-                },
-                cleanRemoteUploads = {
-                    val cleanupResult = cleanupJvmFileSyncOwnedUploads(
-                        androidFileSyncOwnedRemoteTree(session, userId, pair, webDav, context = appContext),
-                        current.coordinator, pairId, fileSyncOwnedUploads(pair),
-                    )
-                    remoteCleanupRejected = cleanupResult.unresolvedUploads.isNotEmpty()
-                    if (!remoteCleanupRejected) cleanedCoordinator = cleanupResult.state
-                    !remoteCleanupRejected
-                },
-                cleanLedger = {
-                    val mediaStore = createAndroidMediaBackupLedgerStore(
-                        context = appContext,
-                        recoverInterruptedTransfers = false,
-                    )
-                    try {
-                        mediaStore.deleteUnfinishedSource(
-                            accountId = pair.accountId,
-                            sourceId = pair.id,
-                            legacyLocalKeys = (pair.baselines.asSequence().map(FileSyncBaseline::relativePath) +
-                                pair.workItems.asSequence().map { work -> work.relativePath })
-                                .distinct()
-                                .map { relativePath ->
-                                    legacyMediaBackupLocalKey(pair.localRootId, relativePath)
-                                }
-                                .toList(),
-                        )
-                    } finally {
-                        mediaStore.close()
-                    }
-                },
-                persistRemoval = {
-                    val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
-                    store.save(
-                        current.copy(
-                            coordinator = remaining,
-                            localDisplayNames = current.localDisplayNames - pairId,
-                        ),
-                    )
-                },
-                cancelSchedule = { scheduler.cancel(pairId) },
-                releaseLocalGrant = {
-                    releaseSafGrantAfterPairRemoval(appContext, pair.localRootId, releasesLocalGrant)
-                },
-            )
-            if (!removed) {
-                return@withLock FileSyncCenterActionResult.Rejected(if (remoteCleanupRejected) {
-                    "A previous upload still needs safe recovery. Run this folder sync before removing it."
-                } else "A local download still needs safe recovery. Run this folder sync before removing it.")
-            }
-            FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
-        }
+        removeAndroidConfiguredFileSyncPair(appContext, store, webDav, scheduler, session, userId, pairId)
+
     suspend fun runPair(
         session: NextcloudSession,
         userId: String,

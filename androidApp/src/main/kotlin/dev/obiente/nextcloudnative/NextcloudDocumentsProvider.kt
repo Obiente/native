@@ -131,7 +131,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             loadAndroidProviderChildren(recoveryAuthorized, read = {
                 val account = resolveAccount(session)
                 if (recoveryAuthorized) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent.path, requireNetwork = true)
-                else services.listFiles(session, account.userId, parent.path)
+                else services.listFilesWithSource(session, account.userId, parent.path).filesForProviderRecovery(recoveryAuthorized)
             }, cached = { offline.availableChildren(session, parent.path) },
                 storedDirectory = { offline.isStoredDirectory(session, parent.path) })
         }
@@ -189,7 +189,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val reference = requireReference(documentId, session)
         if (reference.isRoot) throw FileNotFoundException("Folders cannot be opened as files.")
         if (mode == "r") {
-            offline.availableContent(session, reference.path)?.let { cached ->
+            readAndroidUnversionedProviderContent(recoveryAuthorized) { offline.availableContent(session, reference.path) }?.let { cached ->
                 signal?.throwIfCanceled()
                 return ParcelFileDescriptor.open(cached.content, ParcelFileDescriptor.MODE_READ_ONLY)
             }
@@ -198,7 +198,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val file = runCatching { findDocument(session, account, reference.path, recoveryAuthorized) }
             .getOrElse { failure ->
                 if (mode == "r") {
-                    virtualFiles.acquire(session, reference.path)?.let { lease ->
+                    readAndroidUnversionedProviderContent(recoveryAuthorized) { virtualFiles.acquire(session, reference.path) }?.let { lease ->
                         signal?.throwIfCanceled()
                         return openVirtualFileLease(lease)
                     }
@@ -854,7 +854,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     }
 
     private fun findDocument(
-        session: NextcloudSession, account: ResolvedAccount, path: String, accountLeaseHeld: Boolean = false,
+        session: NextcloudSession, account: ResolvedAccount, path: String, accountLeaseHeld: Boolean = false, requireNetwork: Boolean = accountLeaseHeld,
     ): NextcloudFile =
         providerCall(
             message = "The requested Nextcloud document was not found.",
@@ -862,8 +862,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         ) {
             val parent = NextcloudDocumentIds.parentPath(path)
             runBlocking(Dispatchers.IO) {
-                if (accountLeaseHeld) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent)
-                else services.listFiles(session, account.userId, parent)
+                if (accountLeaseHeld) services.listFilesWhileAccountLeaseHeld(session, account.userId, parent, requireNetwork = true)
+                else services.listFilesWithSource(session, account.userId, parent).filesForProviderRecovery(requireNetwork)
             }.firstOrNull { it.path == path }
                 ?: throw FileNotFoundException("The requested Nextcloud document was not found.")
         }
