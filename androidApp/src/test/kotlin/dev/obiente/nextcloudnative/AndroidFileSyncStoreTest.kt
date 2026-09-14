@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.app.newFileSyncUploadCheckpoint
 import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.io.File
+import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -79,7 +80,7 @@ class AndroidFileSyncStoreTest {
             val writes = executor.submit {
                 start.await()
                 repeat(100) { index ->
-                    writer.save(if (index % 2 == 0) second else first)
+                    saveWhileReadersHoldWindowsHandles { writer.save(if (index % 2 == 0) second else first) }
                 }
             }
             val reads = executor.submit {
@@ -155,6 +156,7 @@ class AndroidFileSyncStoreTest {
             }
 
             assertTrue(!stateFile.exists())
+            AndroidFileSyncStore(stateFile).loadAndReconcileUploadCleanups()
             assertEquals(
                 listOf(cleanup),
                 AndroidFileSyncUploadCleanupStore(File(directory, "state.bin.upload-cleanups"))
@@ -204,6 +206,102 @@ class AndroidFileSyncStoreTest {
     }
 
     @Test
+    fun `postcommit cleanup failure is reconciled from the authoritative empty snapshot`() {
+        val directory = Files.createTempDirectory("file-sync-cleanup-retry-").toFile()
+        try {
+            val stateFile = File(directory, "state.bin")
+            var failedDeletes = 0
+            val cleanupStore = AndroidFileSyncUploadCleanupStore(
+                File(directory, "state.bin.upload-cleanups"),
+                deleteFile = { file ->
+                    if (failedDeletes > 0) {
+                        failedDeletes -= 1
+                        false
+                    } else {
+                        file.delete()
+                    }
+                },
+            )
+            val store = AndroidFileSyncStore(stateFile, uploadCleanupStore = cleanupStore)
+            val owned = pair().copy(pendingUploadCleanups = listOf(cleanup("removed.bin")))
+            store.save(AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(owned))))
+            failedDeletes = 1
+
+            assertFailsWith<IllegalStateException> {
+                store.save(AndroidFileSyncPersistedState())
+            }
+            assertTrue(store.load().coordinator.pairs.isEmpty())
+            assertTrue(cleanupStore.read().containsKey(owned.id))
+
+            assertTrue(store.loadAndReconcileUploadCleanups().coordinator.pairs.isEmpty())
+            assertTrue(cleanupStore.read().isEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `restart cleanup preserves rows owned by a retained account pair`() {
+        val directory = Files.createTempDirectory("file-sync-cleanup-restart-").toFile()
+        try {
+            val stateFile = File(directory, "state.bin")
+            var failDelete = false
+            val cleanupDirectory = File(directory, "state.bin.upload-cleanups")
+            val failingRows = AndroidFileSyncUploadCleanupStore(
+                cleanupDirectory,
+                deleteFile = { file -> !failDelete && file.delete() },
+            )
+            val store = AndroidFileSyncStore(stateFile, uploadCleanupStore = failingRows)
+            val removed = pair().copy(pendingUploadCleanups = listOf(cleanup("removed.bin")))
+            val retained = pair().copy(
+                id = "pair-2",
+                accountId = "account-2",
+                remoteRootPath = "Archive",
+                pendingUploadCleanups = listOf(cleanup("retained.bin", OTHER_UPLOAD_ID)),
+            )
+            store.save(AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(removed, retained))))
+            failDelete = true
+
+            assertFailsWith<IllegalStateException> {
+                store.save(AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(retained))))
+            }
+            val restarted = AndroidFileSyncStore(stateFile)
+
+            assertEquals(listOf(retained), restarted.loadAndReconcileUploadCleanups().coordinator.pairs)
+            assertEquals(setOf(retained.id), AndroidFileSyncUploadCleanupStore(cleanupDirectory).read().keys)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `account cleanup retry fails until obsolete upload rows can be deleted`() {
+        val directory = Files.createTempDirectory("file-sync-account-cleanup-retry-").toFile()
+        try {
+            val stateFile = File(directory, "state.bin")
+            var deletionAvailable = true
+            val rows = AndroidFileSyncUploadCleanupStore(
+                File(directory, "state.bin.upload-cleanups"),
+                deleteFile = { file -> deletionAvailable && file.delete() },
+            )
+            val store = AndroidFileSyncStore(stateFile, uploadCleanupStore = rows)
+            val owned = pair().copy(pendingUploadCleanups = listOf(cleanup("removed.bin")))
+            store.save(AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(owned))))
+            deletionAvailable = false
+            assertFailsWith<IllegalStateException> { store.save(AndroidFileSyncPersistedState()) }
+
+            assertFailsWith<IllegalStateException> { store.loadAndReconcileUploadCleanups() }
+            assertTrue(rows.read().containsKey(owned.id))
+            deletionAvailable = true
+
+            assertTrue(store.loadAndReconcileUploadCleanups().coordinator.pairs.isEmpty())
+            assertTrue(rows.read().isEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `owned uploads block account removal before pair deletion`() {
         val accountPair = pair().copy(
             pendingUploadCleanups = listOf(
@@ -237,12 +335,39 @@ class AndroidFileSyncStoreTest {
         ),
     )
 
+    private fun cleanup(relativePath: String, uploadId: String = UPLOAD_ID) = FileSyncPendingUploadCleanup(
+        uploadId = uploadId,
+        relativePath = relativePath,
+    )
+
     private fun withTemporaryStore(block: (AndroidFileSyncStore) -> Unit) {
         val directory = Files.createTempDirectory("file-sync-store-").toFile()
         try {
             block(AndroidFileSyncStore(File(directory, "state.bin")))
         } finally {
             directory.deleteRecursively()
+        }
+    }
+
+    private companion object {
+        const val UPLOAD_ID = "01234567-89ab-cdef-0123-456789abcdef"
+        const val OTHER_UPLOAD_ID = "fedcba98-7654-3210-fedc-ba9876543210"
+    }
+}
+
+// Windows may reject replacement while another reader holds the destination open.
+// Every write must still complete; readers continue asserting whole snapshots.
+private fun saveWhileReadersHoldWindowsHandles(save: () -> Unit) {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (true) {
+        try {
+            save()
+            return
+        } catch (failure: AccessDeniedException) {
+            if (!System.getProperty("os.name").startsWith("Windows") || System.nanoTime() >= deadline) {
+                throw failure
+            }
+            Thread.sleep(10)
         }
     }
 }

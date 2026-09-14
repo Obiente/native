@@ -192,8 +192,33 @@ Each boundary has a corresponding test responsibility:
   permission denial, confirmation, adaptive layout, and keyboard/touch access.
 - Platform tests cover credential stores, filesystem paths and providers,
   background scheduling, external handoff, packaging, and lifecycle recovery.
+
+Android folder capability cleanup uses demand-driven one-time WorkManager work.
+Empty stores and committed pairs do not keep cleanup work alive. Outstanding
+selections retain a retry owner until bound or abandoned; reconciliation preserves
+selections already delivered to an open setup.
+Folder-picker acquisition and durable scheduling run on the picker's owned IO
+scope, with result delivery on Main and cancellation cleanup retained on IO.
+New acquisitions and cleanup requests schedule recovery, and unfinished cleanup
+retains bounded WorkManager backoff.
+A process restoration grace period protects pending folder drafts only while
+acquiring or ready selections remain after reconciliation; completed setup and
+cleanup return without waiting. A cancelled pair save preserves authoritative
+ownership recovery and then rethrows cancellation, even when the save committed.
+Abandoned acquisitions and committed pair removals retain cleanup evidence until access
+is released. Cleanup retries do not transfer or delete user file contents.
 - Live-server audits use synthetic disposable accounts, record exact tested
   versions, and remain separate from deterministic unit and integration tests.
+A durably removed Android folder-sync pair reports completion while its previously
+scheduled capability recovery worker retries any remaining permission cleanup.
+Ambiguous coordinator saves still require authoritative confirmation of removal.
+Account retirement remains strict until its capability cleanup finishes.
+Cancellation from grant, storage, and cipher adapters remains cancellation rather
+than being reported as damaged recovery metadata or deferred cleanup.
+Reconciliation records independent cleanup progress before reporting a failed
+provider, so one unavailable grant cannot indefinitely retain unrelated grants.
+A legacy shared root can regain expired access only for an account that still
+owns a recorded pair at that exact root in the authoritative coordinator.
 
 A bug fix adds the smallest regression test at the layer where the invariant
 failed. Tests should assert public behavior, not copied implementation details.

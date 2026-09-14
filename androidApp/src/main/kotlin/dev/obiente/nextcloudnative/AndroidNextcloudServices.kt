@@ -504,7 +504,6 @@ internal class AndroidNextcloudServices(
             supportsSeekableRemoteStreaming = true,
         ),
     )
-
     override fun platformCapabilities(): List<PlatformCapabilityStatus> = platformCapabilities.statuses()
 
     override fun requestPlatformCapability(capability: PlatformCapability): Boolean =
@@ -1674,12 +1673,14 @@ internal class AndroidNextcloudServices(
             freedBytes = freed,
         )
     }
-
-    override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
-        checkNotNull(fileSyncRootPicker) {
-            "The native folder chooser is not available from this Android component."
-        }.choose(initialRootHint)
-
+    override suspend fun chooseFileSyncLocalRoot(session: NextcloudSession, initialRootHint: String?): FileSyncLocalRoot? =
+        checkNotNull(fileSyncRootPicker) { "The native folder chooser is not available from this Android component." }
+            .choose(AndroidFileSyncCapabilityAccountId(NextcloudDocumentIds.accountKey(session)), initialRootHint)
+    override fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = fileSyncRootPicker?.abandon(localRoot) ?: true
+    override suspend fun restoreFileSyncLocalRoot(session: NextcloudSession, reference: FileSyncLocalRoot) = restoreAndroidFileSyncRoot(appContext, session, reference)
+    override fun retainFileSyncRootOnDispose(): Boolean = activity?.isChangingConfigurations == true
+    override suspend fun reconcileFileSyncRootSetup(session: NextcloudSession, restoredLocalRoot: FileSyncLocalRoot?) =
+        withContext(Dispatchers.IO) { reconcileRestoredFileSyncSetup(appContext, session, restoredLocalRoot) }
     override suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
@@ -1688,7 +1689,6 @@ internal class AndroidNextcloudServices(
 
     override fun openIncomingShareRecovery(requestId: String) =
         openAndroidIncomingShareRecovery(appContext, requestId)
-
     override suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery =
         withContext(Dispatchers.IO) {
             mediaSyncFolderDetector.discover()
