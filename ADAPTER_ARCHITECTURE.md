@@ -331,3 +331,9 @@ Enqueueing captures the sink's account generation synchronously; the asynchronou
 sink rejects retired or stale generations under its persistence lock.
 Removal, further rotation or a busy lease skips this optional event rather than
 retaining a path-bearing event under an obsolete account scope.
+
+Account removal also purges diagnostic scopes named by verified document aliases
+for that canonical account and incarnation. Both diagnostic sinks must finish
+before document grants and alias provenance are retired. A failure preserves
+those aliases for restart recovery; unrelated accounts and unknown hashes are
+never inferred to belong to the removed account.
