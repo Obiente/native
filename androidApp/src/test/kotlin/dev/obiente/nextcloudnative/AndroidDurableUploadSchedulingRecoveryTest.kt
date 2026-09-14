@@ -572,6 +572,45 @@ class AndroidDurableUploadSchedulingRecoveryTest {
         assertEquals(listOf(60_000L), waits)
     }
 
+    @Test
+    fun `orphaned uploading becomes unknown without scheduling even when account scheduling is paused`() = runBlocking {
+        var current = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        var cleaned = false
+        val recovered = reconcileQueuedDurableUploads(
+            jobs = listOf(current), allowQueuedScheduling = false,
+            schedulerOwns = { false }, cleanupCapability = { error("Not terminal yet") },
+            schedule = { error("An ambiguous upload must never be repeated") },
+            recoverUploading = { expected -> recoverOrphanedDurableUpload(expected, { current }, { false }, {
+                current = current.copy(state = DurableUploadState.OutcomeUnknown, capabilityCleanupPending = true)
+                current
+            }, { cleaned = true }) },
+        )
+        assertTrue(recovered)
+        assertTrue(cleaned)
+        assertEquals(DurableUploadState.OutcomeUnknown, current.state)
+    }
+
+    @Test
+    fun `upload recovery rechecks ownership and rejects stale rows`() = runBlocking {
+        val expected = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        listOf(expected, expected.copy(state = DurableUploadState.Completed), fixtureQueuedJob(2)).forEach { current ->
+            recoverOrphanedDurableUpload(expected, { current }, { true },
+                { error("Owned or stale uploads must not be changed") }, { error("No cleanup") })
+        }
+    }
+
+    @Test
+    fun `failed orphan transition keeps reconciliation pending and cancellation escapes`() = runBlocking {
+        val job = fixtureQueuedJob(1).copy(state = DurableUploadState.Uploading)
+        assertFalse(reconcileQueuedDurableUploads(listOf(job), cleanupCapability = {}, schedule = {},
+            recoverUploading = { throw java.io.IOException("temporary storage failure") }))
+        assertFailsWith<CancellationException> {
+            reconcileQueuedDurableUploads(listOf(job), cleanupCapability = {}, schedule = {},
+                recoverUploading = { throw CancellationException("cancelled") })
+        }
+        Unit
+    }
+
     private fun fixtureQueuedJob(index: Int): AndroidDurableMultipartUploadJob {
         val scope = DurableUploadScope("deck-attachment", index.toString())
         val request = NextcloudMultipartUploadRequest(

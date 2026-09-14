@@ -125,23 +125,25 @@ internal class AndroidDurableMultipartUploads(
             val retainedSelectionIds = durableUploadCapabilityRetainedSelectionIds(snapshot)
             snapshot to picker.reconcileCapabilities(retainedSelectionIds)
         }
+        val schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { job ->
+            workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id)).first().any { !it.state.isFinished }
+        }
+        val cleanup: suspend (AndroidDurableMultipartUploadJob) -> Unit = { job ->
+            check(reconcileTerminalDurableUploadCapabilityCleanup(
+                release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
+                complete = { store.completeCapabilityCleanup(job.id) },
+            )) { "The durable upload capability cleanup remains pending." }
+        }
         val uploadsRecovered = reconcileQueuedDurableUploads(
             jobs = jobs,
             allowQueuedScheduling = allowQueuedScheduling,
-            schedulerOwns = { job ->
-                workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id))
-                    .first()
-                    .any { work -> !work.state.isFinished }
-            },
-            cleanupCapability = { job ->
-                check(
-                    reconcileTerminalDurableUploadCapabilityCleanup(
-                        release = { onQuarantined -> picker.release(job.request.file, onQuarantined) },
-                        complete = { store.completeCapabilityCleanup(job.id) },
-                    ),
-                ) {
-                    "The durable upload capability cleanup remains pending."
-                }
+            schedulerOwns = schedulerOwns,
+            cleanupCapability = cleanup,
+            recoverUploading = { job ->
+                recoverOrphanedDurableUpload(job, store::find, schedulerOwns, { id ->
+                    store.transition(id, DurableUploadState.Uploading, DurableUploadState.OutcomeUnknown,
+                        "The upload stopped before its result was saved. Check the card before uploading again.")
+                }, cleanup)
             },
             schedule = { job ->
                 schedulingRecoverySignal.scheduleUnlessBackedOff(job.id) { schedule(job) }?.await()
