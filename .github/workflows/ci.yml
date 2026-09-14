@@ -405,3 +405,50 @@ jobs:
           steps.changes.outputs.windows != 'true'
         shell: pwsh
         run: '"No Windows desktop or build-system changes; native Windows validation was skipped." >> $env:GITHUB_STEP_SUMMARY'
+
+  macos-sqlite-runtime:
+    name: Intel macOS SQLite runtime
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Detect SQLite packaging changes
+        id: changes
+        continue-on-error: true
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            sqlite:
+              - ".github/workflows/ci.yml"
+              - "gradle/**"
+              - "gradle.properties"
+              - "build.gradle.kts"
+              - "settings.gradle.kts"
+              - "ui/build.gradle.kts"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopSqliteRuntime.kt"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt"
+              - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopSqliteRuntimeTest.kt"
+
+      - name: Set up JDK 21
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.sqlite == 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Verify Intel macOS SQLite in tests and the packaged app
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outcome != 'success' ||
+          steps.changes.outputs.sqlite == 'true'
+        run: |
+          ./gradlew --no-daemon :ui:desktopTest --tests '*DesktopSqliteRuntimeTest' :ui:createDistributable
+          launcher=$(find ui/build/compose/binaries/main/app -type f -path '*/Contents/MacOS/nati.ve' -print -quit)
+          test -n "$launcher"
+          "$launcher" --verify-sqlite-runtime
