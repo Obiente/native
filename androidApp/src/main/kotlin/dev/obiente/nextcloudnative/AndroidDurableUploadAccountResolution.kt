@@ -43,11 +43,7 @@ internal fun resolveDurableUploadSession(
     } ?: return DurableUploadAccountResolution.AccountUnavailable
     val session = loadSession(account.id)
         ?.takeIf { loaded -> NextcloudDocumentIds.accountKey(loaded) == expectedAccountId }
-        ?: return if (account.id == availableRegistry.activeAccountId) {
-            DurableUploadAccountResolution.CredentialUnavailable
-        } else {
-            DurableUploadAccountResolution.DeferAccountActivation
-        }
+        ?: return DurableUploadAccountResolution.CredentialUnavailable
     return DurableUploadAccountResolution.Available(session)
 }
 
@@ -65,7 +61,11 @@ internal fun resolveDurableUploadSessionWithRegistryRecovery(
         }
     }
     if (!recoveryRequired) return resolveDurableUploadSession(expectedAccountId, initial, loadSession)
-    val recoveredSession = recoverRegistry()
+    val recoveredSession = try {
+        recoverRegistry()
+    } catch (_: dev.obiente.nextcloudnative.app.NextcloudSessionStorageUnavailableException) {
+        return DurableUploadAccountResolution.RegistryUnavailable
+    }
     if (
         recoveredSession != null &&
         NextcloudDocumentIds.accountKey(recoveredSession) == expectedAccountId

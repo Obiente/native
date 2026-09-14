@@ -308,3 +308,11 @@ Legacy self-provider trees owned by a different account recover through their
 original provider URI and retained tree permission. Only a root matching the
 removing account may receive its supplied recovery session or a local authority
 rewrite. An unavailable original provider leaves recovery pending.
+
+Android queued uploads retain their rows while saved credentials require recovery.
+Malformed preference values, damaged ciphertext, and invalid decoded credential
+records pause timed retries when no usable or temporarily inaccessible fallback
+remains. Temporary keystore failures continue retrying, including for inactive
+accounts. Unsupported credential versions require an upgrade. These policies are
+covered by deterministic Android unit tests; they do not establish device or
+release validation.
