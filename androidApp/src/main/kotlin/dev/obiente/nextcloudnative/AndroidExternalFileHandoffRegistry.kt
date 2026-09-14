@@ -68,6 +68,15 @@ internal object AndroidExternalFileHandoffRegistry {
 
     private val lock = Any()
     private val entries = linkedMapOf<String, Entry>()
+    private var generation = AndroidExternalFileHandoffGeneration()
+
+    fun captureGeneration(): AndroidExternalFileHandoffGeneration = synchronized(lock) { generation }
+
+    fun <Result> withGeneration(expected: AndroidExternalFileHandoffGeneration, action: () -> Result): Result =
+        synchronized(lock) {
+            if (expected !== generation) throw AndroidExternalFileHandoffRevokedException()
+            action()
+        }
     private var boundStore: AndroidExternalFileHandoffStore? = null
     private var boundStoreIdentity: String? = null
 
@@ -93,6 +102,7 @@ internal object AndroidExternalFileHandoffRegistry {
                 return@synchronized
             }
             readersToRevoke += entries.values.flatMap(Entry::readers)
+            generation = AndroidExternalFileHandoffGeneration()
             entries.clear()
             boundStore = store
             boundStoreIdentity = storeIdentity
@@ -119,6 +129,7 @@ internal object AndroidExternalFileHandoffRegistry {
         session: NextcloudSession,
         file: NextcloudFile,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        expectedGeneration: AndroidExternalFileHandoffGeneration = captureGeneration(),
     ): AndroidExternalFileHandoffRecord {
         require(!file.isDirectory) { "Folders cannot be registered for external file handoff." }
         require(file.size?.let { it >= 0L } == true) {
@@ -132,6 +143,7 @@ internal object AndroidExternalFileHandoffRegistry {
         var displacedRecord: AndroidExternalFileHandoffRecord? = null
         val record = try {
             synchronized(lock) {
+                if (expectedGeneration !== generation) throw AndroidExternalFileHandoffRevokedException()
                 expiredReaders += pruneExpiredLocked(nowEpochMillis)
                 val previousEntries = entries.toMap()
                 val displaced = if (entries.size >= MAX_RECORDS) {
@@ -276,6 +288,7 @@ internal object AndroidExternalFileHandoffRegistry {
                     boundStoreIdentity = storeIdentity
                 }
             }
+            generation = AndroidExternalFileHandoffGeneration()
             cleanupStore = boundStore ?: store
             entries.values.toList().also { entries.clear() }.also {
                 try {
@@ -300,6 +313,7 @@ internal object AndroidExternalFileHandoffRegistry {
                 entries.clear()
                 boundStore = null
                 boundStoreIdentity = null
+                generation = AndroidExternalFileHandoffGeneration()
             }
         }
         readers.forEach(AndroidExternalFileHandoffLease::revoke)

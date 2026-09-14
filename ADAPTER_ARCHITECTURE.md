@@ -316,3 +316,10 @@ reauthentication, and removal may discard them only after incarnation retirement
 Canonical writeback ownership is separate from the support diagnostic scope.
 Writeback failure events use the operation session's existing diagnostic identity,
 so account support export and removal find the same scope as other provider errors.
+
+Remote Android handoff producers capture a process generation under the current
+session guard before probing or staging. Account cleanup invalidates that
+generation even if durable clearing fails. Registration and managed-content
+publication check it under the registry lock, so late producers cannot republish
+cleared account metadata or content. The durable cleanup marker separately fences
+restoration after a failed clear and process restart.
