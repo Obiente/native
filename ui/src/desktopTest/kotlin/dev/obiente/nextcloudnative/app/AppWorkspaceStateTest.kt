@@ -1,67 +1,97 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.runtime.AbstractApplier
-import androidx.compose.runtime.BroadcastFrameClock
-import androidx.compose.runtime.Composition
-import androidx.compose.runtime.Recomposer
-import androidx.compose.runtime.SideEffect
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.snapshots.Snapshot
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.yield
+import androidx.compose.runtime.setValue
+import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
+import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import kotlin.test.Test
-import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class AppWorkspaceStateTest {
-    @Test fun shellChangesDoNotRegisterAnAppKeyTwiceAndAppStateRestores() = runBlocking {
-        val clock = BroadcastFrameClock()
-        val recomposer = Recomposer(coroutineContext + clock)
-        val runner = launch(clock) { recomposer.runRecomposeAndApplyChanges() }
-        val composition = Composition(EmptyApplier(), recomposer)
-        val fullScreen = mutableStateOf(false)
-        val app = mutableStateOf<String?>("photos")
-        var observed = -1
-        var changeValue: (Int) -> Unit = {}
-        composition.setContent {
-            AppWorkspaceState(rememberSaveableStateHolder(), app.value) {
-                val count = rememberSaveable { mutableStateOf(0) }
-                SideEffect { observed = count.value; changeValue = { count.value = it } }
-                // Both presentation branches may be replaced in a single apply pass.
-                if (fullScreen.value) SideEffect {} else SideEffect {}
+    @Test fun desktopAppSwitchingPreservesGlobalSidebarAndPerAppContent() {
+        val app = mutableStateOf("files")
+        nativeSceneTest(1440, 900, content = {
+            val workspace = rememberAppWorkspaceContent(rememberSaveableStateHolder(), app.value, Screen.Files("/")) {
+                SavedCounter("Files")
             }
-        }
-        suspend fun settle() {
-            Snapshot.sendApplyNotifications()
-            yield()
-            clock.sendFrame(System.nanoTime())
-            recomposer.awaitIdle()
-        }
-        try {
-            settle()
-            changeValue(7)
-            settle()
-            repeat(8) { fullScreen.value = !fullScreen.value; settle(); assertEquals(7, observed) }
-            app.value = "files"
-            settle()
-            assertEquals(0, observed)
+            RootShell(
+                presentation = NextcloudPresentation.Desktop,
+                selected = NextcloudDestination.Apps,
+                desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
+                onSelected = {}, identity = null, activeAppId = app.value, content = workspace,
+            )
+        }) {
+            click("Collapse sidebar")
+            click("Change Files state")
+            assertTrue(has("Files state: 1"))
             app.value = "photos"
             settle()
-            assertEquals(7, observed)
-        } finally {
-            composition.dispose()
-            recomposer.close()
-            runner.join()
+            assertTrue(has("Expand sidebar"), "The sidebar must remain collapsed after switching apps")
+            assertTrue(has("Files state: 0"), "A different app must start with independent content state")
+            app.value = "files"
+            settle()
+            assertTrue(has("Expand sidebar"))
+            assertTrue(has("Files state: 1"))
         }
     }
 
-    private class EmptyApplier : AbstractApplier<Unit>(Unit) {
-        override fun insertBottomUp(index: Int, instance: Unit) = Unit
-        override fun insertTopDown(index: Int, instance: Unit) = Unit
-        override fun move(from: Int, to: Int, count: Int) = Unit
-        override fun remove(index: Int, count: Int) = Unit
-        override fun onClear() = Unit
+    @Test fun adaptiveReparentingAndImmersiveNavigationRestoreTheScreenSubtree() {
+        val showShell = mutableStateOf(true)
+        val route = mutableStateOf<Screen>(Screen.Files("/"))
+        nativeSceneTest(390, 800, content = {
+            val screen = route.value
+            val workspace = rememberAppWorkspaceContent(rememberSaveableStateHolder(), "files", screen) {
+                SavedCounter(
+                    if (screen is Screen.MediaViewer) "Viewer" else "Files",
+                    if (screen is Screen.MediaViewer) screen.navigationKey else "workspace",
+                )
+            }
+            if (showShell.value) {
+                RootShell(
+                    presentation = NextcloudPresentation.Adaptive,
+                    selected = NextcloudDestination.Apps,
+                    onSelected = {}, identity = null, activeAppId = "files", content = workspace,
+                )
+            } else workspace()
+        }) {
+            click("Change Files state")
+            repeat(8) {
+                showShell.value = !showShell.value
+                settle()
+                assertTrue(has("Files state: 1"), "Layout changes must retain the moving screen subtree")
+            }
+            route.value = Screen.MediaViewer("synthetic-media", 0, 0, Screen.Files("/"))
+            showShell.value = false
+            settle()
+            assertTrue(has("Viewer state: 0"), "Expected isolated viewer state; rendered text: ${nodes().mapNotNull { it.config.getOrNull(SemanticsProperties.Text) }}")
+            click("Change Viewer state")
+            route.value = Screen.Files("/")
+            showShell.value = true
+            settle()
+            assertTrue(has("Files state: 1"), "Returning from the viewer must restore the Files screen state")
+            route.value = Screen.MediaViewer("another-synthetic-media", 0, 0, Screen.Files("/"))
+            showShell.value = false
+            settle()
+            assertTrue(has("Viewer state: 0"), "A different record must not restore the previous detail state")
+        }
+    }
+
+    @Composable
+    private fun SavedCounter(label: String, recordKey: String = "workspace") {
+        var value by rememberSaveable(recordKey) { mutableStateOf(0) }
+        Column {
+            Text("$label state: $value")
+            Button(onClick = { value += 1 }) { Text("Change $label state") }
+        }
     }
 }

@@ -2608,44 +2608,44 @@ private fun AuthenticatedApp(
                 },
             )
         }
-        AppWorkspaceState(
+        val workspaceContent = rememberAppWorkspaceContent(
             holder = appWorkspaceSaveableStateHolder,
             appId = appWorkspaceNavigation.activeAppId?.takeIf { screen != Screen.Root },
-        ) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
-                    RootShell(
-                        presentation = presentation,
-                        selected = destination,
-                        desktopWorkspaceKind = if (screen == Screen.Root) {
-                            NextcloudDesktopWorkspaceKind.Root
-                        } else {
-                            NextcloudDesktopWorkspaceKind.AppWorkspace
-                        },
-                        navigationEnabled = !groupwareMutationInProgress,
-                        onSelected = { selected ->
-                            inlineEditorNavigation.navigate {
-                                if (!groupwareMutationInProgress) {
-                                    leaveAppWorkspace()
-                                    destination = selected
-                                    screen = Screen.Root
-                                }
-                            }
-                        },
-                        identity = desktopIdentity,
-                        activeAppId = appWorkspaceNavigation.activeAppId,
-                        onOpenApp = { appId ->
+            screen = screen, content = screenContent,
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
+                RootShell(
+                    presentation = presentation,
+                    selected = destination,
+                    desktopWorkspaceKind = if (screen == Screen.Root) {
+                        NextcloudDesktopWorkspaceKind.Root
+                    } else {
+                        NextcloudDesktopWorkspaceKind.AppWorkspace
+                    },
+                    navigationEnabled = !groupwareMutationInProgress,
+                    onSelected = { selected ->
+                        inlineEditorNavigation.navigate {
                             if (!groupwareMutationInProgress) {
-                                serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
-                                    openApp(app, destination)
-                                }
+                                leaveAppWorkspace()
+                                destination = selected
+                                screen = Screen.Root
                             }
-                        },
-                        content = screenContent,
-                    )
-                } else {
-                    screenContent()
-                }
+                        }
+                    },
+                    identity = desktopIdentity,
+                    activeAppId = appWorkspaceNavigation.activeAppId,
+                    onOpenApp = { appId ->
+                        if (!groupwareMutationInProgress) {
+                            serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
+                                openApp(app, destination)
+                            }
+                        }
+                    },
+                    content = workspaceContent,
+                )
+            } else {
+                workspaceContent()
             }
         }
     }
