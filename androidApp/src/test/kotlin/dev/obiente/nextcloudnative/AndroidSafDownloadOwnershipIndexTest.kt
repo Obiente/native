@@ -10,6 +10,29 @@ import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
     @Test
+    fun `expanded discovery cannot reconcile another tree's legacy transaction`() {
+        val root = Files.createTempDirectory("saf-scoped-recovery-tokens-").toFile()
+        try {
+            val store = AndroidSafDownloadOwnershipStore(root)
+            val owned = authenticatedRelocationTransaction()
+            val unrelated = owned.copy(token = SECOND_TOKEN, finalName = "Unrelated.txt")
+            val original = "content://provider/document/original"
+            val relocated = "content://provider/document/elsewhere"
+            store.forDirectory(original).add(owned)
+            store.forDirectory(relocated).add(unrelated)
+            val index = store.indexed(setOf(owned.token))
+            val names = setOf("provider-stage-${owned.token}", "provider-stage-${unrelated.token}")
+            index.observeRecoveryNames(relocated, names)
+            assertEquals(listOf(owned), index.forDirectory(relocated).transactions(names))
+            index.forDirectory(relocated).remove(owned)
+            assertFalse(index.hasPendingTransactions())
+            assertEquals(listOf(unrelated), store.pendingTransactions())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `pending ownership is isolated from unrelated SAF trees`() {
         val base = Files.createTempDirectory("saf-download-tree-index-").toFile()
         try {

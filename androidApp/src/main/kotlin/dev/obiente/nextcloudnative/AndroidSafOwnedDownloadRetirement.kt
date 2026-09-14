@@ -151,7 +151,6 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         DocumentsContract.getTreeDocumentId(treeUri), providerRecoverySession,
     )
     val ownership = createAndroidSafDownloadOwnershipStore(appContext, localRootId)
-    val indexedOwnership = ownership.indexed()
     val localTree = AndroidSafFileSyncLocalTree(
         resolver = appContext.contentResolver,
         rootId = localRootId,
@@ -192,6 +191,12 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
             documentId,
         ) != null
     }
+    val legacyTokens = ownership.legacyPendingTransactions().mapTo(hashSetOf()) { it.token }
+    val relevantTokens = ownership.pendingTransactions().filter { transaction ->
+        transaction.token !in legacyTokens ||
+            !androidSafOwnedDownloadIsProvenUnrelatedToTree(transaction, identityBelongsToTree)
+    }.mapTo(hashSetOf()) { it.token }
+    val indexedOwnership = ownership.indexed(relevantTokens)
     val hasRelevantPendingRecovery = {
         hasRelevantAndroidSafOwnedDownloadRecovery(
             treeScopedPending = ownership.hasTreeScopedPendingTransactions(),

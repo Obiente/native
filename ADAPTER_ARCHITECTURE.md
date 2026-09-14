@@ -322,3 +322,7 @@ recovery tokens are discovered from that account's root, including directories
 moved outside the old sync subtree. The scan retains its depth, count, ownership,
 content-authentication, and cancellation bounds. Cross-account or external
 provider recovery stays within the original tree grant.
+
+Expanded retirement discovery indexes only the selected tree's transactions and
+legacy transactions not proven to belong elsewhere. Seeing another tree's token
+in the same account or directory never authorizes its reconciliation.
