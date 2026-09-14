@@ -92,13 +92,21 @@ class DesktopAccountCredentialPersistenceTest {
 
     @Test
     fun selectionFlushesRegistryAndLegacyMetadataBeforeReturning() = withStore { preferences, secrets ->
-        var flushCount = 0
-        val persistence = persistence(preferences, secrets) { flushCount += 1 }
+        val flushedAccounts = mutableListOf<NextcloudAccountId?>()
+        val persistence = persistence(preferences, secrets) {
+            flushedAccounts += DesktopAccountRegistryPreferenceStore(preferences).read()?.let {
+                decodeNextcloudAccountRegistry(it)?.activeAccountId
+            }.takeIf {
+                preferences.get("server", null) == firstSession().serverUrl &&
+                    preferences.get("login", null) == firstSession().loginName
+            }
+        }
         persistence.saveSession(firstSession())
         persistence.saveSession(secondSession())
+        flushedAccounts.clear()
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(14, flushCount)
+        assertTrue(firstSession().accountId in flushedAccounts)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -767,14 +775,17 @@ class DesktopAccountCredentialPersistenceTest {
         withStore { preferences, secrets ->
             val first = firstSession()
             val second = secondSession()
-            var flushAttempts = 0
+            var failNextFlush = false
             val persistence = persistence(preferences, secrets) {
-                flushAttempts += 1
-                if (flushAttempts == 14) error("synthetic removal flush failure")
+                if (failNextFlush) {
+                    failNextFlush = false
+                    error("synthetic removal flush failure")
+                }
                 preferences.flush()
             }
             persistence.saveSession(first)
             persistence.saveSession(second)
+            failNextFlush = true
 
             assertFailsWith<IllegalStateException> {
                 persistence.removeAccount(second.accountId)

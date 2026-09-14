@@ -234,6 +234,10 @@ internal class DesktopAccountCredentialPersistence(
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
         val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         if (server == null && login == null && phase == null) return
+        if (phase == DESKTOP_CREDENTIAL_SAVE_CLEANUP_COMPLETED) {
+            clearPendingCredentialSave()
+            return
+        }
         if (server.isNullOrBlank() || login.isNullOrBlank()) {
             credentialRollbackRecoveryUnavailable()
         }
@@ -473,22 +477,11 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun clearPendingCredentialSave() {
-        val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
-        val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
-        val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
-        if (server == null && login == null) return
         try {
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_SERVER)
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN)
-            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_PHASE)
-            flushPreferences()
+            clearDesktopCompletedCredentialSave(preferences, flushPreferences)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, server)
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, login)
-            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_PHASE, phase)
-            runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
                 "account-credentials.recover",
