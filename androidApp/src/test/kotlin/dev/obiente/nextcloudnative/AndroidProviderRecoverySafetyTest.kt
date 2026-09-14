@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudSession
+
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import kotlinx.coroutines.CompletableDeferred
@@ -11,6 +13,18 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class AndroidProviderRecoverySafetyTest {
+    @Test
+    fun legacyTreeRecoveryBindsOnlyTheAccountOwningItsDocument() {
+        val removing = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val other = removing.copy(loginName = "bob")
+        kotlin.test.assertEquals(removing, androidRootBoundProviderRecoverySession(NextcloudDocumentIds.rootId(removing), removing))
+        kotlin.test.assertNull(androidRootBoundProviderRecoverySession(NextcloudDocumentIds.rootId(other), removing))
+        kotlin.test.assertNull(androidRootBoundProviderRecoverySession(NextcloudDocumentIds.rootId(other), null))
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            androidRootBoundProviderRecoverySession("invalid", removing)
+        }
+    }
+
     @Test
     fun boundRecoveryRangeReadsUseTheSuppliedSessionBeforeCredentialPersistence() = runBlocking {
         val session = dev.obiente.nextcloudnative.app.NextcloudSession("https://cloud.example.test", "alice", "synthetic")

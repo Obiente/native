@@ -292,3 +292,13 @@ internal fun androidLocalRecoveryAuthority(authority: String, localAuthority: St
     require(parts.last() == localAuthority) { "The recovery provider authority does not match this app." }
     return localAuthority
 }
+
+/** A different account's legacy tree must keep using its original provider and grant. */
+internal fun androidRootBoundProviderRecoverySession(
+    rootDocumentId: String,
+    removingSession: NextcloudSession?,
+): NextcloudSession? {
+    if (removingSession == null) return null
+    val reference = NextcloudDocumentIds.parse(rootDocumentId)
+    return removingSession.takeIf { reference.accountKey == NextcloudDocumentIds.accountKey(it) }
+}

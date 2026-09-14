@@ -28,13 +28,15 @@ internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
     private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
-    private val providerRecoverySession: NextcloudSession? = null,
+    providerRecoverySession: NextcloudSession? = null,
     localRecoveryAuthority: String? = null,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
     private val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocumentId)
-    private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(providerRecoverySession, localRecoveryAuthority)
+    private val providerRecovery = AndroidDocumentsProviderRecoveryAccess(
+        androidRootBoundProviderRecoverySession(rootDocumentId, providerRecoverySession), localRecoveryAuthority,
+    )
 
     init {
         require(rootId.startsWith("content://")) { "The local sync root is not a document-tree grant." }
@@ -43,9 +45,6 @@ internal class AndroidSafFileSyncLocalTree(
                 it.uri == treeUri && it.isReadPermission && it.isWritePermission
             },
         ) { "Access to the selected local folder has expired. Select it again." }
-        providerRecoverySession?.let { session ->
-            NextcloudDocumentIds.requireForSession(rootDocumentId, session)
-        }
     }
 
     override fun scan(

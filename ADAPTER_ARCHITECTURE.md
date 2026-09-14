@@ -303,3 +303,8 @@ installer already includes the behavior.
 Deferred Android provider recovery uses the supplied session under the account
 removal lease before credentials are persisted. A sync pair retains its SAF
 grant until its pending local transactions and retirement have completed.
+
+Legacy self-provider trees owned by a different account recover through their
+original provider URI and retained tree permission. Only a root matching the
+removing account may receive its supplied recovery session or a local authority
+rewrite. An unavailable original provider leaves recovery pending.
