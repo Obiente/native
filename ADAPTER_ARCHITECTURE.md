@@ -244,6 +244,11 @@ store. Missing recovery evidence withholds both actions. The header control is
 scoped to the active account and navigation context and cleared on disposal;
 pending writes remain in durable storage, not in that control.
 
+Android publishes pending mutation records only after synchronizing the record
+and its containing directory. A publication failure withholds the request.
+External file handoff records cannot be restored or newly persisted while
+the durable handoff cleanup marker remains pending, including after restart.
+
 Task requests, durable recovery storage, and recovery reads are serialized.
 Refresh and recovery-discard controls remain disabled until the active request
 finishes. A queued recovery read reloads the durable record after obtaining the
@@ -314,8 +319,35 @@ repair path from a valid legacy session remains available.
 These are source and deterministic-test guarantees, not claims that a published
 installer already includes the behavior.
 
-Android external file handoffs capture a process generation under the active
-account operation guard before probing or staging a file. Clearing handoffs
-invalidates that generation even when persisted cleanup fails. Registration
-and staged-content publication check the captured generation under the registry
-lock, so work started before account removal cannot publish a later handoff.
+Android document writeback initialization holds the credential operation lease
+through metadata resolution and durable staging. Descriptor lifetime uses the
+removal fence, and close-time commits revalidate the exact session. Retained edits
+use canonical local account ownership; verified historical manifest owners migrate
+without changing staged bytes. Document change notifications include verified
+incarnation-scoped legacy IDs. Malformed optional aliases cannot block canonical
+reauthentication, and removal may discard them only after incarnation retirement.
+
+Canonical writeback ownership is separate from the support diagnostic scope.
+Writeback failure events resolve the retained account's current diagnostic identity,
+so account support export and removal find the same scope as other provider errors.
+
+Remote Android handoff producers capture a process generation under the current
+session guard before probing or staging. Account cleanup invalidates that
+generation even if durable clearing fails. Registration and managed-content
+publication check it under the registry lock, so late producers cannot republish
+cleared account metadata or content. The durable cleanup marker separately fences
+restoration after a failed clear and process restart.
+
+Retained-writeback diagnostics resolve the account's current session separately
+from the descriptor's captured session. Publication tries the current account
+operation lease and rechecks the exact session before enqueueing the diagnostic.
+Enqueueing captures the sink's account generation synchronously; the asynchronous
+sink rejects retired or stale generations under its persistence lock.
+Removal, further rotation or a busy lease skips this optional event rather than
+retaining a path-bearing event under an obsolete account scope.
+
+Account removal also purges diagnostic scopes named by verified document aliases
+for that canonical account and incarnation. Both diagnostic sinks must finish
+before document grants and alias provenance are retired. A failure preserves
+those aliases for restart recovery; unrelated accounts and unknown hashes are
+never inferred to belong to the removed account.

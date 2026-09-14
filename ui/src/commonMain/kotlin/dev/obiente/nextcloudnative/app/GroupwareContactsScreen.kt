@@ -209,9 +209,7 @@ fun NativeGroupwareContactsScreen(
     LaunchedEffect(durableMutationInProgress) {
         onMutationInProgressChanged(durableMutationInProgress)
     }
-    DisposableEffect(Unit) {
-        onDispose { onMutationInProgressChanged(false) }
-    }
+    DisposableEffect(Unit) { onDispose { onMutationInProgressChanged(false) } }
 
     LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
         if (!mutationRecoveryLoaded) return@LaunchedEffect

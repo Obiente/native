@@ -43,16 +43,48 @@ internal fun acquireAndroidDocumentMutationAccountLease(
     session: NextcloudSession,
     loadCurrentSession: () -> NextcloudSession?,
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
-    val lease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(session))
+    val lifetimeLease = lifetimeGuard.acquireReadBlocking(session.documentProviderIncarnationAccountIdentity())
+    val operationLease = try {
+        guard.acquireBlocking(androidAccountOperationIdentities(session))
+    } catch (failure: Throwable) {
+        lifetimeLease.close()
+        throw failure
+    }
     return try {
         if (!androidDocumentWritebackSessionIsCurrent(session, loadCurrentSession())) {
             throw FileNotFoundException("The active Nextcloud account changed before the document mutation could start.")
         }
-        lease
+        AndroidAccountOperationLease {
+            try {
+                operationLease.close()
+            } finally {
+                lifetimeLease.close()
+            }
+        }
     } catch (failure: Throwable) {
-        lease.close()
+        operationLease.close()
+        lifetimeLease.close()
         throw failure
+    }
+}
+
+internal inline fun <Result> withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
+    expectedSession: NextcloudSession,
+    noinline loadCurrentSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    action: (NextcloudSession) -> Result,
+): Result {
+    val operationLease = guard.acquireBlocking(androidAccountOperationIdentities(expectedSession))
+    return try {
+        val currentSession = loadCurrentSession()
+        if (!androidDocumentWritebackSessionIsCurrent(expectedSession, currentSession)) {
+            throw FileNotFoundException("The active Nextcloud account changed before the document writeback could commit.")
+        }
+        action(requireNotNull(currentSession))
+    } finally {
+        operationLease.close()
     }
 }
 
@@ -193,9 +225,9 @@ internal fun androidDocumentPendingWritebacks(
     val root = File(context.filesDir, "documents-recovery")
     if (!root.isDirectory) return emptyList()
     val files = requireInspectableAndroidDocumentWritebackRecovery(root)
-    val accountId = NextcloudDocumentIds.accountKey(session)
+    val accountId = session.accountId.storageKey
     return files.mapNotNull { manifest ->
-        parseAndroidDocumentWriteback(root, manifest, accountId)
+        parseOwnedAndroidDocumentWriteback(root, manifest, accountId, legacyAndroidDocumentWritebackOwners(context, session))
     }.filterNot { writeback ->
         writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
     }.sortedBy { writeback -> writeback.manifest.lastModified() }
@@ -209,9 +241,9 @@ internal fun androidDocumentPendingWriteback(
     val root = context?.let { File(it.filesDir, "documents-recovery") } ?: return null
     if (!root.isDirectory) return null
     val files = requireInspectableAndroidDocumentWritebackRecovery(root)
-    val account = NextcloudDocumentIds.accountKey(session)
+    val account = session.accountId.storageKey
     return files.asSequence()
-        .mapNotNull { manifest -> parseAndroidDocumentWriteback(root, manifest, account) }
+        .mapNotNull { manifest -> parseOwnedAndroidDocumentWriteback(root, manifest, account, legacyAndroidDocumentWritebackOwners(requireNotNull(context), session)) }
         .filter { writeback -> writeback.remotePath == remotePath }
         .filterNot { writeback ->
             writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
@@ -234,7 +266,7 @@ internal fun claimAndroidDocumentPendingWritebackForRecovery(
     session: NextcloudSession,
     remotePath: String,
 ): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val accountId = NextcloudDocumentIds.accountKey(session)
+    val accountId = session.accountId.storageKey
     if (androidDocumentMutationBlocksWriteback(accountId, remotePath)) return null
     val activePath = ActiveAndroidDocumentWritebackPath(accountId, remotePath)
     if (!ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.add(activePath)) return null
@@ -249,7 +281,7 @@ internal fun claimAndroidDocumentPendingWritebackForRecovery(
 
 internal fun reserveAndroidDocumentWritebackPath(session: NextcloudSession, remotePath: String) =
     synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val accountId = NextcloudDocumentIds.accountKey(session)
+        val accountId = session.accountId.storageKey
         check(!androidDocumentMutationBlocksWriteback(accountId, remotePath)) {
             "This document is already being changed by another local operation."
         }
@@ -262,7 +294,7 @@ internal fun reserveAndroidDocumentWritebackPath(session: NextcloudSession, remo
 internal fun releaseAndroidDocumentWritebackPath(session: NextcloudSession, remotePath: String) =
     synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
         ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -=
-            ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
+            ActiveAndroidDocumentWritebackPath(session.accountId.storageKey, remotePath)
     }
 
 internal fun <T> withNoBlockingAndroidDocumentWriteback(
@@ -299,7 +331,7 @@ private fun reserveAndroidDocumentMutation(
     remotePaths: Array<out String>,
 ): ActiveAndroidDocumentMutation {
     val providerContext = requireNotNull(context) { "Provider context is unavailable." }
-    val accountId = NextcloudDocumentIds.accountKey(session)
+    val accountId = session.accountId.storageKey
     val paths = remotePaths.toSet()
     require(paths.isNotEmpty() && paths.none(String::isBlank))
     return synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
@@ -398,7 +430,7 @@ private fun parseAndroidDocumentWritebackManifest(
     )
 }.getOrNull()
 
-private fun parseAndroidDocumentWriteback(
+internal fun parseAndroidDocumentWriteback(
     root: File,
     manifest: File,
     expectedAccount: String?,

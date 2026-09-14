@@ -354,7 +354,13 @@ class AndroidExternalFileHandoffTest {
             assertTrue(stateFile.isFile)
 
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
-            val restartedStore = AndroidExternalFileHandoffStore(stateFile)
+            val restartedStore = AndroidExternalFileHandoffStore(stateFile, cleanupPending = { cleanupPending })
+            AndroidExternalFileHandoffRegistry.bind(restartedStore, nowEpochMillis = 11L)
+            assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session.copy(appPassword = "rotated"), 11L))
+            assertTrue(stateFile.isFile)
+            assertFailsWith<AndroidExternalFileHandoffStoreException> {
+                AndroidExternalFileHandoffRegistry.register(session, handoffFile(size = 4L), 11L)
+            }
             assertTrue(
                 retryPendingAndroidExternalHandoffCleanup(
                     pending = cleanupPending,

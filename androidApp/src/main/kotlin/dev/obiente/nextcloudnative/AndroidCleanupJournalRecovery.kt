@@ -50,6 +50,7 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
     prepareRemoval: suspend (NextcloudSession) -> Unit,
     retryCleanup: suspend (NextcloudSession, String, String?, String?, String?) -> Unit,
     recordFailure: (Exception) -> Unit,
+    completeRecovery: suspend (NextcloudSession) -> Unit = {},
 ) {
     val snapshot = journal.snapshot()
     requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
@@ -61,14 +62,16 @@ internal suspend fun retryAndroidCleanupBeforeActivation(
                 pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups),
                 pendingAndroidAccountRemovalCleanup(session),
             ).distinct()
-            // Preserve known legacy ownership until its cleanup succeeds, before deriving a new row.
-            cleanups.forEach { pending ->
-                withAndroidAccountRemovalLease(pending.workIdentity) {
+            withAndroidAccountRemovalLease(session, additionalAccountIdentities = cleanups.map { it.workIdentity }) {
+                // Retain old ownership until all scopes and their document incarnation are retired.
+                journal.prepare(cleanups.first())
+                prepareRemoval(session)
+                cleanups.forEach { pending ->
                     journal.prepare(pending)
-                    prepareRemoval(session)
                     retryAndroidAccountOwnedStateCleanup(session, pending, retryCleanup)
-                    journal.clear(pending.accountStorageKey)
                 }
+                completeRecovery(session)
+                journal.clear(session.accountId.storageKey)
             }
             journal.markReviewed(session.accountId.storageKey, retainedAccounts)
         } else {

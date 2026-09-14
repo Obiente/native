@@ -34,6 +34,28 @@ internal class AndroidAccountOperationGuard {
         }
     }
 
+    suspend fun <Result> tryWithAccounts(
+        accountIds: Collection<String>,
+        unavailable: suspend () -> Result,
+        action: suspend () -> Result,
+    ): Result {
+        currentCoroutineContext().ensureActive()
+        val leases = mutableListOf<AndroidAccountOperationLease>()
+        accountIds.distinct().sorted().forEach { accountId ->
+            val lease = tryAcquire(accountId)
+            if (lease == null) {
+                leases.asReversed().forEach(AndroidAccountOperationLease::close)
+                return unavailable()
+            }
+            leases += lease
+        }
+        try {
+            return action()
+        } finally {
+            leases.asReversed().forEach(AndroidAccountOperationLease::close)
+        }
+    }
+
     suspend fun <Result> withAccounts(accountIds: Collection<String>, action: suspend () -> Result): Result {
         val leases = mutableListOf<AndroidAccountOperationLease>()
         try {
@@ -45,6 +67,17 @@ internal class AndroidAccountOperationGuard {
     }
 
     fun acquireBlocking(accountId: String): AndroidAccountOperationLease = runBlocking { acquire(accountId) }
+
+    fun acquireBlocking(accountIds: Collection<String>): AndroidAccountOperationLease = runBlocking {
+        val leases = mutableListOf<AndroidAccountOperationLease>()
+        try {
+            accountIds.distinct().sorted().forEach { accountId -> leases += acquire(accountId) }
+            AndroidAccountOperationLease { leases.asReversed().forEach(AndroidAccountOperationLease::close) }
+        } catch (failure: Throwable) {
+            leases.asReversed().forEach(AndroidAccountOperationLease::close)
+            throw failure
+        }
+    }
 
     suspend fun <Result> withAccountSession(
         accountId: String,
@@ -126,6 +159,10 @@ internal class AndroidAccountOperationLease(
 }
 
 internal val ANDROID_ACCOUNT_OPERATION_GUARD = AndroidAccountOperationGuard()
+
+internal fun androidAccountOperationIdentities(
+    session: dev.obiente.nextcloudnative.app.NextcloudSession,
+): Set<String> = setOf(NextcloudDocumentIds.accountKey(session), session.accountId.storageKey)
 
 internal fun androidAccountOperationSessionIsCurrent(
     expectedAccountId: String,

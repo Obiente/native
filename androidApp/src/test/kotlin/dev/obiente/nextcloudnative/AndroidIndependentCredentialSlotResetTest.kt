@@ -6,8 +6,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 
 class AndroidIndependentCredentialSlotResetTest {
     @Test
@@ -66,11 +71,20 @@ class AndroidIndependentCredentialSlotResetTest {
         val events = mutableListOf<String>()
         val presentSlots = mutableSetOf(first.preferenceKey, second.preferenceKey)
         val tombstones = mutableSetOf<String>()
+        val completedRetirements = mutableListOf<String>()
 
         retireUnregisteredAndroidAccountCredentialSlots(
             slots = listOf(first, second),
             guard = AndroidAccountOperationGuard(),
-            prepareAccountRemoval = { session -> events += "prepare-${session.loginName}" },
+            prepareAccountRemoval = { session ->
+                events += "prepare-${session.loginName}"
+                session.accountId.storageKey
+            },
+            rollbackPreparedRemoval = { error("prepared retirements must not roll back") },
+            completePreparedRemoval = { retirement, accountStorageKey ->
+                completedRetirements += retirement
+                tombstones -= accountStorageKey
+            },
             commitSlotRemoval = { slot, cleanup ->
                 events += "commit-${slot.session.loginName}"
                 presentSlots -= slot.preferenceKey
@@ -92,6 +106,7 @@ class AndroidIndependentCredentialSlotResetTest {
         )
         assertTrue(presentSlots.isEmpty())
         assertTrue(tombstones.isEmpty())
+        assertEquals(listOf(first.session.accountId.storageKey, second.session.accountId.storageKey), completedRetirements)
     }
 
     @Test
@@ -100,12 +115,18 @@ class AndroidIndependentCredentialSlotResetTest {
         val second = resetSlot(NextcloudSession("https://two.example.test", "bob", "second-secret"))
         val tombstones = mutableSetOf<String>()
         val removed = mutableSetOf<String>()
+        val completed = mutableSetOf<String>()
         val failures = mutableListOf<Exception>()
 
         retireUnregisteredAndroidAccountCredentialSlots(
             slots = listOf(first, second),
             guard = AndroidAccountOperationGuard(),
-            prepareAccountRemoval = {},
+            prepareAccountRemoval = { it.accountId.storageKey },
+            rollbackPreparedRemoval = { error("committed retirements must not roll back") },
+            completePreparedRemoval = { retirement, accountStorageKey ->
+                completed += retirement
+                tombstones -= accountStorageKey
+            },
             commitSlotRemoval = { slot, cleanup ->
                 removed += slot.preferenceKey
                 tombstones += cleanup.accountStorageKey
@@ -120,6 +141,7 @@ class AndroidIndependentCredentialSlotResetTest {
 
         assertEquals(setOf(first.preferenceKey, second.preferenceKey), removed)
         assertEquals(setOf(first.session.accountId.storageKey), tombstones)
+        assertEquals(setOf(second.session.accountId.storageKey), completed)
         assertEquals(1, failures.size)
     }
 
@@ -135,7 +157,9 @@ class AndroidIndependentCredentialSlotResetTest {
             retireUnregisteredAndroidAccountCredentialSlots(
                 slots = listOf(first, second),
                 guard = AndroidAccountOperationGuard(),
-                prepareAccountRemoval = {},
+                prepareAccountRemoval = { it.accountId.storageKey },
+                rollbackPreparedRemoval = { error("committed retirements must not roll back") },
+                completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
                 commitSlotRemoval = { slot, cleanup ->
                     removed += slot.preferenceKey
                     tombstones += cleanup.accountStorageKey
@@ -170,7 +194,9 @@ class AndroidIndependentCredentialSlotResetTest {
                     tombstones -= it.session.accountId.storageKey
                 },
                 guard = AndroidAccountOperationGuard(),
-                prepareAccountRemoval = {},
+                prepareAccountRemoval = { it.accountId.storageKey },
+                rollbackPreparedRemoval = {},
+                completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
                 commitSlotRemoval = { _, _ -> commitAttempted = true; error("synthetic commit failure") },
                 rollbackSlotRemoval = { error("slot must remain untouched") },
                 removeAccountOwnedState = { error("cleanup must not start") },
@@ -189,7 +215,9 @@ class AndroidIndependentCredentialSlotResetTest {
                 preexistingCleanupAccountStorageKeys = tombstones.toSet(),
                 retryPreexistingCleanup = { tombstones -= it.session.accountId.storageKey },
                 guard = AndroidAccountOperationGuard(),
-                prepareAccountRemoval = {},
+                prepareAccountRemoval = { it.accountId.storageKey },
+                rollbackPreparedRemoval = {},
+                completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
                 commitSlotRemoval = { _, cleanup ->
                     commitAttempted = true
                     tombstones += cleanup.accountStorageKey
@@ -203,6 +231,65 @@ class AndroidIndependentCredentialSlotResetTest {
         }
         assertTrue(commitAttempted)
         assertTrue(tombstones.isEmpty())
+    }
+
+    @Test
+    fun malformedSlotResetUsesCanonicalDocumentLifetimeFence() = runBlocking {
+        val session = NextcloudSession("https://CLOUD.example.test:443/", "alice", "first-secret")
+        val slot = resetSlot(session)
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val documentLease = lifetimeGuard.acquireReadBlocking(session.accountId.storageKey)
+        val committed = CompletableDeferred<Unit>()
+
+        val reset = async(Dispatchers.Default) {
+            retireUnregisteredAndroidAccountCredentialSlots(
+                slots = listOf(slot),
+                guard = guard,
+                lifetimeGuard = lifetimeGuard,
+                prepareAccountRemoval = { it.accountId.storageKey },
+                rollbackPreparedRemoval = {},
+                completePreparedRemoval = { _, _ -> },
+                commitSlotRemoval = { _, _ -> committed.complete(Unit) },
+                rollbackSlotRemoval = {},
+                removeAccountOwnedState = {},
+                clearCleanup = {},
+                recordCleanupFailure = { error("cleanup must succeed") },
+            )
+        }
+        yield()
+        assertFalse(committed.isCompleted)
+
+        documentLease.close()
+        withTimeout(1_000L) { reset.await() }
+        assertTrue(committed.isCompleted)
+    }
+
+    @Test
+    fun slotCommitFailureRollsBackItsExactPreparedRetirement() = runBlocking {
+        val slot = resetSlot(NextcloudSession("https://one.example.test", "alice", "first-secret"))
+        val token = "retirement-${slot.session.accountId.storageKey}"
+        val rollbacks = mutableListOf<String>()
+        var slotRestored = false
+
+        assertFailsWith<IllegalStateException> {
+            retireUnregisteredAndroidAccountCredentialSlots(
+                slots = listOf(slot),
+                guard = AndroidAccountOperationGuard(),
+                lifetimeGuard = AndroidAccountRemovalLifetimeGuard(),
+                prepareAccountRemoval = { token },
+                rollbackPreparedRemoval = { rollbacks += it },
+                completePreparedRemoval = { _, _ -> error("failed commit must not complete retirement") },
+                commitSlotRemoval = { _, _ -> error("synthetic slot commit failure") },
+                rollbackSlotRemoval = { slotRestored = true },
+                removeAccountOwnedState = { error("cleanup must not start") },
+                clearCleanup = {},
+                recordCleanupFailure = { error("cleanup must not start") },
+            )
+        }
+
+        assertTrue(slotRestored)
+        assertEquals(listOf(token), rollbacks)
     }
 
     private fun resetSlot(session: NextcloudSession) = AndroidIndependentCredentialSlotReset(

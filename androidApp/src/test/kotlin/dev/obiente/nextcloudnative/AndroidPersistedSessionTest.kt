@@ -1114,13 +1114,14 @@ class AndroidPersistedSessionTest {
                 rollbackActiveRemoval = { events += "rollback-active" },
                 persistInactiveRemoval = { events += "persist-removal" },
                 rollbackInactiveRemoval = { events += "rollback" },
+                onInactiveRemovalCommitted = { events += "notify-roots" },
             )
         }
         cleanupEntered.await()
 
         removal.cancelAndJoin()
 
-        assertEquals(listOf("persist-removal", "remove-uploads"), events)
+        assertEquals(listOf("persist-removal", "notify-roots", "remove-uploads"), events)
     }
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {

@@ -45,8 +45,7 @@ internal class AndroidAccountOwnedStateCleanup(
             listOf(
                 { fenceAndroidDynamicApiStateForRemoval(cacheIdentity, dynamicApiState.coalescer, dynamicApiState.cache) },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, cacheIdentity) },
-                { removeSupportAccount(accountIdentity) },
-                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
+                { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -54,7 +53,6 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAndroidAccountPersistenceScopeDigest(session),
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
@@ -89,8 +87,7 @@ internal class AndroidAccountOwnedStateCleanup(
                     }
                 },
                 { dynamicDiscoveryCache.retireAccount(session.accountId.storageKey, previewCacheIdentity) },
-                { removeSupportAccount(accountIdentity) },
-                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
+                { removeAndroidAccountDiagnosticsAndGrants(appContext, session.accountId.storageKey, accountIdentity, removeSupportAccount) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -98,7 +95,6 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
@@ -133,8 +129,7 @@ internal class AndroidAccountOwnedStateCleanup(
                     }
                 },
                 { dynamicDiscoveryCache.retireAccount(accountStorageKey, previewCacheIdentity) },
-                { removeSupportAccount(accountIdentity) },
-                { AndroidSupportDiagnostics.get(appContext).removeAccount(accountIdentity) },
+                { removeAndroidAccountDiagnosticsAndGrants(appContext, accountStorageKey, accountIdentity, removeSupportAccount) },
                 {
                     removeAndroidHomeWorkspaceAccountPreferences(
                         appContext,
@@ -142,7 +137,6 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },

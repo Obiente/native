@@ -64,6 +64,7 @@ internal class AndroidFileRangeSessionActivity {
 internal class AndroidFileRangeSessionCoordinator {
     private val monitor = Any()
     private val registrations = mutableMapOf<String, MutableSet<Registration>>()
+    private var credentialResetInProgress = false
 
     fun register(
         accountIdentity: String,
@@ -77,7 +78,10 @@ internal class AndroidFileRangeSessionCoordinator {
             whenDrained = activity::whenDrained,
             unregister = { unregister(accountIdentity, registration) },
         )
-        synchronized(monitor) { registrations.getOrPut(accountIdentity, ::linkedSetOf) += registration }
+        synchronized(monitor) {
+            check(!credentialResetInProgress) { "File range sessions are unavailable during credential reset." }
+            registrations.getOrPut(accountIdentity, ::linkedSetOf) += registration
+        }
         return registration
     }
 
@@ -86,6 +90,26 @@ internal class AndroidFileRangeSessionCoordinator {
         current.forEach(Registration::cancel)
         current.forEach { registration -> registration.awaitDrained() }
         synchronized(monitor) { registrations.remove(accountIdentity) }
+    }
+
+    suspend fun <Result> withAllQuiesced(action: suspend () -> Result): Result {
+        val current = synchronized(monitor) {
+            check(!credentialResetInProgress) { "A credential reset is already in progress." }
+            credentialResetInProgress = true
+            registrations.values.flatten()
+        }
+        return try {
+            current.forEach(Registration::cancel)
+            current.forEach { registration -> registration.awaitDrained() }
+            val completed = current.toSet()
+            synchronized(monitor) {
+                registrations.values.forEach { accountRegistrations -> accountRegistrations.removeAll(completed) }
+                registrations.entries.removeAll { (_, accountRegistrations) -> accountRegistrations.isEmpty() }
+            }
+            action()
+        } finally {
+            synchronized(monitor) { credentialResetInProgress = false }
+        }
     }
 
     private fun unregister(accountIdentity: String, registration: Registration) = synchronized(monitor) {
@@ -143,9 +167,12 @@ internal fun openTrackedAndroidFileRangeSession(
             throw FileNotFoundException("The account changed before the file range session could start.")
         }
         val source = openSource()
-        val registration = coordinator.register(
-            NextcloudDocumentIds.accountKey(expectedSession), activity, source::close,
-        )
+        val registration = try {
+            coordinator.register(NextcloudDocumentIds.accountKey(expectedSession), activity, source::close)
+        } catch (failure: Throwable) {
+            runCatching(source::close).exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
         NextcloudFileRangeSession(source.size, source::read, registration::close, activity::start)
     } catch (failure: Throwable) {
         activity.close()
