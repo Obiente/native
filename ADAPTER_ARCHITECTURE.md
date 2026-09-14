@@ -312,3 +312,7 @@ use canonical local account ownership; verified historical manifest owners migra
 without changing staged bytes. Document change notifications include verified
 incarnation-scoped legacy IDs. Malformed optional aliases cannot block canonical
 reauthentication, and removal may discard them only after incarnation retirement.
+
+Canonical writeback ownership is separate from the support diagnostic scope.
+Writeback failure events use the operation session's existing diagnostic identity,
+so account support export and removal find the same scope as other provider errors.

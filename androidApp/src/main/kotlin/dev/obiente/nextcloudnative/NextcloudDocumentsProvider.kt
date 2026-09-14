@@ -556,7 +556,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             val callback = AndroidWritableFileProxyCallback(staging) { closeError ->
                 try {
                     if (closeError != null) {
-                        retainFailedWriteback(writeback, closeError)
+                        retainFailedWriteback(session, writeback, closeError)
                     } else {
                         withAndroidDocumentWritebackCommitWhileLifetimeLeaseHeld(
                             expectedSession = session,
@@ -578,7 +578,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                         }
                     }
                 } catch (failure: Throwable) {
-                    retainFailedWriteback(writeback, failure)
+                    retainFailedWriteback(session, writeback, failure)
                 } finally {
                     writeback.releaseActive()
                     accountLease.close()
@@ -606,7 +606,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         return File.createTempFile("document-", ".stage", directory)
     }
 
-    private fun retainFailedWriteback(writeback: AndroidDocumentPendingWriteback, failure: Throwable) {
+    private fun retainFailedWriteback(session: NextcloudSession, writeback: AndroidDocumentPendingWriteback, failure: Throwable) {
         val wasRetained = writeback.staging.isFile && writeback.manifest.isFile
         Log.e(
             LOG_TAG,
@@ -617,7 +617,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         recordProviderFailure(
             operation = "documents.writeback",
             failure = failure,
-            accountIdentity = writeback.accountId,
+            accountIdentity = NextcloudDocumentIds.accountKey(session),
             remotePath = writeback.remotePath,
             fields = listOf(SupportDiagnosticFieldDraft("recovery_complete", wasRetained.toString())),
         )
