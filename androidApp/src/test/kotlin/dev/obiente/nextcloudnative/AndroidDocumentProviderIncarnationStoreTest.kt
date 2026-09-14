@@ -17,6 +17,19 @@ class AndroidDocumentProviderIncarnationStoreTest {
     private val accountIdentity = "a".repeat(64)
 
     @Test
+    fun recoveryRenewsTheIncarnationEvenWhenTheRegistryRetainsTheAccount() {
+        val fixture = fixture(incarnations = listOf("1".repeat(32), "2".repeat(32)))
+        val original = fixture.store.prepareForAccountSave(accountIdentity, accountAlreadyStored = false)
+        val retired = fixture.store.retireForRemoval(accountIdentity)
+
+        renewRecoveredAndroidDocumentIncarnation(fixture.store, retired)
+
+        val restored = fixture.store.prepareForAccountSave(accountIdentity, accountAlreadyStored = true)
+        assertNotEquals(original, restored)
+        assertEquals(NextcloudDocumentIncarnation.Versioned("2".repeat(32)), restored)
+    }
+
+    @Test
     fun legacyIdentityRemainsUsableUntilItsFirstRemoval() {
         val fixture = fixture()
 
