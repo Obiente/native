@@ -458,7 +458,7 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
-    fun recoveryRangeSessionUsesHeldAccountLeaseAndStillValidatesSession() = runBlocking {
+    fun recoveryRangeSessionUsesHeldAccountLeaseWhileOrdinaryReadsStillValidateSession() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val coordinator = AndroidFileRangeSessionCoordinator()
         val session = NextcloudSession("https://cloud.example.test", "alice", "password")
@@ -490,17 +490,17 @@ class AndroidAccountOperationGuardTest {
                 }
                 assertTrue(read.get(1, TimeUnit.SECONDS))
 
-                assertFailsWith<FileNotFoundException> {
-                    openTrackedAndroidFileRangeSession(
-                        expectedSession = session,
-                        resolveSession = { session.copy(appPassword = "replacement-password") },
-                        activity = AndroidFileRangeSessionActivity(),
-                        guard = guard,
-                        coordinator = coordinator,
-                        accountLeaseHeld = true,
-                        openSource = { error("stale recovery source must not open") },
-                    )
-                }
+            }
+            assertFailsWith<FileNotFoundException> {
+                openTrackedAndroidFileRangeSession(
+                    expectedSession = session,
+                    resolveSession = { session.copy(appPassword = "replacement-password") },
+                    activity = AndroidFileRangeSessionActivity(),
+                    guard = guard,
+                    coordinator = coordinator,
+                    accountLeaseHeld = false,
+                    openSource = { error("stale ordinary source must not open") },
+                )
             }
         } finally {
             executor.shutdownNow()

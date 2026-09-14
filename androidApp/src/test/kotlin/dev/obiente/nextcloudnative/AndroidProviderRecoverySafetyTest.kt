@@ -12,6 +12,29 @@ import kotlin.test.assertNull
 
 class AndroidProviderRecoverySafetyTest {
     @Test
+    fun boundRecoveryRangeReadsUseTheSuppliedSessionBeforeCredentialPersistence() = runBlocking {
+        val session = dev.obiente.nextcloudnative.app.NextcloudSession("https://cloud.example.test", "alice", "synthetic")
+        val source = openTrackedAndroidFileRangeSession(
+            session, { error("Deferred recovery cannot require a persisted credential") }, AndroidFileRangeSessionActivity(),
+            accountLeaseHeld = true,
+        ) { dev.obiente.nextcloudnative.app.NextcloudFileRangeSession(1, { _, _ -> byteArrayOf(7) }, {}) }
+        try {
+            kotlin.test.assertContentEquals(byteArrayOf(7), source.read(0, 1))
+        } finally { source.close() }
+    }
+
+    @Test
+    fun pendingRetirementPreservesTheGrantNeededForItsNextRecoveryAttempt() = runBlocking {
+        var revoked = false
+        assertFailsWith<IllegalStateException> {
+            retireAndroidFileSyncBeforeGrantRevocation({ error("pending local transaction") }, { revoked = true })
+        }
+        kotlin.test.assertFalse(revoked)
+        retireAndroidFileSyncBeforeGrantRevocation({}, { revoked = true })
+        kotlin.test.assertTrue(revoked)
+    }
+
+    @Test
     fun recoveryNeverTreatsCachedAbsenceAsAuthoritative() = runBlocking {
         val cached = NextcloudFileListing(emptyList(), NextcloudFileListingSource.Cache)
         assertFailsWith<IllegalStateException> {

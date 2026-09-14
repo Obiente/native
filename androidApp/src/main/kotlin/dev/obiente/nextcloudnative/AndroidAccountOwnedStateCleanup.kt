@@ -54,11 +54,13 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAndroidAccountPersistenceScopeDigest(session),
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                    { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -98,11 +100,13 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity, session) },
+                    { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -142,11 +146,13 @@ internal class AndroidAccountOwnedStateCleanup(
                         legacyAccountScopeDigest,
                     )
                 },
-                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },
-                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { retireAndroidFileSyncBeforeGrantRevocation(
+                    { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                    { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                ) },
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
@@ -184,4 +190,12 @@ internal suspend fun runAndroidAccountOwnedStateCleanups(
         previewCacheIdentity?.let(clearPreviewAccount)
     }
     runAndroidAccountRemovalCleanups(cleanups + previewCleanup)
+}
+
+internal suspend fun retireAndroidFileSyncBeforeGrantRevocation(
+    retire: suspend () -> Unit,
+    revoke: () -> Unit,
+) {
+    retire()
+    revoke()
 }

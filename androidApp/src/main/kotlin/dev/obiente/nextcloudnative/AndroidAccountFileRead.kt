@@ -150,7 +150,8 @@ internal fun openTrackedAndroidFileRangeSession(
 ): NextcloudFileRangeSession {
     val lease = if (accountLeaseHeld) null else guard.acquireBlocking(NextcloudDocumentIds.accountKey(expectedSession))
     return try {
-        if (resolveSession() != expectedSession) {
+        // Recovery binds a supplied session before it exists in credential storage.
+        if (!accountLeaseHeld && resolveSession() != expectedSession) {
             throw FileNotFoundException("The account changed before the file range session could start.")
         }
         val source = openSource()
