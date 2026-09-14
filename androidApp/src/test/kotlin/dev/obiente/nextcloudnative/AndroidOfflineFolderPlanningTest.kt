@@ -165,6 +165,49 @@ class AndroidOfflineFolderPlanningTest {
         assertTrue(AndroidOfflineFolderState(roots = listOf(root)).offlineDirectories("other").isEmpty())
     }
 
+    @Test
+    fun accountRemovalPurgesOnlyThatAccountsOfflineQueueAndFolders() {
+        val first = planAndroidOfflineFolderPin(
+            current = AndroidFileOfflinePersistedState(),
+            accountId = "account-a",
+            inventory = planAndroidOfflineFolder(directory("First")) {
+                listOf(file("First/a.txt", 1, "\"a\""))
+            },
+            nowEpochMillis = 10,
+            localGenerationExists = { _, _ -> false },
+        )
+        val both = planAndroidOfflineFolderPin(
+            current = first,
+            accountId = "account-b",
+            inventory = planAndroidOfflineFolder(directory("Second")) {
+                listOf(file("Second/b.txt", 2, "\"b\""))
+            },
+            nowEpochMillis = 20,
+            localGenerationExists = { _, _ -> false },
+        ).copy(
+            folders = first.folders.copy(
+                directPins = setOf(FileOfflineKey("account-a", "First/a.txt")),
+                roots = first.folders.roots + planAndroidOfflineFolderPin(
+                    current = AndroidFileOfflinePersistedState(),
+                    accountId = "account-b",
+                    inventory = planAndroidOfflineFolder(directory("Second")) {
+                        listOf(file("Second/b.txt", 2, "\"b\""))
+                    },
+                    nowEpochMillis = 20,
+                    localGenerationExists = { _, _ -> false },
+                ).folders.roots,
+            ),
+        )
+
+        val retained = removeAndroidFileOfflineAccountState(both, "account-a")
+
+        assertTrue(retained.queue.records.all { it.descriptor.key.accountId == "account-b" })
+        assertTrue(retained.queue.jobs.all { it.key.accountId == "account-b" })
+        assertTrue(retained.folders.directPins.isEmpty())
+        assertEquals(listOf("account-b"), retained.folders.roots.map { it.accountId })
+        assertEquals(both.queue.nextJobId, retained.queue.nextJobId)
+    }
+
     private fun directory(path: String) = NextcloudFile(
         path = path,
         name = path.substringAfterLast('/'),

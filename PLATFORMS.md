@@ -154,6 +154,13 @@ for the component contracts and current consumers.
 
 ## Desktop product rules
 
+A desktop account registry written by a newer format blocks startup sign-in with
+compatibility guidance. Saved credentials and registry data remain unchanged;
+reopening a compatible app version is required instead of repeating browser login.
+Malformed registry data without a recoverable legacy session instead shows
+retained-data and support guidance, without offering a reset or claiming that an
+update is needed. A valid legacy session can still repair malformed registry data.
+
 - Resizable master-detail and multi-pane workspaces where the workflow benefits.
 - Keyboard navigation, pointer selection, context menus, drag-and-drop, and
   accessibility focus.

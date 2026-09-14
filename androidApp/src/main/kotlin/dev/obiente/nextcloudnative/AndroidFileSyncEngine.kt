@@ -720,6 +720,7 @@ internal class AndroidFileSyncEngine(context: Context) {
     ): FileSyncExecutionSuccess {
         val pair = state.pairs.first { it.id == command.pairId }
         val work = pair.workItems.first { it.id == command.workId }
+        val accountStagingRoot = androidFileSyncAccountStagingRoot(stagingRoot, pair.accountId)
         require(isAndroidFileSyncExecutionAllowed(pair.localRootId, command.operation)) {
             "Detected media folders permit upload operations only."
         }
@@ -733,10 +734,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                     }
                     remote.createDirectory(operation.relativePath, operation.expectedRemoteEtag.takeUnless { replacingType })
                 } else {
-                    withAndroidFileSyncStagingFile(stagingRoot, "upload") { staged ->
+                    withAndroidFileSyncStagingFile(accountStagingRoot, "upload") { staged ->
                         val exactLocal = local.stageForUpload(
                             operation.relativePath, staged,
-                            androidFileSyncStagingTransferLimit(stagingRoot, source.size),
+                            androidFileSyncStagingTransferLimit(accountStagingRoot, source.size),
                             remote::shouldContinueTransfer,
                         )
                         val protectedDirectoryReplacement =
@@ -779,6 +780,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 local,
                 remote,
                 contentReadBudget,
+                accountStagingRoot,
             )
             is FileSyncOperation.NeedsDecision,
             is FileSyncOperation.Skipped,
@@ -792,8 +794,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
         contentReadBudget: AndroidFileSyncContentReadBudget,
+        accountStagingRoot: File,
     ): FileSyncExecutionSuccess {
-        executeAndroidFileSyncKeepBoth(operation, work, local, remote, stagingRoot)
+        executeAndroidFileSyncKeepBoth(operation, work, local, remote, accountStagingRoot)
         return FileSyncExecutionSuccess(
             synchronizedBaselines = listOf(
                 verifiedBaseline(
@@ -840,7 +843,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, contentHash)
     }
 
-    private companion object {
-        val ENGINE_LOCK = Mutex()
+    internal companion object {
+        internal val ENGINE_LOCK = Mutex()
     }
 }

@@ -1,6 +1,12 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -64,5 +70,73 @@ class PreviewMemoryCacheTest {
         assertContentEquals(byteArrayOf(1), first)
         assertContentEquals(byteArrayOf(1), repeated)
         assertContentEquals(byteArrayOf(3), second)
+    }
+
+    @Test
+    fun loadStartedBeforeRetirementCannotPublishAfterReactivation() = runBlocking {
+        val session = NextcloudSession("https://preview-incarnation.example.test", "user", "secret")
+        val accountKey = session.accountId.storageKey
+        val key = PreviewCacheKey(accountKey, "core", 103L, "etag", 64, 64)
+        val loadStarted = CompletableDeferred<Unit>()
+        val allowLoadToFinish = CompletableDeferred<Unit>()
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        try {
+            val pending = async(Dispatchers.Default) {
+                loadPreviewMemoryCached(key) {
+                    loadStarted.complete(Unit)
+                    allowLoadToFinish.await()
+                    byteArrayOf(4)
+                }
+            }
+            loadStarted.await()
+
+            AccountPrivateMemoryLifecycle.retireAccount(accountKey)
+            AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+            allowLoadToFinish.complete(Unit)
+
+            assertContentEquals(byteArrayOf(4), pending.await())
+            assertNull(PreviewMemoryCache.get(key))
+
+            assertContentEquals(byteArrayOf(5), loadPreviewMemoryCached(key) { byteArrayOf(5) })
+            assertContentEquals(byteArrayOf(5), PreviewMemoryCache.get(key))
+        } finally {
+            allowLoadToFinish.complete(Unit)
+            AccountPrivateMemoryCleanup.removeAccount(accountKey)
+            AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        }
+    }
+
+    @Test
+    fun concurrentRetirementAndPublicationKeepsThePreviewMapConsistent(): Unit = runBlocking {
+        val session = NextcloudSession("https://preview-race.example.test", "user", "secret")
+        val accountKey = session.accountId.storageKey
+        AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        try {
+            withContext(Dispatchers.Default) {
+                coroutineScope {
+                    val publishers = List(4) { publisher ->
+                        async {
+                            repeat(100) { revision ->
+                                val key = PreviewCacheKey(
+                                    accountKey, "core", publisher.toLong(), "etag-$revision", 64, 64,
+                                )
+                                loadPreviewMemoryCached(key) { byteArrayOf(revision.toByte()) }
+                                PreviewMemoryCache.get(key)
+                            }
+                        }
+                    }
+                    val retirements = async {
+                        repeat(50) {
+                            AccountPrivateMemoryLifecycle.retireAccount(accountKey)
+                            AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+                        }
+                    }
+                    (publishers + retirements).awaitAll()
+                }
+            }
+        } finally {
+            AccountPrivateMemoryCleanup.removeAccount(accountKey)
+            AccountPrivateMemoryLifecycle.activateAccount(accountKey)
+        }
     }
 }

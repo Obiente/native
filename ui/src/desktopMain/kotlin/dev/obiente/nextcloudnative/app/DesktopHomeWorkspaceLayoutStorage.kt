@@ -36,6 +36,15 @@ internal class DesktopHomeWorkspaceLayoutStorage(
             }
         }
 
+    fun removeAccount(accountScopeDigest: String, legacyAccountScopeDigest: String? = null) {
+        val keys = homeWorkspaceAccountPersistenceKeys(accountScopeDigest, legacyAccountScopeDigest)
+        withExclusiveAccess {
+            preferences.sync()
+            keys.forEach(preferences::remove)
+            preferences.flush()
+        }
+    }
+
     private fun <T> withExclusiveAccess(operation: () -> T): T {
         val path = lockFile.toPath().toAbsolutePath().normalize()
         return desktopHomeWorkspaceProcessLocks.computeIfAbsent(path.toString()) { ReentrantLock() }.withLock {

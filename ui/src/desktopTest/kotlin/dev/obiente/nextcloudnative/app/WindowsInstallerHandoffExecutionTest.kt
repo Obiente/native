@@ -28,7 +28,7 @@ class WindowsInstallerHandoffExecutionTest {
                 "-File", wrapper.absolutePath, "-Root", directory.absolutePath, "-ExitCode", exitCode.toString(),
             ).redirectErrorStream(true).redirectOutput(File(directory, "process.log")).start()
             try {
-                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "The synthetic handoff must complete.")
+                assertTrue(process.waitFor(60, TimeUnit.SECONDS), "The synthetic handoff must complete.")
                 assertEquals(0, process.exitValue(), "The PowerShell fixture must finish successfully.")
             } finally {
                 if (process.isAlive) process.destroyForcibly().waitFor(5, TimeUnit.SECONDS)

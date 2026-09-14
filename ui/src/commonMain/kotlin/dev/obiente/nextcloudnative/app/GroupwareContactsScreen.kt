@@ -121,7 +121,7 @@ fun NativeGroupwareContactsScreen(
         mutationOperationInProgress = true
         onMutationInProgressChanged(true)
         val saved = try {
-            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts, encoded)
+            services.saveDurableMutationRecovery(session, accountScope, DurableMutationRecoveryKind.Contacts, encoded)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
@@ -215,6 +215,7 @@ fun NativeGroupwareContactsScreen(
 
     LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
         if (!mutationRecoveryLoaded) return@LaunchedEffect
+        val cacheProducer = ContactsWorkspaceMemoryCache.producer(session)
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
             runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
@@ -258,7 +259,7 @@ fun NativeGroupwareContactsScreen(
             ContactsLoadState.Ready(addressBooks, contacts) to concurrentlyDeletedObjectCount
         }.onSuccess { loaded ->
             state = loaded.first
-            ContactsWorkspaceMemoryCache.store(session, userId, loaded.first)
+            ContactsWorkspaceMemoryCache.store(session, userId, loaded.first, cacheProducer)
             if (loaded.second > 0) {
                 refreshError = "${loaded.second} contacts changed during refresh; the remaining contacts are current."
             }

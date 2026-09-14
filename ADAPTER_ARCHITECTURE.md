@@ -279,3 +279,43 @@ text must not hide these actions or bypass read-only and recurrence guards.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
+
+### Recovery of saved account access
+
+Android and desktop startup distinguish an unreadable saved sign-in from a new
+installation. The native recovery screen offers retry and an explicit sign-in
+reset; background account lookup still returns unavailable without activating
+unreadable credentials. Unsupported credential versions remain protected from
+reset by older builds.
+
+An explicit Android reset preserves malformed account-removal journal rows in
+private storage and writes a durable recovery fence before removing them from
+the active journal. Each account remains unavailable until its owned-state
+cleanup completes using that account's supplied session. Failed cleanup retains
+the fence and pending work, and new malformed rows invalidate earlier recovery
+decisions. This does not discard unresolved local document changes. Desktop
+account removal also verifies retirement of recognized temporary file-sync
+staging files under the sync engine lock, while keeping user originals.
+
+Android cleanup review markers are pruned against the retained account registry,
+then the account being recovered is recorded. Removing or replacing another
+account must not evict a retained account's marker and repeat cleanup of its
+offline pins or drafts. If registry ownership is unavailable, recovery keeps the
+existing markers until a readable registry can establish which accounts remain.
+
+An unsupported desktop account registry produces a distinct startup state before
+credential recovery runs. It preserves the registry and secrets and directs the
+user to reopen a compatible app version, rather than opening a login flow whose
+save would be rejected by the same version fence.
+Malformed desktop registry data without a legacy recovery session produces a
+separate support-recovery state and preserves existing data. The established
+repair path from a valid legacy session remains available.
+
+These are source and deterministic-test guarantees, not claims that a published
+installer already includes the behavior.
+
+Android external file handoffs capture a process generation under the active
+account operation guard before probing or staging a file. Clearing handoffs
+invalidates that generation even when persisted cleanup fails. Registration
+and staged-content publication check the captured generation under the registry
+lock, so work started before account removal cannot publish a later handoff.

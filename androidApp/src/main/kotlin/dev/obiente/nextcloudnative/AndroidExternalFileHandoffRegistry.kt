@@ -68,6 +68,15 @@ internal object AndroidExternalFileHandoffRegistry {
 
     private val lock = Any()
     private val entries = linkedMapOf<String, Entry>()
+    private var generation = AndroidExternalFileHandoffGeneration()
+
+    fun captureGeneration(): AndroidExternalFileHandoffGeneration = synchronized(lock) { generation }
+
+    fun <Result> withGeneration(expected: AndroidExternalFileHandoffGeneration, action: () -> Result): Result =
+        synchronized(lock) {
+            if (expected !== generation) throw AndroidExternalFileHandoffRevokedException()
+            action()
+        }
     private var boundStore: AndroidExternalFileHandoffStore? = null
     private var boundStoreIdentity: String? = null
 
@@ -86,6 +95,7 @@ internal object AndroidExternalFileHandoffRegistry {
                 return@synchronized
             }
             readersToRevoke += entries.values.flatMap(Entry::readers)
+            generation = AndroidExternalFileHandoffGeneration()
             entries.clear()
             boundStore = store
             boundStoreIdentity = storeIdentity
@@ -112,6 +122,7 @@ internal object AndroidExternalFileHandoffRegistry {
         session: NextcloudSession,
         file: NextcloudFile,
         nowEpochMillis: Long = System.currentTimeMillis(),
+        expectedGeneration: AndroidExternalFileHandoffGeneration = captureGeneration(),
     ): AndroidExternalFileHandoffRecord {
         require(!file.isDirectory) { "Folders cannot be registered for external file handoff." }
         require(file.size?.let { it >= 0L } == true) {
@@ -125,6 +136,7 @@ internal object AndroidExternalFileHandoffRegistry {
         var displacedRecord: AndroidExternalFileHandoffRecord? = null
         val record = try {
             synchronized(lock) {
+                if (expectedGeneration !== generation) throw AndroidExternalFileHandoffRevokedException()
                 expiredReaders += pruneExpiredLocked(nowEpochMillis)
                 val previousEntries = entries.toMap()
                 val displaced = if (entries.size >= MAX_RECORDS) {
@@ -248,16 +260,44 @@ internal object AndroidExternalFileHandoffRegistry {
     }
 
     fun clear() {
+        clearWithStore(null)
+    }
+
+    fun clearPersisted(store: AndroidExternalFileHandoffStore) {
+        clearWithStore(store)
+    }
+
+    private fun clearWithStore(store: AndroidExternalFileHandoffStore?) {
+        var persistenceFailure: Exception? = null
+        var cleanupStore: AndroidExternalFileHandoffStore? = null
         val removed = synchronized(lock) {
-            if (entries.isEmpty()) {
-                persistLocked()
-                return@synchronized emptyList()
+            if (store != null) {
+                val storeIdentity = store.stateFile.absolutePath
+                check(boundStoreIdentity == null || boundStoreIdentity == storeIdentity) {
+                    "External handoff cleanup targeted a different persistent store."
+                }
+                if (boundStore == null) {
+                    boundStore = store
+                    boundStoreIdentity = storeIdentity
+                }
             }
-            boundStore?.save(emptyList())
-            entries.values.toList().also { entries.clear() }
+            generation = AndroidExternalFileHandoffGeneration()
+            cleanupStore = boundStore ?: store
+            entries.values.toList().also { entries.clear() }.also {
+                try {
+                    cleanupStore?.save(emptyList())
+                } catch (failure: Exception) {
+                    persistenceFailure = failure
+                }
+            }
         }
         removed.flatMap(Entry::readers).forEach(AndroidExternalFileHandoffLease::revoke)
-        removed.forEach { entry -> deleteManagedContentBestEffort(entry.record) }
+        try {
+            cleanupStore?.deleteAllManagedContent()
+        } catch (failure: Exception) {
+            persistenceFailure?.addSuppressed(failure) ?: run { persistenceFailure = failure }
+        }
+        persistenceFailure?.let { throw it }
     }
 
     internal fun resetProcessStateForTests() {
@@ -266,6 +306,7 @@ internal object AndroidExternalFileHandoffRegistry {
                 entries.clear()
                 boundStore = null
                 boundStoreIdentity = null
+                generation = AndroidExternalFileHandoffGeneration()
             }
         }
         readers.forEach(AndroidExternalFileHandoffLease::revoke)
@@ -291,7 +332,14 @@ internal object AndroidExternalFileHandoffRegistry {
     }
 
     private fun deleteManagedContentBestEffort(record: AndroidExternalFileHandoffRecord) {
-        runCatching { boundStore?.deleteManagedContent(record.documentId) }
+        boundStore?.let { store -> deleteManagedContentBestEffort(store, record) }
+    }
+
+    private fun deleteManagedContentBestEffort(
+        store: AndroidExternalFileHandoffStore,
+        record: AndroidExternalFileHandoffRecord,
+    ) {
+        runCatching { store.deleteManagedContent(record.documentId) }
             .onFailure { failure -> Log.w(LOG_TAG, "Could not clear managed external handoff content", failure) }
     }
 

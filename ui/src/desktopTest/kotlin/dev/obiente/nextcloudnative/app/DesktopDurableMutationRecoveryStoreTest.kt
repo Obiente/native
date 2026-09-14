@@ -54,6 +54,47 @@ class DesktopDurableMutationRecoveryStoreTest {
     }
 
     @Test
+    fun `account removal purges every recovery kind without touching another account`() {
+        val root = Files.createTempDirectory("mutation-recovery-account-removal-test").toFile()
+        try {
+            val store = DesktopDurableMutationRecoveryStore(root)
+            val removedScope = "d".repeat(64)
+            val retainedScope = "e".repeat(64)
+            DurableMutationRecoveryKind.entries.forEach { kind ->
+                assertTrue(store.save(removedScope, kind, "removed-${kind.storageKey}"))
+                assertTrue(store.save(retainedScope, kind, "retained-${kind.storageKey}"))
+            }
+
+            store.removeAccount(removedScope)
+
+            DurableMutationRecoveryKind.entries.forEach { kind ->
+                assertNull(store.load(removedScope, kind))
+                assertEquals("retained-${kind.storageKey}", store.load(retainedScope, kind))
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `account removal fails closed on an unsafe recovery path`() {
+        val root = Files.createTempDirectory("mutation-recovery-account-removal-unsafe-test").toFile()
+        try {
+            val store = DesktopDurableMutationRecoveryStore(root)
+            val scope = "f".repeat(64)
+            assertTrue(store.save(scope, DurableMutationRecoveryKind.Calendar, "safe"))
+            val target = root.resolve("${DurableMutationRecoveryKind.Calendar.storageKey}-$scope.json")
+            assertTrue(target.delete())
+            assertTrue(target.mkdir())
+
+            assertFailsWith<IllegalStateException> { store.removeAccount(scope) }
+            assertTrue(target.isDirectory)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `recovery state fails closed when owner-only permissions drift`() {
         val root = Files.createTempDirectory("mutation-recovery-permissions-test").toFile()
         try {
