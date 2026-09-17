@@ -285,7 +285,7 @@ private fun parseGroupwareCalendarsForComponent(
     require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
     return xml.xmlElements("response").mapNotNull { block ->
-        val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
+        val href = block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
             ?: return@mapNotNull null
         if (!block.containsXmlElement("calendar")) return@mapNotNull null
         val supportsComponent = block.xmlOpeningTags("comp").any { component ->
@@ -307,7 +307,7 @@ private fun parseGroupwareCalendarsForComponent(
 fun parseGroupwareAddressBooks(response: NextcloudApiResponse): List<GroupwareAddressBook> {
     require(response.status in 200..299) { "Address-book discovery failed (HTTP ${response.status})." }
     return response.body.decodeToString().xmlElements("response").mapNotNull { block ->
-        val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
+        val href = block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
             ?: return@mapNotNull null
         if (!block.containsXmlElement("addressbook")) return@mapNotNull null
         val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
@@ -1103,6 +1103,44 @@ internal fun String.xmlElements(localName: String): List<String> {
         cursor = closingEnd + 1
     }
     return results
+}
+
+internal fun String.xmlDirectChildText(localName: String): String? {
+    var cursor = 0
+    var depth = 0
+    while (cursor < length) {
+        val opening = indexOf('<', cursor)
+        if (opening < 0) break
+        val nameStart = opening + 1
+        val marker = getOrNull(nameStart)
+        if (marker == '!') {
+            cursor = indexOf('>', nameStart).takeIf { it >= 0 }?.plus(1) ?: break
+            continue
+        }
+        if (marker == '?') {
+            cursor = indexOf("?>", nameStart).takeIf { it >= 0 }?.plus(2) ?: break
+            continue
+        }
+        if (marker == '/') {
+            depth = (depth - 1).coerceAtLeast(0)
+            cursor = indexOf('>', nameStart).takeIf { it >= 0 }?.plus(1) ?: break
+            continue
+        }
+        val nameEnd = indexOfAny(charArrayOf(' ', '\t', '\r', '\n', '>', '/'), nameStart)
+        if (nameEnd < 0) break
+        val qualifiedName = substring(nameStart, nameEnd)
+        val openingEnd = indexOf('>', nameEnd)
+        if (openingEnd < 0) break
+        val selfClosing = getOrNull(openingEnd - 1) == '/'
+        if (depth == 1 && qualifiedName.substringAfter(':').equals(localName, ignoreCase = true)) {
+            if (selfClosing) return null
+            val closingStart = indexOf("</$qualifiedName", openingEnd + 1, ignoreCase = true)
+            return closingStart.takeIf { it >= 0 }?.let { substring(openingEnd + 1, it) }
+        }
+        if (!selfClosing) depth++
+        cursor = openingEnd + 1
+    }
+    return null
 }
 
 internal fun String.xmlText(localName: String): String? = xmlElements(localName).firstOrNull()?.let { element ->
