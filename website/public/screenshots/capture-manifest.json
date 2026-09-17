@@ -546,7 +546,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsLoading.kt": "b71a1bf898ad016af4e800d8c59778a844c1310a535ef0faf1f3f180bc0152d2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "096a154e9d6169da4cc82c0f87d2c572a1a5e97e396cae9eb739d05ce05b0d82",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsState.kt": "1d206c76800e92662b8980a41cd7792684e4c8b8ef94d0119109d5420da343c8",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "88f84a03a3c2d95b130601d5aac62fad4b4e1ed559c7851d7d47a3b44d1d2bc9",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "591cc77bd31cf17e7a1a6c3edc3c7f1c5b1ba87eda78c2415e961b15e472b931",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDavMutation.kt": "f32d31bb3564ef2e4a565f840c0db227e2632f6e15251a29151f233c0b25f718",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDavResourceStatus.kt": "816453d49fb983cf4eca6c93335d102570f037a6e064188f89f9b734ec1ebea0",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareTaskDetails.kt": "5d4a6bc89bce14857ac7aaeb487c9effd4471d243698d350ef06586a0f10ce31",
