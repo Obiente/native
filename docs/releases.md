@@ -64,6 +64,15 @@ cannot cancel the main push build used by the nightly publisher. PR numbers
 keep different PRs isolated even when their event ref becomes `main` after
 merging.
 
+Before retrying, check the newest `push` build for `main` and compare its
+source SHA with current `main`. Let any queued or running main push build
+finish. If `main` has advanced, use its newer push build instead of rerunning
+the older commit. Retry only the newest failed or cancelled run whose SHA
+still matches `main`, rechecking immediately before retrying. Main push runs
+still share a cancellation group, so coordinate retries with ongoing merges;
+this check is not atomic with a new push. If the newest source build already
+succeeded, inspect its nightly run instead of rerunning successful CI.
+
 If the qualifying push build was cancelled or failed because of a transient
 infrastructure problem, inspect the run, address that problem, then use
 **Re-run all jobs** on the original push run. This preserves its source event
