@@ -348,7 +348,10 @@ fun predefinedStatusesRequest(): NextcloudApiRequest = NextcloudApiRequest(
     maximumResponseBytes = STATUS_RESPONSE_LIMIT_BYTES,
 ).requireSafe()
 
-fun parseDashboardWidgets(response: NextcloudApiResponse): List<NativeDashboardWidget> {
+fun parseDashboardWidgets(
+    response: NextcloudApiResponse,
+    linkPolicy: DashboardLinkPolicy = DashboardLinkPolicy.TlsOnly,
+): List<NativeDashboardWidget> {
     val data = response.requireOcsData("dashboard widgets")
     require(data is JsonObject) { "The dashboard widget response is not an object." }
     require(data.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard returned too many widgets." }
@@ -364,16 +367,16 @@ fun parseDashboardWidgets(response: NextcloudApiResponse): List<NativeDashboardW
             NativeDashboardAction(
                 type = objectValue.requiredDashboardText("type", MAX_DASHBOARD_TYPE_LENGTH),
                 label = objectValue.requiredDashboardText("text", MAX_DASHBOARD_TEXT_LENGTH),
-                link = objectValue.requiredDashboardLink("link"),
+                link = objectValue.requiredDashboardLink("link", linkPolicy),
             )
         }
         NativeDashboardWidget(
             id = id,
             title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
             order = item.optionalInt("order") ?: 0,
-            iconUrl = item.optionalDashboardLink("icon_url"),
+            iconUrl = item.optionalDashboardIconLink("icon_url", linkPolicy),
             iconClass = item.optionalDashboardText("icon_class", MAX_DASHBOARD_TYPE_LENGTH),
-            widgetUrl = item.optionalDashboardLink("widget_url"),
+            widgetUrl = item.optionalDashboardLink("widget_url", linkPolicy),
             itemApiVersions = item.integerSet("item_api_versions"),
             itemIconsRound = item.optionalBoolean("item_icons_round") ?: false,
             reloadIntervalSeconds = item.optionalInt("reload_interval")?.takeIf { it > 0 }?.also {
@@ -389,6 +392,7 @@ fun parseDashboardWidgets(response: NextcloudApiResponse): List<NativeDashboardW
 fun parseDashboardItems(
     response: NextcloudApiResponse,
     widgets: List<NativeDashboardWidget>,
+    linkPolicy: DashboardLinkPolicy = DashboardLinkPolicy.TlsOnly,
 ): Map<String, List<NativeDashboardItem>> {
     val data = response.requireDashboardItemsObject("dashboard v1 items")
     require(data.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard returned too many item groups." }
@@ -396,13 +400,14 @@ fun parseDashboardItems(
     return data.mapValues { (widgetId, value) ->
         require(widgetId in widgetIds) { "The dashboard returned items for an unknown widget." }
         val items = value as? JsonArray ?: error("Dashboard items for $widgetId are not an array.")
-        items.parseDashboardItemList(widgetId)
+        items.parseDashboardItemList(widgetId, linkPolicy)
     }
 }
 
 internal fun parseDashboardItemsV2(
     response: NextcloudApiResponse,
     widgets: List<NativeDashboardWidget>,
+    linkPolicy: DashboardLinkPolicy = DashboardLinkPolicy.TlsOnly,
 ): DashboardItemsPayload {
     val data = response.requireDashboardItemsObject("dashboard v2 items")
     require(data.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard returned too many item groups." }
@@ -415,7 +420,7 @@ internal fun parseDashboardItemsV2(
         val group = value as? JsonObject ?: error("Dashboard items for $widgetId are not an object.")
         val items = group["items"] as? JsonArray
             ?: error("Dashboard items for $widgetId have no item list.")
-        itemsByWidget[widgetId] = items.parseDashboardItemList(widgetId)
+        itemsByWidget[widgetId] = items.parseDashboardItemList(widgetId, linkPolicy)
         group.optionalDashboardText("emptyContentMessage", MAX_DASHBOARD_TEXT_LENGTH)?.let {
             emptyMessages[widgetId] = it
         }
@@ -428,6 +433,15 @@ internal fun parseDashboardItemsV2(
         emptyContentMessagesByWidget = emptyMessages,
         halfEmptyContentMessagesByWidget = halfEmptyMessages,
     )
+}
+
+internal fun DashboardItemApiVersion.parsePayload(
+    response: NextcloudApiResponse,
+    widgets: List<NativeDashboardWidget>,
+    linkPolicy: DashboardLinkPolicy,
+): DashboardItemsPayload = when (this) {
+    DashboardItemApiVersion.V1 -> DashboardItemsPayload(parseDashboardItems(response, widgets, linkPolicy))
+    DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, widgets, linkPolicy)
 }
 
 internal fun mergeDashboardItemFetchResults(
@@ -735,7 +749,10 @@ private fun NextcloudApiResponse.requireDashboardItemsObject(label: String): Jso
     }
 }
 
-private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashboardItem> {
+private fun JsonArray.parseDashboardItemList(
+    widgetId: String,
+    linkPolicy: DashboardLinkPolicy,
+): List<NativeDashboardItem> {
     require(size <= MAX_DASHBOARD_ITEMS_PER_WIDGET) {
         "The dashboard widget returned too many items."
     }
@@ -745,9 +762,9 @@ private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashb
             widgetId = widgetId,
             title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
             subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
-            link = item.optionalDashboardLink("link"),
-            iconUrl = item.optionalDashboardIconLink("iconUrl"),
-            overlayIconUrl = item.optionalDashboardIconLink("overlayIconUrl"),
+            link = item.optionalDashboardLink("link", linkPolicy),
+            iconUrl = item.optionalDashboardIconLink("iconUrl", linkPolicy),
+            overlayIconUrl = item.optionalDashboardIconLink("overlayIconUrl", linkPolicy),
             sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
         )
     }
@@ -801,31 +818,6 @@ private fun JsonObject.statusExpiryOption(name: String): NativeStatusExpiryOptio
     return NativeStatusExpiryOption(type, time)
 }
 
-private fun JsonObject.requiredDashboardLink(name: String): String =
-    optionalDashboardLink(name) ?: error("The dashboard response has no valid $name.")
-
-private fun JsonObject.optionalDashboardLink(name: String): String? {
-    val value = optionalDashboardText(name, MAX_DASHBOARD_LINK_LENGTH) ?: return null
-    require(value.isSafeDashboardLink()) { "The dashboard $name is unsafe." }
-    return value
-}
-
-private fun JsonObject.optionalDashboardIconLink(name: String): String? =
-    optionalDashboardText(name, MAX_DASHBOARD_LINK_LENGTH)?.takeIf(String::isSafeDashboardLink)
-
-private fun String.isSafeDashboardLink(): Boolean {
-    if (any { it.isISOControl() || it.isWhitespace() } || '\\' in this || startsWith("//")) return false
-    if (startsWith('/')) {
-        return split('/').none { segment ->
-            val decodedDots = segment.replace("%2e", ".", ignoreCase = true)
-            decodedDots == "." || decodedDots == ".."
-        }
-    }
-    if (!startsWith("https://")) return false
-    val authority = removePrefix("https://").substringBefore('/')
-    return authority.isNotBlank() && '@' !in authority
-}
-
 private fun String.isDashboardIdentifier(): Boolean =
     isNotBlank() && length <= MAX_DASHBOARD_ID_LENGTH &&
         all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
@@ -859,7 +851,6 @@ private const val MAX_DASHBOARD_ACTIONS = 16
 private const val MAX_DASHBOARD_ID_LENGTH = 128
 private const val MAX_DASHBOARD_CURSOR_LENGTH = 1_024
 private const val MAX_DASHBOARD_TEXT_LENGTH = 4_096
-private const val MAX_DASHBOARD_LINK_LENGTH = 8_192
 private const val MAX_DASHBOARD_TYPE_LENGTH = 128
 private const val MAX_DASHBOARD_API_VERSION = 32
 internal const val MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS = 4

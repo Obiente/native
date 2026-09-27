@@ -37,6 +37,17 @@ not alter repository policy. A layout change should not alter mutation safety.
 
 ## Ownership boundaries
 
+### Dashboard response links
+
+Dashboard widget metadata and both item API versions use the account-scoped
+[DashboardLinkPolicy](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardLinkPolicy.kt).
+Absolute links default to HTTPS. An account explicitly approved for HTTP may
+also receive HTTP links with the same scheme, host, and effective port as its
+server URL. Relative links retain their traversal and scheme-relative guards.
+Invalid actionable links reject the response; invalid optional widget, item,
+and overlay icons are omitted. This policy does not change transport consent
+or authorize requests to another HTTP origin.
+
 ### Compose UI
 
 - Renders immutable state and sends explicit user intents.

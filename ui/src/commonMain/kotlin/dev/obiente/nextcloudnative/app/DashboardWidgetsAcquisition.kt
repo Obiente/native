@@ -22,6 +22,7 @@ internal enum class DashboardWidgetsResponseClassification(val diagnosticValue: 
 
 internal suspend fun acquireDashboardWidgets(
     cachedAvailable: Boolean,
+    linkPolicy: DashboardLinkPolicy = DashboardLinkPolicy.TlsOnly,
     executeResponse: suspend () -> NextcloudApiResponse,
     onDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
 ): DashboardWidgetsLoad {
@@ -59,7 +60,7 @@ internal suspend fun acquireDashboardWidgets(
 
             DashboardWidgetsResponseClassification.Supported -> {
                 val widgets = try {
-                    withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
+                    withContext(Dispatchers.Default) { parseDashboardWidgets(response, linkPolicy) }
                 } catch (failure: Exception) {
                     if (failure is CancellationException) throw failure
                     classification = DashboardWidgetsResponseClassification.MalformedResponse
