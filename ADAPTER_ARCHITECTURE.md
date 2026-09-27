@@ -98,6 +98,10 @@ or authorize requests to another HTTP origin.
 - Scope every record, cache key, queued operation, and diagnostic identifier to
   an opaque local account ID.
 - Keep credential material out of metadata databases and diagnostics.
+- A freshly authenticated account with no registered credential may save to
+  Keychain when Keychain confirms absence and the legacy executable is missing.
+  Existing account credentials and encrypted data retain their migration gates;
+  locked storage and cancellation must not be treated as absence.
 - Publish files atomically after complete writes.
 - Preserve originals unless the user explicitly chooses replacement.
 - Bound automatic caches; keep offline files and unresolved conflict copies

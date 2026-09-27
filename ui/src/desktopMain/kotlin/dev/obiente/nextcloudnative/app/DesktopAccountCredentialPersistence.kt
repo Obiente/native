@@ -104,7 +104,7 @@ internal class DesktopAccountCredentialPersistence(
         val encodedRegistry = prepareRegistry(updatedRegistry)
         val secretReference = desktopAccountSecretReference(persistedSession.accountId)
         val rollbackReference = desktopAccountCredentialRollbackReference(persistedSession.accountId)
-        val previousSecret = loadSecretForRollback(secretReference)
+        val previousSecret = loadSecretForRollback(secretReference, newAccount = previousRecord == null)
         check(previousRecord == null || previousSecret != null) {
             "The existing account credential could not be read for safe replacement."
         }
@@ -592,10 +592,18 @@ internal class DesktopAccountCredentialPersistence(
         )
     }
 
-    private fun loadSecretForRollback(reference: DesktopSecretReference): ByteArray? = try {
+    private fun loadSecretForRollback(reference: DesktopSecretReference, newAccount: Boolean): ByteArray? = try {
         secretStore.load(reference)
     } catch (cancelled: CancellationException) {
         throw cancelled
+    } catch (failure: NextcloudSessionLegacyMigrationUnavailableException) {
+        // Keychain confirmed absence. A new authenticated account has no registered credential to migrate.
+        // Existing accounts and encrypted data must still retain their unavailable legacy recovery path.
+        if (!newAccount) {
+            recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_READ_FAILED", "account-credentials.persist", failure)
+            throw failure
+        }
+        null
     } catch (failure: Exception) {
         recordCredentialDiagnostic(
             "ACCOUNT_CREDENTIAL_STORE_READ_FAILED",

@@ -9,6 +9,28 @@ import kotlinx.coroutines.runBlocking
 
 class DesktopSupportDiagnosticsTest {
     @Test
+    fun loggedOutExportCreatesARedactedBundleWithoutAnAccount() = runBlocking {
+        val root = createTempDirectory("logged-out-support-export").toFile()
+        val diagnostics = AsyncJvmSupportDiagnostics(File(root, "diagnostics"), environment(), "logged-out-export-test")
+        try {
+            diagnostics.registerPrivateValue("synthetic-private-login-token")
+            val destination = File(root, "report.zip")
+            assertIs<SupportDiagnosticsExportResult.Exported>(DesktopSupportBundleExporter(
+                diagnostics, chooseDestination = { destination },
+            ).export("Login failed with synthetic-private-login-token", emptyList()))
+            java.util.zip.ZipFile(destination).use { zip ->
+                val entries = zip.entries().asSequence().toList()
+                kotlin.test.assertEquals(SUPPORT_BUNDLE_INCLUDED_FILES.toSet(), entries.map { it.name }.toSet())
+                val content = entries.joinToString("\n") { zip.getInputStream(it).bufferedReader().use { reader -> reader.readText() } }
+                kotlin.test.assertFalse(content.contains("synthetic-private-login-token"))
+            }
+        } finally {
+            diagnostics.close()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun externalEnvironmentValuesAreBoundedBeforeDiagnosticsStartup() {
         val oversized = "x".repeat(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH + 1)
         val environment = desktopSupportDiagnosticsEnvironment(
