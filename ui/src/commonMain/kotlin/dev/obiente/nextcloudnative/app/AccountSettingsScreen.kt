@@ -27,6 +27,7 @@ internal fun SettingsScreen(
     themePreference: ThemePreference,
     platformCapabilityRefreshRequest: Long,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
+    canAdminister: Boolean,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
     onTransfers: () -> Unit,
@@ -61,6 +62,7 @@ internal fun SettingsScreen(
         isDesktop = isDesktop,
         hasDeviceSettings = platformCapabilities.isNotEmpty(),
         hasDesktopAppSettings = hasDesktopAppSettings,
+        canAdminister = canAdminister,
     )
     val selectedSection = selectedSectionName?.let { restoredName ->
         resolveSettingsWorkspaceSection(restoredName, visibleSections)

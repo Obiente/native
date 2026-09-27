@@ -104,6 +104,7 @@ suspend fun loadNativeAppCatalog(
             queryParameters = mapOf("details" to "true", "format" to "json"),
             ocsApiRequest = true,
             maximumResponseBytes = APP_CATALOG_RESPONSE_LIMIT_BYTES,
+            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
         ),
     )
     when (appStoreResponse.status) {
@@ -309,6 +310,7 @@ private fun legacyAppListRequest(filter: String): NextcloudApiRequest = Nextclou
     relativePath = PROVISIONING_APPS_PATH,
     queryParameters = mapOf("filter" to filter, "format" to "json"),
     ocsApiRequest = true,
+    cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
 )
 
 private fun appStoreMutationRequest(
@@ -379,9 +381,9 @@ private fun NextcloudApiResponse.ocsDataOrNull(): JsonElement? {
     val ocs = root["ocs"] as? JsonObject ?: return null
     val meta = ocs["meta"] as? JsonObject ?: return null
     val statusCode = (meta["statuscode"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
-    if (statusCode != null && statusCode !in setOf(100, 200)) return null
+    if (statusCode !in setOf(100, 200)) return null
     val statusValue = (meta["status"] as? JsonPrimitive)?.contentOrNull
-    if (statusValue != null && statusValue != "ok") return null
+    if (statusValue != "ok") return null
     return ocs["data"]
 }
 
