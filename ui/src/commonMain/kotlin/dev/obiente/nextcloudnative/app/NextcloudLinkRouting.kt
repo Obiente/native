@@ -242,6 +242,8 @@ private fun resolveAccountLink(serverUrl: String, link: String): ResolvedAccount
     )
 }
 
+internal fun validatedNextcloudWebOrigin(value: String): String? = parseWebUrl(value)?.origin
+
 private fun parseWebUrl(value: String): ParsedWebUrl? {
     if (value.length !in 1..MAX_NEXTCLOUD_LINK_LENGTH) return null
     if (value.any { it.isWhitespace() || it.isISOControl() } || '\\' in value) return null

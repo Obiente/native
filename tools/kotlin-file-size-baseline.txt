@@ -6,8 +6,8 @@ contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/Static
 contractAcquisition/src/test/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirerTest.kt|1798
 ui/src/androidMain/kotlin/dev/obiente/nextcloudnative/app/AndroidCompatibilityVideoPlaybackService.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt|1157
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|873
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1803
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|864
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1801
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckNativeActions.kt|1158
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2498
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2598

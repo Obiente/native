@@ -461,6 +461,7 @@ internal fun rememberNativeDashboardState(
             coroutineScope {
                 val widgetsDeferred = async {
                     acquireDashboardWidgets(
+                        linkPolicy = DashboardLinkPolicy.forAccount(session.serverUrl),
                         cachedAvailable = previousSnapshot != null,
                         executeResponse = {
                             services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
@@ -557,12 +558,9 @@ internal fun rememberNativeDashboardState(
                                 reservationSettled = true
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = withContext(Dispatchers.Default) {
-                                    when (effectiveApiVersion) {
-                                        DashboardItemApiVersion.V1 -> DashboardItemsPayload(
-                                            itemsByWidget = parseDashboardItems(response, selectedWidgets),
-                                        )
-                                        DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
-                                    }
+                                    effectiveApiVersion.parsePayload(
+                                        response, selectedWidgets, DashboardLinkPolicy.forAccount(session.serverUrl),
+                                    )
                                 }
                                 dashboardItemsFetchResult(plan.widgetIds, payload).also { result ->
                                     if (result is DashboardItemsFetchResult.Failed) {
