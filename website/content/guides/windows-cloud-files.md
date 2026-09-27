@@ -39,6 +39,23 @@ The storage view distinguishes **Not connected**, **Connected**, and
 is connected or that every local edit has reached Nextcloud. Disconnection is
 in the file-manager connection menu, separate from routine storage cleanup.
 
+### Slow storage checks
+
+**Last reviewed: 2026-09-27.** The following behavior is implemented in source;
+availability in installed builds may change. Check the
+[release notes](https://github.com/obiente/native/releases) for your version.
+
+After ten seconds, a slow storage check explains that you can use other parts
+of the app while it finishes. A refresh keeps the previous storage figures
+visible and pauses storage actions until the check completes. If the status
+request fails, **Check again** retries the status check. A provider activation
+failure still uses the separate **Connect to file manager** action.
+
+Windows startup checks entries already present on disk instead of browsing
+every remote folder. A timeout checking the local root means the check did not
+finish; it does not by itself establish that your files are corrupt. Keep the
+existing root and local edits intact when investigating a timeout.
+
 ## 2. Open placeholders, keep content local, or free eligible space
 
 @capture-alt: nati.ve Windows virtual-file storage overview showing placeholder integration, hydrated bytes, pinned content, free space, and automatic cleanup state

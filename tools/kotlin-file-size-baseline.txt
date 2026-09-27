@@ -10,7 +10,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|873
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1803
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckNativeActions.kt|1158
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2498
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2598
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2577
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|960
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1386
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|1063
@@ -53,11 +53,11 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncRemoteT
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6202
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCache.kt|2759
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem.kt|1697
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1085
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2355
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1069
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2344
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCacheTest.kt|2479
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2888
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystemTest.kt|2149
-ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProviderTest.kt|3205
+ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProviderTest.kt|3204
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/PantryLiveContractCompatibilityTest.kt|1202
 ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2543
