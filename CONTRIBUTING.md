@@ -128,6 +128,12 @@ directory, ADB port, and visible emulator window. It discovers the SDK through
 default uses host GPU acceleration. Headless CI hosts may select a supported
 software backend with `NC_NATIVE_EMULATOR_GPU`.
 
+AVD creation uses the executable `avdmanager` on `PATH`, so the command-line
+tools selected by your SDK setup are honored. If none is available there, the
+helper falls back to `cmdline-tools/latest/bin/avdmanager` inside the discovered
+SDK. A failure from the selected tool is reported without retrying another
+version. Keep the configured tool and installed system image in the same SDK.
+
 Install the API 36 AOSP x86_64 system image, then assign a unique slot to each
 concurrent test:
 

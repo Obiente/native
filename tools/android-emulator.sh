@@ -92,10 +92,14 @@ ensure_avd() {
     local avd_name="nc_native_${instance//[^A-Za-z0-9_]/_}"
     local avd_home="$directory/avd"
     local android_user_home="$directory/android-user"
-    local avdmanager="$root/cmdline-tools/latest/bin/avdmanager"
+    local avdmanager
+    avdmanager="$(type -P avdmanager || true)"
+    if [[ -z "$avdmanager" ]]; then
+        avdmanager="$root/cmdline-tools/latest/bin/avdmanager"
+    fi
     local emulator="$root/emulator/emulator"
 
-    [[ -x "$avdmanager" ]] || fail "avdmanager is missing from $root/cmdline-tools/latest/bin"
+    [[ -x "$avdmanager" ]] || fail "avdmanager is missing from PATH and $root/cmdline-tools/latest/bin"
     [[ -x "$emulator" ]] || fail "Android Emulator is missing from $root/emulator"
     local system_image_directory="$root/${system_image//;/\/}"
     [[ -d "$system_image_directory" ]] ||
@@ -425,6 +429,8 @@ smoke_test() {
     fi
     printf 'smoke test passed on %s; report: %s\n' "$serial" "$report_dir"
 }
+
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
 command="${1:-}"
 case "$command" in
