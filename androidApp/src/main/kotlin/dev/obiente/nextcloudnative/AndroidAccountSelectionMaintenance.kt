@@ -25,7 +25,13 @@ internal suspend fun completeAndroidAccountSelectionTransition(
         if (!committed.get()) throw cancelled
         cancellation = cancelled
     }
-    withContext(NonCancellable) { finishMaintenance() }
+    try {
+        withContext(NonCancellable) { finishMaintenance() }
+    } catch (failure: Exception) {
+        val originalCancellation = cancellation ?: throw failure
+        retainAndroidAccountMaintenanceFailure(originalCancellation, failure)
+        throw originalCancellation
+    }
     cancellation?.let { throw it }
     currentCoroutineContext().ensureActive()
 }
@@ -38,8 +44,10 @@ internal fun commitAndroidAccountTransitionBeforeHandoffCleanup(
     commitTransition()
     try {
         clearHandoffs()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
-        runCatching { recordFailure(failure) }
+        recordCommittedAndroidAccountDiagnostic { recordFailure(failure) }
     }
 }
 
@@ -52,7 +60,43 @@ internal fun clearAndroidPreviousPreviewAfterCommittedSelection(
     if (previousSession == null || previousSession.accountId == selectedSession.accountId) return
     try {
         clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(previousSession))
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
-        runCatching { recordFailure(failure) }
+        recordCommittedAndroidAccountDiagnostic { recordFailure(failure) }
     }
+}
+
+/** Required activation has completed; keep both maintenance steps owned before propagating cancellation. */
+internal suspend fun finishAndroidAccountSelectionMaintenance(
+    clearPreviousPreview: () -> Unit,
+    resumeUploadsAndNotify: suspend () -> Unit,
+) {
+    var cancellation: CancellationException? = null
+    try {
+        clearPreviousPreview()
+    } catch (cancelled: CancellationException) {
+        cancellation = cancelled
+    }
+    try {
+        resumeUploadsAndNotify()
+    } catch (failure: Exception) {
+        val originalCancellation = cancellation ?: throw failure
+        retainAndroidAccountMaintenanceFailure(originalCancellation, failure)
+        throw originalCancellation
+    }
+    cancellation?.let { throw it }
+}
+
+internal fun retainAndroidAccountMaintenanceFailure(original: CancellationException, failure: Exception) {
+    val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+    var current: Throwable? = failure
+    repeat(32) {
+        val cause = current ?: run { original.addSuppressed(failure); return }
+        // Coroutine recovery copies can point back to the cancellation being preserved.
+        if (cause === original) return
+        if (!seen.add(cause)) return
+        current = cause.cause
+    }
+    // Do not attach an unbounded chain whose link back to the original is unknown.
 }

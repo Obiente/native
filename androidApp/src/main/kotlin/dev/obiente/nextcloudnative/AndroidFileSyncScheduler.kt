@@ -17,6 +17,7 @@ import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
 import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 
 internal data class AndroidFileSyncSessionSchedulingToken(
@@ -63,14 +64,11 @@ internal class AndroidFileSyncSessionSchedulingGuard {
             persist()
             generation += 1
             accountId = replacementAccountId
-            try {
-                publishAccount(replacementAccountId)
-            } finally {
-                if (accountChanged) {
-                    runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
-                }
-                runScheduleMaintenance(onScheduleMaintenanceFailure) { restoreSchedules(replacementAccountId) }
-            }
+            runScheduleMaintenance(onScheduleMaintenanceFailure, buildList {
+                add { publishAccount(replacementAccountId) }
+                if (accountChanged) add(cancelAll)
+                add { restoreSchedules(replacementAccountId) }
+            })
         }
     }
 
@@ -84,8 +82,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
             persist()
             generation += 1
             accountId = null
-            runScheduleMaintenance(onScheduleMaintenanceFailure, clearPublishedAccount)
-            runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
+            runScheduleMaintenance(onScheduleMaintenanceFailure, listOf(clearPublishedAccount, cancelAll))
         }
     }
 
@@ -108,12 +105,26 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         }
     }
 
-    private fun runScheduleMaintenance(onFailure: (Exception) -> Unit, action: () -> Unit) {
-        try {
-            action()
-        } catch (failure: Exception) {
-            runCatching { onFailure(failure) }
+    private fun runScheduleMaintenance(onFailure: (Exception) -> Unit, actions: List<() -> Unit>) {
+        var cancellation: CancellationException? = null
+        actions.forEach { action ->
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                if (cancellation == null) cancellation = cancelled
+                else retainAndroidAccountMaintenanceFailure(cancellation, cancelled)
+            } catch (failure: Exception) {
+                try {
+                    onFailure(failure)
+                } catch (cancelled: CancellationException) {
+                    if (cancellation == null) cancellation = cancelled
+                    else retainAndroidAccountMaintenanceFailure(cancellation, cancelled)
+                } catch (_: Exception) {
+                    // Optional diagnostics cannot change a committed scheduling outcome.
+                }
+            }
         }
+        cancellation?.let { throw it }
     }
 }
 

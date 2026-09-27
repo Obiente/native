@@ -8,6 +8,8 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.nio.charset.CharacterCodingException
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -384,7 +386,7 @@ internal suspend fun retireAndroidDocumentProviderIncarnationsForCredentialReset
     store: AndroidDocumentProviderIncarnationStore,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard,
     rangeCoordinator: AndroidFileRangeSessionCoordinator = ANDROID_FILE_RANGE_SESSION_COORDINATOR,
-    clearCredentials: suspend () -> Unit,
+    clearCredentials: suspend (() -> Unit) -> Unit,
     recordCompletionFailure: (Exception) -> Unit = {},
 ) {
     val accountIdentities = store.accountIdentitiesForCredentialReset()
@@ -392,21 +394,33 @@ internal suspend fun retireAndroidDocumentProviderIncarnationsForCredentialReset
         rangeCoordinator.withAllQuiesced {
             val retirements = store.prepareForCredentialReset(accountIdentities)
             withContext(NonCancellable) {
+                val committed = AtomicBoolean(false)
                 try {
-                    clearCredentials()
+                    clearCredentials { committed.set(true) }
                 } catch (failure: Exception) {
+                    if (committed.get()) throw failure
                     retirements.asReversed().forEach { retirement ->
                         runCatching { store.rollback(retirement) }.onFailure(failure::addSuppressed)
                     }
                     throw failure
                 }
+                var cancellation: CancellationException? = null
                 retirements.forEach { retirement ->
                     try {
                         store.complete(retirement)
+                    } catch (cancelled: CancellationException) {
+                        if (cancellation == null) cancellation = cancelled
                     } catch (failure: Exception) {
-                        recordCompletionFailure(failure)
+                        try {
+                            recordCompletionFailure(failure)
+                        } catch (cancelled: CancellationException) {
+                            if (cancellation == null) cancellation = cancelled
+                        } catch (_: Exception) {
+                            // Diagnostics cannot interrupt already committed account retirement.
+                        }
                     }
                 }
+                cancellation?.let { throw it }
             }
         }
     }

@@ -9,6 +9,10 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -90,7 +94,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 completedRetirements += retirement
                 tombstones -= accountStorageKey
             },
-            commitSlotRemoval = { slot, cleanup ->
+            commitSlotRemoval = { slot, cleanup, _ ->
                 events += "commit-${slot.session.loginName}"
                 presentSlots -= slot.preferenceKey
                 tombstones += cleanup.accountStorageKey
@@ -135,7 +139,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 completed += retirement
                 tombstones -= accountStorageKey
             },
-            commitSlotRemoval = { slot, cleanup ->
+            commitSlotRemoval = { slot, cleanup, _ ->
                 removed += slot.preferenceKey
                 tombstones += cleanup.accountStorageKey
             },
@@ -168,7 +172,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = { error("committed retirements must not roll back") },
                 completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
-                commitSlotRemoval = { slot, cleanup ->
+                commitSlotRemoval = { slot, cleanup, _ ->
                     removed += slot.preferenceKey
                     tombstones += cleanup.accountStorageKey
                 },
@@ -207,7 +211,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = {},
                 completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
-                commitSlotRemoval = { _, _ -> commitAttempted = true; error("synthetic commit failure") },
+                commitSlotRemoval = { _, _, _ -> commitAttempted = true; error("synthetic commit failure") },
                 rollbackSlotRemoval = { error("slot must remain untouched") },
                 removeAccountOwnedState = { error("cleanup must not start") },
                 clearCleanup = { tombstones -= it },
@@ -228,7 +232,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = {},
                 completePreparedRemoval = { _, accountStorageKey -> tombstones -= accountStorageKey },
-                commitSlotRemoval = { _, cleanup ->
+                commitSlotRemoval = { _, cleanup, _ ->
                     commitAttempted = true
                     tombstones += cleanup.accountStorageKey
                     error("synthetic slot-removal commit failure")
@@ -260,7 +264,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 prepareAccountRemoval = { it.accountId.storageKey },
                 rollbackPreparedRemoval = {},
                 completePreparedRemoval = { _, _ -> },
-                commitSlotRemoval = { _, _ -> committed.complete(Unit) },
+                commitSlotRemoval = { _, _, _ -> committed.complete(Unit) },
                 rollbackSlotRemoval = {},
                 removeAccountOwnedState = {},
                 clearCleanup = {},
@@ -290,7 +294,7 @@ class AndroidIndependentCredentialSlotResetTest {
                 prepareAccountRemoval = { token },
                 rollbackPreparedRemoval = { rollbacks += it },
                 completePreparedRemoval = { _, _ -> error("failed commit must not complete retirement") },
-                commitSlotRemoval = { _, _ -> error("synthetic slot commit failure") },
+                commitSlotRemoval = { _, _, _ -> error("synthetic slot commit failure") },
                 rollbackSlotRemoval = { slotRestored = true },
                 removeAccountOwnedState = { error("cleanup must not start") },
                 clearCleanup = {},
@@ -300,6 +304,38 @@ class AndroidIndependentCredentialSlotResetTest {
 
         assertTrue(slotRestored)
         assertEquals(listOf(token), rollbacks)
+    }
+
+    @Test
+    fun slotCommitResultCancellationPreservesRemovalAndPendingRetirement() = runBlocking {
+        val slot = resetSlot(NextcloudSession("https://one.example.test", "alice", "first-secret"))
+        val events = mutableListOf<String>()
+        val owner = launch {
+            val ownerJob = currentCoroutineContext().job
+            retireUnregisteredAndroidAccountCredentialSlots(
+                slots = listOf(slot),
+                guard = AndroidAccountOperationGuard(),
+                lifetimeGuard = AndroidAccountRemovalLifetimeGuard(),
+                prepareAccountRemoval = { events += "prepare"; "retirement" },
+                rollbackPreparedRemoval = { events += "rollback-retirement" },
+                completePreparedRemoval = { _, _ -> events += "complete" },
+                commitSlotRemoval = { _, _, markCommitted ->
+                    withContext(Dispatchers.IO) {
+                        events += "commit"
+                        markCommitted()
+                        ownerJob.cancel(CancellationException("synthetic slot result cancellation"))
+                    }
+                },
+                rollbackSlotRemoval = { events += "restore-slot" },
+                removeAccountOwnedState = { events += "cleanup" },
+                clearCleanup = { events += "clear-journal" },
+                recordCleanupFailure = { error("Cancellation must not be logged as failure") },
+            )
+            error("Cancellation must propagate")
+        }
+        owner.join()
+        assertTrue(owner.isCancelled)
+        assertEquals(listOf("prepare", "commit"), events)
     }
 
     private fun resetSlot(session: NextcloudSession) = AndroidIndependentCredentialSlotReset(

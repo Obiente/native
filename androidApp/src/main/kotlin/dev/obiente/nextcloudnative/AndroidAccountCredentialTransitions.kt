@@ -3,6 +3,9 @@ package dev.obiente.nextcloudnative
 import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -111,15 +114,26 @@ internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
     notifyDocumentRootsChanged: () -> Unit,
     recordFailure: () -> Unit,
 ) {
+    var cancellation: CancellationException? = null
     try {
         resume()
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        cancellation = cancelled
     } catch (_: Exception) {
-        recordFailure()
-    } finally {
-        notifyDocumentRootsChanged()
+        try {
+            recordCommittedAndroidAccountDiagnostic(recordFailure)
+        } catch (cancelled: CancellationException) {
+            cancellation = cancelled
+        }
     }
+    try {
+        notifyDocumentRootsChanged()
+    } catch (cancelled: CancellationException) {
+        if (cancellation == null) cancellation = cancelled
+    } catch (_: Exception) {
+        // This observer cannot change the outcome of the persisted account selection.
+    }
+    cancellation?.let { throw it }
 }
 
 internal fun notifyAndroidDocumentRootsAfterCommittedTransition(
@@ -128,8 +142,20 @@ internal fun notifyAndroidDocumentRootsAfterCommittedTransition(
 ) {
     try {
         notify()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
-        recordFailure(failure)
+        recordCommittedAndroidAccountDiagnostic { recordFailure(failure) }
+    }
+}
+
+internal inline fun recordCommittedAndroidAccountDiagnostic(record: () -> Unit) {
+    try {
+        record()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // Diagnostic delivery cannot undo an already committed credential transition.
     }
 }
 
@@ -137,25 +163,32 @@ internal suspend fun removeAndroidAccountCredentialData(
     active: Boolean,
     prepareAccountRemoval: suspend () -> Unit = {},
     removeQueuedUploads: suspend () -> Unit,
-    clearActiveAccount: suspend () -> Unit,
+    clearActiveAccount: suspend (() -> Unit) -> Unit,
     rollbackActiveRemoval: suspend () -> Unit,
-    persistInactiveRemoval: suspend () -> Unit,
+    persistInactiveRemoval: suspend (() -> Unit) -> Unit,
     rollbackInactiveRemoval: suspend () -> Unit,
+    onActiveRemovalCommitted: () -> Unit = {},
     onInactiveRemovalCommitted: () -> Unit = {},
     completeCommittedCleanup: suspend () -> Unit = {},
     recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) {
+    currentCoroutineContext().ensureActive()
     prepareAccountRemoval()
+    val committed = AtomicBoolean(false)
+    val markCommitted = { committed.set(true) }
     if (active) {
         try {
-            clearActiveAccount()
+            currentCoroutineContext().ensureActive()
+            clearActiveAccount(markCommitted)
         } catch (failure: Exception) {
+            if (committed.get()) throw failure
             withContext(NonCancellable) {
                 runCatching { rollbackActiveRemoval() }
                     .onFailure(failure::addSuppressed)
             }
             throw failure
         }
+        notifyAndroidDocumentRootsAfterCommittedTransition(onActiveRemovalCommitted, recordCommittedCleanupFailure)
         finishCommittedAndroidAccountRemovalCleanup(
             removeQueuedUploads,
             completeCommittedCleanup,
@@ -165,8 +198,10 @@ internal suspend fun removeAndroidAccountCredentialData(
     }
 
     try {
-        persistInactiveRemoval()
+        currentCoroutineContext().ensureActive()
+        persistInactiveRemoval(markCommitted)
     } catch (failure: Exception) {
+        if (committed.get()) throw failure
         withContext(NonCancellable) {
             runCatching { rollbackInactiveRemoval() }
                 .onFailure(failure::addSuppressed)
@@ -189,9 +224,10 @@ internal suspend fun removeUnavailableAndroidAccountCredentialData(
     active: Boolean = false,
     prepareAccountRemoval: suspend () -> Unit,
     removeAccountOwnedWorkWithoutCredentials: suspend (String) -> Unit,
-    persistRemoval: suspend () -> Unit,
-    clearActiveAccount: suspend () -> Unit = persistRemoval,
+    persistRemoval: suspend (() -> Unit) -> Unit,
+    clearActiveAccount: suspend (() -> Unit) -> Unit = persistRemoval,
     rollbackRemoval: suspend () -> Unit,
+    onActiveRemovalCommitted: () -> Unit = {},
     onInactiveRemovalCommitted: () -> Unit = {},
     completeCommittedCleanup: suspend () -> Unit = {},
     recordCommittedCleanupFailure: (Exception) -> Unit = {},
@@ -205,6 +241,7 @@ internal suspend fun removeUnavailableAndroidAccountCredentialData(
         rollbackActiveRemoval = rollbackRemoval,
         persistInactiveRemoval = persistRemoval,
         rollbackInactiveRemoval = rollbackRemoval,
+        onActiveRemovalCommitted = onActiveRemovalCommitted,
         onInactiveRemovalCommitted = onInactiveRemovalCommitted,
         completeCommittedCleanup = completeCommittedCleanup,
         recordCommittedCleanupFailure = recordCommittedCleanupFailure,
@@ -222,15 +259,16 @@ private suspend fun finishCommittedAndroidAccountRemovalCleanup(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {
-        recordFailure(failure)
+        recordCommittedAndroidAccountDiagnostic { recordFailure(failure) }
     }
 }
 
 internal suspend fun removeRecoveredAndroidAccountCredentialData(
     prepareAccountRemoval: suspend () -> Unit = {},
     removeQueuedUploads: suspend () -> Unit,
-    clearRecoveredAccount: suspend () -> Unit,
+    clearRecoveredAccount: suspend (() -> Unit) -> Unit,
     rollbackRecoveredAccount: suspend () -> Unit,
+    onRemovalCommitted: () -> Unit = {},
     completeCommittedCleanup: suspend () -> Unit = {},
     recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) = removeAndroidAccountCredentialData(
@@ -238,6 +276,7 @@ internal suspend fun removeRecoveredAndroidAccountCredentialData(
     prepareAccountRemoval = prepareAccountRemoval,
     removeQueuedUploads = removeQueuedUploads,
     clearActiveAccount = clearRecoveredAccount,
+    onActiveRemovalCommitted = onRemovalCommitted,
     rollbackActiveRemoval = rollbackRecoveredAccount,
     persistInactiveRemoval = {},
     rollbackInactiveRemoval = {},

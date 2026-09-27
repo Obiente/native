@@ -159,6 +159,13 @@ diagnostics without exposing private data.
 - A retry must be bounded and safe for the operation. Ambiguous delivery of a
   mutation requires reconciliation before another submission.
 
+Android account transitions distinguish durable credential changes from later
+observer notifications and maintenance. Notification and diagnostic failures
+must not roll back a committed transition or replace an outstanding cancellation.
+Pending cleanup retains its durable retry evidence, and required activation
+failures remain observable. Regression tests cover these boundaries without a
+live account; they do not establish device-level lifecycle behavior.
+
 ## Offline and conflict rules
 
 Repositories use stale-while-revalidate behavior:

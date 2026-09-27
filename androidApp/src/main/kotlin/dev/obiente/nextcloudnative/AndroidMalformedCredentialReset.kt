@@ -45,10 +45,11 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
         completePreparedRemoval = { retirement, accountStorageKey ->
             cleanupJournal.completeDocumentRetirement(context, retirement, accountStorageKey)
         },
-        commitSlotRemoval = { slot, cleanup ->
+        commitSlotRemoval = { slot, cleanup, markCommitted ->
             commitPreferences(
                 cleanupJournal.prepareEdit(preferences.edit().remove(slot.preferenceKey), cleanup),
             )
+            markCommitted()
         },
         rollbackSlotRemoval = { slot ->
             commitPreferences(preferences.edit().putString(slot.preferenceKey, slot.encrypted))
@@ -71,7 +72,7 @@ internal suspend fun <Retirement : Any> retireUnregisteredAndroidAccountCredenti
     completePreparedRemoval: suspend (Retirement, String) -> Unit,
     recoverAccountRemoval: suspend (NextcloudSession) -> Unit = {},
     revalidateAccountRemoval: suspend (NextcloudSession) -> Unit = {},
-    commitSlotRemoval: suspend (AndroidIndependentCredentialSlotReset, AndroidPendingAccountRemovalCleanup) -> Unit,
+    commitSlotRemoval: suspend (AndroidIndependentCredentialSlotReset, AndroidPendingAccountRemovalCleanup, () -> Unit) -> Unit,
     rollbackSlotRemoval: suspend (AndroidIndependentCredentialSlotReset) -> Unit,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
     clearCleanup: suspend (String) -> Unit,
@@ -94,7 +95,7 @@ internal suspend fun <Retirement : Any> retireUnregisteredAndroidAccountCredenti
             removeRecoveredAndroidAccountCredentialData(
                 prepareAccountRemoval = { retirement = prepareAccountRemoval(session) },
                 removeQueuedUploads = { removeAccountOwnedState(session) },
-                clearRecoveredAccount = { commitSlotRemoval(slot, pendingCleanup) },
+                clearRecoveredAccount = { markCommitted -> commitSlotRemoval(slot, pendingCleanup, markCommitted) },
                 rollbackRecoveredAccount = {
                     rollbackSlotRemoval(slot)
                     rollbackPreparedRemoval(requireNotNull(retirement))

@@ -384,3 +384,15 @@ internal fun repairAndroidRecoveredCredentialSlot(repair: () -> Unit) {
         // The verified aggregate is still authoritative; a later restore can repair this slot.
     }
 }
+
+internal fun requireAndroidAccountCredentialStateForRemoval(
+    read: AndroidAccountCredentialStoreRead,
+    requireSupported: (dev.obiente.nextcloudnative.app.NextcloudAccountRegistry) -> Unit,
+    recoverIndependent: () -> AndroidAccountCredentialState?,
+): AndroidAccountCredentialState = when (read) {
+    is AndroidAccountCredentialStoreRead.Available -> read.state.also { requireSupported(it.registry) }
+    is AndroidAccountCredentialStoreRead.Invalid,
+    AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable,
+    -> recoverIndependent() ?: error("The independent account credential slots could not be recovered.")
+    is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
+}
