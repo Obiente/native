@@ -162,14 +162,17 @@ primary account password to bypass that boundary.
 evidence from the existing read-only administrator catalog contract. It reuses
 that catalog for the Server apps screen and caches both allowed and denied
 results for five minutes using a monotonic clock. Opening Settings checks the
-cache; while Settings or Server apps remains open, expired evidence is refreshed.
+cache; while the root Settings screen or Server apps is visible, expired evidence
+is refreshed. Opening a child screen from Settings stops automatic polling.
 No permission result survives logout, account replacement, or process restart.
 Both catalog request paths use `ForceNetwork` so revalidation cannot renew access
 from the transport's persisted response cache.
 
-Administration, its installed-workspace summary, and the Server apps route
+Administration, its installed-workspace summary, and the Server apps catalog
 require fresh successful evidence. Unknown, expired, denied, malformed, and
-unavailable results hide those surfaces, including restored navigation. An
+unavailable results hide those surfaces, including restored navigation. The
+Server apps route keeps a loading or typed failure view with retry and Back
+instead of navigating away silently when permission revalidation fails. An
 explicit refresh removes old access before requesting new evidence. Concurrent
 checks share the cached result, and cancellation cannot publish a late success.
 The ordinary Apps workspace remains available to regular users. Cached visibility

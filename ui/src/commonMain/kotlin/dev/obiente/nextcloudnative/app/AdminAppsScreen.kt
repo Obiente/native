@@ -10,12 +10,37 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+
+internal sealed interface AdminAppsContent {
+    data object Checking : AdminAppsContent
+    data class Catalog(val catalog: NativeAppCatalog) : AdminAppsContent
+    enum class Failure(val message: String) : AdminAppsContent {
+        Forbidden("This account does not have permission to manage server apps. You can return to Settings."),
+        Unavailable("Administrator access could not be verified. Try again, or return to Settings."),
+        InvalidResponse("The server returned an unexpected response while checking administrator access. Try again, or return to Settings."),
+        Expired("Administrator access needs to be checked again before server apps can be shown."),
+    }
+}
+
+internal fun adminAppsContent(state: AdministrationAccessState, canAdminister: Boolean): AdminAppsContent {
+    if (state.checking) return AdminAppsContent.Checking
+    return when (val result = state.result) {
+        null -> AdminAppsContent.Checking
+        is NativeAppCatalogResult.Available -> if (canAdminister && state.canAdminister) {
+            AdminAppsContent.Catalog(result.catalog)
+        } else {
+            AdminAppsContent.Failure.Expired
+        }
+        NativeAppCatalogResult.Forbidden -> AdminAppsContent.Failure.Forbidden
+        NativeAppCatalogResult.Unavailable -> AdminAppsContent.Failure.Unavailable
+        is NativeAppCatalogResult.InvalidResponse -> AdminAppsContent.Failure.InvalidResponse
+    }
+}
 
 @Composable
 internal fun AdminAppsScreen(
@@ -30,14 +55,7 @@ internal fun AdminAppsScreen(
     var pendingLifecycleAction by remember(access.state.result) {
         mutableStateOf<Pair<NativeManagedApp, NativeAppLifecycleAction>?>(null)
     }
-    if (!access.canAdminister) {
-        if (access.state.checking) {
-            LoadingMessage("Checking administrator access...")
-        } else {
-            LaunchedEffect(access.state) { onBack() }
-        }
-        return
-    }
+    val content = adminAppsContent(access.state, access.canAdminister)
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader(
@@ -45,10 +63,10 @@ internal fun AdminAppsScreen(
             subtitle = "Administrator app management",
             onBack = onBack,
         )
-        when (val result = access.state.result) {
-            null -> LoadingMessage("Loading administrator app catalog...")
-            is NativeAppCatalogResult.Available -> NativeAppCatalogSurface(
-                catalog = result.catalog,
+        when (content) {
+            AdminAppsContent.Checking -> LoadingMessage("Checking administrator access...")
+            is AdminAppsContent.Catalog -> NativeAppCatalogSurface(
+                catalog = content.catalog,
                 query = search,
                 filter = catalogFilter,
                 onQueryChanged = { search = it },
@@ -60,22 +78,14 @@ internal fun AdminAppsScreen(
                     if (access.canAdminister) pendingLifecycleAction = app to action
                 },
             )
-            NativeAppCatalogResult.Forbidden -> ErrorMessage(
-                "This account does not have permission to manage server apps.",
-                onRetry = access.refresh,
-            )
-            NativeAppCatalogResult.Unavailable -> ErrorMessage(
-                "Administrator app management is unavailable on this server.",
-                onRetry = access.refresh,
-            )
-            is NativeAppCatalogResult.InvalidResponse -> ErrorMessage(
-                result.reason,
+            is AdminAppsContent.Failure -> ErrorMessage(
+                content.message,
                 onRetry = access.refresh,
             )
         }
     }
 
-    pendingLifecycleAction?.let { (app, action) ->
+    pendingLifecycleAction?.takeIf { content is AdminAppsContent.Catalog }?.let { (app, action) ->
         AlertDialog(
             onDismissRequest = { pendingLifecycleAction = null },
             title = { Text("${action.uiLabel()} ${app.name}?") },

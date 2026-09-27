@@ -8,7 +8,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -28,11 +31,16 @@ class AdministrationAccessCompositionTest {
         }
         val composition = Composition(EmptyUnitApplier(), recomposer)
         var frameTime = 0L
-        suspend fun advance() {
+        val frames = launch {
+            while (isActive) {
+                Snapshot.sendApplyNotifications()
+                frameClock.sendFrame(frameTime++)
+                delay(1)
+            }
+        }
+        suspend fun advance() = withTimeout(5_000) {
             yield()
             Snapshot.sendApplyNotifications()
-            yield()
-            frameClock.sendFrame(frameTime++)
             recomposer.awaitIdle()
         }
         var session by mutableStateOf(NextcloudSession(
@@ -89,9 +97,10 @@ class AdministrationAccessCompositionTest {
             assertTrue(regularRenders.isNotEmpty())
             assertTrue(regularRenders.none { it })
         } finally {
+            frames.cancelAndJoin()
             composition.dispose()
-            recomposer.close()
-            recomposerJob.join()
+            recomposer.cancel()
+            recomposerJob.cancelAndJoin()
         }
     }
 

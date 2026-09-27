@@ -1221,7 +1221,7 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     val administration = rememberAdministrationAccess(
         session, platformCapabilityRefreshRequest,
-        active = destination == NextcloudDestination.Settings || screen == Screen.AdminApps,
+        active = administrationAccessPollingActive(screen, destination),
     ) { services.executeNextcloudApi(session, it) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }

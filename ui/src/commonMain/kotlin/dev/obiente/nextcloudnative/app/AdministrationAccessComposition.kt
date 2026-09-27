@@ -9,9 +9,13 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+internal fun administrationAccessPollingActive(screen: Screen, destination: NextcloudDestination): Boolean =
+    screen == Screen.AdminApps || (screen == Screen.Root && destination == NextcloudDestination.Settings)
 
 internal class AdministrationAccessController(
     val state: AdministrationAccessState,
