@@ -1,6 +1,6 @@
 # Prerelease policy
 
-**Last reviewed: 2026-08-20.** The active version and release policy may have
+**Last reviewed: 2026-09-27.** The active version and release policy may have
 changed. The `ncVersion*` values in [`gradle.properties`](../gradle.properties),
 the [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
 [latest releases](https://github.com/obiente/native/releases) are the current
@@ -64,11 +64,16 @@ cannot cancel the main push build used by the nightly publisher. PR numbers
 keep different PRs isolated even when their event ref becomes `main` after
 merging.
 
-If the qualifying push build was cancelled or failed, inspect that run and
-address any failure, then use **Re-run all jobs** on the original push run.
-This preserves its source event and commit. Starting **Run workflow** creates
-a `workflow_dispatch` run and will not publish a nightly. Retrying the skipped
-nightly alone does not make an unsuccessful source build eligible.
+If the qualifying push build was cancelled or failed because of a transient
+infrastructure problem, inspect the run, address that problem, then use
+**Re-run all jobs** on the original push run. This preserves its source event
+and commit. A deterministic source or workflow defect instead requires a
+corrective commit merged into `main`; that new push must pass its own build.
+Rerunning the original commit cannot include the correction.
+
+Starting **Run workflow** creates a `workflow_dispatch` run and will not
+publish a nightly. Retrying the skipped nightly alone does not make an
+unsuccessful source build eligible.
 
 A successful eligible build starts the existing signing, artifact verification,
 release quorum, and channel-promotion gates; it does not bypass them. A curated
