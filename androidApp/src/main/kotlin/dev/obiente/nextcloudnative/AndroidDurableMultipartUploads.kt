@@ -35,7 +35,8 @@ internal class AndroidDurableMultipartUploads(
     private val appContext = context.applicationContext
     private val picker = localUploadPicker ?: AndroidLocalUploadPicker(appContext)
     private val store = AndroidDurableMultipartUploadStore(appContext)
-    private val workManager = WorkManager.getInstance(appContext)
+    // DocumentsProvider constructs services before AndroidX Startup may initialize WorkManager.
+    private val workManager by lazy { WorkManager.getInstance(appContext) }
 
     suspend fun enqueue(
         session: NextcloudSession,

@@ -108,7 +108,7 @@ jobs:
           packages: "platform-tools"
 
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0" "emulator" "system-images;android-36;default;x86_64"
 
       - name: Require protected Android signing secrets
         env:
@@ -226,6 +226,31 @@ jobs:
           keystore="${RUNNER_TEMP}/nextcloud-native-release.keystore"
           if [[ -f "${keystore}" ]]; then
             shred --remove "${keystore}"
+          fi
+
+      - name: Launch the signed nightly on a fresh Android emulator
+        timeout-minutes: 10
+        env:
+          NIGHTLY_VERSION: ${{ needs.source.outputs.version }}
+          NC_NATIVE_EMULATOR_STATE_ROOT: ${{ runner.temp }}/nightly-emulator
+          NC_NATIVE_EMULATOR_GPU: swiftshader_indirect
+          NC_NATIVE_EMULATOR_BOOT_TIMEOUT_SECONDS: "300"
+        run: |
+          set -euo pipefail
+          test ! -e "${RUNNER_TEMP}/nextcloud-native-release.keystore"
+          test -e /dev/kvm
+          sudo chown "$(id -u)" /dev/kvm
+          sudo chmod u+rw /dev/kvm
+          tools/android-emulator.sh start nightly-launch 0 --fresh --headless
+          tools/android-emulator.sh smoke nightly-launch "dist/nextcloud-native-${NIGHTLY_VERSION}-android.apk"
+
+      - name: Stop the nightly Android emulator
+        if: always()
+        env:
+          NC_NATIVE_EMULATOR_STATE_ROOT: ${{ runner.temp }}/nightly-emulator
+        run: |
+          if [[ -f "${NC_NATIVE_EMULATOR_STATE_ROOT}/nightly-launch/port" ]]; then
+            tools/android-emulator.sh stop nightly-launch
           fi
 
       - name: Upload verified signed nightly

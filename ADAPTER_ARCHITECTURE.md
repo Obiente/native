@@ -200,6 +200,10 @@ Each boundary has a corresponding test responsibility:
 - Platform tests cover credential stores, filesystem paths and providers,
   background scheduling, external handoff, packaging, and lifecycle recovery.
 
+Android services created by the DocumentsProvider defer WorkManager lookup until
+scheduling or reconciliation needs it. Provider construction can precede AndroidX
+Startup initialization and must not require the scheduler singleton.
+
 Android folder capability cleanup uses demand-driven one-time WorkManager work.
 Empty stores and committed pairs do not keep cleanup work alive. Outstanding
 selections retain a retry owner until bound or abandoned; reconciliation preserves

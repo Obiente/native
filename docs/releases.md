@@ -88,6 +88,14 @@ A successful eligible build starts the existing signing, artifact verification,
 release quorum, and channel-promotion gates; it does not bypass them. A curated
 prerelease already tagged at that source commit suppresses nightly publication.
 
+Before uploading the signed Android nightly artifact, the Android job removes
+the signing key and launches that exact APK on a fresh, isolated Android 16
+(API 36) x86-64 emulator. The repository emulator smoke check verifies startup
+and rotation without signing in. A failed launch blocks the Android artifact
+from publication; emulator shutdown runs even after failure. This gate covers
+fresh-install startup, not migration of an existing account or every Android
+version. Emulator reports remain runner-local and are not release assets.
+
 ## Creating a prerelease
 
 1. Update the three `ncVersion*` development defaults in `gradle.properties`.
