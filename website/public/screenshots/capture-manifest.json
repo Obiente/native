@@ -596,7 +596,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LivePhotos.kt": "380a1f135dd50b1746967a6805b69dd4e48ab77dc864aeef394440c021c223d7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LocalFileUpload.kt": "71b363286921b21fb43bae04832ddb15627f12fbcc62c58262ce474481833658",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LoginDiagnostics.kt": "4eac0172e469d673d594c9fd83a85bf275e7c945ec1bd85cf8ea18679f9444bc",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LoginDiagnosticsView.kt": "c7efba9238b807f5319e841cd6f2c84541ccefc4ab2582acdee58141ac3a53b2",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LoginDiagnosticsView.kt": "3a28fdbeb1e215266331f549e0c8007f1dcbbc0eeb111f0a0e0352de47dfd008",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LoginPolling.kt": "fa07ee68e4111f0222ae5e0c4d1be453d1ae5d92dd2cd20ec92dccc4e4173962",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingAdaptiveAppScenario.kt": "f7dc8e65e7e396b7205dcc5c1f06f94bea2ad334ece8c7e0207254f1500aa277",
