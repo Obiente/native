@@ -387,16 +387,30 @@ smoke_test() {
     install_apk "$instance" "$apk_path"
     "$adb" -s "$serial" shell pm clear "$package_name" >/dev/null
     "$adb" -s "$serial" logcat -c
-    "$adb" -s "$serial" shell am start -W -n "$activity_name" >"$report_dir/launch.txt"
+    "$adb" -s "$serial" shell am start -W -n "$activity_name" >"$report_dir/launch.txt" 2>&1
+    if ! grep -Eq '^Status: ok[[:space:]]*$' "$report_dir/launch.txt" ||
+        grep -Eq '^[[:space:]]*Error' "$report_dir/launch.txt"; then
+        "$adb" -s "$serial" logcat -d >"$report_dir/logcat.txt"
+        fail "Android smoke test could not launch the activity; see $report_dir"
+    fi
 
     local rotation
     for rotation in 0 1; do
         "$adb" -s "$serial" shell settings put system accelerometer_rotation 0
         "$adb" -s "$serial" shell settings put system user_rotation "$rotation"
         sleep 1
+        if ! "$adb" -s "$serial" shell pidof "$package_name" |
+            grep -Eq '^[0-9]+([[:space:]]+[0-9]+)*[[:space:]]*$'; then
+            "$adb" -s "$serial" logcat -d >"$report_dir/logcat.txt"
+            fail "Android smoke test lost the app process; see $report_dir"
+        fi
         "$adb" -s "$serial" shell uiautomator dump /sdcard/nc-native-window.xml >/dev/null
         "$adb" -s "$serial" exec-out cat /sdcard/nc-native-window.xml \
             >"$report_dir/window-rotation-${rotation}.xml"
+        if ! grep -Fq "package=\"$package_name\"" "$report_dir/window-rotation-${rotation}.xml"; then
+            "$adb" -s "$serial" logcat -d >"$report_dir/logcat.txt"
+            fail "Android smoke test could not find the app window; see $report_dir"
+        fi
         "$adb" -s "$serial" exec-out screencap -p \
             >"$report_dir/screenshot-rotation-${rotation}.png"
     done

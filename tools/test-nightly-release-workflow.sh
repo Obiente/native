@@ -48,6 +48,25 @@ require_text "$nightly" 'ref: ${{ github.event.workflow_run.head_sha }}'
 require_text "$nightly" 'environment: prerelease'
 require_text "$nightly" 'continue-on-error: true'
 require_text "$nightly" 'Require protected Android signing secrets'
+require_text "$nightly" '"system-images;android-36;default;x86_64"'
+require_text "$nightly" 'tools/android-emulator.sh start nightly-launch 0 --fresh --headless'
+require_text "$nightly" 'tools/android-emulator.sh smoke nightly-launch "dist/nextcloud-native-${NIGHTLY_VERSION}-android.apk"'
+require_text "$nightly" 'test ! -e "${RUNNER_TEMP}/nextcloud-native-release.keystore"'
+require_text "$nightly" 'tools/android-emulator.sh stop nightly-launch'
+android_job="$(sed -n '/^  android:/,/^  desktop:/p' "$nightly")"
+signing_cleanup_line="$(grep -n -m1 'name: Remove protected Android signing key' <<<"$android_job" | cut -d: -f1)"
+launch_line="$(grep -n -m1 'name: Launch the signed nightly on a fresh Android emulator' <<<"$android_job" | cut -d: -f1)"
+stop_line="$(grep -n -m1 'name: Stop the nightly Android emulator' <<<"$android_job" | cut -d: -f1)"
+upload_line="$(grep -n -m1 'name: Upload verified signed nightly' <<<"$android_job" | cut -d: -f1)"
+if [[ "$signing_cleanup_line" -ge "$launch_line" || "$launch_line" -ge "$stop_line" || "$stop_line" -ge "$upload_line" ]]; then
+    echo "Signed Android launch must follow key removal and precede artifact upload." >&2
+    exit 1
+fi
+stop_step="$(sed -n '/name: Stop the nightly Android emulator/,/name: Upload verified signed nightly/p' <<<"$android_job")"
+if ! grep -Fq 'if: always()' <<<"$stop_step"; then
+    echo "Nightly emulator cleanup must run after failed startup checks." >&2
+    exit 1
+fi
 require_text "$nightly" 'if [[ -z "${!secret_name}" ]]; then'
 require_text "$nightly" 'runner: ubuntu-latest'
 require_text "$nightly" 'runner: windows-latest'
