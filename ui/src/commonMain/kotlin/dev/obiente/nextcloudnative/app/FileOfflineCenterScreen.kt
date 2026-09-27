@@ -62,12 +62,10 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlin.time.Clock
 
 internal enum class FileOfflineWorkspaceSection(
     val title: String,
@@ -126,8 +124,8 @@ internal fun FileOfflineCenterScreen(
     var pendingSyncDecision by remember(session, userId) {
         mutableStateOf<PendingFileSyncDecision?>(null)
     }
-    var virtualStorage by remember(session, userId) { mutableStateOf<VirtualFileStorageSnapshot?>(null) }
-    var virtualStorageLoading by remember(session, userId) { mutableStateOf(false) }
+    val virtualStorageStatus = rememberVirtualFileStorageLoadState(services, session, userId, refreshAttempt)
+    val virtualStorage = virtualStorageStatus.snapshot
     var virtualStorageBusy by remember(session, userId) { mutableStateOf(false) }
     var virtualStorageSettingsVisible by remember(session, userId) { mutableStateOf(false) }
     var selectedWorkspaceSectionName by rememberSaveable(session.serverUrl, session.loginName, userId) {
@@ -446,29 +444,6 @@ internal fun FileOfflineCenterScreen(
     }
 
     LaunchedEffect(session, userId, refreshAttempt) {
-        if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
-        virtualStorageLoading = true
-        try {
-            while (true) {
-                val loaded = services.loadVirtualFileStorage(session, userId)
-                virtualStorage = loaded
-                virtualStorageLoading = false
-                val pollDelay = virtualStorageHydrationPollDelay(
-                    loaded.folderHydrationStatuses,
-                    nowEpochMillis = Clock.System.now().toEpochMilliseconds().coerceAtLeast(0L),
-                ) ?: break
-                delay(pollDelay)
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            actionMessage = failure.message ?: "Could not load virtual file storage."
-        } finally {
-            virtualStorageLoading = false
-        }
-    }
-
-    LaunchedEffect(session, userId, refreshAttempt) {
         if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
         syncLoading = true
         try {
@@ -639,7 +614,9 @@ internal fun FileOfflineCenterScreen(
                         if (services.supportsVirtualFileStorage) {
                             VirtualFileStorageCard(
                                 snapshot = virtualStorage,
-                                loading = virtualStorageLoading,
+                                loading = virtualStorageStatus.loading,
+                                statusMessage = virtualStorageStatus.message,
+                                onReload = virtualStorageStatus::retry,
                                 busy = virtualStorageBusy,
                                 onManage = { virtualStorageSettingsVisible = true },
                                 onFreeUp = ::freeUpVirtualStorage,
@@ -763,7 +740,9 @@ internal fun FileOfflineCenterScreen(
                                 item {
                                     VirtualFileStorageCard(
                                         snapshot = virtualStorage,
-                                        loading = virtualStorageLoading,
+                                        loading = virtualStorageStatus.loading,
+                                        statusMessage = virtualStorageStatus.message,
+                                        onReload = virtualStorageStatus::retry,
                                         busy = virtualStorageBusy,
                                         onManage = { virtualStorageSettingsVisible = true },
                                         onFreeUp = ::freeUpVirtualStorage,
