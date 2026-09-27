@@ -17,14 +17,19 @@ On Android, "Report prepared" means the system share sheet opened. Complete the
 save or share action there; dismissing the chooser does not confirm delivery.
 
 Reports contain bounded, sanitized diagnostic history and device information.
-Credentials, cookies, private URLs, filenames, and file content are excluded.
-Treat the exported report as private even after redaction. The optional draft
-stays in memory and is not saved as application state.
+Automatically collected diagnostics exclude credentials, cookies, private URLs,
+filenames, and file content. Optional notes may still contain sensitive text that
+automatic redaction cannot recognize. Check your notes before exporting and
+review the archive before sharing it. Treat the exported report as private even
+after redaction. The optional draft stays in memory and is not saved as
+application state.
 
 The login view uses the local export service directly. It does not load private
 support requests, require an account identity, or start a support submission.
 Unavailable diagnostics, cancelled exports, and failed saves remain visible and
 retryable without asking the user to sign in.
+Recovery actions and the diagnostics button scroll together on short windows
+and when accessibility text sizes need more space.
 
 ## macOS credential storage
 

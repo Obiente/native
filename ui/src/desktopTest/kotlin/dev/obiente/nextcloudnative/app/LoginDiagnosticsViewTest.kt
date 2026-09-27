@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CompletableDeferred
@@ -24,6 +25,37 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LoginDiagnosticsViewTest {
+    @Test
+    fun `recovery actions remain reachable in short windows with large text`() {
+        for (fontScale in listOf(1f, 2f)) {
+            val invoked = mutableListOf<String>()
+            nativeSceneTest(640, 240, fontScale = fontScale, content = {
+                SessionRecoveryContent(
+                    NextcloudSessionLoadState.LegacyMigrationUnavailable,
+                    onRetry = { invoked += "retry" },
+                    onSignInAgain = { invoked += "sign-in" },
+                    onDiagnostics = { invoked += "diagnostics" },
+                )
+            }) {
+                for (label in listOf("Try again", "Sign in again", "Export login diagnostics")) {
+                    var attempts = 0
+                    while (assertNotNull(node(label)).boundsInRoot.let { it.height == 0f || it.bottom > 240f } && attempts++ < 30) {
+                        val scroll = assertNotNull(nodes().firstNotNullOfOrNull {
+                            it.config.getOrNull(SemanticsActions.ScrollBy)?.action
+                        })
+                        assertTrue(scroll.invoke(0f, 60f))
+                        settle()
+                    }
+                    val bounds = assertNotNull(node(label)).boundsInRoot
+                    assertTrue(bounds.height > 0f && bounds.top >= 0f && bounds.bottom <= 240f, "Unreachable: $label")
+                    click(label)
+                }
+                assertEquals(listOf("retry", "sign-in", "diagnostics"), invoked)
+                capture("login-recovery-$fontScale")
+            }
+        }
+    }
+
     @Test
     fun `closing diagnostics cancels the screen owned export`() {
         val visible = mutableStateOf(true)

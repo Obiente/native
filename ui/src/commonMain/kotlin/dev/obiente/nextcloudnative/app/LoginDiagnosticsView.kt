@@ -69,7 +69,7 @@ internal fun LoginDiagnosticsView(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
         Text("Save a report without signing in. Review it before sharing it privately.")
         Text(
-            "The report excludes passwords, cookies, private URLs, filenames, and file content.",
+            "Automatically collected diagnostics exclude passwords, cookies, private URLs, filenames, and file content.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(
@@ -78,7 +78,7 @@ internal fun LoginDiagnosticsView(
             modifier = Modifier.fillMaxWidth(),
             enabled = !exporting,
             label = { Text("What happened? (optional)") },
-            supportingText = { Text("Do not include passwords or private content. This draft is not saved to disk.") },
+            supportingText = { Text("Check your notes for passwords and private content before exporting. They may not be removed automatically. This draft is not saved to disk.") },
             minLines = 2,
             maxLines = 4,
         )
@@ -123,6 +123,23 @@ internal fun LoginDiagnosticsView(
 }
 
 @Composable
+internal fun SessionRecoveryContent(
+    state: NextcloudSessionLoadState,
+    onRetry: () -> Unit,
+    onSignInAgain: () -> Unit,
+    onDiagnostics: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        SessionLoadingRecoveryScreen(state, onRetry, onSignInAgain)
+        TextButton(onClick = onDiagnostics) { Text("Export login diagnostics") }
+    }
+}
+
+@Composable
 internal fun SessionRecoveryDiagnosticsView(
     services: NextcloudPlatformServices,
     state: NextcloudSessionLoadState,
@@ -131,10 +148,7 @@ internal fun SessionRecoveryDiagnosticsView(
 ) {
     var showDiagnostics by remember { mutableStateOf(false) }
     val drafts = remember { SupportSettingsDraftRegistry.loginState() }
-    Column(Modifier.fillMaxSize().safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.weight(1f)) { SessionLoadingRecoveryScreen(state, onRetry, onSignInAgain) }
-        TextButton(onClick = { showDiagnostics = true }) { Text("Export login diagnostics") }
-    }
+    SessionRecoveryContent(state, onRetry, onSignInAgain, onDiagnostics = { showDiagnostics = true })
     if (showDiagnostics) {
         AlertDialog(
             onDismissRequest = { showDiagnostics = false },
