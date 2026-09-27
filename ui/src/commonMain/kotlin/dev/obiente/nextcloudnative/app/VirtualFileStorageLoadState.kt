@@ -17,6 +17,11 @@ import kotlin.time.Clock
 internal enum class VirtualFileStorageLoadPhase { Loading, Slow, Ready, Failed }
 
 internal class VirtualFileStorageLoadState {
+    var retryGeneration by mutableStateOf(0)
+        private set
+
+    fun retry() { retryGeneration += 1 }
+
     var snapshot by mutableStateOf<VirtualFileStorageSnapshot?>(null)
         private set
     var phase by mutableStateOf(VirtualFileStorageLoadPhase.Loading)
@@ -60,7 +65,7 @@ internal fun rememberVirtualFileStorageLoadState(
     refreshAttempt: Int,
 ): VirtualFileStorageLoadState {
     val state = remember(services, session, userId) { VirtualFileStorageLoadState() }
-    LaunchedEffect(state, refreshAttempt) {
+    LaunchedEffect(state, refreshAttempt, state.retryGeneration) {
         if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
         while (true) {
             state.refresh { services.loadVirtualFileStorage(session, userId) }

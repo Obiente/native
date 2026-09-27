@@ -8,15 +8,16 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-09-06
+lastUpdated: 2026-09-27
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
 
 # Use Nextcloud files in Windows File Explorer
 
-**Last reviewed: 2026-09-06.** The software and published packages may have
-changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
+**Storage-check guidance last reviewed: 2026-09-27; other workflows: 2026-09-06.**
+The software and published packages may have changed since these reviews.
+Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
 On Windows, nati.ve integrates with the Cloud Files API so remote content can appear as placeholders in File Explorer and download when opened. This is not the same workflow as a conventional folder pair. Cloud Files is still under prerelease qualification, so begin with disposable synthetic data and keep another copy of anything important.
@@ -47,8 +48,8 @@ availability in installed builds may change. Check the
 
 After ten seconds, a slow storage check explains that you can use other parts
 of the app while it finishes. A refresh keeps the previous storage figures
-visible and pauses storage actions until the check completes. If the status
-request fails, **Check again** retries the status check. A provider activation
+visible and keeps storage actions paused until a check succeeds. If the status
+request fails, **Check again** retries only the storage status check. A provider activation
 failure still uses the separate **Connect to file manager** action.
 
 Windows startup checks entries already present on disk instead of browsing
