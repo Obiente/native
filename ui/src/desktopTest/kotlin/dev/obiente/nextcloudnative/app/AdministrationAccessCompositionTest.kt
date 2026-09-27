@@ -3,11 +3,13 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.runtime.AbstractApplier
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composition
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
@@ -50,9 +52,11 @@ class AdministrationAccessCompositionTest {
         var denyAdmin = false
         var calls = 0
         var rendered: AdministrationAccessController? = null
+        val visibility = MutableStateFlow(true)
         val regularRenders = mutableListOf<Boolean>()
         try {
             composition.setContent {
+                CompositionLocalProvider(LocalAppWindowVisibility provides visibility) {
                 val account = session.loginName
                 val access = rememberAdministrationAccess(session, refreshRequest = 0, active = active) {
                     calls++
@@ -64,6 +68,7 @@ class AdministrationAccessCompositionTest {
                 }
                 rendered = access
                 if (account == "regular") regularRenders += access.state.canAdminister
+                }
             }
             withTimeout(5_000) {
                 while (rendered?.state?.canAdminister != true) advance()

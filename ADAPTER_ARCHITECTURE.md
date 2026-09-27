@@ -164,6 +164,10 @@ that catalog for the Server apps screen and caches both allowed and denied
 results for five minutes using a monotonic clock. Opening Settings checks the
 cache; while the root Settings screen or Server apps is visible, expired evidence
 is refreshed. Opening a child screen from Settings stops automatic polling.
+Polling also stops when Android leaves the started lifecycle or the desktop
+window is hidden or minimized. Returning to a visible screen reuses fresh
+evidence or revalidates expired evidence. Settings retains the requested section
+while Administration is hidden during a check, without rendering its controls.
 No permission result survives logout, account replacement, or process restart.
 Both catalog request paths use `ForceNetwork` so revalidation cannot renew access
 from the transport's persisted response cache.
