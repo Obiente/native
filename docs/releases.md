@@ -1,6 +1,6 @@
 # Prerelease policy
 
-**Last reviewed: 2026-08-20.** The active version and release policy may have
+**Last reviewed: 2026-09-27.** The active version and release policy may have
 changed. The `ncVersion*` values in [`gradle.properties`](../gradle.properties),
 the [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
 [latest releases](https://github.com/obiente/native/releases) are the current
@@ -49,6 +49,44 @@ key sets because installed clients parse them strictly. Do not add optional
 fields to these documents. Publish future cumulative changelogs or other
 extensible metadata as separately versioned sidecars, and test mutable channel
 pointers against every supported client parser before promotion.
+
+## Nightly builds and recovery
+
+[Publish nightly](../.github/workflows/nightly.yml) starts after
+[Build and test](../.github/workflows/ci.yml) completes successfully for a
+trusted `push` to `main`. Pull-request builds and manually dispatched builds
+do not qualify, even when they test the same commit. There is no scheduled
+nightly timer.
+
+Build concurrency is scoped by workflow, event, and PR number or ref. A new
+run can cancel obsolete work for the same target, but PR and manual runs
+cannot cancel the main push build used by the nightly publisher. PR numbers
+keep different PRs isolated even when their event ref becomes `main` after
+merging.
+
+Before retrying, check the newest `push` build for `main` and compare its
+source SHA with current `main`. Let any queued or running main push build
+finish. If `main` has advanced, use its newer push build instead of rerunning
+the older commit. Retry only the newest failed or cancelled run whose SHA
+still matches `main`, rechecking immediately before retrying. Main push runs
+still share a cancellation group, so coordinate retries with ongoing merges;
+this check is not atomic with a new push. If the newest source build already
+succeeded, inspect its nightly run instead of rerunning successful CI.
+
+If the qualifying push build was cancelled or failed because of a transient
+infrastructure problem, inspect the run, address that problem, then use
+**Re-run all jobs** on the original push run. This preserves its source event
+and commit. A deterministic source or workflow defect instead requires a
+corrective commit merged into `main`; that new push must pass its own build.
+Rerunning the original commit cannot include the correction.
+
+Starting **Run workflow** creates a `workflow_dispatch` run and will not
+publish a nightly. Retrying the skipped nightly alone does not make an
+unsuccessful source build eligible.
+
+A successful eligible build starts the existing signing, artifact verification,
+release quorum, and channel-promotion gates; it does not bypass them. A curated
+prerelease already tagged at that source commit suppresses nightly publication.
 
 ## Creating a prerelease
 
