@@ -304,32 +304,7 @@ internal fun NativeAppSchema.forDynamicContractVersion(
 
 private const val DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS = 500L
 
-private class PhotoTimelineUiState {
-    val timeline = mutableStateOf(PhotoTimelineState(pageSize = MAX_PHOTO_TIMELINE_PAGE_SIZE))
-    val backupStatuses = mutableStateOf<Map<String, MediaBackupStatus>>(emptyMap())
-    val initialLoadCompleted = mutableStateOf(false)
-}
-
-private object PhotoTimelineUiStateRepository {
-    private const val MAXIMUM_ACCOUNT_STATES = 4
-    private val accountStates = linkedMapOf<String, PhotoTimelineUiState>()
-
-    fun stateFor(session: NextcloudSession): PhotoTimelineUiState {
-        val accountKey = previewCacheDigest(session)
-        accountStates.remove(accountKey)?.let { existing ->
-            accountStates[accountKey] = existing
-            return existing
-        }
-        val created = PhotoTimelineUiState()
-        accountStates[accountKey] = created
-        while (accountStates.size > MAXIMUM_ACCOUNT_STATES) {
-            accountStates.remove(accountStates.keys.first())
-        }
-        return created
-    }
-}
-
-private val mediaViewerNavigationRepository = MediaViewerNavigationRepository()
+private val mediaViewerNavigationRepository = sharedMediaViewerNavigationRepository
 
 private inline fun <reified T : Enum<T>> enumSaver() = Saver<T, String>(
     save = { value -> value.name },
@@ -553,16 +528,8 @@ fun NextcloudNativeApp(
             }
             if (sessionLoad == null) {
                 LoadingMessage("Loading account")
-            } else if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
-                SecureSessionStorageUnavailable(
-                    onRetry = { sessionLoadAttempt += 1 },
-                    onSignInAgain = signInAgain,
-                )
-            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
-                LegacySessionMigrationUnavailable(
-                    onRetry = { sessionLoadAttempt += 1 },
-                    onSignInAgain = signInAgain,
-                )
+            } else if (sessionLoad !is NextcloudSessionLoadState.Loaded) {
+                SessionLoadingRecoveryScreen(sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
             } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
@@ -574,8 +541,7 @@ fun NextcloudNativeApp(
                     LoginScreen(
                         services = services,
                         onLoggedIn = { authenticated ->
-                            services.saveSession(authenticated)
-                            session = authenticated
+                            session = services.saveSession(authenticated)
                         },
                     )
                 }
@@ -1255,7 +1221,7 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
-    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsStorage = rememberAccountHomeWorkspaceStorage(session)
     val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
     val appPinsPersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
     val appPinsAccountScope = appPinsPersistenceScopes.current
@@ -1614,13 +1580,13 @@ private fun AuthenticatedApp(
         returnTo: Screen,
         sourceMembers: List<NextcloudFile> = media,
         navigationIdentityBySourceIdentity: Map<String, String> = emptyMap(),
-    ): Screen.MediaViewer {
+    ): Screen {
         val route = mediaViewerNavigationRepository.register(
-            media = media,
+            accountId = session.accountId, media = media,
             selected = selected,
             sourceMembers = sourceMembers,
             navigationIdentityBySourceIdentity = navigationIdentityBySourceIdentity,
-        )
+        ) ?: return returnTo
         return Screen.MediaViewer(
             navigationKey = route.key,
             selectedIndex = route.selectedIndex,
@@ -2005,7 +1971,7 @@ private fun AuthenticatedApp(
             is Screen.Chat -> screen = Screen.Talk
             is Screen.NoteEditor -> screen = Screen.Notes
             is Screen.MediaViewer -> {
-                mediaViewerNavigationRepository.release(current.navigationKey)
+                mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                 screen = current.returnTo
             }
             is Screen.FileInfo -> screen = Screen.Files(current.parentPath)
@@ -2458,7 +2424,6 @@ private fun AuthenticatedApp(
                     val cached = cachedAppDiscoveries[current.app.id]
                     if (cached == null || candidate.acquisition != DynamicDescriptorAcquisition.MetadataFallback) {
                         cachedAppDiscoveries[current.app.id] = candidate
-                        sharedDynamicNativeMemoryCache.storeDiscovery(session, current.app.id, candidate)
                     }
                     val liveServerVersion = serverInfo?.version
                     val active = screen as? Screen.AppInfo
@@ -2490,7 +2455,7 @@ private fun AuthenticatedApp(
                 selectedIndex = current.selectedIndex,
                 selectedSourceIndex = current.selectedSourceIndex,
             )
-            val snapshot = mediaViewerNavigationRepository.resolve(route)
+            val snapshot = mediaViewerNavigationRepository.resolve(session.accountId, route)
             if (snapshot == null) {
                 LaunchedEffect(current.navigationKey) {
                     screen = current.returnTo
@@ -2508,7 +2473,7 @@ private fun AuthenticatedApp(
                     sharingCapabilities = serverInfo?.fileSharing
                         ?: NextcloudFileSharingCapabilities.Unavailable,
                     onSelect = { selected ->
-                        mediaViewerNavigationRepository.select(route, selected)?.let { next ->
+                        mediaViewerNavigationRepository.select(session.accountId, route, selected)?.let { next ->
                             screen = current.copy(
                                 selectedIndex = next.selectedIndex,
                                 selectedSourceIndex = next.selectedSourceIndex,
@@ -2516,11 +2481,11 @@ private fun AuthenticatedApp(
                         }
                     },
                     onSourceRemoved = {
-                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                         screen = current.returnTo
                     },
                     onClose = {
-                        mediaViewerNavigationRepository.release(current.navigationKey)
+                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                         screen = current.returnTo
                     },
                     navigationRequest = pendingEditorNavigationRequest,
@@ -2879,7 +2844,6 @@ private fun AppInfoScreen(
         discoveryAttempt += 1
         onRetryServerInfo()
     }
-
     LaunchedEffect(
         app.id,
         session,
@@ -2888,6 +2852,7 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
+        val cacheProducer = sharedDynamicNativeMemoryCache.producer(session)
         discoveryProgress = DynamicDescriptorDiscoveryProgress(
             DynamicDescriptorDiscoveryPhase.CachedWorkspace,
             "Checking the saved workspace",
@@ -2903,7 +2868,7 @@ private fun AppInfoScreen(
         if (retainedDiscovery != null) {
             discovery = retainedDiscovery
             onDiscovery(retainedDiscovery)
-            sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedDiscovery)
+            sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedDiscovery, cacheProducer)
         }
         val shouldRetry = discoveryAttempt > 0 || sharedDynamicNativeMemoryCache.shouldRetryDiscovery(session, app.id) ||
             !sharedDynamicNativeMemoryCache.isDiscoveryFresh(session, app.id)
@@ -2932,9 +2897,9 @@ private fun AppInfoScreen(
                 val retainedCachedContract = resolvedDiscovery !== candidate
                 onDiscovery(resolvedDiscovery)
                 discovery = resolvedDiscovery
-                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery)
+                sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery, cacheProducer)
                 runCatching {
-                    services.saveCachedDynamicAppDiscovery(session, resolvedDiscovery)
+                    services.saveCachedDynamicAppDiscovery(session, resolvedDiscovery, cacheProducer)
                 }
                 if (retainedCachedContract) {
                     discoveryError =
@@ -2950,9 +2915,9 @@ private fun AppInfoScreen(
                 if (retainedReadOnly != null) {
                     onDiscovery(retainedReadOnly)
                     discovery = retainedReadOnly
-                    sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly)
+                    sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly, cacheProducer)
                 }
-                sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id)
+                sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
                 discoveryError = if (retainedDiscovery == null) {
                     failure.message ?: "Could not discover this app's native API."
                 } else {
@@ -2961,7 +2926,6 @@ private fun AppInfoScreen(
                 }
             }
     }
-
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         val resolved = discovery
         // The discovered screen owns its own contextual header. Keeping the
@@ -3401,6 +3365,7 @@ private fun DynamicDiscoveredAppScreen(
         formRelationLoadAttempt,
         loadAttempt,
     ) {
+        val cacheProducer = sharedDynamicNativeMemoryCache.producer(session)
         val view = selectedView ?: return@LaunchedEffect
         val retainedMailPagination = retainedMailPaginationSnapshot(
             hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
@@ -3538,6 +3503,7 @@ private fun DynamicDiscoveredAppScreen(
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
                         DynamicScreenSnapshot(records, updatedRecords),
+                        cacheProducer,
                     )
                 }
             }.onFailure { failure ->
@@ -3632,6 +3598,7 @@ private fun DynamicDiscoveredAppScreen(
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
                         DynamicScreenSnapshot(rows, updatedRecords),
+                        cacheProducer,
                     )
                 }
             }.onFailure { failure ->
@@ -3655,6 +3622,7 @@ private fun DynamicDiscoveredAppScreen(
             sharedDynamicNativeMemoryCache.storeScreen(
                 cacheKey,
                 DynamicScreenSnapshot(records, updatedRecords),
+                cacheProducer,
             )
             return@LaunchedEffect
         }
@@ -3720,6 +3688,7 @@ private fun DynamicDiscoveredAppScreen(
                         relatedRecords = updatedRecords,
                         pagination = nextPagination?.toCheckpoint(),
                     ),
+                    cacheProducer,
                 )
             }
         }.onFailure { failure ->
@@ -4705,6 +4674,7 @@ private fun DynamicDiscoveredAppScreen(
                     pathParameters = pagingPathParameters,
                     cacheable = pagingCacheable,
                 )
+                val cacheProducer = sharedDynamicNativeMemoryCache.producer(pagingRequestIdentity.cacheKey)
                 val pagingRuntimeValues = pagingRecord?.toDynamicRuntimeValues().orEmpty().toMap()
                 val values = pagingRuntimeValues +
                     pagingPathParameters +
@@ -4800,6 +4770,7 @@ private fun DynamicDiscoveredAppScreen(
                                 relatedRecords = updatedRecords,
                                 pagination = nextPagination?.toCheckpoint(),
                             ),
+                            cacheProducer,
                         )
                         loadingMore = false
                     }.onFailure { failure ->
@@ -7081,49 +7052,6 @@ internal fun inheritDynamicParentParameters(
         !key.equals("id", ignoreCase = true) && key.endsWith("Id", ignoreCase = true)
     }
 
-/**
- * Selecting a record without a destination keeps the current collection on screen. Its path
- * bindings still belong to that collection and must survive the selection. Otherwise a child's
- * generic `id` can replace the parent's generic `id` when the collection reloads.
- */
-internal fun resolveDynamicRecordSelectionParameters(
-    currentViewId: String,
-    nextViewId: String,
-    currentParameters: Map<String, String>,
-    explicitTargetParameters: Map<String, String>?,
-    fallbackTargetParameters: Map<String, String>,
-): Map<String, String> = explicitTargetParameters
-    ?: if (nextViewId == currentViewId) currentParameters else fallbackTargetParameters
-
-internal fun shouldShowDynamicRecordFallbackDetail(
-    viewResourceId: String,
-    viewComponent: NativeComponent,
-    selectedRecord: NativeRecord?,
-    selectedRecordResourceId: String?,
-): Boolean = selectedRecord != null &&
-    viewComponent != NativeComponent.detail &&
-    viewComponent != NativeComponent.form &&
-    selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
-
-private object ActivityWorkspaceMemoryCache {
-    private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ActivityTimelineState>()
-
-    fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? {
-        val key = key(session, filterId)
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, filterId: String, value: ActivityTimelineState) {
-        val key = key(session, filterId)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    private fun key(session: NextcloudSession, filterId: String): Pair<NextcloudAccountId, String> =
-        session.accountId to filterId
-}
-
 @Composable
 private fun ActivityScreen(
     services: NextcloudPlatformServices,
@@ -7208,6 +7136,7 @@ private fun ActivityScreen(
     LaunchedEffect(session, activityInstalled, selectedServerFilterId, loadAttempt) {
         if (!activityInstalled) return@LaunchedEffect
         val filterId = selectedServerFilterId
+        val cacheProducer = ActivityWorkspaceMemoryCache.producer(session)
         timeline = timeline.beginActivityRefresh()
         runCatching {
             loadNextcloudActivityPage(filterId = filterId) { request ->
@@ -7217,7 +7146,7 @@ private fun ActivityScreen(
             .onSuccess { page ->
                 if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyActivityRefresh(page)
-                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline, cacheProducer)
             }
             .onFailure { failure ->
                 if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
@@ -7229,6 +7158,7 @@ private fun ActivityScreen(
         if (!activityInstalled || olderPageAttempt == 0) return@LaunchedEffect
         val filterId = selectedServerFilterId
         val cursor = timeline.nextSince ?: return@LaunchedEffect
+        val cacheProducer = ActivityWorkspaceMemoryCache.producer(session)
         timeline = timeline.beginNextActivityPage()
         runCatching {
             loadNextcloudActivityPage(since = cursor, filterId = filterId) { request ->
@@ -7238,7 +7168,7 @@ private fun ActivityScreen(
             .onSuccess { page ->
                 if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyNextActivityPage(page)
-                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline, cacheProducer)
             }
             .onFailure { failure ->
                 if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
@@ -11876,38 +11806,6 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
-internal object TalkWorkspaceMemoryCache {
-    private val rooms = linkedMapOf<NextcloudAccountId, List<TalkRoom>>()
-    private val messages = linkedMapOf<Pair<NextcloudAccountId, String>, List<TalkMessage>>()
-
-    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, session.accountId)
-
-    fun storeRooms(session: NextcloudSession, value: List<TalkRoom>) {
-        store(rooms, session.accountId, value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
-    }
-
-    fun messages(session: NextcloudSession, roomToken: String): List<TalkMessage>? =
-        touch(messages, session.accountId to roomToken)
-
-    fun storeMessages(session: NextcloudSession, roomToken: String, value: List<TalkMessage>) {
-        store(
-            messages,
-            session.accountId to roomToken,
-            value,
-            MAXIMUM_RETAINED_TALK_ROOMS,
-        )
-    }
-
-    private fun <Key, T> touch(entries: LinkedHashMap<Key, T>, key: Key): T? =
-        entries.remove(key)?.also { entries[key] = it }
-
-    private fun <Key, T> store(entries: LinkedHashMap<Key, T>, key: Key, value: T, maximum: Int) {
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > maximum) entries.remove(entries.keys.first())
-    }
-}
-
 @Composable
 private fun TalkScreen(
     services: NextcloudPlatformServices,
@@ -11920,12 +11818,13 @@ private fun TalkScreen(
     var refreshing by remember(session) { mutableStateOf(false) }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     LaunchedEffect(loadAttempt) {
+        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
         refreshing = rooms != null
         error = null
         runCatching { services.listTalkRooms(session) }
             .onSuccess {
                 rooms = it
-                TalkWorkspaceMemoryCache.storeRooms(session, it)
+                TalkWorkspaceMemoryCache.storeRooms(session, it, cacheProducer)
             }
             .onFailure { error = it.message ?: "Could not load Talk conversations." }
         refreshing = false
@@ -12412,6 +12311,3 @@ internal fun formatBytes(bytes: Long?): String = when {
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024
-private const val MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS = 4
-private const val MAXIMUM_RETAINED_TALK_ACCOUNTS = 4
-private const val MAXIMUM_RETAINED_TALK_ROOMS = 16

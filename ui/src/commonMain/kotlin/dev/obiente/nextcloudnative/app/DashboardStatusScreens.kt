@@ -229,7 +229,7 @@ internal fun NativeDashboardScreen(
         recoveryAttempt = recoveryAttempt,
     )
     val formFactor = rememberHomeFormFactor()
-    val workspaceStorage = rememberHomeWorkspaceLayoutStorage()
+    val workspaceStorage = rememberAccountHomeWorkspaceStorage(session)
     val workspaceRepository = remember(workspaceStorage) {
         HomeWorkspaceLayoutRepository(workspaceStorage)
     }
@@ -444,6 +444,7 @@ internal fun rememberNativeDashboardState(
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
         val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
         val previousStatus = cached?.status ?: displayed?.status
+        val cacheProducer = sharedDashboardStatusMemoryCache.producer(session)
         val cachePolicy = if (refreshAttempt > 0 || recoveryAttempt > 0) {
             NextcloudApiCachePolicy.RefreshNetwork
         } else {
@@ -510,7 +511,6 @@ internal fun rememberNativeDashboardState(
                     loadingWidgetIds = pendingWidgetIds,
                 )
                 state = DashboardSurfaceState.Available(snapshot, previousStatus)
-
                 val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
                 val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
                 val responseBudget = DashboardResponseBudget()
@@ -625,6 +625,7 @@ internal fun rememberNativeDashboardState(
                     dashboard = result.snapshot,
                     status = result.status,
                     nowEpochSeconds = currentDashboardEpochSeconds(),
+                    producer = cacheProducer,
                 )
             }
             state = DashboardSurfaceState.Available(
@@ -1397,41 +1398,6 @@ private fun DashboardFailure(message: String, onRetry: () -> Unit) {
     }
 }
 
-private sealed interface UserStatusSurfaceState {
-    data object Loading : UserStatusSurfaceState
-    data class Available(
-        val capabilities: NativeUserStatusCapabilities,
-        val status: NativeUserStatus,
-        val predefined: List<NativePredefinedStatus>,
-    ) : UserStatusSurfaceState
-    data class Failed(val message: String) : UserStatusSurfaceState
-}
-
-private object UserStatusWorkspaceMemoryCache {
-    private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
-
-    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
-        val key = key(session)
-        return entries.remove(key)?.also { entries[key] = it }
-    }
-
-    fun store(session: NextcloudSession, value: UserStatusSurfaceState.Available) {
-        val key = key(session)
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    private fun key(session: NextcloudSession): NextcloudAccountId = session.accountId
-}
-
-private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
-    Never("No expiry", null),
-    OneHour("1 hour", 60L * 60L),
-    FourHours("4 hours", 4L * 60L * 60L),
-    OneDay("24 hours", 24L * 60L * 60L),
-}
-
 @Composable
 internal fun NativeUserStatusScreen(
     services: NextcloudPlatformServices,
@@ -1458,8 +1424,8 @@ internal fun NativeUserStatusScreen(
     var mutationInProgress by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
     LaunchedEffect(session, refreshAttempt) {
+        val cacheProducer = UserStatusWorkspaceMemoryCache.producer(session)
         val cached = UserStatusWorkspaceMemoryCache.get(session)
         if (cached != null) state = cached
         val retained = cached ?: state as? UserStatusSurfaceState.Available
@@ -1493,7 +1459,7 @@ internal fun NativeUserStatusScreen(
             }
         }.onSuccess { loaded ->
             state = loaded
-            UserStatusWorkspaceMemoryCache.store(session, loaded)
+            UserStatusWorkspaceMemoryCache.store(session, loaded, cacheProducer)
             if (!draftInitialized) {
                 customMessage = loaded.status.message.orEmpty()
                 customIcon = loaded.status.icon.orEmpty().takeIf {
@@ -1511,7 +1477,6 @@ internal fun NativeUserStatusScreen(
         }
         refreshing = false
     }
-
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
             title = "User Status",
@@ -1745,6 +1710,7 @@ internal fun NativeUserStatusScreen(
                         onClick = {
                             mutationInProgress = true
                             scope.launch {
+                                val cacheProducer = sharedDashboardStatusMemoryCache.producer(session)
                                 runCatching {
                                     services.executeNextcloudApi(session, request).also { response ->
                                         require(response.status in 200..299) {
@@ -1752,7 +1718,7 @@ internal fun NativeUserStatusScreen(
                                         }
                                     }
                                 }.onSuccess {
-                                    sharedDashboardStatusMemoryCache.invalidate(session)
+                                    sharedDashboardStatusMemoryCache.invalidate(session, cacheProducer)
                                     pendingEdit = null
                                     mutationInProgress = false
                                     mutationError = null
@@ -1778,7 +1744,6 @@ internal fun NativeUserStatusScreen(
     }
 }
 
-private const val MAXIMUM_RETAINED_STATUS_ACCOUNTS = 4
 
 @Composable
 private fun CurrentUserStatusCard(status: NativeUserStatus) {

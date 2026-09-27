@@ -1,12 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -447,6 +451,91 @@ class MemoriesMainTimelineTest {
     }
 
     @Test
+    fun retiredAccountIndexIsPurgedWithoutRemovingAnotherAccount() = runBlocking {
+        val gate = AccountPrivateMemoryGate()
+        val cache = MemoriesMainTimelineIndexCache(gate)
+        val removed = session("removed")
+        val retained = session("retained")
+        val removedProducer = assertNotNull(cache.producer(removed.accountId))
+        val retainedProducer = assertNotNull(cache.producer(retained.accountId))
+
+        val removedIndex = assertIs<MemoriesMainTimelineLoadResult.Loaded<MemoriesMainTimelineCachedIndex>>(
+            cache.load(removed.accountId, "removed-scope", true, removedProducer) {
+                MemoriesMainTimelineLoadResult.Loaded(
+                    MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(30L, 1))),
+                )
+            },
+        ).value
+        val retainedIndex = assertIs<MemoriesMainTimelineLoadResult.Loaded<MemoriesMainTimelineCachedIndex>>(
+            cache.load(retained.accountId, "retained-scope", true, retainedProducer) {
+                MemoriesMainTimelineLoadResult.Loaded(
+                    MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(29L, 2))),
+                )
+            },
+        ).value
+        assertTrue(
+            cache.markMemoriesActive(
+                removed.accountId,
+                "removed-scope",
+                removedIndex.sourceGeneration,
+                removedProducer,
+            ),
+        )
+        assertTrue(
+            cache.markMemoriesActive(
+                retained.accountId,
+                "retained-scope",
+                retainedIndex.sourceGeneration,
+                retainedProducer,
+            ),
+        )
+
+        gate.retireAccount(removed.accountId.storageKey) {
+            cache.purgeRetiredAccount(removed.accountId.storageKey)
+        }
+        gate.activateAccount(removed.accountId.storageKey)
+
+        assertNull(cache.activeMemoriesIndex(removed.accountId, "removed-scope"))
+        assertEquals(
+            listOf(29L),
+            assertNotNull(
+                cache.activeMemoriesIndex(retained.accountId, "retained-scope"),
+            ).index.days.map(NativeMediaDay::id),
+        )
+    }
+
+    @Test
+    fun indexLoadCrossingRetirementCannotPublishIntoReactivatedAccount() = runBlocking {
+        val gate = AccountPrivateMemoryGate()
+        val cache = MemoriesMainTimelineIndexCache(gate)
+        val account = session("crossing")
+        val staleProducer = assertNotNull(cache.producer(account.accountId))
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        val staleLoad = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching {
+                cache.load(account.accountId, "account-scope", true, staleProducer) {
+                    loadStarted.complete(Unit)
+                    releaseLoad.await()
+                    MemoriesMainTimelineLoadResult.Loaded(
+                        MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(30L, 1))),
+                    )
+                }
+            }
+        }
+        loadStarted.await()
+
+        gate.retireAccount(account.accountId.storageKey) {
+            cache.purgeRetiredAccount(account.accountId.storageKey)
+        }
+        gate.activateAccount(account.accountId.storageKey)
+        releaseLoad.complete(Unit)
+
+        assertIs<IllegalStateException>(staleLoad.await().exceptionOrNull())
+        assertNull(cache.activeMemoriesIndex(account.accountId, "account-scope"))
+    }
+
+    @Test
     fun cursorFromAnotherTimelineSourceIsRejected() {
         val index = MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(30L, 1)))
         val service = MemoriesMainTimelineReadService { _, _ -> error("No request expected.") }
@@ -643,7 +732,7 @@ class MemoriesMainTimelineTest {
         }
         val snapshot = requireNotNull(
             runBlocking {
-                service.navigationSnapshot("account-a")
+                service.navigationSnapshot(session().accountId, "account-a")
             },
         )
         val target = runBlocking {
@@ -686,7 +775,7 @@ class MemoriesMainTimelineTest {
 
         assertNull(
             runBlocking {
-                service.navigationSnapshot("account-a")
+                service.navigationSnapshot(session().accountId, "account-a")
             },
         )
     }
@@ -712,7 +801,7 @@ class MemoriesMainTimelineTest {
             }
         }
         val firstSnapshot = requireNotNull(
-            runBlocking { service.navigationSnapshot("account-a") },
+            runBlocking { service.navigationSnapshot(session().accountId, "account-a") },
         )
         runBlocking {
             service.loadPage(session(), "account-a", cursor = null) {
@@ -766,6 +855,12 @@ class MemoriesMainTimelineTest {
     private fun session(): NextcloudSession = NextcloudSession(
         serverUrl = "https://cloud.example.test",
         loginName = "fixture",
+        appPassword = "fixture-secret",
+    )
+
+    private fun session(name: String): NextcloudSession = NextcloudSession(
+        serverUrl = "https://$name.cloud.example.test",
+        loginName = name,
         appPassword = "fixture-secret",
     )
 }

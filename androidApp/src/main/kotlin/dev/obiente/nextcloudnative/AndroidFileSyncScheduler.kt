@@ -5,7 +5,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -15,6 +17,7 @@ import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
 import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 
 internal data class AndroidFileSyncSessionSchedulingToken(
@@ -53,18 +56,19 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         publishAccount: (String) -> Unit = {},
+        restoreSchedules: (String) -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
+            persist()
             generation += 1
-            accountId = null
-            try {
-                persist()
-                accountId = replacementAccountId
-                publishAccount(replacementAccountId)
-            } finally {
-                if (accountChanged) cancelAll()
-            }
+            accountId = replacementAccountId
+            runScheduleMaintenance(onScheduleMaintenanceFailure, buildList {
+                add { publishAccount(replacementAccountId) }
+                if (accountChanged) add(cancelAll)
+                add { restoreSchedules(replacementAccountId) }
+            })
         }
     }
 
@@ -72,16 +76,13 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         clearPublishedAccount: () -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
+            persist()
             generation += 1
             accountId = null
-            try {
-                persist()
-                clearPublishedAccount()
-            } finally {
-                cancelAll()
-            }
+            runScheduleMaintenance(onScheduleMaintenanceFailure, listOf(clearPublishedAccount, cancelAll))
         }
     }
 
@@ -102,6 +103,28 @@ internal class AndroidFileSyncSessionSchedulingGuard {
             action()
             true
         }
+    }
+
+    private fun runScheduleMaintenance(onFailure: (Exception) -> Unit, actions: List<() -> Unit>) {
+        var cancellation: CancellationException? = null
+        actions.forEach { action ->
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                if (cancellation == null) cancellation = cancelled
+                else retainAndroidAccountMaintenanceFailure(cancellation, cancelled)
+            } catch (failure: Exception) {
+                try {
+                    onFailure(failure)
+                } catch (cancelled: CancellationException) {
+                    if (cancellation == null) cancellation = cancelled
+                    else retainAndroidAccountMaintenanceFailure(cancellation, cancelled)
+                } catch (_: Exception) {
+                    // Optional diagnostics cannot change a committed scheduling outcome.
+                }
+            }
+        }
+        cancellation?.let { throw it }
     }
 }
 
@@ -161,6 +184,28 @@ internal class AndroidFileSyncScheduler(context: Context) {
         workManager.enqueueUniquePeriodicWork(
             workName(pairId),
             ExistingPeriodicWorkPolicy.UPDATE,
+            request,
+        )
+    }
+
+    fun restorePersistedPairSchedules(accountId: String) {
+        val request = OneTimeWorkRequestBuilder<AndroidFileSyncScheduleRestorationWorker>()
+            .setInputData(
+                Data.Builder()
+                    .putString(AndroidFileSyncScheduleRestorationWorker.KEY_ACCOUNT_ID, accountId)
+                    .build(),
+            )
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .addTag(TAG)
+            .build()
+        workManager.enqueueUniqueWork(
+            "file-sync-restore-$accountId",
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }

@@ -42,6 +42,23 @@ internal actual fun rememberHomeWorkspaceLayoutStorage(): HomeWorkspaceLayoutSto
     }
 }
 
+fun removeAndroidHomeWorkspaceAccountPreferences(
+    context: Context,
+    accountScopeDigest: String,
+    legacyAccountScopeDigest: String?,
+) {
+    val preferences = context.applicationContext.getSharedPreferences(
+        HOME_WORKSPACE_PREFERENCES,
+        Context.MODE_PRIVATE,
+    )
+    val keys = homeWorkspaceAccountPersistenceKeys(accountScopeDigest, legacyAccountScopeDigest)
+    synchronized(ANDROID_HOME_WORKSPACE_STORAGE_LOCK) {
+        val editor = preferences.edit()
+        keys.forEach(editor::remove)
+        check(editor.commit()) { "The home workspace account settings could not be removed." }
+    }
+}
+
 @Composable
 internal actual fun rememberHomeFormFactor(): HomeFormFactor {
     val configuration = LocalConfiguration.current

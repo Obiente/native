@@ -56,23 +56,25 @@ class PhotoMediaQueryOwnershipTest {
             accountScope = "account-a",
             owner = PhotoMediaQueryOwner.FolderInventory,
         )
-        val timelineGeneration = store.beginAccountGeneration(timelineScope)
-        val folderGeneration = store.beginAccountGeneration(folderScope)
+        val account = NextcloudAccountId("a".repeat(64))
+        val producer = requireNotNull(store.producer(account))
+        val timelineGeneration = requireNotNull(store.beginAccountGeneration(account, timelineScope, producer))
+        val folderGeneration = requireNotNull(store.beginAccountGeneration(account, folderScope, producer))
         val timelineCursor = PhotoTimelineCursor("timeline-cursor")
         val folderCursor = PhotoTimelineCursor("folder-cursor")
         val timelineCarryover = carryover("Photos/timeline.jpg", 1L)
         val folderCarryover = carryover("Photos/Trips/folder.jpg", 2L)
 
-        store.put(timelineScope, timelineGeneration, timelineCursor, timelineCarryover)
-        store.put(folderScope, folderGeneration, folderCursor, folderCarryover)
+        store.put(account, timelineScope, timelineGeneration, timelineCursor, timelineCarryover, producer)
+        store.put(account, folderScope, folderGeneration, folderCursor, folderCarryover, producer)
 
         assertEquals(
             timelineCarryover,
-            store.take(timelineScope, timelineGeneration, timelineCursor),
+            store.take(account, timelineScope, timelineGeneration, timelineCursor, producer),
         )
         assertEquals(
             folderCarryover,
-            store.take(folderScope, folderGeneration, folderCursor),
+            store.take(account, folderScope, folderGeneration, folderCursor, producer),
         )
     }
 

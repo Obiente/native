@@ -202,7 +202,7 @@ test("capture source discovery rejects traversal, backslashes, and symlinks", as
     }
 
     await writeFile(path.join(outside, "private.kt"), "private");
-    await symlink(outside, path.join(repository, "linked"));
+    await symlink(outside, path.join(repository, "linked"), process.platform === "win32" ? "junction" : "dir");
     await writeFile(
       path.join(repository, "tools", "marketing-capture-inputs.txt"),
       "linked\n",

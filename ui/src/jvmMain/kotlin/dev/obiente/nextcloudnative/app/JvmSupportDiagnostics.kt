@@ -8,6 +8,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import java.util.ArrayDeque
 import java.util.Base64
 import java.util.zip.ZipEntry
@@ -46,6 +47,9 @@ internal class JvmSupportDiagnostics(
     private var historyPresentAtStartup = historyFile.isFile && historyFile.length() > 0L
     private var activeAccountScope: String? = null
     private var storageAvailable = false
+    private var historyLoaded = false
+    private data class AccountGeneration(val value: Long, val retired: Boolean)
+    private val accountGenerations = ConcurrentHashMap<String, AccountGeneration>()
     private var batchPersistenceDeferred = false
     private var batchPersistencePending = false
 
@@ -64,6 +68,7 @@ internal class JvmSupportDiagnostics(
             runCatching { loadHistory() }
                 .onFailure { storageAvailable = false }
         }
+        historyLoaded = storageAvailable
     }
 
     fun registerPrivateValue(value: String?) {
@@ -86,7 +91,9 @@ internal class JvmSupportDiagnostics(
 
     fun setActiveAccountIdentity(accountIdentity: String?) {
         synchronized(lock) {
-            updateActiveAccountScope(accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope))
+            val nextScope = accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
+            nextScope?.let { scope -> accountGenerations.computeIfPresent(scope) { _, epoch -> epoch.copy(retired = false) } }
+            updateActiveAccountScope(nextScope)
         }
     }
 
@@ -100,10 +107,31 @@ internal class JvmSupportDiagnostics(
 
     fun record(draft: SupportDiagnosticEventDraft) = recordWithScope(draft) { activeAccountScope }
 
-    fun recordForAccountIdentity(accountIdentity: String?, draft: SupportDiagnosticEventDraft) =
-        recordWithScope(draft) {
-            accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
+    internal fun accountGeneration(accountIdentity: String?): Long {
+        val scope = accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
+        val epoch = scope?.let(accountGenerations::get)
+        return if (epoch?.retired == true) -1L else epoch?.value ?: 0L
+    }
+
+    fun removeAccount(accountIdentity: String) = synchronized(lock) {
+        check(historyLoaded) { "The diagnostic history must be readable before account removal." }
+        val scope = accountScope(accountIdentity)
+        accountGenerations.compute(scope) { _, epoch ->
+            if (epoch?.retired == true) epoch else AccountGeneration((epoch?.value ?: 0L) + 1L, retired = true)
         }
+        events.removeIf { it.accountScope == scope }
+        persistHistory()
+        storageAvailable = true
+        publishRevision()
+    }
+
+    fun recordForAccountIdentity(
+        accountIdentity: String?,
+        draft: SupportDiagnosticEventDraft,
+        expectedGeneration: Long? = null,
+    ) = recordWithScope(draft, expectedGeneration) {
+        accountIdentity?.takeIf(String::isNotBlank)?.let(::accountScope)
+    }
 
     internal fun applyBatch(block: JvmSupportDiagnostics.() -> Unit) = synchronized(lock) {
         check(!batchPersistenceDeferred) { "Nested diagnostic batches are unsupported." }
@@ -126,15 +154,20 @@ internal class JvmSupportDiagnostics(
 
     private fun recordWithScope(
         draft: SupportDiagnosticEventDraft,
+        expectedGeneration: Long? = null,
         scope: () -> String?,
     ) {
         if (!storageAvailable) return
         synchronized(lock) {
+            val accountScope = scope()
+            val generation = accountScope?.let(accountGenerations::get)
+            if (generation?.retired == true) return
+            if (expectedGeneration != null && expectedGeneration != (generation?.value ?: 0L)) return
             runCatching {
                 val event = sanitizer.sanitize(
                     sequence = nextSequence++,
                     occurredAtEpochMillis = nowEpochMillis().coerceAtLeast(0L),
-                    accountScope = scope(),
+                    accountScope = accountScope,
                     draft = draft,
                 )
                 val encodedLine = SUPPORT_JSON.encodeToString(event).encodeToByteArray()

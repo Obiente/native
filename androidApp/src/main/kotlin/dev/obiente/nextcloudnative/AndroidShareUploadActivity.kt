@@ -180,19 +180,26 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     ?: error("Sign in to nati.ve before sharing files to it.")
                 activeAccountId = NextcloudDocumentIds.accountKey(activeSession)
                 val staged = withContext(Dispatchers.IO) {
-                    val restored = validatedRequestId?.let { requestId ->
-                        store.requireAvailable(requestId)
-                    } ?: store.stage(
-                        sourceIntent,
-                        NextcloudDocumentIds.accountKey(activeSession),
-                    ).also { newlyStaged ->
-                        unclaimedStagedRequestId = newlyStaged.id
+                    restoreIncomingShareForActiveSession(
+                        guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+                        expectedSession = activeSession,
+                        resolveActiveSession = services::loadSession,
+                        unavailable = { error("The account changed before the shared files could be prepared.") },
+                    ) {
+                        val restored = validatedRequestId?.let { requestId ->
+                            store.requireAvailable(requestId)
+                        } ?: store.stage(
+                            sourceIntent,
+                            NextcloudDocumentIds.accountKey(activeSession),
+                        ).also { newlyStaged ->
+                            unclaimedStagedRequestId = newlyStaged.id
+                        }
+                        require(restored.accountId == NextcloudDocumentIds.accountKey(activeSession)) {
+                            "Switch back to the account that received this share before reviewing it."
+                        }
+                        uploads.ensureQueuedRequestScheduled(restored)
+                        restored
                     }
-                    require(restored.accountId == NextcloudDocumentIds.accountKey(activeSession)) {
-                        "Switch back to the account that received this share before reviewing it."
-                    }
-                    uploads.ensureQueuedRequestScheduled(restored)
-                    restored
                 }
                 ensureActive()
                 if (generation != restoreGeneration) return@launch
@@ -249,7 +256,13 @@ class AndroidShareUploadActivity : ComponentActivity() {
         queueJob = lifecycleScope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    uploads.enqueue(activeSession, info.userId, staged.id, destinationPath)
+                    ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+                        expectedSession = activeSession,
+                        resolveSession = services::loadSession,
+                        unavailable = { error("The account changed before the upload could be queued.") },
+                    ) { current ->
+                        uploads.enqueue(current, info.userId, staged.id, destinationPath)
+                    }
                 }
             }
             if (!isCurrentIncomingShareEnqueue(generation, restoreGeneration, staged.id, request?.id)) return@launch
@@ -395,6 +408,14 @@ internal fun isValidIncomingShareRequestId(value: String): Boolean =
 
 internal fun AndroidIncomingShareRequest.canReleaseForIncomingShareReplacement(): Boolean =
     chunkSession == null && state == AndroidIncomingShareState.Completed
+
+internal suspend fun <Result> restoreIncomingShareForActiveSession(
+    guard: AndroidAccountOperationGuard,
+    expectedSession: NextcloudSession,
+    resolveActiveSession: suspend () -> NextcloudSession?,
+    unavailable: suspend () -> Result,
+    restore: suspend (NextcloudSession) -> Result,
+): Result = guard.withExactAccountSession(expectedSession, resolveActiveSession, unavailable, restore)
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,

@@ -48,6 +48,16 @@ class NextcloudSessionLoadingTest {
     }
 
     @Test
+    fun cleanupRecoveryPreservesItsReasonWithoutPretendingStorageIsLocked() {
+        NextcloudSessionCleanupReason.entries.forEach { reason ->
+            assertEquals(
+                NextcloudSessionLoadState.AccountCleanupUnavailable(reason),
+                loadNextcloudSessionSafely { throw NextcloudSessionCleanupUnavailableException(reason) },
+            )
+        }
+    }
+
+    @Test
     fun cancellationRemainsControlFlow() {
         assertFailsWith<CancellationException> {
             loadNextcloudSessionSafely { throw CancellationException("cancelled") }
@@ -63,6 +73,22 @@ class NextcloudSessionLoadingTest {
                     NextcloudSessionStorageUnavailableException("private provider failure"),
                 )
             },
+        )
+    }
+
+    @Test
+    fun newerStorageKeepsItsRecoveryCategoryInsteadOfOpeningLogin() {
+        assertEquals(
+            NextcloudSessionLoadState.StorageVersionUnsupported,
+            loadNextcloudSessionSafely { throw NextcloudSessionStorageVersionUnsupportedException() },
+        )
+    }
+
+    @Test
+    fun malformedStorageKeepsSupportRecoverySeparateFromVersionAndSignIn() {
+        assertEquals(
+            NextcloudSessionLoadState.StorageMalformed,
+            loadNextcloudSessionSafely { throw NextcloudSessionStorageMalformedException() },
         )
     }
 

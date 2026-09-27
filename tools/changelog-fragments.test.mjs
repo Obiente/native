@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -283,8 +283,20 @@ test("loading rejects symlinks and other non-regular fragment entries", async ()
   try {
     const unreleased = path.join(root, "changes", "unreleased");
     await mkdir(unreleased, { recursive: true });
-    await writeFile(path.join(root, "outside.md"), fragment());
-    await symlink(path.join(root, "outside.md"), path.join(unreleased, "42-feature.md"));
+    const link = path.join(unreleased, "42-feature.md");
+    if (process.platform === "win32") {
+      // Junctions exercise the same Dirent link rejection without symlink elevation.
+      const target = path.join(root, "outside");
+      await mkdir(target);
+      await writeFile(path.join(target, "43-feature.md"), fragment());
+      await symlink(target, link, "junction");
+    } else {
+      const target = path.join(root, "outside.md");
+      await writeFile(target, fragment());
+      await symlink(target, link);
+    }
+    const [entry] = await readdir(unreleased, { withFileTypes: true });
+    assert.equal(entry.isSymbolicLink(), true);
     await assert.rejects(
       loadFragments(root),
       /fragment entries must be regular files or directories/,

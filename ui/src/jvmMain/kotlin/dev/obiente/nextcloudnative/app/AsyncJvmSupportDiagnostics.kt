@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -79,18 +80,26 @@ class AsyncJvmSupportDiagnostics private constructor(
 
     fun record(event: SupportDiagnosticEventDraft) {
         val drain = synchronized(lock) {
-            submitLocked(PendingOperation.Record(activeAccountIdentity, event))
+            submitLocked(recordOperation(activeAccountIdentity, event))
         }
         startDrain(drain)
     }
 
     fun recordForAccountIdentity(accountIdentity: String, event: SupportDiagnosticEventDraft) {
-        submit(PendingOperation.Record(accountIdentity, event))
+        submit(recordOperation(accountIdentity, event))
+    }
+
+    private fun recordOperation(accountIdentity: String?, event: SupportDiagnosticEventDraft) =
+        PendingOperation.Record(accountIdentity, event, delegate?.accountGeneration(accountIdentity) ?: 0L)
+
+    suspend fun removeAccount(accountIdentity: String) = withContext(NonCancellable + dispatcher) {
+        ready.await().also(::drainPendingSnapshot).removeAccount(accountIdentity)
+        publishRevision()
     }
 
     fun recordBeforeProcessExit(event: SupportDiagnosticEventDraft) {
         val operation = synchronized(lock) {
-            PendingOperation.Record(activeAccountIdentity, event)
+            recordOperation(activeAccountIdentity, event)
         }
         val current = synchronized(lock) {
             delegate ?: run {
@@ -373,9 +382,10 @@ class AsyncJvmSupportDiagnostics private constructor(
         data class Record(
             val accountIdentity: String?,
             val event: SupportDiagnosticEventDraft,
+            val generation: Long,
         ) : PendingOperation {
             override fun apply(diagnostics: JvmSupportDiagnostics) {
-                diagnostics.recordForAccountIdentity(accountIdentity, event)
+                diagnostics.recordForAccountIdentity(accountIdentity, event, generation)
             }
         }
 

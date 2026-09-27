@@ -267,6 +267,10 @@ internal class AndroidVirtualFileCache(context: Context) {
         }
     }
 
+    fun clearAccount(accountId: String) = synchronized(STORE_LOCK) {
+        deleteAndroidAccountPrivateCache(root, accountId)
+    }
+
     fun loadPolicy(): VirtualFileCachePolicy = VirtualFileCachePolicy(
         automaticCleanup = preferences.getBoolean(KEY_AUTOMATIC, true),
         maximumCacheBytes = preferences.getLong(

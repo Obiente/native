@@ -152,6 +152,20 @@ class MediaBackupLedgerTest {
     }
 
     @Test
+    fun deletingAnAccountRetainsOtherAccountsRows() = runBlocking {
+        val otherAccount = "fedcba9876543210fedcba9876543210"
+        val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
+        store.upsert(pendingRecord(accountId, "external:removed", 1_000))
+        store.upsert(pendingRecord(otherAccount, "external:retained", 2_000))
+
+        store.deleteAccount(accountId)
+
+        assertEquals(null, store.load(accountId, "external:removed"))
+        assertEquals("external:retained", store.load(otherAccount, "external:retained")?.localKey)
+        store.close()
+    }
+
+    @Test
     fun snapshotReturnsSummaryAndPageFromOneLedgerRead() = runBlocking {
         val store = MediaBackupLedgerStore(BundledSQLiteDriver().open(":memory:"))
         repeat(3) { index ->

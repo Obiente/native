@@ -104,6 +104,9 @@ internal class AndroidFileReadCache(
         )
     }
 
+    @Synchronized
+    fun clearAccount(accountId: String) = deleteAndroidAccountPrivateCache(root, accountId)
+
     private fun CacheState.bounded(): CacheState {
         var retainedEntries = 0
         val retained = listings

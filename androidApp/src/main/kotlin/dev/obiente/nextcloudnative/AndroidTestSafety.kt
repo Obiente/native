@@ -4,7 +4,7 @@ import android.content.Context
 import java.net.URI
 import java.util.Locale
 
-internal const val TEST_PREFERENCES_NAME = "nextcloud_native"
+internal const val TEST_PREFERENCES_NAME = ANDROID_ACCOUNT_PREFERENCES_NAME
 internal const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
 internal const val KEY_TEST_WRITE_SCOPE_SERVER = "emulator_test_write_scope_server"
 internal const val KEY_TEST_WRITE_SCOPE_PATH = "emulator_test_write_scope_path"

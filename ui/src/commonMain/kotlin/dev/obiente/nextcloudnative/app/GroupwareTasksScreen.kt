@@ -110,7 +110,7 @@ fun NativeGroupwareTasksScreen(
         recoveryVerification = TaskRecoveryVerification.Unknown
         onMutationInProgressChanged(true)
         val saved = try {
-            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Tasks, encoded)
+            services.saveDurableMutationRecovery(session, accountScope, DurableMutationRecoveryKind.Tasks, encoded)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {

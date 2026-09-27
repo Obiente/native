@@ -10,7 +10,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal open class NextcloudSessionStorageUnavailableException(
+open class NextcloudSessionStorageUnavailableException(
     message: String,
     cause: Throwable? = null,
 ) : IllegalStateException(message, cause)
@@ -22,12 +22,30 @@ internal class NextcloudSessionLegacyMigrationUnavailableException(
     cause,
 )
 
+internal enum class NextcloudSessionCleanupReason { Pending, NeedsReview }
+
+internal class NextcloudSessionCleanupUnavailableException(
+    val reason: NextcloudSessionCleanupReason,
+) : IllegalStateException("Account cleanup has not completed.")
+internal class NextcloudSessionStorageVersionUnsupportedException : IllegalStateException(
+    "The saved account registry requires a compatible app version.",
+)
+
+internal class NextcloudSessionStorageMalformedException : IllegalStateException(
+    "The saved account registry requires recovery.",
+)
+
 internal sealed interface NextcloudSessionLoadState {
     data class Loaded(val session: NextcloudSession?) : NextcloudSessionLoadState
 
     data object SecureStorageUnavailable : NextcloudSessionLoadState
 
     data object LegacyMigrationUnavailable : NextcloudSessionLoadState
+
+    data class AccountCleanupUnavailable(val reason: NextcloudSessionCleanupReason) : NextcloudSessionLoadState
+    data object StorageVersionUnsupported : NextcloudSessionLoadState
+
+    data object StorageMalformed : NextcloudSessionLoadState
 }
 
 internal class NextcloudSessionLoadCoordinator(
@@ -72,6 +90,12 @@ internal fun loadNextcloudSessionSafely(
     NextcloudSessionLoadState.Loaded(loadSession())
 } catch (failure: CancellationException) {
     throw failure
+} catch (failure: NextcloudSessionCleanupUnavailableException) {
+    NextcloudSessionLoadState.AccountCleanupUnavailable(failure.reason)
+} catch (_: NextcloudSessionStorageVersionUnsupportedException) {
+    NextcloudSessionLoadState.StorageVersionUnsupported
+} catch (_: NextcloudSessionStorageMalformedException) {
+    NextcloudSessionLoadState.StorageMalformed
 } catch (_: NextcloudSessionLegacyMigrationUnavailableException) {
     NextcloudSessionLoadState.LegacyMigrationUnavailable
 } catch (_: NextcloudSessionStorageUnavailableException) {

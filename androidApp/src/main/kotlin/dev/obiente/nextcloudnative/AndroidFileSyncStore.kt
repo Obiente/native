@@ -4,13 +4,13 @@ import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.decodeFileSyncCoordinatorSnapshot
 import dev.obiente.nextcloudnative.app.encodeFileSyncCoordinatorSnapshot
+import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -27,17 +27,46 @@ internal data class AndroidFileSyncPersistedState(
     }
 }
 
+internal fun removeAndroidFileSyncAccountPairs(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+): AndroidFileSyncPersistedState {
+    requireAndroidFileSyncAccountRemovalReady(state, accountId)
+    val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
+    val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
+    return AndroidFileSyncPersistedState(
+        coordinator = FileSyncCoordinatorState(retainedPairs),
+        localDisplayNames = state.localDisplayNames.filterKeys(retainedPairIds::contains),
+    )
+}
+
+internal fun requireAndroidFileSyncAccountRemovalReady(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+) {
+    require(accountId.isNotBlank())
+    state.coordinator.pairs
+        .filter { pair -> pair.accountId == accountId }
+        .forEach { pair ->
+            require(fileSyncOwnedUploads(pair).isEmpty()) {
+                "Owned remote upload state must be recovered before removing this account's sync pairs."
+            }
+        }
+}
+
+internal class AndroidFileSyncStateTruncatedException(cause: EOFException) :
+    IllegalStateException("Folder sync state is truncated.", cause)
+
 internal class AndroidFileSyncStore internal constructor(
     private val stateFile: File,
     private val maximumSnapshotBytes: Int = MAX_SNAPSHOT_BYTES,
+    private val uploadCleanupStore: AndroidFileSyncUploadCleanupStore = AndroidFileSyncUploadCleanupStore(
+        File(checkNotNull(stateFile.parentFile), "${stateFile.name}.upload-cleanups"),
+    ),
 ) {
     init {
         require(maximumSnapshotBytes in 1..MAX_SNAPSHOT_BYTES)
     }
-
-    private val uploadCleanupStore = AndroidFileSyncUploadCleanupStore(
-        File(checkNotNull(stateFile.parentFile), "${stateFile.name}.upload-cleanups"),
-    )
 
     constructor(context: Context) : this(File(context.filesDir, STATE_FILE_NAME))
 
@@ -48,7 +77,7 @@ internal class AndroidFileSyncStore internal constructor(
             throw IllegalStateException("Folder sync state exceeds its safe storage limit.")
         }
         val stored = try {
-            DataInputStream(BufferedInputStream(FileInputStream(stateFile))).use { input ->
+            DataInputStream(BufferedInputStream(Files.newInputStream(stateFile.toPath()))).use { input ->
                 check(input.readInt() == MAGIC) { "Folder sync state has an invalid header." }
                 check(input.readInt() == FORMAT_VERSION) { "Folder sync state version is unsupported." }
                 val snapshotLength = input.readInt()
@@ -67,7 +96,7 @@ internal class AndroidFileSyncStore internal constructor(
                 AndroidFileSyncPersistedState(coordinator, names)
             }
         } catch (failure: EOFException) {
-            throw IllegalStateException("Folder sync state is truncated.", failure)
+            throw AndroidFileSyncStateTruncatedException(failure)
         } catch (failure: Throwable) {
             if (failure is IllegalStateException) throw failure
             throw IllegalStateException("Folder sync state is invalid.", failure)
@@ -93,6 +122,15 @@ internal class AndroidFileSyncStore internal constructor(
                 },
             ),
         )
+    }
+
+    @Synchronized
+    fun loadAndReconcileUploadCleanups(): AndroidFileSyncPersistedState = load().also { state ->
+        if (stateFile.isFile) {
+            uploadCleanupStore.replace(
+                state.coordinator.pairs.associate { pair -> pair.id to pair.pendingUploadCleanups },
+            )
+        }
     }
 
     @Synchronized

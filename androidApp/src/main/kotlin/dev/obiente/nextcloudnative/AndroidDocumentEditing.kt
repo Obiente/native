@@ -46,7 +46,7 @@ internal data class AndroidDocumentEditingHttpResponse(
 )
 
 internal class AndroidDocumentEditingTransport(
-    private val execute: (NextcloudSession, AndroidDocumentEditingHttpRequest) -> AndroidDocumentEditingHttpResponse,
+    private val execute: suspend (NextcloudSession, AndroidDocumentEditingHttpRequest) -> AndroidDocumentEditingHttpResponse,
 ) {
     suspend fun loadCapabilities(
         session: NextcloudSession,

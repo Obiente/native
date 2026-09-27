@@ -148,7 +148,7 @@ class AndroidSafDownloadStageIdentityTest {
     }
 
     @Test
-    fun `restart adopts a normalized stage created before identity persistence`() {
+    fun `restart preserves a normalized stage without persisted identity or content proof`() {
         val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
         val normalizedStageName = "provider-stage-$TOKEN"
         val directory = FakeSafDirectory().apply {
@@ -174,14 +174,11 @@ class AndroidSafDownloadStageIdentityTest {
 
         publisher(directory).reconcile()
 
-        val adopted = directory.ownership.transactions().single()
-        assertEquals(directory.documentNamed(normalizedStageName).toString(), adopted.stageDocumentIdentity)
-        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
-
-        publisher(directory).reconcile()
-
-        assertEquals(listOf("Report.txt"), directory.names())
-        assertEquals(emptyList(), directory.ownership.transactions())
+        assertEquals(listOf(pending), directory.ownership.transactions())
+        assertEquals(setOf("Report.txt", normalizedStageName), directory.names().toSet())
+        assertContentEquals(byteArrayOf(10, 11), directory.entryNamed("Report.txt").bytes)
+        assertEquals(0, directory.deleteCalls)
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
     }
 
     @Test
