@@ -50,6 +50,30 @@ fields to these documents. Publish future cumulative changelogs or other
 extensible metadata as separately versioned sidecars, and test mutable channel
 pointers against every supported client parser before promotion.
 
+## Nightly builds and recovery
+
+[Publish nightly](../.github/workflows/nightly.yml) starts after
+[Build and test](../.github/workflows/ci.yml) completes successfully for a
+trusted `push` to `main`. Pull-request builds and manually dispatched builds
+do not qualify, even when they test the same commit. There is no scheduled
+nightly timer.
+
+Build concurrency is scoped by workflow, event, and PR number or ref. A new
+run can cancel obsolete work for the same target, but PR and manual runs
+cannot cancel the main push build used by the nightly publisher. PR numbers
+keep different PRs isolated even when their event ref becomes `main` after
+merging.
+
+If the qualifying push build was cancelled or failed, inspect that run and
+address any failure, then use **Re-run all jobs** on the original push run.
+This preserves its source event and commit. Starting **Run workflow** creates
+a `workflow_dispatch` run and will not publish a nightly. Retrying the skipped
+nightly alone does not make an unsuccessful source build eligible.
+
+A successful eligible build starts the existing signing, artifact verification,
+release quorum, and channel-promotion gates; it does not bypass them. A curated
+prerelease already tagged at that source commit suppresses nightly publication.
+
 ## Creating a prerelease
 
 1. Update the three `ncVersion*` development defaults in `gradle.properties`.
