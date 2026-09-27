@@ -48,10 +48,11 @@ class LoginDiagnosticsViewTest {
         for (width in listOf(400, 900)) {
             val drafts = SupportSettingsDraftState().apply { updateReportDraft("Browser approval succeeded but sign-in failed.") }
             val exports = mutableListOf<String>()
+            val destination = if (width == 400) "Android share sheet" else "synthetic-report.zip"
             val load: suspend () -> SupportDiagnosticsSummary = { summary() }
             val export: suspend (String) -> SupportDiagnosticsExportResult = {
                 exports += it
-                SupportDiagnosticsExportResult.Exported("synthetic-report.zip")
+                SupportDiagnosticsExportResult.Exported(destination)
             }
             nativeSceneTest(width, 900, content = { Dialog { LoginDiagnosticsView(drafts, load, export, flowOf(0L)) } }) {
                 assertTrue(has("Save login diagnostics"))
@@ -60,7 +61,8 @@ class LoginDiagnosticsViewTest {
                 capture("login-diagnostics-$width")
                 click("Save login diagnostics")
                 assertEquals(listOf(drafts.reportDraft), exports)
-                assertTrue(has("Diagnostics saved: synthetic-report.zip"))
+                assertTrue(has("Report prepared: $destination"))
+                assertFalse(has("Diagnostics saved: $destination"))
             }
         }
     }

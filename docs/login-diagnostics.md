@@ -13,6 +13,9 @@ submission remains an authenticated feature.
 4. Review the archive before sharing it privately with support. Saving the report
    does not submit it or create a public issue.
 
+On Android, "Report prepared" means the system share sheet opened. Complete the
+save or share action there; dismissing the chooser does not confirm delivery.
+
 Reports contain bounded, sanitized diagnostic history and device information.
 Credentials, cookies, private URLs, filenames, and file content are excluded.
 Treat the exported report as private even after redaction. The optional draft

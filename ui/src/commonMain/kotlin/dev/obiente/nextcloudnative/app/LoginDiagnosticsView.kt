@@ -98,7 +98,7 @@ internal fun LoginDiagnosticsView(
                 scope.launch {
                     try {
                         notice = when (val result = exportReport(draft)) {
-                            is SupportDiagnosticsExportResult.Exported -> "Diagnostics saved: ${result.destination}"
+                            is SupportDiagnosticsExportResult.Exported -> "Report prepared: ${result.destination}"
                             SupportDiagnosticsExportResult.Cancelled -> "Export cancelled."
                             is SupportDiagnosticsExportResult.Failed -> result.message
                             is SupportDiagnosticsExportResult.Unsupported -> result.reason
