@@ -529,7 +529,7 @@ fun NextcloudNativeApp(
             if (sessionLoad == null) {
                 LoadingMessage("Loading account")
             } else if (sessionLoad !is NextcloudSessionLoadState.Loaded) {
-                SessionLoadingRecoveryScreen(sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
+                SessionRecoveryDiagnosticsView(services, sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
             } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
@@ -1098,7 +1098,7 @@ private fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services, supportDrafts)
+                    LoginDiagnosticsView(services, supportDrafts)
                 }
             },
             confirmButton = {

@@ -225,7 +225,9 @@ The JVM SQLite dependency is constrained to 2.6.2 because the 2.7.0 and 2.7.1
 artifacts omit the Intel macOS native library. `DesktopSqliteRuntimeTest` checks
 the native resources for each packaged desktop architecture and opens an
 in-memory database on the test host. An Intel macOS CI job validates relevant
-dependency and packaging changes. Nightly and prerelease macOS packages run their
+dependency, credential-storage, and packaging changes, including a synthetic
+first-account save and restore through native Keychain. This test does not
+replace live browser login acceptance. Nightly and prerelease macOS packages run their
 launcher with `--verify-sqlite-runtime`, before creating application services.
 This check does not inspect accounts or modify user databases. A resource check
 on one OS does not establish runtime validation on another OS.

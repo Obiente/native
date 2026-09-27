@@ -417,7 +417,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Detect SQLite packaging changes
+      - name: Detect macOS storage and packaging changes
         id: changes
         continue-on-error: true
         uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
@@ -433,6 +433,11 @@ jobs:
               - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopSqliteRuntime.kt"
               - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt"
               - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopSqliteRuntimeTest.kt"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/Desktop*Credential*.kt"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopSecretStore.kt"
+              - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/MacOsKeychain*.kt"
+              - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopMacOsLoginPersistenceTest.kt"
+              - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopSecretStoreTest.kt"
 
       - name: Set up JDK 21
         if: >-
@@ -445,13 +450,14 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Verify Intel macOS SQLite in tests and the packaged app
+      - name: Verify Intel macOS Keychain and packaged SQLite
         if: >-
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outcome != 'success' ||
           steps.changes.outputs.sqlite == 'true'
         run: |
-          ./gradlew --no-daemon :ui:desktopTest --tests '*DesktopSqliteRuntimeTest' :ui:createDistributable
+          ./gradlew --no-daemon :ui:desktopTest --tests '*DesktopSqliteRuntimeTest' \
+            --tests '*DesktopMacOsLoginPersistenceTest' --tests '*DesktopSecretStoreTest' :ui:createDistributable
           launcher=$(find ui/build/compose/binaries/main/app -type f -path '*/Contents/MacOS/nati.ve' -print -quit)
           test -n "$launcher"
           "$launcher" --verify-sqlite-runtime
