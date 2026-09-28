@@ -100,13 +100,13 @@ dependencies {
     implementation(libs.okhttp)
     testImplementation(kotlin("test"))
     testImplementation(libs.org.json)
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.uiautomator)
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
-    androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.5.0")
 }
 
 val validateReleaseSigning by tasks.registering {
