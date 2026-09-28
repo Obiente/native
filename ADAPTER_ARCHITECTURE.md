@@ -156,6 +156,33 @@ Stored Login Flow app passwords must not be treated as primary passwords for
 strict administrator confirmation. The client must not collect or retain a
 primary account password to bypass that boundary.
 
+### Administration visibility
+
+`AdministrationAccessRepository` owns session-scoped, in-memory permission
+evidence from the existing read-only administrator catalog contract. It reuses
+that catalog for the Server apps screen and caches both allowed and denied
+results for five minutes using a monotonic clock. Opening Settings checks the
+cache; while the root Settings screen or Server apps is visible, expired evidence
+is refreshed. Opening a child screen from Settings stops automatic polling.
+Polling also stops when Android leaves the started lifecycle or the desktop
+window is hidden or minimized. Returning to a visible screen reuses fresh
+evidence or revalidates expired evidence. Settings retains the requested section
+while Administration is hidden during a check, without rendering its controls.
+No permission result survives logout, account replacement, or process restart.
+Both catalog request paths use `ForceNetwork` so revalidation cannot renew access
+from the transport's persisted response cache.
+
+Administration, its installed-workspace summary, and the Server apps catalog
+require fresh successful evidence. Unknown, expired, denied, malformed, and
+unavailable results hide those surfaces, including restored navigation. The
+Server apps route keeps a loading or typed failure view with retry and Back
+instead of navigating away silently when permission revalidation fails. An
+explicit refresh removes old access before requesting new evidence. Concurrent
+checks share the cached result, and cancellation cannot publish a late success.
+The ordinary Apps workspace remains available to regular users. Cached visibility
+never authorizes a mutation; strict operations still use authenticated browser
+handoff and server-side authorization.
+
 ## Error and cancellation rules
 
 Errors must retain enough structured context to support recovery and safe

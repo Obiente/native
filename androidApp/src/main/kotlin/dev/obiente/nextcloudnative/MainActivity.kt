@@ -8,6 +8,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -18,12 +19,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
+import dev.obiente.nextcloudnative.app.LocalAppWindowVisibility
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import dev.obiente.nextcloudnative.app.ThemePreference
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
+    private val windowVisibility = MutableStateFlow(false)
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
     private var lastAppUpdateReviewEventId: Long? = null
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
@@ -131,22 +135,34 @@ class MainActivity : ComponentActivity() {
                 window.decorView.setBackgroundColor(background.toArgb())
             }
 
-            NextcloudNativeApp(
-                services = services,
-                appUpdateReviewRequest = appUpdateReviewRequest,
-                platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                linkRequest = incomingLinkRequests.firstOrNull(),
-                onLinkRequestHandled = { sequence ->
-                    if (incomingLinkRequests.firstOrNull()?.sequence == sequence) {
-                        incomingLinkRequests.removeAt(0)
-                    }
-                },
-                linkQueueOverflowEvent = incomingLinkQueueOverflowEvent,
-                onLinkQueueOverflowHandled = { event ->
-                    if (incomingLinkQueueOverflowEvent == event) incomingLinkQueueOverflowEvent = 0L
-                },
-            )
+            CompositionLocalProvider(LocalAppWindowVisibility provides windowVisibility) {
+                NextcloudNativeApp(
+                    services = services,
+                    appUpdateReviewRequest = appUpdateReviewRequest,
+                    platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                    linkRequest = incomingLinkRequests.firstOrNull(),
+                    onLinkRequestHandled = { sequence ->
+                        if (incomingLinkRequests.firstOrNull()?.sequence == sequence) {
+                            incomingLinkRequests.removeAt(0)
+                        }
+                    },
+                    linkQueueOverflowEvent = incomingLinkQueueOverflowEvent,
+                    onLinkQueueOverflowHandled = { event ->
+                        if (incomingLinkQueueOverflowEvent == event) incomingLinkQueueOverflowEvent = 0L
+                    },
+                )
+            }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        windowVisibility.value = true
+    }
+
+    override fun onStop() {
+        windowVisibility.value = false
+        super.onStop()
     }
 
     override fun onResume() {

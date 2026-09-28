@@ -1,5 +1,9 @@
 package dev.obiente.nextcloudnative.nativeui.preview
 
+import androidx.compose.runtime.CompositionLocalProvider
+import kotlinx.coroutines.flow.MutableStateFlow
+import dev.obiente.nextcloudnative.app.LocalAppWindowVisibility
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -370,11 +374,14 @@ private fun launchDesktopProcess(arguments: Array<String>) {
                 if (mainWindow.value === window) mainWindow.value = null
             }
         }
+        val administrationWindowVisibility = remember { MutableStateFlow(false) }
         SideEffect {
+            administrationWindowVisibility.value = windowVisible.value && !mainWindowState.isMinimized
             applyDesktopNativeWindowFrame(window, darkTheme)
             window.background = java.awt.Color(background.toArgb(), true)
             window.minimumSize = java.awt.Dimension(960, 640)
         }
+        CompositionLocalProvider(LocalAppWindowVisibility provides administrationWindowVisibility) {
         Box(Modifier.fillMaxSize().background(background)) {
             NextcloudNativeApp(
                 services = services,
@@ -386,6 +393,7 @@ private fun launchDesktopProcess(arguments: Array<String>) {
                     }
                 },
             )
+        }
         }
     }
     }

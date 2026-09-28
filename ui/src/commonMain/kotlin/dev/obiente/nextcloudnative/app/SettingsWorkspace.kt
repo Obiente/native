@@ -73,8 +73,10 @@ internal fun visibleSettingsSections(
     isDesktop: Boolean,
     hasDeviceSettings: Boolean,
     hasDesktopAppSettings: Boolean = isDesktop,
+    canAdminister: Boolean = false,
 ): List<SettingsWorkspaceSection> = SettingsWorkspaceSection.entries.filter { section ->
     when (section) {
+        SettingsWorkspaceSection.Administration -> canAdminister
         SettingsWorkspaceSection.DesktopApp -> isDesktop && hasDesktopAppSettings
         SettingsWorkspaceSection.NotificationsAndDevice -> hasDeviceSettings
         else -> true
