@@ -10,7 +10,9 @@ is the source of truth for published artifacts and their limitations.
 
 The target architecture has three portable layers and thin platform products:
 
-1. The Rust semantic compiler produces the same validated native schema.
+1. The Kotlin semantic compiler produces the schema consumed by the app.
+   The Rust compiler maintains a reference subset; see the explicit
+   [schema ownership and compatibility boundary](NATIVE_SCHEMA.md#contract-ownership).
 2. Shared Kotlin repositories own account state, caching, pagination,
    conflicts, and actions.
 3. Shared Compose components render semantic workflows without HTML.
@@ -39,7 +41,36 @@ Standard CI builds Android packages and runs Android unit tests, but it does not
 run connected-device instrumentation. A package or passing unit-test job is not
 evidence that device-specific acceptance criteria have passed.
 
+Notes uses an editor toolbar with Save outside the scrolling content. Short
+windows move title and folder controls into an accessible Details dialog, leaving
+space for the text or preview. The shared Markdown typography uses content-sized
+headings across Notes, files, Deck, Talk, and news. `NoteEditorContentTest` covers
+the short-window controls and preservation of temporary form values; device
+rotation and visual evidence are separate platform acceptance checks.
+
+The compact Apps browser uses a searchable list with category filters and
+pinned shortcuts. Long labels truncate explicitly, and the header can grow with
+text size. Desktop retains its catalog grid. Photos places the date scrubber
+over edge-to-edge timeline content with symmetric padding; its accessible thumb
+and narrow rail retain date navigation while the surrounding area accepts photo
+taps. Contact detail bodies scroll independently of their Edit/Delete buttons.
+Focused scene tests cover these interactions; dated device observations belong
+in [COMPATIBILITY.md](COMPATIBILITY.md).
+
 ## Shared boundaries
+
+Android and desktop dynamic application reads use the same JVM account-session
+adapter, including native audio stream requests. Playback refreshes expired
+sessions per request on a stream worker and cancels preparation with the stream.
+Account retirement also clears pending Android requests and stops the matching
+MediaSession queue; leaving a screen still permits background playback. Desktop
+retirement cancels the matching download and disposes its player and staged file.
+Queue identities prevent delayed cleanup from stopping a replacement queue.
+Deterministic JVM tests cover cookie rotation, path isolation,
+credential replacement, cancellation, and retirement. This shared test coverage
+does not establish Android device or live-server compatibility; versioned server
+and platform evidence belongs in [COMPATIBILITY.md](COMPATIBILITY.md).
+
 
 - Shared modules must not import Android, Apple, Windows, macOS, or Linux APIs.
 - Platform services implement interfaces owned by shared domain code.
@@ -137,6 +168,22 @@ for the authentication, provider selection, and retry boundaries. Device-level
 Office acceptance remains separate from compiling or packaging this integration.
 
 ## Mobile product rules
+
+App-specific presentation groups related values around the task. Budget gives
+the account balance and period spending priority, keeps category limits and
+carryover together, and omits unavailable totals instead of displaying zero.
+Music playlists keep ordered tracks and playback controls together. Calendar
+editors group Schedule and Details while Save/Cancel remain outside the scrolling
+body. Transfer history puts queue status and the failed-upload filter before
+individual records, with a centered bounded layout on wider windows. These
+surfaces reuse the existing typed models, action bindings, and recovery policies.
+Pantry collection cards emphasize household and list descriptions; grocery task
+rows include quantity without replacing completion recovery. Tables cards keep
+declared counts visible and secondary metadata expandable. Record details group
+typed cells under their primary value without repeating that value as a second
+field. Compact table controls wrap when horizontal space is limited.
+Focused scene tests cover enlarged text, visible actions, and playlist order;
+platform observations are recorded separately in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 View switchers and form choices use common native components on phone and
 desktop. Calendar, compact Chores, Budget categories and dynamic enum fields

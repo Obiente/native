@@ -118,7 +118,7 @@ private fun TalkNativeTextBubble(
                 TalkReplyPreview(message.parent)
                 Text(message.actorDisplayName, style = MaterialTheme.typography.labelMedium)
                 if (model.markdown) {
-                    Markdown(content = model.summary)
+                    Markdown(typography = nativeMarkdownTypography(), content = model.summary)
                 } else {
                     Text(model.summary, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -280,16 +280,16 @@ private fun TalkNativeAttachmentCard(
     onOpen: () -> Unit,
 ) {
     val file = remember(model) { model.asNextcloudFile() }
-    var preview by remember(file.fileId, file.etag, model.canLoadServerRaster) {
+    var preview by remember(session, file.fileId, file.etag, model.canLoadServerRaster) {
         mutableStateOf<TalkAttachmentPreviewState>(
             if (model.canLoadServerRaster) TalkAttachmentPreviewState.Loading else TalkAttachmentPreviewState.None,
         )
     }
-    LaunchedEffect(file.fileId, file.etag, model.canLoadServerRaster) {
+    LaunchedEffect(session, file.fileId, file.etag, model.canLoadServerRaster) {
         if (!model.canLoadServerRaster) return@LaunchedEffect
-        preview = runCatching {
+        preview = runCatchingPreservingCancellation {
             val bytes = services.loadPreviewCached(session, file, width = 720, height = 480)
-            decodePlatformImage(
+            decodePlatformImageInBackground(
                 bytes,
                 EncodedImageOrientationPolicy.PixelsAlreadyUpright,
             ) ?: error("Invalid Talk attachment preview")

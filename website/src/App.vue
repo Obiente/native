@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   PhAndroidLogo as AndroidLogo,
   PhAppleLogo as AppleLogo,
@@ -42,8 +42,8 @@ import {
   guidePlatformHubs,
   guidesForPlatformHub,
 } from "./guide-platforms.js";
-import RoadmapDashboard from "./components/RoadmapDashboard.vue";
-import ArticleRoadmap from "./components/ArticleRoadmap.vue";
+const RoadmapDashboard = defineAsyncComponent(() => import("./components/RoadmapDashboard.vue"));
+const ArticleRoadmap = defineAsyncComponent(() => import("./components/ArticleRoadmap.vue"));
 import NativeHome from "./components/NativeHome.vue";
 import PageOutline from "./components/PageOutline.vue";
 
@@ -497,7 +497,7 @@ const appFamilies = [
     icon: File,
     title: "Files and documents",
     apps: "Files, Notes, search, sharing foundations, Android offline storage, folder pairs, and desktop virtual files",
-    body: "Browse and preview ordinary files, edit guarded text content, and use platform file integration. Sync, cache, and conflict state remain explicit while the alpha is still being hardened.",
+    body: "Browse folders, preview documents and edit text files. Keep selected files available offline or set up folder sync. Sync is still alpha: keep independent backups.",
     captureDark: "homepage-files-desktop-dark",
     captureLight: "homepage-files-desktop-light",
     captureFallback: "obsidian-vault-sync",
@@ -506,7 +506,7 @@ const appFamilies = [
     icon: Camera,
     title: "Photos and memories",
     apps: "Photos, Memories, Recognize people, albums, RAW previews, Live Photos, and Android media backup state",
-    body: "Browse timelines, folders, albums, and recognized people, inspect native previews, and follow exact-version Android backup state. Editing remains a foundation, not a complete shipped workflow.",
+    body: "Find photos by date, folder, album or recognized person, and open them full-screen. On Android, check which photos have been backed up and which still need attention.",
     captureDark: "homepage-photos-desktop-dark",
     captureLight: "homepage-photos-desktop-light",
     captureFallback: "photo-folder-browser-desktop",
@@ -515,7 +515,7 @@ const appFamilies = [
     icon: ChatCircleDots,
     title: "Conversations and people",
     apps: "Talk room history and rich message cards, Mail and Contacts workspaces, shared files, status, and notification foundations",
-    body: "Talk history is readable through typed message cards, while Mail, Contacts, and communication actions remain at different levels of completeness. Native calling is not shipped yet.",
+    body: "Open your Talk rooms, read earlier messages and view shared files. Native voice and video calls are not available yet. Mail and Contacts have separate support limits.",
     captureDark: "homepage-conversations-desktop-dark",
     captureLight: "homepage-conversations-desktop-light",
     captureFallback: "file-share-group-desktop",
@@ -524,7 +524,7 @@ const appFamilies = [
     icon: ListChecks,
     title: "Planning and everyday work",
     apps: "Calendar, Tasks, Deck, Tables, Cookbook, Cospend, Music, dashboards, and administration inventory",
-    body: "Calendar has direct CalDAV workflows. Other planning, media, and administration surfaces use native semantics at different levels of completeness and with capability-gated actions.",
+    body: "Check your calendar by month, week or agenda, and create or edit events in writable calendars. Browse Deck boards and tasks when those apps are installed on your server.",
     captureDark: "homepage-planning-desktop-dark",
     captureLight: "homepage-planning-desktop-light",
     captureFallback: "deck-board-desktop",
@@ -533,7 +533,7 @@ const appFamilies = [
     icon: SquaresFour,
     title: "The apps on your server",
     apps: "Verified app capabilities become useful native tables, forms, galleries, boards, conversations, and media views",
-    body: "Installed apps are interpreted through verified contracts and reusable native components. Specialized adapters improve workflows where generic semantics are not enough.",
+    body: "Find the apps installed on your Nextcloud server and open supported content in nati.ve. Some apps offer browsing only; others support editing. Check compatibility for the tasks you need.",
     captureDark: "homepage-apps-desktop-dark",
     captureLight: "homepage-apps-desktop-light",
     captureFallback: "tables-insights-desktop",
@@ -576,9 +576,14 @@ const adaptiveSteps = [
 
 const frequentlyAsked = [
   {
+    question: "Do I need a Nextcloud account?",
+    answer:
+      "Yes. Nextcloud is software for hosting files, photos, calendars and other services on a server you or your provider runs. Install nati.ve on your device, enter your server address and sign in. nati.ve does not host a server or provide cloud storage.",
+  },
+  {
     question: "Is this a web wrapper?",
     answer:
-      "No. nati.ve consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
+      "No. File lists, photo galleries, calendars and other app screens are built into nati.ve. They load data from your Nextcloud server. Some document formats use a web-based viewer.",
   },
   {
     question: "Can I keep normal folders and an Obsidian vault in sync?",
@@ -596,9 +601,9 @@ const frequentlyAsked = [
       "Reusable native components understand common resources such as files, messages, people, events, tables, boards, media, forms, and actions. Verified app knowledge improves specialized workflows without turning every integration into a separate client.",
   },
   {
-    question: "Why use adaptive components instead of only app-specific clients?",
+    question: "Does every Nextcloud app work in nati.ve?",
     answer:
-      "App-specific knowledge can improve an experience, but reusable semantics let similar data and actions work across apps we have never tested. Verified adapters remain available for the places where they create a genuine UX improvement.",
+      "No. Support varies by app, version and platform. Some integrations are read-only or incomplete. The compatibility page describes tested behavior; a listed app is not a promise that every feature is available.",
   },
   {
     question: "Is this an official Nextcloud project?",
@@ -1645,7 +1650,7 @@ onMounted(() => {
           <span class="native-brand-mark"><img :src="resolvedTheme === 'light' ? '/brand/native-mark.svg' : '/brand/native-mark-dark.svg'" alt="" width="38" height="38" /></span>
           <span class="brand-copy"><strong>nati.ve</strong></span>
         </a>
-        <p>Your Nextcloud, in a native workspace.</p>
+        <p>One app for your Nextcloud files, photos, chats and calendars.</p>
       </div>
       <nav class="footer-directory" aria-label="Footer navigation">
         <div>

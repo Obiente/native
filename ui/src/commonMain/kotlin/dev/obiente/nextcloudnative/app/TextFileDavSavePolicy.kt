@@ -31,8 +31,10 @@ fun textFileDavSaveRequest(
     )
 }
 
+class TextFileDavSaveConflictException : IllegalStateException("The file changed on the server.")
+
 fun confirmTextFileDavSave(status: Int): TextFileDavSaveConfirmation {
-    check(status != 412) { "The file changed on the server. Reload it before saving your changes." }
+    if (status == 412) throw TextFileDavSaveConflictException()
     check(status in 200..299) { "Saving the text file failed (HTTP $status)." }
     return TextFileDavSaveConfirmation(created = status == 201)
 }

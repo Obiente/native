@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
+
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
@@ -48,14 +50,14 @@ internal data class NativeChoresPresentation(
 )
 
 /**
- * Recognizes the exact read hierarchy verified from the signed Chores 0.1.0 package.
+ * Recognizes the exact read hierarchy verified from the signed Chores 0.1.0 and 0.2.0 packages.
  * Similar-looking routes from other apps intentionally stay on the generic renderer.
  */
 internal fun nativeChoresWorkspaceKind(
     schema: NativeAppSchema,
     view: ViewSpec,
 ): NativeChoresWorkspaceKind? {
-    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return null
+    if (!schema.app.isSupportedChoresVersion()) return null
     val action = schema.action(view.sourceActionId) ?: return null
     if (
         action.confidence !in setOf(Confidence.high, Confidence.verified) ||
@@ -126,7 +128,7 @@ internal fun nativeChoresMemberFieldChoices(
     schema: NativeAppSchema,
     teamRecord: NativeRecord?,
 ): Map<String, List<NativeFieldChoice>> {
-    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return emptyMap()
+    if (!schema.app.isSupportedChoresVersion()) return emptyMap()
     val authoritativeTeam = teamRecord?.takeIf { record ->
         record.actionSafeIdentity && record.actionBindingProvenanceValid
     } ?: return emptyMap()

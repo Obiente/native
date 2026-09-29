@@ -15,6 +15,11 @@ API on 2026-07-24. Its SHA-256 digest is
 It is used only as the synthetic Obiente account avatar in deterministic,
 offline product captures. It is not the nati.ve app icon.
 
+These resources and the desktop capture entry points belong to `desktopTest`.
+Shared synthetic scenarios belong to `commonTest`. Capture tasks use the test
+compilation so fixture assets and fake services are excluded from application
+packages.
+
 The asset in this directory is canonical. The website content generator copies it to
 `website/public/obiente-avatar.png` for static hosting; that generated copy is
 ignored rather than stored as a second repository binary.

@@ -120,7 +120,30 @@ container) with Rust, Node.js, Git, Python 3, jq, and Debian packaging tools
 available. Windows-only fixture checks can run from Git Bash; Node.js launches
 the manifest scripts through Bash using Windows-compatible paths.
 
+On Windows, install jq with `winget install --exact --id jqlang.jq --source winget`
+and reopen the terminal so its user PATH is refreshed. Release scripts normalize
+native jq line endings before comparing versions, sizes, and digests. Run
+`bash tools/test-jq-output-portability.sh` to exercise those comparisons.
+
+For maintenance changes, measure the work removed as well as the result. Cache
+tests cover repeated warm reads without durable index writes, concurrent preview
+misses with one producer, and indexed offline status lookups. These synthetic
+checks guard specific regressions; they do not replace device timing, memory,
+battery, packaging, and lifecycle validation. Avoid enabling release shrinking or
+changing supported artifact behavior solely to improve a source-size metric.
+
+### Synthetic UI captures
+
+Synthetic Compose capture scenarios live in `ui/src/commonTest`, with desktop
+capture entry points and fixture resources in `ui/src/desktopTest`. The capture
+Gradle tasks use the desktop test compilation and its runtime dependencies. Keep
+fixtures out of production source sets and update
+`tools/marketing-capture-inputs.txt` when moving capture inputs. Existing screenshot
+manifests describe the sources at capture time; moving fixtures does not qualify
+an old capture as freshly rendered.
+
 ### Isolated Android emulator tests
+
 
 The emulator helper gives each concurrent worktree a separate Android data
 directory, ADB port, and visible emulator window. It discovers the SDK through
@@ -145,6 +168,21 @@ tools/android-emulator.sh stop media-change
 
 The window opens visibly by default and remains available to scripted ADB
 checks. Add `--headless` only for unattended runs without a desktop session.
+
+Contract parsing in JVM modules must also work on Android. The synthetic
+`AppOwnedOpenApiAndroidInstrumentedTest` checks class initialization and rejects
+foreign or malformed server authorities without contacting a server. Run it
+on an isolated emulator after building and installing both test artifacts:
+
+```bash
+./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+serial="$(tools/android-emulator.sh serial files-change)"
+adb -s "$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk
+adb -s "$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
+adb -s "$serial" shell am instrument -w \
+  -e class dev.obiente.nextcloudnative.AppOwnedOpenApiAndroidInstrumentedTest \
+  dev.obiente.nextcloudnative.test/androidx.test.runner.AndroidJUnitRunner
+```
 
 For authenticated compatibility and write-path testing, use the disposable
 [real Nextcloud compatibility instance](integration/nextcloud-demo/README.md).

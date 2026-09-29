@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
+
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 
@@ -590,590 +592,6 @@ fun NextcloudNativeApp(
                         }
                     },
                 )
-            }
-        }
-    }
-}
-
-/**
- * Renders the real root shell and home components against the compile-time synthetic fixture.
- *
- * Capture builds call this directly, so they cannot load sessions, caches, endpoints, or media.
- */
-@Composable
-fun NextcloudNativeMarketingCapture(
-    scenario: MarketingCaptureScenario,
-    assets: MarketingCaptureAssets,
-    fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
-    darkTheme: Boolean = scenario.darkTheme,
-    typography: Typography = NextcloudTypography,
-) {
-    scenario.guideCaptureSourceScenarioOrNull()?.let { sourceScenario ->
-        NextcloudNativeMarketingCapture(
-            scenario = sourceScenario,
-            assets = assets,
-            fixture = fixture,
-            darkTheme = darkTheme,
-            typography = typography,
-        )
-        return
-    }
-    NextcloudNativeTheme(darkTheme = darkTheme, typography = typography) {
-        NextcloudAppBackground {
-            val desktop = scenario.presentation == NextcloudPresentation.Desktop
-            CompositionLocalProvider(
-                LocalNextcloudWorkspaceCapabilities provides NextcloudWorkspaceCapabilities(
-                    isDesktop = desktop,
-                    usesDenseControls = desktop,
-                    supportsAuxiliaryPane = desktop,
-                ),
-            ) {
-                when (scenario) {
-                    MarketingCaptureScenario.SharedControlsDesktop,
-                    MarketingCaptureScenario.SharedControlsMobile,
-                    -> MarketingSharedControlsScenario(scenario)
-                    MarketingCaptureScenario.ShellCompactDesktop,
-                    MarketingCaptureScenario.ShellAppSwitcherMobile,
-                    MarketingCaptureScenario.ShellTablet,
-                    -> MarketingShellCaptureScenario(scenario, assets)
-                    MarketingCaptureScenario.HomepageOverviewDesktopDark,
-                    MarketingCaptureScenario.HomepageOverviewDesktopLight,
-                    MarketingCaptureScenario.HomepageOverviewMobileDark,
-                    MarketingCaptureScenario.HomepageOverviewMobileLight,
-                    MarketingCaptureScenario.DesktopHome,
-                    MarketingCaptureScenario.MobileHome,
-                    -> {
-                        RootShell(
-                            presentation = scenario.presentation,
-                            selected = NextcloudDestination.Home,
-                            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
-                            onSelected = {},
-                            identity = marketingDesktopIdentity(fixture, assets.avatar),
-                        ) {
-                            MarketingHomeDashboardScenario(scenario, fixture)
-                        }
-                    }
-                    MarketingCaptureScenario.HomepageFilesDesktopDark,
-                    MarketingCaptureScenario.HomepageFilesDesktopLight,
-                    MarketingCaptureScenario.HomepageFilesMobileDark,
-                    MarketingCaptureScenario.HomepageFilesMobileLight,
-                    -> if (desktop) {
-                        RootShell(
-                            presentation = NextcloudPresentation.Desktop,
-                            selected = NextcloudDestination.Apps,
-                            desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
-                            onSelected = {},
-                            identity = marketingDesktopIdentity(fixture, assets.avatar),
-                            activeAppId = "files",
-                        ) {
-                            FilesScreen(
-                                services = assets.services,
-                                session = marketingHomepageSession,
-                                userId = marketingHomepageTalkUserId,
-                                fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
-                                path = "",
-                                layout = FileLayout.List,
-                                onLayoutChanged = {},
-                                onBack = {},
-                                onOpenFolder = {},
-                                onOpenFile = { _, _ -> },
-                                onFileAction = { _, _, _ -> },
-                                initialSelectedFilePath = "Product direction.md",
-                            )
-                        }
-                    } else {
-                        FilesScreen(
-                            services = assets.services,
-                            session = marketingHomepageSession,
-                            userId = marketingHomepageTalkUserId,
-                            fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
-                            path = "",
-                            layout = FileLayout.List,
-                            onLayoutChanged = {},
-                            onBack = {},
-                            onOpenFolder = {},
-                            onOpenFile = { _, _ -> },
-                            onFileAction = { _, _, _ -> },
-                            initialSelectedFilePath = "Product direction.md",
-                        )
-                    }
-                    MarketingCaptureScenario.HomepageConversationsDesktopDark,
-                    MarketingCaptureScenario.HomepageConversationsDesktopLight,
-                    -> MarketingDesktopConversationsScenario(fixture, assets)
-                    MarketingCaptureScenario.HomepageAppsDesktopDark,
-                    MarketingCaptureScenario.HomepageAppsDesktopLight,
-                    MarketingCaptureScenario.AdaptiveApp,
-                    MarketingCaptureScenario.TablesRowsDesktop,
-                    MarketingCaptureScenario.TablesRowFormDesktop,
-                    MarketingCaptureScenario.TablesColumnsDesktop,
-                    MarketingCaptureScenario.TablesViewsDesktop,
-                    MarketingCaptureScenario.TablesSharesDesktop,
-                    MarketingCaptureScenario.AdaptiveAppMobile,
-                    MarketingCaptureScenario.AdaptiveAppCollectionMobile,
-                    MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
-                    MarketingCaptureScenario.TablesColumnsMobile,
-                    MarketingCaptureScenario.TablesViewsMobile,
-                    MarketingCaptureScenario.TablesSharesMobile,
-                    -> MarketingAdaptiveAppScenario(scenario)
-                    MarketingCaptureScenario.InlineRecordEditDesktop,
-                    MarketingCaptureScenario.InlineRecordEditMobile,
-                    -> MarketingInlineRecordEditShell(scenario, fixture, assets)
-                    MarketingCaptureScenario.AppsWorkspaceDesktopDark,
-                    MarketingCaptureScenario.AppsWorkspaceDesktopLight,
-                    -> MarketingAppsWorkspaceScenario(fixture, assets)
-                    MarketingCaptureScenario.CalendarWorkspaceDesktopDark,
-                    MarketingCaptureScenario.CalendarWorkspaceDesktopLight,
-                    MarketingCaptureScenario.CalendarWorkspaceMobileDark,
-                    MarketingCaptureScenario.CalendarWorkspaceMobileLight,
-                    MarketingCaptureScenario.CalendarMonthMobile,
-                    MarketingCaptureScenario.CalendarWeekMobile,
-                    MarketingCaptureScenario.CalendarWeekDesktop,
-                    MarketingCaptureScenario.CalendarEventEditorMobile,
-                    MarketingCaptureScenario.CalendarEventEditorDesktop,
-                    -> MarketingCalendarWorkspaceScenario(scenario, assets)
-                    MarketingCaptureScenario.MailWorkspaceDesktop,
-                    MarketingCaptureScenario.MailWorkspaceMobile,
-                    MarketingCaptureScenario.MailMessageBodyMobile,
-                    MarketingCaptureScenario.MailWorkspaceLoadingMobile,
-                    MarketingCaptureScenario.MailWorkspaceEmptyMobile,
-                    MarketingCaptureScenario.MailWorkspaceErrorDesktop,
-                    -> MarketingMailWorkspaceScenario(scenario)
-                    MarketingCaptureScenario.PhotoTimelineRevalidationErrorMobile,
-                    MarketingCaptureScenario.PhotoTimelineReturnToNewestErrorMobile,
-                    MarketingCaptureScenario.PhotoTimelineRawRetryMobile,
-                    -> MarketingPhotoTimelineFailureScenario(scenario)
-                    MarketingCaptureScenario.PhotoFolderBrowserMobile,
-                    MarketingCaptureScenario.PhotoFolderBrowserDesktop,
-                    MarketingCaptureScenario.HomepagePhotosDesktopDark,
-                    MarketingCaptureScenario.HomepagePhotosDesktopLight,
-                    -> MarketingPhotoFolderScenario(scenario, assets)
-                    MarketingCaptureScenario.ObsidianSync -> MarketingObsidianSyncScenario()
-                    MarketingCaptureScenario.MediaBackup -> MarketingMediaBackupScenario()
-                    MarketingCaptureScenario.FileSyncRulesMobile -> MarketingFileSyncRulesScenario()
-                    MarketingCaptureScenario.FileSyncStatusMobile -> MarketingFileSyncStatusMobileScenario()
-                    MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
-                    MarketingCaptureScenario.ActivityWorkspaceDesktop -> MarketingActivityWorkspaceDesktopScenario()
-                    MarketingCaptureScenario.ActivityWorkspaceMobileDark,
-                    MarketingCaptureScenario.ActivityWorkspaceMobileLight,
-                    -> MarketingActivityWorkspaceMobileScenario()
-                    MarketingCaptureScenario.BudgetDashboardDesktopDark,
-                    MarketingCaptureScenario.BudgetDashboardDesktopLight,
-                    MarketingCaptureScenario.BudgetDashboardMobileDark,
-                    MarketingCaptureScenario.BudgetDashboardMobileLight,
-                    -> MarketingBudgetDashboardScenario(scenario)
-                    MarketingCaptureScenario.BudgetTransactionsDesktop,
-                    MarketingCaptureScenario.BudgetTransactionsMobile,
-                    MarketingCaptureScenario.BudgetAccountsDesktop,
-                    MarketingCaptureScenario.BudgetAccountsMobile,
-                    MarketingCaptureScenario.BudgetCategoriesDesktop,
-                    MarketingCaptureScenario.BudgetCategoriesMobile,
-                    MarketingCaptureScenario.BudgetPlanDesktop,
-                    MarketingCaptureScenario.BudgetPlanMobile,
-                    -> MarketingBudgetDynamicWorkspaceScenario(scenario)
-                    MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
-                    MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
-                        MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)
-                    MarketingCaptureScenario.GuideLinuxFolderSyncRules ->
-                        MarketingFileSyncSetupDesktopScenario(
-                            initialStep = FileSyncSetupStep.Review,
-                            initialAdvancedSettingsVisible = true,
-                        )
-                    MarketingCaptureScenario.GuideAndroidFolderSyncLocations ->
-                        MarketingFileSyncRulesScenario(initialStep = FileSyncSetupStep.Locations)
-                    MarketingCaptureScenario.GuideAndroidFolderSyncRules ->
-                        MarketingFileSyncRulesScenario(
-                            initialStep = FileSyncSetupStep.Review,
-                            initialAdvancedSettingsVisible = true,
-                        )
-                    MarketingCaptureScenario.GuideAndroidCalendarEdit ->
-                        MarketingCalendarRecurringEventDetailCapture()
-                    MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers ->
-                        MarketingOfflineFileTransferScenario()
-                    MarketingCaptureScenario.GuideAndroidOfflineFilesStorage ->
-                        MarketingVirtualFileStorageOverviewMobileScenario()
-                    MarketingCaptureScenario.GuideWindowsCloudFilesSettings ->
-                        MarketingVirtualFileStorageDesktopScenario(scenario)
-                    MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary ->
-                        MarketingMediaTransferScenario(scenario)
-                    MarketingCaptureScenario.FileSyncSelectionDesktop,
-                    MarketingCaptureScenario.FileSyncSelectionMobile,
-                    ->
-                        MarketingFileSyncSelectionScenario(assets.services)
-                    MarketingCaptureScenario.VirtualFileStorageMobile -> MarketingVirtualFileStorageMobileScenario()
-                    MarketingCaptureScenario.VirtualFileStorageDesktop,
-                    MarketingCaptureScenario.WindowsCloudFilesStorageDesktop,
-                    MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop,
-                    -> MarketingVirtualFileStorageDesktopScenario(scenario)
-                    MarketingCaptureScenario.DesktopStartupSettings ->
-                        MarketingDesktopStartupSettingsScenario(fixture, assets)
-                    MarketingCaptureScenario.RawPreviewLoadingMobile,
-                    MarketingCaptureScenario.RawPreviewErrorMobile,
-                    MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
-                    MarketingCaptureScenario.RawPreviewHighDetailDesktop,
-                    MarketingCaptureScenario.NativeTiffPreviewMobile,
-                    -> error("Native media captures require the isolated desktop fixture renderer.")
-                    MarketingCaptureScenario.LivePhotoMotionFailureMobile ->
-                        MarketingLivePhotoMotionFailureScenario(assets.mediaPreview)
-                    MarketingCaptureScenario.FileShareUserMobile,
-                    MarketingCaptureScenario.FileShareGroupDesktop,
-                    MarketingCaptureScenario.FileShareLoadingMobile,
-                    MarketingCaptureScenario.FileShareErrorMobile,
-                    -> MarketingFileShareScenario(scenario)
-                    MarketingCaptureScenario.TransferMobilePending,
-                    MarketingCaptureScenario.TransferMobileFailed,
-                    MarketingCaptureScenario.TransferDesktopActive,
-                    MarketingCaptureScenario.TransferDesktopCompleted,
-                    -> MarketingMediaTransferScenario(scenario)
-                    MarketingCaptureScenario.MusicLibraryAlbumTracksMobile,
-                    MarketingCaptureScenario.MusicLibraryPlaybackErrorDesktop,
-                    -> MarketingMusicWorkspaceScenario(scenario, assets)
-                    MarketingCaptureScenario.DeckBoardDesktop,
-                    MarketingCaptureScenario.DeckBoardMobile,
-                    MarketingCaptureScenario.HomepagePlanningDesktopDark,
-                    MarketingCaptureScenario.HomepagePlanningDesktopLight,
-                    -> MarketingDeckBoardScenario(scenario)
-                    MarketingCaptureScenario.GuideAndroidGettingStartedHome,
-                    MarketingCaptureScenario.GuideAndroidGettingStartedFiles,
-                    MarketingCaptureScenario.GuideAndroidGettingStartedCalendar,
-                    MarketingCaptureScenario.GuideDesktopGettingStartedHome,
-                    MarketingCaptureScenario.GuideDesktopGettingStartedApps,
-                    MarketingCaptureScenario.GuideDesktopGettingStartedSettings,
-                    MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse,
-                    MarketingCaptureScenario.GuideAndroidFolderSyncStatus,
-                    MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace,
-                    MarketingCaptureScenario.GuideWindowsCloudFilesStorage,
-                    MarketingCaptureScenario.GuideWindowsCloudFilesRecovery,
-                    MarketingCaptureScenario.GuideAndroidPhotoBackupFolders,
-                    MarketingCaptureScenario.GuideAndroidPhotoBackupQueue,
-                    MarketingCaptureScenario.GuideAndroidCalendarMonth,
-                    MarketingCaptureScenario.GuideAndroidCalendarAgenda,
-                    MarketingCaptureScenario.GuideDesktopCalendarMonth,
-                    MarketingCaptureScenario.GuideDesktopCalendarSources,
-                    MarketingCaptureScenario.GuideDesktopCalendarEdit,
-                    MarketingCaptureScenario.GuideDesktopSwitchAppsCatalog,
-                    MarketingCaptureScenario.GuideDesktopSwitchAppsSidebar,
-                    MarketingCaptureScenario.GuideDesktopSwitchAppsNested,
-                    -> error("Guide capture aliases must resolve before rendering.")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MarketingAppsWorkspaceScenario(
-    fixture: MarketingDemoFixture,
-    assets: MarketingCaptureAssets,
-) {
-    RootShell(
-        presentation = NextcloudPresentation.Desktop,
-        selected = NextcloudDestination.Apps,
-        onSelected = {},
-        identity = marketingDesktopIdentity(fixture, assets.avatar),
-        onOpenApp = {},
-    ) {
-        NativeAppsWorkspace(
-            serverInfo = fixture.serverInfo(),
-            error = null,
-            lastOpenedAppId = "deck",
-            onRetry = {},
-            onSettings = {},
-            onSearch = {},
-            onOpenApp = {},
-        )
-    }
-}
-
-@Composable
-private fun MarketingDesktopConversationsScenario(
-    fixture: MarketingDemoFixture,
-    assets: MarketingCaptureAssets,
-) {
-    RootShell(
-        presentation = NextcloudPresentation.Desktop,
-        selected = NextcloudDestination.Apps,
-        onSelected = {},
-        identity = marketingDesktopIdentity(fixture, assets.avatar),
-        activeAppId = "spreed",
-        desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
-    ) {
-        NextcloudDesktopMasterDetail(
-            masterWidthDp = 340,
-            master = {
-                TalkScreen(
-                    services = assets.services,
-                    session = marketingHomepageSession,
-                    onBack = {},
-                    onOpenRoom = {},
-                )
-            },
-            detail = {
-                ChatScreen(
-                    services = assets.services,
-                    session = marketingHomepageSession,
-                    userId = marketingHomepageTalkUserId,
-                    room = marketingHomepageTalkRoom,
-                    onBack = {},
-                    onOpenAttachment = {},
-                )
-            },
-        )
-    }
-}
-
-@Composable
-private fun MarketingDesktopStartupSettingsScenario(
-    fixture: MarketingDemoFixture,
-    assets: MarketingCaptureAssets,
-) {
-    RootShell(
-        presentation = NextcloudPresentation.Desktop,
-        selected = NextcloudDestination.Settings,
-        onSelected = {},
-        identity = marketingDesktopIdentity(fixture, assets.avatar),
-    ) { DesktopSettingsWorkspace(
-            summary = SettingsWorkspaceSummary(
-                displayName = fixture.displayName,
-                cloudName = fixture.cloudName,
-                serverUrl = "https://${fixture.cloudName}",
-                serverVersion = "31.0.8",
-                installedApps = fixture.apps.count { it.id != "dashboard" },
-                syncLabel = "4 active syncs",
-                storageLabel = "34.2 GB of 100 GB used",
-            ),
-            visibleSections = visibleSettingsSections(true, false, true),
-            selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
-        ) { section ->
-            when (section) {
-                SettingsWorkspaceSection.DesktopApp -> {
-                    SettingsDesktopAppSectionContent(
-                        preferences = settingsDesktopPreferences(true, true),
-                        onPreferenceChanged = { _, _ -> },
-                    )
-                }
-                else -> SettingsActionCard(
-                    title = section.title,
-                    description = section.description,
-                    icon = section.icon,
-                    onClick = {},
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LoginScreen(
-    services: NextcloudPlatformServices,
-    onLoggedIn: suspend (NextcloudSession) -> Unit,
-) {
-    var serverUrl by remember { mutableStateOf("") }
-    var connecting by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var certificateReview by remember { mutableStateOf<ServerCertificateReview?>(null) }
-    var trustedCertificate by remember { mutableStateOf<TrustedServerCertificate?>(null) }
-    var trustingCertificate by remember { mutableStateOf(false) }
-    var confirmPlainHttp by remember { mutableStateOf(false) }
-    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
-    val scope = rememberCoroutineScope()
-    fun startLogin(
-        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
-        certificateJustApproved: String? = null,
-    ) {
-        connecting = true
-        error = null
-        status = "Contacting your server..."
-        scope.launch {
-            try {
-                val challenge = services.beginLogin(serverUrl, transportSecurity)
-                services.openLoginUrl(challenge.loginUrl)
-                status = "Finish signing in in your browser, then return here."
-                val started = TimeSource.Monotonic.markNow()
-                val authenticated = try {
-                    pollLoginUntilApproved(
-                        poll = { services.pollLogin(challenge) },
-                        waitBeforeNextPoll = { delayMillis, awaitNetwork ->
-                            if (awaitNetwork) services.awaitLoginNetworkAvailability()
-                            delay(delayMillis)
-                        },
-                        hasTimedOut = { started.elapsedNow() >= 5.minutes },
-                        onStatus = { status = it },
-                    )
-                } finally {
-                    services.finishLoginPolling(challenge)
-                }
-                onLoggedIn(authenticated)
-                supportDrafts.clearDrafts()
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (failure: Throwable) {
-                val reviewResult = if (certificateJustApproved == null) {
-                    runCatching { services.inspectServerCertificateFailure(serverUrl, failure) }
-                } else {
-                    Result.success(null)
-                }
-                val review = reviewResult.getOrNull()
-                if (review != null) {
-                    certificateReview = review
-                    error = null
-                } else {
-                    error = reviewResult.exceptionOrNull()?.message
-                        ?: failure.message
-                        ?: if (certificateJustApproved != null) {
-                            "The server still rejected the approved certificate. Review the server certificate and try again."
-                        } else {
-                            "Could not connect to this server."
-                        }
-                }
-                connecting = false
-                status = null
-            }
-        }
-    }
-
-    if (confirmPlainHttp) {
-        AlertDialog(
-            onDismissRequest = { confirmPlainHttp = false },
-            title = { Text("Connect without encryption?") },
-            text = {
-                Text(
-                    "This server uses plain HTTP. Your sign-in token, app password, files, messages, " +
-                        "and all other Nextcloud data can be read or changed by anyone able to observe " +
-                        "the network path. Continue only for a server you reach through a trusted local " +
-                        "network or a VPN such as WireGuard. HTTPS is strongly recommended.",
-                )
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmPlainHttp = false }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmPlainHttp = false
-                        startLogin(LoginTransportSecurity.PlainHttp)
-                    },
-                ) { Text("Connect without encryption") }
-            },
-        )
-    }
-
-    certificateReview?.let { review ->
-        ServerCertificateReviewDialog(
-            review = review,
-            checking = trustingCertificate,
-            error = null,
-            confirmLabel = "Trust and connect",
-            onDismiss = { certificateReview = null },
-            onConfirm = {
-                trustingCertificate = true
-                scope.launch {
-                    runCatching { services.trustServerCertificate(review) }
-                        .onSuccess {
-                            trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
-                            certificateReview = null
-                            trustingCertificate = false
-                            startLogin(certificateJustApproved = review.sha256Fingerprint)
-                        }
-                        .onFailure { failure ->
-                            if (failure is CancellationException) throw failure
-                            error = failure.message ?: "The certificate could not be trusted."
-                            certificateReview = null
-                            trustingCertificate = false
-                        }
-                }
-            },
-        )
-    }
-
-    if (showDiagnostics) {
-        AlertDialog(
-            onDismissRequest = { showDiagnostics = false },
-            title = { Text("Login diagnostics") },
-            text = {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 560.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    SupportDiagnosticsSettingsCard(services, supportDrafts)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showDiagnostics = false }) { Text("Close") }
-            },
-        )
-    }
-
-    Box(modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 460.dp).padding(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-        ) {
-            Surface(
-                color = NextcloudTheme.colors.appIconContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Medium),
-            ) {
-                dev.obiente.nextcloudnative.app.design.NativeBrandMark(
-                    modifier = Modifier.size(64.dp),
-                )
-            }
-            Text("nati.ve", style = MaterialTheme.typography.headlineLarge)
-            Text(
-                "Your cloud, natively.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = { value ->
-                    serverUrl = value
-                    trustedCertificate = services.trustedServerCertificate(value)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Server address") },
-                placeholder = { Text("https://cloud.example.com") },
-                singleLine = true,
-                enabled = !connecting,
-            )
-            trustedCertificate?.let { certificate ->
-                TrustedCertificateSettings(
-                    certificate = certificate,
-                    error = null,
-                    onRemove = {
-                        if (services.removeTrustedServerCertificate(serverUrl)) {
-                            trustedCertificate = null
-                        } else {
-                            error = "The certificate trust could not be removed."
-                        }
-                    },
-                )
-            }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Button(
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                enabled = serverUrl.isNotBlank() && !connecting,
-                onClick = {
-                    if (serverAddressUsesPlainHttp(serverUrl)) {
-                        confirmPlainHttp = true
-                    } else {
-                        startLogin()
-                    }
-                },
-            ) {
-                if (connecting) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp))
-                }
-                Text(if (connecting) "Waiting for approval" else "Connect")
-            }
-            TextButton(
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                onClick = { showDiagnostics = true },
-            ) {
-                Text("Export login diagnostics")
             }
         }
     }
@@ -2247,21 +1665,15 @@ private fun AuthenticatedApp(
                 session = session,
                 onBack = ::navigateBack,
                 onOpenResult = { selection ->
-                    val fileParent = selection.nativeFileParentPathOrNull()
-                    if (fileParent != null) {
-                        screen = Screen.Files(fileParent)
-                    } else {
-                        val app = serverInfo?.apps?.firstOrNull { candidate ->
-                            candidate.id == selection.provider.appId ||
-                                selection.provider.id.startsWith(candidate.id)
-                        }
-                        if (app != null) {
-                            openApp(app, returnDestination)
-                        } else {
-                            selection.entry.resourceUrl?.let { resource ->
-                                launchNextcloudLinkNavigation(resource, NextcloudLinkSource.InApp)
-                            }
-                        }
+                    when (val target = selection.openTarget(
+                        session.serverUrl, serverInfo?.apps.orEmpty().mapTo(linkedSetOf()) { it.id },
+                    )) {
+                        is UnifiedSearchOpenTarget.Link ->
+                            launchNextcloudLinkNavigation(target.url, NextcloudLinkSource.InApp)
+                        is UnifiedSearchOpenTarget.FilesPath -> screen = Screen.Files(target.path)
+                        is UnifiedSearchOpenTarget.App -> serverInfo?.apps
+                            ?.firstOrNull { it.id == target.appId }?.let { openApp(it, returnDestination) }
+                        null -> Unit
                     }
                 },
             )
@@ -2949,13 +2361,6 @@ private fun AppInfoScreen(
                 Spacer(modifier = Modifier.weight(1f))
             }
         } else {
-            if (resolved.versionStatus == DynamicContractVersionStatus.LastKnownReadOnly) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Checking the current app version" },
-                )
-            }
             DynamicDiscoveredAppScreen(
                 services = services,
                 session = session,
@@ -3012,7 +2417,7 @@ private fun DynamicDiscoveredAppScreen(
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
             .forDynamicContractVersion(discovery.versionStatus)
-            .withNativeBudgetDashboard(descriptor.actions)
+            .withNativeBudgetDashboard(descriptor.actions).withNativePantryPresentation()
     }
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
@@ -3229,7 +2634,7 @@ private fun DynamicDiscoveredAppScreen(
                         ?.body
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { bytes ->
-                            decodePlatformImageSampled(
+                            decodePlatformImageSampledInBackground(
                                 bytes,
                                 MAX_DYNAMIC_ARTWORK_DIMENSION,
                             )?.image
@@ -3629,11 +3034,11 @@ private fun DynamicDiscoveredAppScreen(
         if (staleSnapshot == null) showLoading()
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
-            val outcome = loadDynamicRecordsWithOutcome(
+            val outcome = loadDynamicTableDetailWithOutcome(
                 services = services,
                 session = session,
                 descriptor = descriptor,
-                actionId = view.sourceActionId,
+                view = view, schema = schema,
                 values = values,
                 runtimeContext = values,
                 cachePolicy = dynamicReadCachePolicy,
@@ -3654,7 +3059,7 @@ private fun DynamicDiscoveredAppScreen(
                 staleRecords = staleSnapshot?.records,
                 partialFailureMessage = displayFailure,
             )
-            val updatedRecords = recordsByResourceId + (view.resourceId to presentedRecords)
+            val updatedRecords = recordsByResourceId + outcome.relatedRecords + (view.resourceId to presentedRecords)
             val nextPagination = if (displayFailure == null) {
                 paginationSpec?.toDynamicPaginationState(view.id, presentedRecords)
             } else {
@@ -3662,7 +3067,7 @@ private fun DynamicDiscoveredAppScreen(
             }
             recordsByResourceId = updatedRecords
             viewState = NativeScreenState.Ready(presentedRecords)
-            dynamicRefreshError = displayFailure
+            dynamicRefreshError = displayFailure ?: outcome.relatedFailureMessage
             mutationReconciliationGeneration += 1
             records.firstOrNull()
                 ?.takeIf { displayFailure == null }
@@ -3783,7 +3188,7 @@ private fun DynamicDiscoveredAppScreen(
                 services.executeNextcloudApi(session, previewRequest.request)
                     .acceptedDynamicRecordImageBytes()
                     ?.let { bytes ->
-                        decodePlatformImageSampled(
+                        decodePlatformImageSampledInBackground(
                             bytes,
                             MAX_DYNAMIC_ARTWORK_DIMENSION,
                         )?.image
@@ -3964,7 +3369,7 @@ private fun DynamicDiscoveredAppScreen(
             ): Boolean {
                 val invitationAccept = nativeChoresInvitationAcceptPostcondition(key, values)
                 if (invitationAccept != null) {
-                    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                    if (!schema.app.isSupportedChoresVersion()) return false
                     if (schema.action(invitationAccept.actionId)?.takeIf { action ->
                         isNativeChoresInvitationAcceptAction(schema, action)
                     } == null) return false
@@ -4020,7 +3425,7 @@ private fun DynamicDiscoveredAppScreen(
                             read.binding.path.substringBefore('?').trimEnd('/') ==
                                 create.binding.path.substringBefore('?').trimEnd('/')
                         NativeCreateMutationMatchKind.NestedRecord ->
-                            schema.app.id == "chores" && schema.app.version == "0.1.0" &&
+                            schema.app.isSupportedChoresVersion() &&
                                 create.binding.path ==
                                 "/apps/chores/api/v1.0/team/{teamId}/invites" &&
                                 create.binding.bodyFieldNames == listOf("userId") &&
@@ -4046,7 +3451,7 @@ private fun DynamicDiscoveredAppScreen(
                         false
                     }
                 }
-                if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                if (!schema.app.isSupportedChoresVersion()) return false
                 val postcondition = nativeChoresCompletionPostcondition(key, values) ?: return false
                 val commandActionId = key.actionId.removePrefix(
                     "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:",
@@ -4511,10 +3916,6 @@ private fun DynamicDiscoveredAppScreen(
         }
     }
     val choresWorkspaceActive = nativeChoresWorkspaceKind(schema, selectedView) != null
-    // Every verified read destination belongs in the adaptive, scrollable navigator. Keeping
-    // technical or trash collections in the small header popup makes them unreachable on compact
-    // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
-    // automatic child; it must not hide an explicitly verified user destination.
     val visibleRootResourceIds = remember(descriptor.app.id, navigationDestinations, schema.actions) {
         nativeBudgetVisibleRootResourceIds(
             descriptor.app.id,
@@ -4523,9 +3924,9 @@ private fun DynamicDiscoveredAppScreen(
                 .mapTo(hashSetOf(), ActionSpec::resourceId),
         )
     }
-    val primaryNavigationDestinations = navigationDestinations.filter { (destination, _) ->
+    val primaryNavigationDestinations = nativeMailReadingDestinations(descriptor, navigationDestinations.filter { (destination, _) ->
         destination.resourceId in visibleRootResourceIds
-    }
+    })
     val secondaryNavigationDestinations =
         emptyList<Pair<DynamicNavigationDestination, ViewSpec>>()
     val selectedCollectionState = remember(schema, selectedView.sourceActionId) {
@@ -4807,19 +4208,22 @@ private fun DynamicDiscoveredAppScreen(
         return true
     }
 
-    fun selectDynamicRecord(record: NativeRecord) {
-        if (inlineEditorNavigation?.intercept({ selectDynamicRecord(record) }) == true) return
+    fun selectDynamicRecord(inputRecord: NativeRecord) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicRecord(inputRecord) }) == true) return
         rememberCurrentLocation()
-        val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
         val inheritedParameters = inheritDynamicParentParameters(
             selectedPathParameterValues = selectedPathParameterValues,
             runtimeValues = runtimeValues,
         )
+        val selection = dynamicThreadMessageReadSelection(descriptor, selectedView.sourceActionId, inputRecord, inheritedParameters)
+            ?: DynamicMessageReadSelection(inputRecord, inputRecord.effectiveNativeResourceId(selectedView.resourceId), inheritedParameters)
+        val record = selection.record
+        val selectedParentResourceId = selection.resourceId
         val nextContext = DynamicResourceRecordContext(
             resourceId = selectedParentResourceId,
             recordId = record.id,
             fieldValues = record.values,
-            parameterValues = inheritedParameters,
+            parameterValues = selection.parameters,
             actionSafeIdentity = record.actionSafeIdentity,
             actionBindingProvenanceValid = record.actionBindingProvenanceValid,
             currentLayoutId = selectedView.id,
@@ -4866,7 +4270,7 @@ private fun DynamicDiscoveredAppScreen(
             ?: preferredCollectionChild?.pathParameterValues
             ?: directChild?.pathParameterValues
             ?: detailResolution?.second
-        val fallbackTargetParameters = inheritedParameters +
+        val fallbackTargetParameters = selection.parameters +
             nextPlan.contextualChildDestinations
                 .filter { destination -> destination.actionId in compositeActionIds }
                 .flatMap { destination -> destination.pathParameterValues.entries }
@@ -4880,7 +4284,7 @@ private fun DynamicDiscoveredAppScreen(
         }
         contextualMenuOpen = showDestinationMenu
         selectedPathParameterValues = if (showDestinationMenu) {
-            inheritedParameters
+            selection.parameters
         } else {
             resolveDynamicRecordSelectionParameters(
                 currentViewId = selectedViewId.orEmpty(),
@@ -5199,7 +4603,7 @@ private fun DynamicDiscoveredAppScreen(
                                 duplicate = duplicateLabel,
                             ),
                         accessibilityId = destination.actionId,
-                        supportingText = if (budgetDashboard) "Net worth and finance overview" else budgetSemantics?.supportingText
+                        supportingText = nativeMailReadingSupportingText(descriptor, destination) ?: if (budgetDashboard) "Net worth and finance overview" else budgetSemantics?.supportingText
                             ?: view.dynamicDestinationSupportingText(
                                 destinationLabel = baseLabel,
                                 resourceLabel = resourceLabel,
@@ -5210,7 +4614,7 @@ private fun DynamicDiscoveredAppScreen(
                 }
                 .sortedWith(
                     compareBy<Pair<DynamicNavigationDestination, NextcloudCollectionDestination>> {
-                        nativeBudgetDestinationSemantics(
+                        nativeMailReadingOrder(descriptor, it.first) ?: nativeBudgetDestinationSemantics(
                             descriptor.app.id,
                             it.first.resourceId,
                         )?.order ?: if (it.second.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID) 0 else Int.MAX_VALUE
@@ -5250,11 +4654,17 @@ private fun DynamicDiscoveredAppScreen(
             shouldShowDynamicContextDestinationMenu(
                 collectionDestinationEntries.map { (destination, _) -> destination },
             )
+        val selectedContextLabel = selectedRecord?.dynamicContextLabel(
+            schema.resource(selectedRecordResourceId.orEmpty())?.name,
+        )
         val ancestorWorkspaceLabel = navigationHistory.asReversed()
-            .firstNotNullOfOrNull { snapshot -> snapshot.record?.dynamicContextLabel() }
+            .firstNotNullOfOrNull { snapshot ->
+                snapshot.record?.dynamicContextLabel(
+                    schema.resource(snapshot.recordResourceId ?: snapshot.resourceId)?.name,
+                )
+            }
         val activeSectionLabel = selectedView.dynamicNavigationLabel(descriptor.app.name)
-        val nestedObjectTitle = selectedRecord
-            ?.dynamicContextLabel()
+        val nestedObjectTitle = selectedContextLabel
             ?.takeIf {
                 !showContextDestinationMenu &&
                     ancestorWorkspaceLabel != null &&
@@ -5262,7 +4672,7 @@ private fun DynamicDiscoveredAppScreen(
             }
         val activeContentTitle = when {
             choresWorkspaceActive -> descriptor.app.name
-            showContextDestinationMenu -> selectedRecord?.dynamicContextLabel().orEmpty()
+            showContextDestinationMenu -> selectedContextLabel.orEmpty()
             nestedObjectTitle != null -> nestedObjectTitle
             else -> activeSectionLabel
         }.ifBlank { descriptor.app.name }
@@ -5275,7 +4685,7 @@ private fun DynamicDiscoveredAppScreen(
                 label.equals(activeContentTitle, ignoreCase = true)
             }
         } else {
-            selectedRecord?.dynamicContextLabel()
+            selectedContextLabel
                 ?.takeUnless { label -> label.equals(activeContentTitle, ignoreCase = true) }
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
@@ -5292,7 +4702,7 @@ private fun DynamicDiscoveredAppScreen(
                 NextcloudCollectionNavigationMode.Hidden
             },
             workspaceLabel = ancestorWorkspaceLabel
-                ?: selectedRecord?.dynamicContextLabel()
+                ?: selectedContextLabel
                 ?.takeIf(String::isNotBlank)
                 ?: descriptor.app.name,
             contentTitle = activeContentTitle,
@@ -5332,7 +4742,7 @@ private fun DynamicDiscoveredAppScreen(
         ) {
             if (showContextDestinationMenu) {
                 DynamicContextDestinationMenu(
-                    recordLabel = requireNotNull(selectedRecord).dynamicContextLabel(),
+                    recordLabel = selectedContextLabel.orEmpty(),
                     destinations = collectionDestinationEntries,
                     schema = schema,
                     onDestinationSelected = { destination, view ->
@@ -5354,14 +4764,13 @@ private fun DynamicDiscoveredAppScreen(
                     modifier = Modifier.padding(NextcloudSpacing.Medium),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                 ) {
-                    Text("No verified native API", style = MaterialTheme.typography.titleSmall)
+                    Text("App unavailable", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        discovery.diagnostics.lastOrNull()
-                            ?: "No usable API contract or verified static read routes were found for this app.",
+                        "This app's content could not be loaded. Try again.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     TextButton(onClick = onRetryDiscovery) {
-                        Text("Retry discovery")
+                        Text("Try again")
                     }
                 }
             }
@@ -6164,163 +5573,6 @@ private fun ContractInfoSection(label: String, value: String) {
 
 private fun List<String>.safeContractList(): String = ifEmpty { listOf("none") }.joinToString(", ")
 
-internal data class DynamicNavigationSnapshot(
-    val viewId: String,
-    val resourceId: String,
-    val record: NativeRecord?,
-    val recordResourceId: String?,
-    val pathParameterValues: Map<String, String>,
-)
-
-@Serializable
-internal data class SavedDynamicNavigationSnapshot(
-    val viewId: String,
-    val resourceId: String,
-    val recordId: String? = null,
-    val recordResourceId: String? = null,
-    val pathParameterValues: Map<String, String> = emptyMap(),
-)
-
-@Serializable
-internal data class DynamicAppNavigationState(
-    val selectedViewId: String? = null,
-    val selectedRecord: NativeRecord? = null,
-    val selectedRecordResourceId: String? = null,
-    val pathParameterValues: Map<String, String> = emptyMap(),
-    val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
-)
-
-internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
-    selectedViewId != null || selectedRecord != null || history.isNotEmpty()
-
-internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
-    val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
-    val savedRecordId = selectedRecord?.id?.takeIf { value ->
-        value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
-    }
-    return SavedDynamicAppNavigationState(
-        selectedViewId = selectedViewId?.takeIf { value ->
-            value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
-        },
-        selectedRecordId = savedRecordId,
-        selectedRecordResourceId = selectedRecordResourceId?.takeIf { value ->
-            savedRecordId != null &&
-                value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
-        },
-        pathParameterValues = savedParameters,
-        history = normalizeSavedDynamicNavigationHistory(history),
-    )
-}
-
-internal fun SavedDynamicAppNavigationState.toDynamicAppNavigationState(): DynamicAppNavigationState {
-    val restoredRecordId = selectedRecordId?.takeIf { value ->
-        value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS)
-    }
-    return DynamicAppNavigationState(
-        selectedViewId = selectedViewId?.takeIf { value ->
-            value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
-        },
-        selectedRecord = restoredRecordId?.let { recordId ->
-            NativeRecord(id = recordId, values = emptyMap(), actionSafeIdentity = false)
-        },
-        selectedRecordResourceId = selectedRecordResourceId?.takeIf { value ->
-            restoredRecordId != null &&
-                value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)
-        },
-        pathParameterValues = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty(),
-        history = normalizeSavedDynamicNavigationHistory(history),
-    )
-}
-
-private fun normalizeSavedDynamicNavigationHistory(
-    history: List<SavedDynamicNavigationSnapshot>,
-): List<SavedDynamicNavigationSnapshot> =
-    saveDynamicNavigationHistory(restoreDynamicNavigationHistory(history))
-
-internal fun saveDynamicNavigationHistory(
-    history: List<DynamicNavigationSnapshot>,
-): List<SavedDynamicNavigationSnapshot> = history
-    .takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
-    .mapNotNull(DynamicNavigationSnapshot::toSavedDynamicNavigationSnapshot)
-
-internal fun restoreDynamicNavigationHistory(
-    history: List<SavedDynamicNavigationSnapshot>,
-): List<DynamicNavigationSnapshot> = history
-    .takeLast(MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY)
-    .mapNotNull(SavedDynamicNavigationSnapshot::toDynamicNavigationSnapshot)
-
-private fun DynamicNavigationSnapshot.toSavedDynamicNavigationSnapshot(): SavedDynamicNavigationSnapshot? {
-    if (!viewId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
-    if (!resourceId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
-    val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters() ?: return null
-    val savedRecordId = record?.id?.let { value ->
-        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS) }
-            ?: return null
-    }
-    val savedRecordResourceId = recordResourceId?.let { value ->
-        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS) }
-            ?: return null
-    }?.takeIf { savedRecordId != null }
-    return SavedDynamicNavigationSnapshot(
-        viewId = viewId,
-        resourceId = resourceId,
-        recordId = savedRecordId,
-        recordResourceId = savedRecordResourceId,
-        pathParameterValues = savedParameters,
-    )
-}
-
-private fun SavedDynamicNavigationSnapshot.toDynamicNavigationSnapshot(): DynamicNavigationSnapshot? {
-    if (!viewId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
-    if (!resourceId.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS)) return null
-    val restoredParameters = pathParameterValues.toSavedDynamicNavigationParameters() ?: return null
-    val restoredRecordId = recordId?.let { value ->
-        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_RECORD_ID_CHARS) }
-            ?: return null
-    }
-    val restoredRecordResourceId = recordResourceId?.let { value ->
-        value.takeIf { it.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS) }
-            ?: return null
-    }?.takeIf { restoredRecordId != null }
-    return DynamicNavigationSnapshot(
-        viewId = viewId,
-        resourceId = resourceId,
-        record = restoredRecordId?.let { recordId ->
-            NativeRecord(
-                id = recordId,
-                values = emptyMap(),
-                // A persisted identity can reload a detail route, but only the authoritative
-                // read response may authorize a mutation after process restoration.
-                actionSafeIdentity = false,
-            )
-        },
-        recordResourceId = restoredRecordResourceId,
-        pathParameterValues = restoredParameters,
-    )
-}
-
-private fun Map<String, String>.toSavedDynamicNavigationParameters(): Map<String, String>? {
-    if (size > MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETERS) return null
-    if (any { (key, value) ->
-            !key.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_NAME_CHARS) ||
-                !value.isSafeSavedDynamicNavigationValue(MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_VALUE_CHARS)
-        }
-    ) {
-        return null
-    }
-    return toMap()
-}
-
-internal fun String.isSafeSavedDynamicNavigationValue(maximumChars: Int): Boolean =
-    isNotBlank() && length <= maximumChars && none(Char::isISOControl)
-
-internal const val MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY = 16
-private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETERS = 8
-private const val MAX_SAVED_DYNAMIC_NAVIGATION_ID_CHARS = 128
-private const val MAX_SAVED_DYNAMIC_RECORD_ID_CHARS = 256
-private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_NAME_CHARS = 64
-private const val MAX_SAVED_DYNAMIC_NAVIGATION_PARAMETER_VALUE_CHARS = 256
-
 internal data class DynamicCollectionDestinationSelectionPlan(
     val pathParameterValues: Map<String, String>,
     val clearHierarchyContext: Boolean,
@@ -6769,13 +6021,6 @@ private fun ViewSpec.dynamicDestinationSupportingText(
 
 private fun NativeRecord.dynamicContextNavigationToken(resourceId: String): String =
     "$resourceId\u0000$id"
-
-private fun NativeRecord.dynamicContextLabel(): String =
-    listOf("name", "title", "displayName", "subject", "what", "merchant", "label", "description")
-        .firstNotNullOfOrNull { key ->
-            (displayValues[key] ?: values[key])?.takeIf(String::isNotBlank)
-        }
-        ?: id
 
 @Composable
 internal fun DynamicContextDestinationMenu(
@@ -7335,7 +6580,7 @@ private fun readableAppName(value: String): String = value
     .joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
 @Composable
-private fun FilesScreen(
+internal fun FilesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String?,
@@ -7349,24 +6594,22 @@ private fun FilesScreen(
     onFileAction: (NextcloudFile, FileMenuAction, List<NextcloudFile>) -> Unit,
     initialSelectedFilePath: String? = null,
 ) {
-    var files by remember(path, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
-    var error by remember(path, userId) { mutableStateOf<String?>(null) }
-    var refreshing by remember(path, userId) { mutableStateOf(false) }
-    var listingSource by remember(path, userId) {
+    var files by remember(session, path, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var error by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var refreshing by remember(session, path, userId) { mutableStateOf(false) }
+    var listingSource by remember(session, path, userId) {
         mutableStateOf<NextcloudFileListingSource?>(null)
     }
-    var loadAttempt by remember(path, userId) { mutableStateOf(0) }
-    var renameTarget by remember(path, userId) { mutableStateOf<NextcloudFile?>(null) }
-    var renameValue by remember(path, userId) { mutableStateOf("") }
-    var transferTarget by remember(path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
-    var transferDirectory by remember(path, userId) { mutableStateOf("") }
-    var transferName by remember(path, userId) { mutableStateOf("") }
-    var deleteTarget by remember(path, userId) { mutableStateOf<NextcloudFile?>(null) }
-    var creationKind by remember(path, userId) { mutableStateOf<FileCreationKind?>(null) }
-    var creationName by remember(path, userId) { mutableStateOf("") }
-    var creationError by remember(path, userId) { mutableStateOf<String?>(null) }
-    var creationRunning by remember(path, userId) { mutableStateOf(false) }
-    var filterQuery by remember(path, userId) { mutableStateOf("") }
+    var loadAttempt by remember(session, path, userId) { mutableStateOf(0) }
+    var renameTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
+    var renameValue by remember(session, path, userId) { mutableStateOf("") }
+    var transferTarget by remember(session, path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
+    var deleteTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
+    var creationKind by remember(session, path, userId) { mutableStateOf<FileCreationKind?>(null) }
+    var creationName by remember(session, path, userId) { mutableStateOf("") }
+    var creationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var creationRunning by remember(session, path, userId) { mutableStateOf(false) }
+    var filterQuery by remember(session, path, userId) { mutableStateOf("") }
     var searchScope by rememberSaveable(userId, stateSaver = enumSaver<FileSearchScope>()) {
         mutableStateOf(FileSearchScope.CurrentFolder)
     }
@@ -7379,60 +6622,64 @@ private fun FilesScreen(
     var sortDirection by rememberSaveable(userId, stateSaver = enumSaver<FileSortDirection>()) {
         mutableStateOf(FileSortDirection.Ascending)
     }
-    var searchResults by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
-    var searchLoading by remember(userId) { mutableStateOf(false) }
-    var searchError by remember(userId) { mutableStateOf<String?>(null) }
-    var favoriteResults by remember(userId) { mutableStateOf<List<NextcloudFile>?>(null) }
-    var favoriteLoading by remember(userId) { mutableStateOf(false) }
-    var favoriteError by remember(userId) { mutableStateOf<String?>(null) }
+    var searchResults by remember(session, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var searchLoading by remember(session, userId) { mutableStateOf(false) }
+    var searchError by remember(session, userId) { mutableStateOf<String?>(null) }
+    var favoriteResults by remember(session, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var favoriteLoading by remember(session, userId) { mutableStateOf(false) }
+    var favoriteError by remember(session, userId) { mutableStateOf<String?>(null) }
     var selectedFilePath by rememberSaveable(path, userId) { mutableStateOf(initialSelectedFilePath) }
-    var mutationRunning by remember(path, userId) { mutableStateOf(false) }
-    var mutationError by remember(path, userId) { mutableStateOf<String?>(null) }
-    var mutationNotice by remember(path, userId) { mutableStateOf<String?>(null) }
-    var offlineAvailability by remember(path, userId) {
+    var mutationRunning by remember(session, path, userId) { mutableStateOf(false) }
+    var mutationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var mutationNotice by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var offlineAvailability by remember(session, path, userId) {
         mutableStateOf<Map<String, FileOfflineAvailability>>(emptyMap())
     }
-    var offlineError by remember(path, userId) { mutableStateOf<String?>(null) }
-    var offlineNotice by remember(path, userId) { mutableStateOf<String?>(null) }
-    var handoffError by remember(path, userId) { mutableStateOf<String?>(null) }
-    var handoffNotice by remember(path, userId) { mutableStateOf<String?>(null) }
-    var shareTarget by remember(path, userId) { mutableStateOf<NextcloudFile?>(null) }
-    var fileShares by remember(path, userId) { mutableStateOf<List<NextcloudFileShare>?>(null) }
-    var shareType by remember(path, userId) { mutableStateOf(FileShareTarget.PublicLink) }
-    var shareRecipient by remember(path, userId) { mutableStateOf("") }
-    var shareAllowsEditing by remember(path, userId) { mutableStateOf(false) }
-    var shareDetails by remember(path, userId) { mutableStateOf(FileShareCreationDetails()) }
+    var offlineError by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var offlineNotice by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var handoffError by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var handoffNotice by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var shareTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
+    var fileShares by remember(session, path, userId) { mutableStateOf<List<NextcloudFileShare>?>(null) }
+    var shareType by remember(session, path, userId) { mutableStateOf(FileShareTarget.PublicLink) }
+    var shareRecipient by remember(session, path, userId) { mutableStateOf("") }
+    var shareAllowsEditing by remember(session, path, userId) { mutableStateOf(false) }
+    var shareDetails by remember(session, path, userId) { mutableStateOf(FileShareCreationDetails()) }
     var effectiveFileSharing by remember(path, userId, fileSharing) { mutableStateOf(fileSharing) }
-    var shareRunning by remember(path, userId) { mutableStateOf(false) }
-    var shareError by remember(path, userId) { mutableStateOf<String?>(null) }
-    var shareNotice by remember(path, userId) { mutableStateOf<String?>(null) }
+    var shareRunning by remember(session, path, userId) { mutableStateOf(false) }
+    var shareError by remember(session, path, userId) { mutableStateOf<String?>(null) }
+    var shareNotice by remember(session, path, userId) { mutableStateOf<String?>(null) }
     val externalHandoffCapability = remember(services) {
         (services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available)?.capability
     }
+    val favorites = remember(session, userId) { FilesFavoriteMutations() }
+    val shareLoads = remember(session, path, userId) { FileShareLoadIdentity() }
+    var shareLoadJob by remember(session, path, userId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(path, userId, loadAttempt) {
+    LaunchedEffect(session, path, userId, loadAttempt) {
         if (userId == null) return@LaunchedEffect
+        val readRevision = favorites.revision
         val retainedFiles = files
         error = null
-        val cached = runCatching { services.listFilesCachedWithSource(session, userId, path) }.getOrNull()
+        val cached = filesRequest { services.listFilesCachedWithSource(session, userId, path) }.getOrNull()
         if (cached != null) {
-            files = cached.files
+            files = favorites.refreshed(cached.files, readRevision)
             listingSource = cached.source
             if (services.supportsFileOfflineStorage) {
-                runCatching { services.loadFileOfflineAvailability(session, userId, cached.files) }
+                filesRequest { services.loadFileOfflineAvailability(session, userId, cached.files) }
                     .onSuccess { offlineAvailability = it }
                     .onFailure { offlineError = it.message ?: "Could not read offline file status." }
             }
         }
         val hasRetainedFiles = cached != null || retainedFiles != null
         refreshing = hasRetainedFiles
-        runCatching { services.listFilesWithSource(session, userId, path) }
+        filesRequest { services.listFilesWithSource(session, userId, path) }
             .onSuccess { listing ->
-                files = listing.files
+                files = favorites.refreshed(listing.files, readRevision)
                 listingSource = listing.source
                 refreshing = false
                 if (services.supportsFileOfflineStorage) {
-                    runCatching { services.loadFileOfflineAvailability(session, userId, listing.files) }
+                    filesRequest { services.loadFileOfflineAvailability(session, userId, listing.files) }
                         .onSuccess { offlineAvailability = it }
                         .onFailure { offlineError = it.message ?: "Could not read offline file status." }
                 }
@@ -7442,7 +6689,7 @@ private fun FilesScreen(
                 error = nextcloudFileRefreshFailure(hasRetainedFiles, it)
             }
     }
-    LaunchedEffect(userId, filterQuery, searchScope) {
+    LaunchedEffect(session, userId, filterQuery, searchScope) {
         if (searchScope != FileSearchScope.AllFiles) {
             searchResults = null
             searchLoading = false
@@ -7457,22 +6704,24 @@ private fun FilesScreen(
             return@LaunchedEffect
         }
         delay(320)
+        val readRevision = favorites.revision
         searchLoading = true
         searchError = null
-        runCatching { services.searchFiles(session, userId, query) }
-            .onSuccess { searchResults = it }
+        filesRequest { services.searchFiles(session, userId, query) }
+            .onSuccess { searchResults = favorites.refreshed(it, readRevision) }
             .onFailure {
                 searchResults = emptyList()
                 searchError = it.message ?: "Could not search all files."
             }
         searchLoading = false
     }
-    LaunchedEffect(userId, workspaceFilter, loadAttempt) {
+    LaunchedEffect(session, userId, workspaceFilter, loadAttempt) {
         if (workspaceFilter != FileWorkspaceFilter.Favorites || userId == null) return@LaunchedEffect
+        val readRevision = favorites.revision
         favoriteLoading = true
         favoriteError = null
-        runCatching { services.listFavoriteFiles(session, userId) }
-            .onSuccess { favoriteResults = it }
+        filesRequest { services.listFavoriteFiles(session, userId) }
+            .onSuccess { favoriteResults = favorites.refreshed(it, readRevision) }
             .onFailure { favoriteError = it.message ?: "Could not load favorites." }
         favoriteLoading = false
     }
@@ -7482,11 +6731,11 @@ private fun FilesScreen(
         FileWorkspaceSource.GlobalSearch -> searchResults.orEmpty()
         FileWorkspaceSource.CurrentFolder -> emptyList()
     }
-    LaunchedEffect(userId, services.supportsFileOfflineStorage, globalOfflineFiles) {
+    LaunchedEffect(session, userId, services.supportsFileOfflineStorage, globalOfflineFiles) {
         if (userId == null || !services.supportsFileOfflineStorage || globalOfflineFiles.isEmpty()) {
             return@LaunchedEffect
         }
-        runCatching { services.loadFileOfflineAvailability(session, userId, globalOfflineFiles) }
+        filesRequest { services.loadFileOfflineAvailability(session, userId, globalOfflineFiles) }
             .onSuccess { loaded -> offlineAvailability = offlineAvailability + loaded }
             .onFailure { offlineError = it.message ?: "Could not read offline file status." }
     }
@@ -7518,12 +6767,12 @@ private fun FilesScreen(
     }
     val trackedOfflineFiles = (files.orEmpty() + searchResults.orEmpty() + favoriteResults.orEmpty())
         .distinctBy(NextcloudFile::path)
-    LaunchedEffect(path, userId, offlineWorkPending, trackedOfflineFiles) {
+    LaunchedEffect(session, path, userId, offlineWorkPending, trackedOfflineFiles) {
         if (!offlineWorkPending || userId == null || !services.supportsFileOfflineStorage) return@LaunchedEffect
         while (true) {
             delay(800)
             val loaded = trackedOfflineFiles.takeIf { candidates -> candidates.isNotEmpty() } ?: break
-            val refreshed = runCatching {
+            val refreshed = filesRequest {
                 services.loadFileOfflineAvailability(session, userId, loaded)
             }.getOrElse {
                 offlineError = it.message ?: "Could not refresh offline file status."
@@ -7555,29 +6804,27 @@ private fun FilesScreen(
             }
             FileMenuAction.AddFavorite, FileMenuAction.RemoveFavorite -> {
                 val favorite = action == FileMenuAction.AddFavorite
-                val previousFiles = files
-                val previousSearchResults = searchResults
-                val previousFavoriteResults = favoriteResults
-                fun applyFavorite(items: List<NextcloudFile>?): List<NextcloudFile>? = items?.map { candidate ->
-                    if (candidate.path == file.path) candidate.copy(favorite = favorite) else candidate
-                }
+                if (!favorites.begin(file, favorite)) return
                 mutationError = null
-                files = applyFavorite(files)
-                searchResults = applyFavorite(searchResults)
-                favoriteResults = applyFavorite(favoriteResults)
+                files = files.withFavorite(file.path, favorite)
+                searchResults = searchResults.withFavorite(file.path, favorite)
+                favoriteResults = favoriteResults.withFavorite(file.path, favorite)
                 scope.launch {
-                    runCatching {
+                    filesRequest {
                         services.setFileFavorite(session, requireNotNull(userId), file, favorite)
                     }.onSuccess {
+                        favorites.succeeded(file.path)
                         mutationNotice = if (favorite) {
                             "${file.name} added to favorites"
                         } else {
                             "${file.name} removed from favorites"
                         }
                     }.onFailure {
-                        files = previousFiles
-                        searchResults = previousSearchResults
-                        favoriteResults = previousFavoriteResults
+                        favorites.failed(file.path)?.let { previous ->
+                            files = files.withFavorite(file.path, previous)
+                            searchResults = searchResults.withFavorite(file.path, previous)
+                            favoriteResults = favoriteResults.withFavorite(file.path, previous)
+                        }
                         mutationError = it.message ?: "Could not update the favorite."
                     }
                 }
@@ -7588,8 +6835,6 @@ private fun FilesScreen(
             }
             FileMenuAction.Move, FileMenuAction.Copy -> {
                 transferTarget = file to action
-                transferDirectory = path
-                transferName = file.name
                 mutationError = null
             }
             FileMenuAction.MakeAvailableOffline, FileMenuAction.RemoveOffline -> {
@@ -7600,7 +6845,7 @@ private fun FilesScreen(
                     file.path to if (makeAvailable) FileOfflineAvailability.Queued else FileOfflineAvailability.Removing
                     )
                 scope.launch {
-                    runCatching {
+                    filesRequest {
                         services.setFileAvailableOffline(session, requireNotNull(userId), file, makeAvailable)
                     }.onSuccess { availability ->
                         offlineAvailability = offlineAvailability + (file.path to availability)
@@ -7616,7 +6861,10 @@ private fun FilesScreen(
                 }
             }
             FileMenuAction.Share -> {
+                shareLoadJob?.cancel()
+                val shareRequest = shareLoads.replace()
                 shareTarget = file
+                shareRunning = false
                 fileShares = null
                 shareRecipient = ""
                 shareAllowsEditing = false
@@ -7625,10 +6873,11 @@ private fun FilesScreen(
                     ?: FileShareTarget.PublicLink
                 shareError = null
                 shareNotice = null
-                scope.launch {
-                    runCatching { services.listFileShares(session, file.path) }
-                        .onSuccess { fileShares = it }
+                shareLoadJob = scope.launch {
+                    filesRequest { services.listFileShares(session, file.path) }
+                        .onSuccess { if (shareLoads.accepts(shareRequest)) fileShares = it }
                         .onFailure {
+                            if (!shareLoads.accepts(shareRequest)) return@onFailure
                             fileShares = emptyList()
                             shareError = it.message ?: "Could not load existing shares."
                         }
@@ -7638,7 +6887,7 @@ private fun FilesScreen(
                 handoffError = null
                 handoffNotice = "Preparing ${file.name}..."
                 scope.launch {
-                    runCatching {
+                    filesRequest {
                         services.handoffFileToExternalApp(
                             session = session,
                             userId = requireNotNull(userId),
@@ -7671,7 +6920,7 @@ private fun FilesScreen(
                 handoffError = null
                 handoffNotice = "Preparing ${file.name}..."
                 scope.launch {
-                    runCatching {
+                    filesRequest {
                         services.handoffFileToExternalApp(
                             session = session,
                             userId = requireNotNull(userId),
@@ -7984,7 +7233,7 @@ private fun FilesScreen(
                         creationRunning = true
                         creationError = null
                         scope.launch {
-                            runCatching {
+                            filesRequest {
                                 when (plan.kind) {
                                     FileCreationKind.Folder -> {
                                         check(services.createDirectoryIfAbsent(session, requireNotNull(userId), plan.path)) {
@@ -8100,7 +7349,7 @@ private fun FilesScreen(
                         mutationRunning = true
                         mutationError = null
                         scope.launch {
-                            runCatching {
+                            filesRequest {
                                 services.executeFileMutation(
                                     session,
                                     requireNotNull(userId),
@@ -8134,120 +7383,62 @@ private fun FilesScreen(
     }
 
     transferTarget?.let { (target, action) ->
+        val currentUserId = userId ?: return@let
         val moving = action == FileMenuAction.Move
         val verb = if (moving) "Move" else "Copy"
-        val validationError = fileTransferValidationError(target, transferDirectory, transferName)
-        AlertDialog(
-            onDismissRequest = {
-                if (!mutationRunning) {
-                    transferTarget = null
-                    mutationError = null
+        val pickerOperations = remember(services, session, currentUserId) {
+            remoteFolderPickerOperations(services, session, currentUserId)
+        }
+        FileTransferDialog(
+            file = target,
+            moving = moving,
+            initialDirectory = path,
+            operations = pickerOperations,
+            running = mutationRunning,
+            error = mutationError,
+            onEdited = { mutationError = null },
+            onDismiss = { transferTarget = null; mutationError = null },
+            onConfirm = confirm@{ destination ->
+                val etag = target.etag?.takeIf(String::isNotBlank)
+                if (etag == null) {
+                    mutationError = "Refresh the folder before changing this item."
+                    return@confirm
                 }
-            },
-            title = { Text("$verb ${target.name}") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
-                    Text(
-                        "Choose a folder relative to your Nextcloud root. Leave the folder blank for the root.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedTextField(
-                        value = transferDirectory,
-                        onValueChange = {
-                            transferDirectory = it
-                            mutationError = null
-                        },
-                        label = { Text("Destination folder") },
-                        placeholder = { Text("Photos/Edited") },
-                        singleLine = true,
-                        enabled = !mutationRunning,
-                        isError = mutationError != null || validationError != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = transferName,
-                        onValueChange = {
-                            transferName = it
-                            mutationError = null
-                        },
-                        label = { Text("Name at destination") },
-                        singleLine = true,
-                        enabled = !mutationRunning,
-                        isError = mutationError != null || validationError != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        "An existing item is never overwritten. The source ETag is checked before the operation.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    (mutationError ?: validationError)?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                mutationRunning = true
+                mutationError = null
+                scope.launch {
+                    val mutation = if (moving) {
+                        NextcloudFileMutation.Move(
+                            target.path,
+                            destination.directory,
+                            destination.name,
+                            etag,
+                            sourceIsDirectory = target.isDirectory,
+                        )
+                    } else {
+                        NextcloudFileMutation.Copy(
+                            target.path,
+                            destination.directory,
+                            destination.name,
+                            etag,
+                            sourceIsDirectory = target.isDirectory,
+                        )
                     }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !mutationRunning,
-                    onClick = {
+                    filesRequest {
+                        services.executeFileMutation(session, requireNotNull(userId), mutation)
+                    }.onSuccess {
                         transferTarget = null
-                        mutationError = null
-                    },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = validationError == null && !mutationRunning,
-                    onClick = {
-                        val etag = target.etag?.takeIf(String::isNotBlank)
-                        if (etag == null) {
-                            mutationError = "Refresh the folder before changing this item."
-                            return@Button
+                        mutationNotice = if (moving) {
+                            "Moved ${target.name}"
+                        } else {
+                            "Copied ${target.name}"
                         }
-                        mutationRunning = true
-                        mutationError = null
-                        scope.launch {
-                            val mutation = if (moving) {
-                                NextcloudFileMutation.Move(
-                                    target.path,
-                                    transferDirectory,
-                                    transferName,
-                                    etag,
-                                    sourceIsDirectory = target.isDirectory,
-                                )
-                            } else {
-                                NextcloudFileMutation.Copy(
-                                    target.path,
-                                    transferDirectory,
-                                    transferName,
-                                    etag,
-                                    sourceIsDirectory = target.isDirectory,
-                                )
-                            }
-                            runCatching {
-                                services.executeFileMutation(session, requireNotNull(userId), mutation)
-                            }.onSuccess {
-                                transferTarget = null
-                                mutationNotice = if (moving) {
-                                    "Moved ${target.name}"
-                                } else {
-                                    "Copied ${target.name}"
-                                }
-                                files = null
-                                loadAttempt += 1
-                            }.onFailure {
-                                mutationError = it.message ?: "Could not ${verb.lowercase()} this item."
-                            }
-                            mutationRunning = false
-                        }
-                    },
-                ) {
-                    if (mutationRunning) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
+                        files = null
+                        loadAttempt += 1
+                    }.onFailure {
+                        mutationError = it.message ?: "Could not ${verb.lowercase()} this item."
                     }
-                    Text(if (mutationRunning) "${verb}ing..." else verb)
+                    mutationRunning = false
                 }
             },
         )
@@ -8301,7 +7492,7 @@ private fun FilesScreen(
                         mutationRunning = true
                         mutationError = null
                         scope.launch {
-                            runCatching {
+                            filesRequest {
                                 services.executeFileMutation(
                                     session,
                                     requireNotNull(userId),
@@ -8348,6 +7539,8 @@ private fun FilesScreen(
                 error = shareError,
             ),
             onDismiss = {
+                shareLoadJob?.cancel()
+                shareLoads.replace()
                 shareTarget = null
                 shareError = null
                 shareNotice = null
@@ -8367,25 +7560,31 @@ private fun FilesScreen(
                 shareError = null
             },
             onCreate = { ready ->
+                shareLoadJob?.cancel()
+                val creationRequest = shareLoads.replace()
                 shareRunning = true
                 shareError = null
                 shareNotice = null
                 scope.launch {
-                    runCatching { services.createFileShare(session, ready.request) }
+                    filesRequest { services.createFileShare(session, ready.request) }
                         .onSuccess { created ->
+                            if (!shareLoads.accepts(creationRequest)) return@onSuccess
                             val safeUrl = safeFileShareUrl(session, created)
                             val copied = safeUrl != null &&
                                 services.copyTextToClipboard("Nextcloud share link", safeUrl)
                             shareNotice = if (copied) "Share created and link copied" else "Share created"
-                            fileShares = runCatching {
+                            val refreshedShares = filesRequest {
                                 services.listFileShares(session, target.path)
                             }.getOrElse { fileShares.orEmpty() + created }
+                            if (!shareLoads.accepts(creationRequest)) return@onSuccess
+                            fileShares = refreshedShares
                             shareRecipient = ""
                         }
                         .onFailure {
+                            if (!shareLoads.accepts(creationRequest)) return@onFailure
                             shareError = it.message ?: "Could not create the share."
                         }
-                    shareRunning = false
+                    if (shareLoads.accepts(creationRequest)) shareRunning = false
                 }
             },
             recipientPicker = { targetType ->
@@ -8568,15 +7767,13 @@ private fun FileGridTile(
     ) {
         file.fileId ?: return@LaunchedEffect
         if (file.isDirectory || !file.isPhotoMedia()) return@LaunchedEffect
-        preview = services.loadMediaThumbnailDecoded(
+        preview = services.loadMediaThumbnailImage(
             session = session,
             userId = userId,
             file = file,
             width = 320,
             height = 320,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -9859,7 +9056,7 @@ private fun MediaScreen(
                                 contentPadding = PaddingValues(
                                     start = 4.dp,
                                     top = 4.dp,
-                                    end = PhotoTimelineScrubberTouchLaneWidth,
+                                    end = 4.dp,
                                     bottom = NextcloudSpacing.XLarge,
                                 ),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -10253,11 +9450,11 @@ private fun PersonTile(
     person: NextcloudPerson,
     onClick: () -> Unit,
 ) {
-    var image by remember(person.id, person.coverFileId, person.coverEtag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(person.id, person.coverFileId, person.coverEtag) {
+    var image by remember(session, person.id, person.coverFileId, person.coverEtag) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(session, person.id, person.coverFileId, person.coverEtag) {
         if (person.coverFileId == null) return@LaunchedEffect
-        image = runCatching {
-            decodePlatformImage(
+        image = runCatchingPreservingCancellation {
+            decodePlatformImageInBackground(
                 services.loadPersonCoverCached(session, person),
                 EncodedImageOrientationPolicy.PixelsAlreadyUpright,
             )
@@ -11345,13 +10542,11 @@ internal fun MediaTile(
         file.memoriesRenderAllowed,
     ) {
         file.fileId ?: return@LaunchedEffect
-        image = services.loadMediaThumbnailDecoded(
+        image = services.loadMediaThumbnailImage(
             session = session,
             file = file,
             userId = userId,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     val tileAspectRatio = when (layout) {
         MediaTileLayout.SquareCrop -> 1f
@@ -11449,14 +10644,8 @@ private fun FileInfoScreen(
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
         ) {
             item {
-                Surface(color = NextcloudTheme.colors.appIconContainer, shape = RoundedCornerShape(NextcloudRadii.Medium)) {
-                    Icon(
-                        if (file.isDirectory) NextcloudIcons.Folder else fileIcon(file),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(18.dp).size(38.dp),
-                    )
-                }
+                FileAudioPlaybackOrIcon(session, userId, file,
+                    if (file.isDirectory) NextcloudIcons.Folder else fileIcon(file))
             }
             item {
                 Text(file.name, style = MaterialTheme.typography.headlineMedium)
@@ -11480,7 +10669,7 @@ private fun FileInfoScreen(
                         if (!file.isDirectory) FileMetadataLine("Size", formatBytes(file.size))
                         file.lastModified?.let { FileMetadataLine("Modified", it) }
                         if (!file.isDirectory) {
-                            FileMetadataLine("Preview", if (file.hasPreview) "Available" else "Unavailable")
+                            FileMetadataLine("Image preview", if (file.hasPreview) "Available" else "Unavailable")
                         }
                     }
                 }
@@ -11525,289 +10714,7 @@ private fun FileMetadataLine(label: String, value: String) {
 }
 
 @Composable
-private fun TextEditorScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    userId: String,
-    file: NextcloudFile,
-    onBack: () -> Unit,
-    navigationRequest: NextcloudPendingNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
-    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
-    navigationCommitInProgress: Boolean = false,
-) {
-    val descriptor = remember(file) { describeDocument(file) }
-    val isMarkdown = descriptor.kind == DocumentKind.Markdown
-    var originalText by remember(file.path) { mutableStateOf<String?>(null) }
-    var draft by remember(file.path) { mutableStateOf("") }
-    var etag by remember(file.path) { mutableStateOf(file.etag) }
-    var loadingError by remember(file.path) { mutableStateOf<String?>(null) }
-    var saveError by remember(file.path) { mutableStateOf<String?>(null) }
-    var saving by remember(file.path) { mutableStateOf(false) }
-    var confirmSave by remember(file.path) { mutableStateOf(false) }
-    var confirmDiscard by remember(file.path) { mutableStateOf(false) }
-    var savedMessage by remember(file.path) { mutableStateOf<String?>(null) }
-    var markdownViewMode by rememberSaveable(file.path) {
-        mutableStateOf(
-            if (
-                isMarkdown &&
-                (file.size == null || file.size <= MAX_RENDERED_MARKDOWN_PREVIEW_BYTES)
-            ) {
-                MarkdownFileViewMode.Preview
-            } else {
-                MarkdownFileViewMode.Edit
-            },
-        )
-    }
-    val scope = rememberCoroutineScope()
-    val dirty = originalText != null && draft != originalText
-    val textPresentation = remember(descriptor, draft) {
-        planNativeTextPresentation(descriptor, draft.utf8Size())
-    }
-    val markdownPreviewAvailable = textPresentation == NativeTextPresentation.RenderedMarkdown
-
-    LaunchedEffect(file.path, userId) {
-        if (userId.isBlank()) return@LaunchedEffect
-        loadingError = null
-        runCatching {
-            services.downloadFile(
-                session = session,
-                userId = userId,
-                path = file.path,
-                maxBytes = MAX_EDITABLE_TEXT_BYTES,
-            )
-        }.onSuccess { downloaded ->
-            runCatching { downloaded.bytes.decodeToString(throwOnInvalidSequence = true) }
-                .onSuccess { text ->
-                    originalText = text
-                    draft = text
-                    etag = downloaded.etag ?: file.etag
-                }
-                .onFailure { loadingError = "This file is not valid UTF-8 text." }
-        }.onFailure { loadingError = it.message ?: "Could not download this file." }
-    }
-
-    fun requestBack() {
-        if (saving || navigationCommitInProgress) return
-        if (dirty) confirmDiscard = true else onBack()
-    }
-    fun discardDraft() {
-        draft = originalText.orEmpty()
-        saveError = null
-        savedMessage = null
-    }
-    LaunchedEffect(navigationRequest?.identity, saving, navigationCommitInProgress) {
-        navigationRequest?.let { request ->
-            if (!saving && !navigationCommitInProgress) {
-                if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
-            }
-        }
-    }
-    PlatformBackHandler(enabled = true, onBack = ::requestBack)
-
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(file.name, if (dirty) "Unsaved changes" else "Text editor", ::requestBack)
-        when {
-            loadingError != null -> ErrorMessage(requireNotNull(loadingError))
-            originalText == null -> LoadingMessage("Opening ${file.name}...")
-            else -> {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        savedMessage ?: saveError ?: if (etag.isNullOrBlank()) {
-                            "Saving is disabled until the server version is verified."
-                        } else {
-                            ""
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = when {
-                            saveError != null -> MaterialTheme.colorScheme.error
-                            etag.isNullOrBlank() -> MaterialTheme.colorScheme.onSurfaceVariant
-                            else -> NextcloudTheme.colors.success
-                        },
-                    )
-                    Button(
-                        enabled = dirty && !saving && !navigationCommitInProgress && !etag.isNullOrBlank(),
-                        onClick = { confirmSave = true },
-                    ) {
-                        Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text(if (saving) "Saving..." else "Save")
-                    }
-                }
-                if (isMarkdown) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(
-                            start = NextcloudSpacing.Large,
-                            end = NextcloudSpacing.Large,
-                            bottom = NextcloudSpacing.Medium,
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FilterChip(
-                            selected = markdownViewMode == MarkdownFileViewMode.Preview,
-                            onClick = { markdownViewMode = MarkdownFileViewMode.Preview },
-                            enabled = markdownPreviewAvailable,
-                            label = { Text("Preview") },
-                            leadingIcon = {
-                                Icon(
-                                    NextcloudIcons.File,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                        FilterChip(
-                            selected = markdownViewMode == MarkdownFileViewMode.Edit,
-                            onClick = { markdownViewMode = MarkdownFileViewMode.Edit },
-                            label = { Text("Edit source") },
-                            leadingIcon = {
-                                Icon(
-                                    NextcloudIcons.Edit,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                        if (!markdownPreviewAvailable) {
-                            Text(
-                                "Rendered preview is limited to " +
-                                    "${MAX_RENDERED_MARKDOWN_PREVIEW_BYTES / 1024} KiB.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                if (isMarkdown && markdownViewMode == MarkdownFileViewMode.Preview) {
-                    Surface(
-                        modifier = Modifier.fillMaxSize().padding(
-                            start = NextcloudSpacing.Large,
-                            end = NextcloudSpacing.Large,
-                            bottom = NextcloudSpacing.Large,
-                        ),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        when {
-                            !markdownPreviewAvailable -> Box(
-                                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    "Switch to Edit source to continue.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            draft.isBlank() -> Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    "This document is empty.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            else -> Markdown(
-                                content = draft,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(NextcloudSpacing.Large),
-                            )
-                        }
-                    }
-                } else {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = {
-                            draft = it
-                            saveError = null
-                            savedMessage = null
-                        },
-                        modifier = Modifier.fillMaxSize().padding(
-                            start = NextcloudSpacing.Large,
-                            end = NextcloudSpacing.Large,
-                            bottom = NextcloudSpacing.Large,
-                        ),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        enabled = !saving && !navigationCommitInProgress,
-                    )
-                }
-            }
-        }
-    }
-
-    if (confirmSave) {
-        AlertDialog(
-            onDismissRequest = { confirmSave = false },
-            title = { Text("Save changes to Nextcloud?") },
-            text = { Text("This updates ${file.name} on the server. A conflict will stop the save instead of overwriting newer changes.") },
-            dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Cancel") } },
-            confirmButton = {
-                Button(onClick = {
-                    confirmSave = false
-                    saving = true
-                    saveError = null
-                    scope.launch {
-                        runCatching {
-                            services.saveTextFile(
-                                session,
-                                userId,
-                                file.path,
-                                draft,
-                                requireNotNull(etag?.takeIf(String::isNotBlank)),
-                            )
-                        }.onSuccess { saved ->
-                            originalText = draft
-                            etag = saved.etag ?: etag
-                            savedMessage = "Saved to Nextcloud"
-                        }.onFailure { saveError = it.message ?: "Could not save this file." }
-                        saving = false
-                    }
-                }) { Text("Save") }
-            },
-        )
-    }
-
-    if (confirmDiscard) {
-        AlertDialog(
-            onDismissRequest = {
-                confirmDiscard = false
-                navigationRequest?.let(onNavigationCancelled)
-            },
-            title = { Text("Discard unsaved changes?") },
-            text = { Text("Your local edits to ${file.name} have not been saved.") },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        confirmDiscard = false
-                        navigationRequest?.let(onNavigationCancelled)
-                    },
-                ) { Text("Keep editing") }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    confirmDiscard = false
-                    discardDraft()
-                    navigationRequest?.let(onNavigationConfirmed) ?: onBack()
-                }) { Text("Discard") }
-            },
-        )
-    }
-}
-
-private enum class MarkdownFileViewMode {
-    Preview,
-    Edit,
-}
-
-@Composable
-private fun TalkScreen(
+internal fun TalkScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     onBack: () -> Unit,
@@ -11994,8 +10901,8 @@ private fun ProjectNewsArticleScreen(
     val presentation = remember(article) { projectNewsArticlePresentation(article) }
     var heroImage by remember(article.image.sha256) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(article.image.sha256) {
-        heroImage = runCatching {
-            decodePlatformImage(services.loadProjectNewsImage(presentation.heroImage))
+        heroImage = runCatchingPreservingCancellation {
+            decodePlatformImageInBackground(services.loadProjectNewsImage(presentation.heroImage))
         }.getOrNull()
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -12037,7 +10944,7 @@ private fun ProjectNewsArticleScreen(
                 )
             }
             item {
-                Markdown(
+                Markdown(typography = nativeMarkdownTypography(),
                     content = article.bodyMarkdown,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -12189,18 +11096,6 @@ internal fun ProductHeader(
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-private fun UnifiedSearchSelection.nativeFileParentPathOrNull(): String? {
-    if (provider.appId != "files" && !provider.id.startsWith("files")) return null
-    val candidate = entry.attributes["path"]
-        ?: entry.attributes["filePath"]
-        ?: entry.subline?.takeIf { it.startsWith('/') }
-        ?: return null
-    val segments = candidate.substringBefore('?').trim('/').split('/').filter(String::isNotBlank)
-    if (segments.any { it == "." || it == ".." || it.any(Char::isISOControl) }) return null
-    val path = segments.joinToString("/")
-    return if (segments.lastOrNull() == entry.title) path.substringBeforeLast('/', "") else path
 }
 
 @Composable

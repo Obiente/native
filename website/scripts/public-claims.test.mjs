@@ -30,7 +30,8 @@ test("machine-readable product claims match current supported platforms and alph
   assert.match(app, /macOS is a packaging preview without sign-in/);
   assert.match(app, /href="https:\/\/github\.com\/obiente\/native\/releases"/);
   assert.doesNotMatch(app, /releases\/latest/);
-  assert.match(home, /Your cloud,/);
+  assert.match(app, /Connect your existing Nextcloud account/);
+  assert.match(home, /support varies by app and platform/);
   assert.match(home, /aria-label="Platform availability"/);
   assert.match(home, /macOS preview/);
   assert.match(home, /iOS planned/);

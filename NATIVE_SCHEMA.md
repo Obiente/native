@@ -4,9 +4,29 @@ The schema is the trust boundary between discovery and presentation. Discovery
 may use deterministic inspection, verified adapters or local AI, but a renderer
 only accepts this typed document.
 
-**Last reviewed: 2026-08-20.** The schema contract may have changed. The
-[canonical Rust model](src/schema.rs) is the source of truth for its current
-fields, validation, and serialized form.
+**Last reviewed: 2026-09-27.** The schema contract may have changed. The
+[Kotlin runtime model](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/NativeSchema.kt)
+defines the document consumed by the native app. The
+[Rust reference model](src/schema.rs) and compiler cover a smaller contract;
+they are not the app's runtime compiler or a lossless serializer for Kotlin
+extensions. Check the linked source and contract tests before changing a wire
+field.
+
+## Contract ownership
+
+The app compiles discovered contracts with
+[`DynamicAppDescriptorCompiler`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt).
+Kotlin includes resource relationships, record image previews, enum labels,
+repeatable object inputs, and composite data grids beyond the Rust reference
+model. A successful reference-schema test does not prove support for these
+extensions in another consumer.
+
+Keep shared wire fields compatible and test representative serialized documents
+at the actual consumer. Before claiming bidirectional compatibility, test
+extension preservation, unknown fields, unsupported versions, and invalid
+bindings in both directions. Do not route an extended Kotlin document through
+the Rust model when it would discard fields. Compilers may share fixtures
+without sharing runtime ownership or requiring a new native bridge.
 
 ## Top-level document
 
@@ -16,6 +36,7 @@ fields, validation, and serialized form.
 - `resources` describe data entities and fields.
 - `actions` bind intent to real server operations.
 - `views` select reusable native components for resources and actions.
+- `relationships` bind parent and child resources in the Kotlin runtime.
 - `warnings` explain missing or ambiguous semantics.
 
 ## Confidence
@@ -78,7 +99,7 @@ guard for the shell, section changes, Back and incoming links. Leaving a dirty
 draft requires confirmation; an in-flight save or unresolved result blocks
 navigation until its result has been checked.
 
-## Bounded form restoration
+## Shared choice controls
 
 Dynamic enum fields use the shared native choice field, preserving exact wire
 values, required/error labels and icon/color previews. Compact Chores navigation

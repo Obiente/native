@@ -70,4 +70,11 @@ class AppWorkspacePresentationTest {
         assertEquals(listOf("deck", "talk"), presentation.pinnedEntries.map { it.app.id })
         assertFalse(presentation.pinnedEntries.any { it.app.id == "files" })
     }
+    @Test
+    fun appCountUsesSingularOnlyForOneMatch() {
+        assertEquals("0 apps", appWorkspaceCountLabel(0))
+        assertEquals("1 app", appWorkspaceCountLabel(1))
+        assertEquals("2 apps", appWorkspaceCountLabel(2))
+    }
+
 }

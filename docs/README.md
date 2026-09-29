@@ -3,7 +3,7 @@
 Use this index to find the maintained document for a question instead of
 copying status or policy into another file.
 
-**Last reviewed: 2026-08-20.** The documentation set may have changed. The
+**Last reviewed: 2026-09-28.** The documentation set may have changed. The
 [default-branch index](https://github.com/obiente/native/blob/main/docs/README.md)
 is the source of truth for maintained public documents.
 
@@ -26,6 +26,8 @@ is the source of truth for maintained public documents.
 
 ## Contributing and security
 
+- [Sign-in recovery](login-diagnostics.md): browser approval, connection retries,
+  cancellation, and private diagnostic handling.
 - [Contributing](../CONTRIBUTING.md): setup, verification, test-account safety,
   pull requests, and authorship requirements.
 - [Repository maintenance guide](../AGENTS.md): code ownership, documentation,
@@ -54,7 +56,7 @@ is the source of truth for maintained public documents.
   and deployment configuration.
 - [Design assets](../design/README.md): canonical icon sources and asset
   ownership.
-- [Marketing capture assets](../ui/src/desktopMain/resources/marketing/README.md):
+- [Marketing capture assets](../ui/src/desktopTest/resources/marketing/README.md):
   provenance for the synthetic organization avatar.
 
 Time-sensitive documents state when they were last reviewed. Treat that date

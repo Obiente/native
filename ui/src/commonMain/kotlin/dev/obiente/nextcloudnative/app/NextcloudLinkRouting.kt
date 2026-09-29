@@ -49,10 +49,12 @@ data class NextcloudNativeLinkRequest(
 internal fun nextcloudLinkDestination(
     session: NextcloudSession,
     rawLink: String,
-): NextcloudLinkDestination {
+): NextcloudLinkDestination = nextcloudLinkDestination(session.serverUrl, rawLink)
+
+internal fun nextcloudLinkDestination(serverUrl: String, rawLink: String): NextcloudLinkDestination {
     val unwrapped = unwrapNextcloudNativeLink(rawLink)
         ?: return NextcloudLinkDestination.Rejected("This link is invalid or unsupported.")
-    val resolved = resolveAccountLink(session.serverUrl, unwrapped)
+    val resolved = resolveAccountLink(serverUrl, unwrapped)
         ?: return NextcloudLinkDestination.Rejected("This link is invalid or unsupported.")
     if (!resolved.sameAccount) {
         return NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = false)

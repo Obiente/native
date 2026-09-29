@@ -18,6 +18,21 @@ import kotlinx.serialization.json.jsonObject
 
 class DesktopFileReadCacheTest {
     @Test
+    fun `warm content reads do not publish index or scan orphaned blobs`() = withCache { root, cache ->
+        val account = desktopFileCacheAccountId(session())
+        assertTrue(cache.storeContent(account, "photo.bin", NextcloudFileContent(byteArrayOf(1), null, "etag")))
+        val directory = root.resolve(account)
+        directory.listFiles().orEmpty().forEach { assertTrue(it.setLastModified(10_000L)) }
+        val publicationTimes = directory.listFiles().orEmpty().associate { it.name to it.lastModified() }
+        val before = directory.listFiles().orEmpty().associate { it.name to it.readBytes().toList() }
+        val orphan = directory.resolve("unreferenced.blob").apply { writeBytes(byteArrayOf(9)) }
+        repeat(100) { assertContentEquals(byteArrayOf(1), cache.cachedContent(account, "photo.bin", 8)?.bytes) }
+        assertTrue(orphan.isFile)
+        before.forEach { (name, bytes) -> assertEquals(bytes, directory.resolve(name).readBytes().toList()) }
+        publicationTimes.forEach { (name, time) -> assertEquals(time, directory.resolve(name).lastModified()) }
+    }
+
+    @Test
     fun `stale producers cannot recreate cache files across retirement and reactivation`() = withCache { root, cache ->
         val accountId = desktopFileCacheAccountId(session())
         val staleProducer = checkNotNull(cache.producer(accountId))

@@ -3,24 +3,22 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
@@ -235,84 +233,47 @@ internal fun EventEditorDialog(
                     )
                 }
                 item {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Schedule", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        Text("All day", style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(end = 8.dp))
-                        Switch(checked = allDay, onCheckedChange = { allDay = it },
-                            enabled = !mutationInProgress,
-                            modifier = Modifier.semantics { contentDescription = "All day" })
-                    }
-                }
-                item {
-                    CalendarDateField(date, onDateChanged = { date = it }, enabled = !mutationInProgress)
-                }
-                if (!allDay) item {
-                    CalendarTimeRangeFields(startTime, endTime, { startTime = it }, { endTime = it }, !mutationInProgress)
-                }
-                item {
-                    CalendarEventChoice(
-                        label = "Repeats", value = recurrencePreset.label, enabled = !mutationInProgress,
-                        options = EventRecurrencePreset.entries.map { NextcloudChoiceOption(it.name, it.label) },
-                        selectedId = recurrencePreset.name,
-                        onSelected = { id ->
-                            val preset = EventRecurrencePreset.entries.first { it.name == id }
-                            recurrencePresetName = preset.name
-                            if (preset == EventRecurrencePreset.Custom && customRecurrenceRule.isBlank()) {
-                                customRecurrenceRule = "FREQ=WEEKLY;INTERVAL=2"
-                            }
-                        },
-                    )
-                }
-                if (recurrencePreset == EventRecurrencePreset.Custom) {
-                    item {
-                        OutlinedTextField(
-                            value = customRecurrenceRule,
-                            onValueChange = { customRecurrenceRule = it },
-                            label = { Text("Recurrence rule") },
-                            supportingText = {
-                                Text("Daily, weekly, or monthly rule, for example FREQ=WEEKLY;BYDAY=MO,WE")
+                    CalendarEditorSection("Schedule") {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("All day", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Switch(checked = allDay, onCheckedChange = { allDay = it }, enabled = !mutationInProgress,
+                                modifier = Modifier.semantics { contentDescription = "All day" })
+                        }
+                        CalendarDateField(date, onDateChanged = { date = it }, enabled = !mutationInProgress)
+                        if (!allDay) CalendarTimeRangeFields(startTime, endTime, { startTime = it }, { endTime = it }, !mutationInProgress)
+                        CalendarEventChoice(
+                            label = "Repeats", value = recurrencePreset.label, enabled = !mutationInProgress,
+                            options = EventRecurrencePreset.entries.map { NextcloudChoiceOption(it.name, it.label) },
+                            selectedId = recurrencePreset.name,
+                            onSelected = { id ->
+                                val preset = EventRecurrencePreset.entries.first { it.name == id }
+                                recurrencePresetName = preset.name
+                                if (preset == EventRecurrencePreset.Custom && customRecurrenceRule.isBlank()) {
+                                    customRecurrenceRule = "FREQ=WEEKLY;INTERVAL=2"
+                                }
                             },
-                            isError = !recurrenceValid,
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !mutationInProgress,
                         )
+                        if (recurrencePreset == EventRecurrencePreset.Custom) {
+                            OutlinedTextField(value = customRecurrenceRule,
+                                onValueChange = { customRecurrenceRule = it }, label = { Text("Recurrence rule") },
+                                supportingText = { Text("Daily, weekly, or monthly rule, for example FREQ=WEEKLY;BYDAY=MO,WE") },
+                                isError = !recurrenceValid, modifier = Modifier.fillMaxWidth(), enabled = !mutationInProgress)
+                        }
+                        if (event?.recurrenceRule != null) Text("Changes apply to the complete recurring series.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (event?.recurrenceRule != null) item {
-                    Text("Changes apply to the complete recurring series.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
-                item { Text("Details", style = MaterialTheme.typography.titleSmall) }
                 item {
-                    OutlinedTextField(
-                        value = location,
-                        onValueChange = { location = it },
-                        label = { Text("Location") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        value = description,
-                        onValueChange = { description = it },
-                        label = { Text("Description") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    CalendarEventChoice(
-                        label = "Calendar", value = calendar?.displayName ?: "No writable calendar",
-                        enabled = !mutationInProgress,
-                        options = calendars.map { NextcloudChoiceOption(it.href, it.displayName) },
-                        selectedId = calendar?.href,
-                        onSelected = { selectedCalendarHref = it },
-                    )
+                    CalendarEditorSection("Details") {
+                        CalendarEventChoice(label = "Calendar", value = calendar?.displayName ?: "No writable calendar",
+                            enabled = !mutationInProgress,
+                            options = calendars.map { NextcloudChoiceOption(it.href, it.displayName) },
+                            selectedId = calendar?.href, onSelected = { selectedCalendarHref = it })
+                        OutlinedTextField(value = location, onValueChange = { location = it }, label = { Text("Location") },
+                            modifier = Modifier.fillMaxWidth(), enabled = !mutationInProgress)
+                        OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Description") },
+                            modifier = Modifier.fillMaxWidth(), minLines = 3, enabled = !mutationInProgress)
+                    }
                 }
                 error?.let { message ->
                     item { Text(message, color = MaterialTheme.colorScheme.error) }

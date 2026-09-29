@@ -114,8 +114,11 @@ data class FileOfflineQueueState(
         require(nextJobId > (jobs.maxOfOrNull(FileOfflineJob::id) ?: 0L))
     }
 
-    fun record(key: FileOfflineKey): FileOfflinePinRecord? = records.firstOrNull { it.descriptor.key == key }
-    fun job(key: FileOfflineKey): FileOfflineJob? = jobs.firstOrNull { it.key == key }
+    private val recordsByKey = records.associateBy { it.descriptor.key }
+    private val jobsByKey = jobs.associateBy(FileOfflineJob::key)
+
+    fun record(key: FileOfflineKey): FileOfflinePinRecord? = recordsByKey[key]
+    fun job(key: FileOfflineKey): FileOfflineJob? = jobsByKey[key]
 
     fun availability(key: FileOfflineKey): FileOfflineAvailability {
         val record = record(key) ?: return FileOfflineAvailability.OnlineOnly

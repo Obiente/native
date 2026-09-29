@@ -101,15 +101,17 @@ The intended repository split is:
 | `sync-engine` | Reconciliation plan, journal, tombstones, retries, conflict generation | Platform UI |
 | `adapters-*` | Versioned protocol translation and capability gates | Platform APIs or presentation state |
 | `repositories` | Cached state, pagination, refresh, pending writes, cross-adapter identity | Raw JSON/XML |
-| `native-schema` | Rust semantic compiler, schema contract, verified adapter registry | Network execution or arbitrary code |
+| `native-schema` | Semantic compiler, schema contract, verified adapter registry | Network execution or arbitrary code |
 | `ui` | Shared screens/components and accessibility semantics | Endpoint construction |
 | platform apps/extensions | Keychain, filesystem provider, workers, notifications, WebRTC, signing | Domain policy duplication |
 
 Runtime repositories, transport, storage, and sync are planned as Kotlin
-Multiplatform boundaries. The Rust compiler remains the deterministic
-automatic-adapter engine and exchanges versioned `NativeAppSchema` documents.
-A later UniFFI/FFI embedding spike is allowed, but production must not maintain
-two independent semantic compilers.
+Multiplatform boundaries. The application uses the Kotlin deterministic
+adapter compiler; Rust provides a reference subset. See
+[schema ownership](NATIVE_SCHEMA.md#contract-ownership). Any consolidation or
+UniFFI/FFI embedding must first prove preservation of runtime extensions,
+version handling, and rejection behavior. A planned module split is not evidence
+that the Rust compiler is linked into the application.
 
 ### 4.2 Account-scoped identity
 
@@ -545,7 +547,7 @@ navigation + capability snapshot + version metadata
                      |
 official OpenAPI/OCS/DAV descriptions when present
                      |
-deterministic Rust compiler
+deterministic runtime compiler
                      |
 low/medium/high-confidence NativeAppSchema
                      |

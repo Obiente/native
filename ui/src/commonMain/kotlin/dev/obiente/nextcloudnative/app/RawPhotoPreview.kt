@@ -247,7 +247,7 @@ private suspend fun <T> attemptDecodedDisplayPayload(
     null
 }
 
-private fun <T> decodeDisplayPayload(
+private suspend fun <T> decodeDisplayPayload(
     bytes: ByteArray,
     kind: MediaDisplayPayloadKind,
     maximumPayloadBytes: Int,
@@ -255,7 +255,7 @@ private fun <T> decodeDisplayPayload(
 ): DecodedMediaDisplayPayload<T>? {
     if (!isBoundedDisplayImagePayload(bytes, maximumPayloadBytes)) return null
     val payload = MediaDisplayPayload(bytes, kind)
-    return decode(payload)?.let { DecodedMediaDisplayPayload(value = it, payload = payload) }
+    return sharedMediaImageDecoder.decode { decode(payload) }?.let { DecodedMediaDisplayPayload(value = it, payload = payload) }
 }
 
 private fun ByteArray.readUnsignedBigEndianInt(offset: Int): Long {

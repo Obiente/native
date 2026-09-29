@@ -51,7 +51,7 @@ append_asset() {
     digest="$(sha256sum "$file" | awk '{print $1}')"
     [[ "$size" =~ ^[1-9][0-9]*$ ]]
     [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
-    jq -cn \
+    release_jq -cn \
         --arg platform "$platform" \
         --arg format "$format" \
         --arg architecture "$architecture" \
@@ -73,14 +73,14 @@ while IFS= read -r -d '' asset; do
     esac
 done < <(find "$asset_directory" -maxdepth 1 -type f -print0 | sort -z)
 
-assets="$(jq -s '.' "$assets_json")"
-jq -e '
+assets="$(release_jq -s '.' "$assets_json")"
+release_jq -e '
   length >= 1 and length <= 8 and
   (map([.platform,.format,.architecture] | join(":")) | length == (unique | length))
 ' <<<"$assets" >/dev/null
 
 mkdir -p "$(dirname "$output")"
-jq -n \
+release_jq -n \
     --argjson schemaVersion 1 \
     --arg channel "$channel" \
     --arg versionName "$version" \

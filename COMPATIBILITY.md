@@ -4,7 +4,7 @@ This document separates a dated implementation snapshot from the target
 completeness contract. It is organized by reusable capability instead of
 assuming that opening an app proves compatibility.
 
-**Last reviewed: 2026-08-20.** Implementation, server APIs, and app behavior
+**Last reviewed: 2026-09-28.** Implementation, server APIs, and app behavior
 may have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published compatibility limitations.
 
@@ -33,6 +33,93 @@ Standard CI does not provision a real Nextcloud server or run connected Android
 instrumentation. Deterministic tests, opt-in live audits, device tests, and
 release qualification provide different evidence and must not be presented as
 interchangeable.
+
+### Android integration audit
+
+**Last reviewed: 2026-09-28.** These local development observations may change;
+the release link above remains authoritative for published artifacts. An API 36
+emulator was exercised against a disposable Nextcloud 34.0.3 instance. This is
+neither release qualification nor a claim of whole-app parity.
+
+- The Apps browser exercised search, category filters, opening an app, and its
+  overflow menu at compact width and in landscape at 1.3 font scale.
+- Photos showed equal left and right grid spacing in the emulator capture.
+  Opening a preview from the rightmost column and switching list/grid layouts
+  worked. These checks do not establish every device density or screen size.
+- Transfer history filters remained reachable with an empty history; no active
+  transfer or background recovery behavior was qualified by that layout check.
+- Contacts and Tasks loaded multiple DAV resources. Disposable contact and task
+  create/edit/delete journeys completed, including task completion and editor
+  rotation. After correcting deletion verification, a fresh contact create/delete
+  journey returned to the original list and Home without restarting the app.
+- Files exercised draft restoration after process restart, conditional text
+  save, concurrent-edit conflict preservation, rename, copy, move, image zoom,
+  and cached image access without network connectivity.
+  On this Nextcloud 34.0.3 instance, Sabre rejected correctly formed collection
+  ETag conditions even when the folder ETag matched. Folder rename, move, copy,
+  and delete therefore fail safely when that condition is rejected. The client
+  keeps the guard and explains the limitation; it never retries without it.
+  File ETag conditions remain supported. This observation is specific to the
+  tested server and does not establish behavior for other Nextcloud versions.
+- Notes exercised create, body/favorite update, save, reopen, and delete.
+  Short-height editing and Markdown preview were retested after layout and
+  heading-size corrections, including landscape editing at 1.3 font scale.
+- Calendar exercised weekly series creation and expanded occurrences. Later
+  occurrences remained read-only. A subsequent single-event create/delete
+  journey verified recovery completion and navigation after deletion.
+  Schedule/Details navigation and scrolling to Save/Cancel remained reachable
+  in landscape at 1.3 font scale. That visual check cancelled an empty draft
+  and did not submit another event.
+- Deck exercised card creation, a due date, completion, and confirmed deletion.
+  Chores 0.2.0 rendered tasks, history, team membership, and invitations. Tables
+  rendered its inventory, rows, and named row values after correcting the
+  descriptor-to-detail projection. Its contextual row title was also verified
+  on the emulator. Row editing remains unqualified.
+- Music albums, tracks, and playlists loaded after session-cookie corrections.
+  Native playback reached the end of a synthetic track from both Music and
+  Files after the shared stream authentication correction. Queue and Stop
+  controls were exercised, including Play all and Stop from the revised playlist
+  screen. This is not a long-duration playback qualification.
+- Memories timeline and album reads worked after configuring the disposable
+  server. People remained unavailable because its recognition backend was not
+  enabled; the corrected screen explained the required server setup. This does
+  not identify a particular missing model or qualify recognition.
+- Mail inbox, thread list, and message bodies rendered. After correcting message
+  identity selection, opening the original message from a thread showed its body.
+  Message/Conversation navigation and the corrected attachment metadata separator
+  were verified. Attachment names, media types, and sizes rendered; opening or downloading Mail
+  attachments is not qualified by this audit.
+  Talk sent a message in a scoped disposable
+  room. Calls, external participants, and attachment workflows remain unqualified.
+- Cookbook ingredient scaling, Cospend bills/members, Pantry hierarchy, Activity
+  filtering, and native PDF/Office-file previews were exercised. Collaborative
+  Office editing and financial writes were not qualified. Pantry 0.34.0 displayed
+  reviewed epoch timestamps as readable UTC dates on the emulator.
+- Budget 2.54.0 opened its dashboard, verified account balances, and recent
+  transactions after the OCS accounts-list correction. The final Dev APK
+  confirmed the account row and transaction on the emulator. The disposable server returned HTTP 404 for the optional account
+  summary endpoint; that partial failure remains visible. The client does not
+  infer net worth by summing account balances when the summary is unavailable.
+
+Only disposable records were mutated. Personal accounts, live calls, sync data
+loss gates, and every advertised app action were not covered by these checks.
+
+Activity/Search exact Files-link precedence is implemented with deterministic
+routing tests. On the isolated Android emulator, selecting a synthetic image
+from Search opened its native preview directly. Activity uses the same routing
+policy, but its exact-file journey was not separately exercised in this pass.
+App-specific item links such as Notes and Deck retain the existing native app
+fallback; exact-record support for those links is not established by these tests.
+
+A focused follow-up verified Pantry list descriptions and item quantities, and
+Tables inventory counts, expandable metadata, projected row summaries and row
+details on the isolated emulator. Fixtures contained five grocery items and five
+table rows with three columns. Pantry remained usable in landscape at 1.3 font
+scale. After activity recreation, an ID-only parent showed its resource label
+instead of a raw ID; its original name returns after the parent is loaded again.
+The final build passed 120 selected desktop tests and produced a Dev APK and
+desktop distributable. These observations do not qualify new Pantry completion
+writes, Tables row editing, or all advertised app actions.
 
 ## Whole-app parity contract
 

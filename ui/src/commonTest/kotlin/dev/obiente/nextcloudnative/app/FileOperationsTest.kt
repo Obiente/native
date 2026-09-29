@@ -68,13 +68,32 @@ class FileOperationsTest {
 
         assertTrue(spec.sourceIsDirectory)
         assertEquals("\"directory-etag\"", spec.expectedEtag)
-        assertEquals(mapOf("If" to "(\"directory-etag\")"), spec.conflictConditionHeaders())
+        assertEquals(mapOf("If" to "([\"directory-etag\"])"), spec.conflictConditionHeaders())
         assertEquals(
             mapOf("If-Match" to "\"file-etag\""),
             NextcloudFileMutation.Delete("Projects/readme.md", "\"file-etag\"")
                 .toWebDavMutationSpec()
                 .conflictConditionHeaders(),
         )
+    }
+
+    @Test
+    fun unsafeFolderEntityTagsNeverProduceAnIgnoredCondition() {
+        for (etag in listOf("*", "\"broken]tag\"", "\"unterminated", "\"a\"\"b\"")) {
+            assertFailsWith<IllegalArgumentException> {
+                NextcloudFileMutation.Delete("Projects", etag, sourceIsDirectory = true)
+                    .toWebDavMutationSpec().conflictConditionHeaders()
+            }
+        }
+    }
+
+    @Test
+    fun rejectedFolderPreconditionExplainsSafeRecoveryWithoutClaimingAnEtagChange() {
+        val failure = fileOperationException(412, sourceIsDirectory = true)
+        assertEquals(NextcloudFileOperationError.Conflict, failure.error)
+        assertTrue(failure.message.orEmpty().contains("could not verify the folder version"))
+        assertTrue(failure.message.orEmpty().contains("This operation did not change the folder"))
+        assertFalse(fileOperationException(412).message.orEmpty().contains("folder version"))
     }
 
     @Test

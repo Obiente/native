@@ -27,6 +27,10 @@ class NextcloudNativeApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // AndroidX provider initialization has finished before Application.onCreate.
+        val capabilityStore = AndroidFileSyncStore(this)
+        startAndroidFileSyncCapabilityRecovery(this, startupRecoveryScope,
+            capabilityStore::loadAndReconcileUploadCleanups, AndroidFileSyncCapabilityLifecycle(this))
         accountCleanupListener = installAndroidAccountRemovalCleanupRecovery(this)
         startupRecoveryScope.launch {
             val recordRecoveryFailure = {

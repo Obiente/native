@@ -59,13 +59,17 @@ pointer_state="$(
 )"
 test "$pointer_state" = $'false\ttrue\t'"$pointer_tag"
 
-mapfile -t candidate_codes < <(
+mapfile -d '' candidate_manifests < <(
     find "$asset_directory" -maxdepth 1 -type f \
         \( -name 'update-manifest.json' -o -name 'desktop-update-manifest.json' \) \
-        -print0 |
-        sort -z |
-        xargs -0 -r -n1 jq -er '.versionCode | select(type == "number" and floor == . and . > 0)'
+        -print0 | sort -z
 )
+candidate_codes=()
+for manifest in "${candidate_manifests[@]}"; do
+    code="$(release_jq -er '.versionCode | select(type == "number" and floor == . and . > 0)' "$manifest")"
+    [[ "$code" =~ ^[1-9][0-9]*$ ]]
+    candidate_codes+=("$code")
+done
 [[ "${#candidate_codes[@]}" -gt 0 ]]
 candidate_code="${candidate_codes[0]}"
 for code in "${candidate_codes[@]}"; do
@@ -79,7 +83,7 @@ if gh release download "$pointer_tag" \
     --pattern download-channel.json \
     --dir "$temporary/existing" >/dev/null 2>&1; then
     current_code="$(
-        jq -er \
+        release_jq -er \
             --arg channel nightly-v1 \
             '
               select(keys == ["channel", "releaseNotesUrl", "schemaVersion", "versionCode", "versionName"]) |
@@ -98,7 +102,7 @@ if gh release download "$pointer_tag" \
     fi
 fi
 
-jq -n \
+release_jq -n \
     --arg version_name "$immutable_tag" \
     --argjson version_code "$candidate_code" \
     '{

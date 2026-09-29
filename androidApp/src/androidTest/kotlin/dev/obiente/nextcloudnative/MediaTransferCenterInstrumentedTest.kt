@@ -32,8 +32,9 @@ class MediaTransferCenterInstrumentedTest {
         )
         val accountId = NextcloudDocumentIds.accountKey(session)
         val services = AndroidNextcloudServices(context)
-        seedSyntheticHistory(context, accountId)
         runBlocking { services.saveSession(session) }
+        // Account activation completes any previous removal recovery before creating new fixture rows.
+        seedSyntheticHistory(context, accountId)
 
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -42,9 +43,11 @@ class MediaTransferCenterInstrumentedTest {
             device.findObject(By.text("Media transfers")).click()
 
             assertVisible(device, "Transfers")
+            assertVisible(device, "Failed 1")
             device.findObject(By.text("Failed 1")).click()
             assertVisible(device, "upload-failed.jpg")
 
+            assertVisible(device, "Completed 2")
             device.findObject(By.text("Completed 2")).click()
             assertVisible(device, "upload-complete-1.jpg")
             assertTrue(device.wait(Until.hasObject(By.desc("Actions for transfer history")), WAIT_MILLIS))
@@ -59,10 +62,18 @@ class MediaTransferCenterInstrumentedTest {
             assertVisible(device, "No completed uploads are in local history.")
             assertFalse(device.hasObject(By.text("upload-complete-1.jpg")))
 
+            assertVisible(device, "Pending 56")
             device.findObject(By.text("Pending 56")).click()
+            assertVisible(device, "upload-pending-0.jpg")
             assertTrue(scrollUntilVisible(device, "Older", TRANSFER_SCROLL_ATTEMPTS))
             device.findObject(By.text("Older")).click()
-            assertVisible(device, "Newer")
+            assertVisible(device, "upload-pending-50.jpg")
+            assertTrue(scrollUntilVisible(device, "Newer", TRANSFER_SCROLL_ATTEMPTS))
+            device.findObject(By.text("Newer")).click()
+            assertTrue(scrollUntilVisible(device, "Older", TRANSFER_SCROLL_ATTEMPTS))
+            assertTrue(
+                scrollUntilVisible(device, "upload-pending-0.jpg", TRANSFER_SCROLL_ATTEMPTS, towardsStart = true),
+            )
         } finally {
             scenario.close()
             runBlocking { services.clearSession() }
@@ -82,8 +93,8 @@ class MediaTransferCenterInstrumentedTest {
         )
         val services = AndroidNextcloudServices(context)
         resetLedgerFiles(context)
-        ledgerFile(context).writeText("Synthetic invalid SQLite fixture")
         runBlocking { services.saveSession(session) }
+        ledgerFile(context).writeText("Synthetic invalid SQLite fixture")
 
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -95,8 +106,9 @@ class MediaTransferCenterInstrumentedTest {
             assertVisible(device, "Try again")
         } finally {
             scenario.close()
-            runBlocking { services.clearSession() }
+            // Restore a usable ledger before account cleanup, which must open it to remove account rows.
             resetLedgerFiles(context)
+            runBlocking { services.clearSession() }
         }
     }
 
@@ -104,6 +116,9 @@ class MediaTransferCenterInstrumentedTest {
         assertVisible(device, "Settings")
         device.findObject(By.text("Settings")).click()
         assertVisible(device, "Appearance")
+        assertTrue("Expected Sync & storage in settings", scrollUntilVisible(device, "Sync & storage"))
+        device.findObject(By.text("Sync & storage")).click()
+        assertVisible(device, "Folder sync workspace")
     }
 
     private fun assertVisible(device: UiDevice, text: String) {
@@ -117,14 +132,15 @@ class MediaTransferCenterInstrumentedTest {
         device: UiDevice,
         text: String,
         attempts: Int = SETTINGS_SCROLL_ATTEMPTS,
+        towardsStart: Boolean = false,
     ): Boolean {
         repeat(attempts) {
             if (device.hasObject(By.text(text))) return true
             device.swipe(
                 device.displayWidth / 2,
-                device.displayHeight * 4 / 5,
+                if (towardsStart) device.displayHeight / 3 else device.displayHeight * 4 / 5,
                 device.displayWidth / 2,
-                device.displayHeight / 3,
+                if (towardsStart) device.displayHeight * 4 / 5 else device.displayHeight / 3,
                 20,
             )
             device.waitForIdle()

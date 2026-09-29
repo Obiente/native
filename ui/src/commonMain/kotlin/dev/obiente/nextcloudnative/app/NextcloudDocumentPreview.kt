@@ -444,7 +444,7 @@ private fun RenderedMarkdownDocument(preview: DocumentPreview.Text, filename: St
                 }
             } else {
                 SelectionContainer {
-                    Markdown(
+                    Markdown(typography = nativeMarkdownTypography(),
                         content = preview.value,
                         modifier = Modifier
                             .fillMaxSize()
@@ -459,12 +459,15 @@ private fun RenderedMarkdownDocument(preview: DocumentPreview.Text, filename: St
 
 @Composable
 private fun RasterDocument(preview: DocumentPreview.Raster, filename: String) {
-    val image = remember(preview) {
-        decodePlatformImage(
-            preview.encodedImage,
-            EncodedImageOrientationPolicy.PixelsAlreadyUpright,
-        )
+    val decoded = rememberDecodedImage(
+        preview.encodedImage,
+        orientationPolicy = EncodedImageOrientationPolicy.PixelsAlreadyUpright,
+    )
+    if (decoded.loading) {
+        DocumentPreviewMessage(title = "Loading preview", detail = "Preparing the document image.")
+        return
     }
+    val image = decoded.image
     if (image == null) {
         DocumentPreviewMessage(
             title = "Preview unavailable",

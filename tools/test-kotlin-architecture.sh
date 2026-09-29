@@ -45,6 +45,32 @@ rm \
     "$fixture/ui/src/androidMain/kotlin/example/Same.android.kt" \
     "$fixture/ui/src/desktopMain/kotlin/example/Same.desktop.kt"
 
+printf '%s\n' 'package example' 'fun platformValue() = 1' > \
+    "$fixture/ui/src/androidMain/kotlin/example/SharedTransport.kt"
+cp "$fixture/ui/src/androidMain/kotlin/example/SharedTransport.kt" \
+    "$fixture/ui/src/desktopMain/kotlin/example/SharedTransport.kt"
+expect_failure 'byte-identical files without platform suffixes' "$checker" "$fixture"
+printf '%s\n' 'package example' 'fun platformValue() = 2' > \
+    "$fixture/ui/src/desktopMain/kotlin/example/SharedTransport.kt"
+"$checker" "$fixture" >/dev/null
+rm "$fixture/ui/src/androidMain/kotlin/example/SharedTransport.kt" \
+    "$fixture/ui/src/desktopMain/kotlin/example/SharedTransport.kt"
+
+
+cat > "$fixture/contractAcquisition/src/main/kotlin/example/PortableHost.kt" <<'EOF'
+package example
+private val host = Regex("\\{[A-Za-z]+}")
+EOF
+expect_failure 'an Android-incompatible brace regex in a shared JVM library' "$checker" "$fixture"
+expect_failure 'brace regex detection without ripgrep' \
+    env KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH=true "$checker" "$fixture"
+cat > "$fixture/contractAcquisition/src/main/kotlin/example/PortableHost.kt" <<'EOF'
+package example
+private val code = Regex("[A-Za-z]{2}")
+EOF
+"$checker" "$fixture" >/dev/null
+rm "$fixture/contractAcquisition/src/main/kotlin/example/PortableHost.kt"
+
 cat > "$fixture/ui/src/commonMain/kotlin/example/PlatformImport.kt" <<'EOF'
 package example
 

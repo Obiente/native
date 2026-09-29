@@ -107,7 +107,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
       repositoryRoot,
       "ui",
       "src",
-      "desktopMain",
+      "desktopTest",
       "kotlin",
       "dev",
       "obiente",
@@ -226,6 +226,9 @@ test("marketing screenshots are rendered offscreen without an Android device", a
         relative === "gradle/wrapper/gradle-wrapper.properties" ||
         relative === "tools/marketing-capture-inputs.txt" ||
         relative.startsWith("ui/src/commonMain/") ||
+        relative.startsWith("ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/captures/") ||
+        relative.startsWith("ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/preview/") ||
+        relative.startsWith("ui/src/desktopTest/resources/marketing/") ||
         relative.startsWith(
           "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/",
         ) ||
@@ -258,7 +261,7 @@ test("marketing screenshots are rendered offscreen without an Android device", a
   );
   assert.throws(() => decodePngDimensions(validPng.subarray(0, 40)));
   const avatar = await readFile(
-    path.join(repositoryRoot, "ui", "src", "desktopMain", "resources", "marketing", "obiente-avatar.png"),
+    path.join(repositoryRoot, "ui", "src", "desktopTest", "resources", "marketing", "obiente-avatar.png"),
   );
   assert.equal(
     createHash("sha256").update(avatar).digest("hex"),
@@ -419,13 +422,14 @@ test("homepage captures route synthetic fixtures through production app surfaces
       repositoryRoot,
       "ui",
       "src",
-      "commonMain",
+      "commonTest",
       "kotlin",
       "dev",
       "obiente",
       "nextcloudnative",
       "app",
-      "NextcloudNativeApp.kt",
+      "captures",
+      "MarketingAppCapture.kt",
     ),
     "utf8",
   );

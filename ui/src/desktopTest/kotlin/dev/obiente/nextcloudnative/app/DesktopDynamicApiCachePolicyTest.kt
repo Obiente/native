@@ -15,7 +15,7 @@ class DesktopDynamicApiCachePolicyTest {
         var networkLoads = 0
         val committed = mutableListOf<NextcloudApiResponse>()
 
-        val result = executeDesktopDynamicApiGet(
+        val result = executeDynamicApiGet(
             accountId = "a".repeat(64),
             requestIdentity = "GET /apps/deck/api/v1.1/boards/7",
             cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
@@ -47,7 +47,7 @@ class DesktopDynamicApiCachePolicyTest {
         var networkLoads = 0
 
         kotlin.test.assertFailsWith<IllegalStateException> {
-            executeDesktopDynamicApiGet(
+            executeDynamicApiGet(
                 accountId = "a".repeat(64),
                 requestIdentity = "GET /dashboard/widgets",
                 cachePolicy = NextcloudApiCachePolicy.RefreshNetwork,

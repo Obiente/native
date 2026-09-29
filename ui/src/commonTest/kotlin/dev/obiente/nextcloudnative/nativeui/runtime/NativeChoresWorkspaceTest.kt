@@ -59,6 +59,15 @@ class NativeChoresWorkspaceTest {
     }
 
     @Test
+    fun `verified 0_2_0 retains the same team chore and history destinations`() {
+        val fixture = fixture()
+        val schema = fixture.schema.copy(app = fixture.schema.app.copy(version = "0.2.0"))
+        assertEquals(NativeChoresWorkspaceKind.Team, nativeChoresWorkspaceKind(schema, fixture.teamView))
+        assertEquals(NativeChoresWorkspaceKind.Chores, nativeChoresWorkspaceKind(schema, fixture.choresView))
+        assertEquals(NativeChoresWorkspaceKind.History, nativeChoresWorkspaceKind(schema, fixture.historyView))
+    }
+
+    @Test
     fun `team context remains available on team-owned Chores destinations`() {
         assertTrue(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.Team))
         assertTrue(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.Chores))

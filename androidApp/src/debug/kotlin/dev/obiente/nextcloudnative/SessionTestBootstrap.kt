@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
+import android.content.SharedPreferences
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
 import java.io.File
 import java.net.URI
 import org.json.JSONObject
@@ -24,24 +27,11 @@ internal object SessionTestBootstrap {
             val serverUrl = source.getString("serverUrl").validatedServerUrl()
             val loginName = source.getString("loginName").validatedSecretField("login name")
             val appPassword = source.getString("appPassword").validatedSecretField("app password")
-            val encryptedSession = JSONObject()
-                .put("serverUrl", serverUrl)
-                .put("loginName", loginName)
-                .put("appPassword", appPassword)
-                .toString()
-                .let(SessionCipher()::encrypt)
-
-            check(
-                context.getSharedPreferences(TEST_PREFERENCES_NAME, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_SESSION, encryptedSession)
-                    .putBoolean(KEY_TEST_READ_ONLY, true)
-                    .remove(KEY_TEST_WRITE_SCOPE_SERVER)
-                    .remove(KEY_TEST_WRITE_SCOPE_PATH)
-                    .commit(),
-            ) {
-                "Could not store the read-only emulator session."
-            }
+            persistImportedSession(
+                context.getSharedPreferences(TEST_PREFERENCES_NAME, Context.MODE_PRIVATE),
+                NextcloudSession(serverUrl, loginName, appPassword),
+                SessionCipher()::encrypt,
+            )
         } finally {
             check(importFile.delete() || !importFile.exists()) {
                 "Could not remove the temporary emulator session import."
@@ -72,9 +62,9 @@ internal object SessionTestBootstrap {
             val encryptedSession = requireNotNull(preferences.getString(KEY_SESSION, null)) {
                 "The imported emulator session is missing."
             }
-            val serverUrl = JSONObject(SessionCipher().decrypt(encryptedSession))
-                .getString("serverUrl")
-                .validatedServerUrl()
+            val serverUrl = requireNotNull(
+                decodeAndroidAccountCredentialState(SessionCipher().decrypt(encryptedSession)).state?.activeSession,
+            ) { "The imported emulator session is unavailable." }.serverUrl.validatedServerUrl()
             val apiPathPrefix = source.getString("apiPathPrefix")
             requireNotNull(ScopedTestWriteAuthorization.create(serverUrl, apiPathPrefix)) {
                 "The emulator write scope is invalid."
@@ -92,6 +82,37 @@ internal object SessionTestBootstrap {
                 "Could not remove the temporary emulator write scope."
             }
         }
+    }
+
+    internal fun persistImportedSession(
+        preferences: SharedPreferences,
+        session: NextcloudSession,
+        encrypt: (String) -> String,
+    ) = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
+        val existingRegistry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)?.let {
+            requireNotNull(restoreAndroidCredentialFreeRegistry(it).registry) {
+                "The existing account registry cannot be imported over."
+            }
+        }
+        val existingAccountIds = existingRegistry?.accounts.orEmpty().map { it.id }
+        val hasCredentials = preferences.contains(KEY_SESSION) || preferences.all.keys.any {
+            it.startsWith(ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX)
+        }
+        require(
+            (existingAccountIds.isEmpty() && !hasCredentials) ||
+                (preferences.getBoolean(KEY_TEST_READ_ONLY, false) &&
+                    existingAccountIds == listOf(session.accountId)),
+        ) { "Session import requires an empty app or the same read-only test account." }
+        val state = AndroidAccountCredentialState.Empty.upsertAndSelect(session)
+        val encrypted = encrypt(encodeAndroidAccountCredentialState(state))
+        check(preferences.edit()
+            .putString(KEY_SESSION, encrypted)
+            .putString(ANDROID_ACCOUNT_REGISTRY_KEY, encodeNextcloudAccountRegistry(state.registry))
+            .putString(androidAccountCredentialSlotKey(session.accountId), encrypted)
+            .putBoolean(KEY_TEST_READ_ONLY, true)
+            .remove(KEY_TEST_WRITE_SCOPE_SERVER)
+            .remove(KEY_TEST_WRITE_SCOPE_PATH)
+            .commit()) { "Could not store the read-only emulator session." }
     }
 
     private fun String.validatedServerUrl(): String {

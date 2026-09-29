@@ -390,16 +390,10 @@ private fun FileVersionPreviewDialog(
 ) {
     val mimeType = preview.content.mimeType?.substringBefore(';')?.lowercase()
         ?: file.mimeType?.substringBefore(';')?.lowercase()
-    val image: ImageBitmap? = remember(preview) {
-        if (mimeType?.startsWith("image/") == true) {
-            decodePlatformImageSampled(
-                preview.content.bytes,
-                MAX_FILE_VERSION_IMAGE_PREVIEW_DIMENSION,
-            )?.image
-        } else {
-            null
-        }
-    }
+    val image = rememberDecodedImage(
+        preview.content.bytes.takeIf { mimeType?.startsWith("image/") == true },
+        maximumDimension = MAX_FILE_VERSION_IMAGE_PREVIEW_DIMENSION,
+    ).image
     val text = remember(preview) {
         if (file.isEditableText() || mimeType?.startsWith("text/") == true || mimeType in TEXTUAL_VERSION_MIME_TYPES) {
             runCatching {

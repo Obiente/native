@@ -25,6 +25,14 @@ The next phase has four priorities, in this order:
 Feature count never outranks correctness, privacy, accessibility, battery use,
 or preservation of originals.
 
+For maintenance work, first reproduce or characterize the affected behavior.
+Prioritize cancellation, stale completions, durable recovery, and unnecessary
+work on frequently used paths. Preserve working features and platform behavior.
+Code size is an outcome of clearer ownership and removed duplication, not a
+reason to discard safeguards, merge unrelated abstractions, or enable untested
+build optimizations. A broad human-directed maintenance pass still needs bounded
+file ownership for each agent and one integrated validation pass.
+
 All work must follow [AI_POLICY.md](AI_POLICY.md). The human supplies the idea,
 intent, decisions, and active guidance. Agents may assist only inside that
 concrete scope and may not operate as autonomous contributors.
@@ -291,6 +299,10 @@ Nextcloud server and installed apps
   authoritative postcondition first.
 - Partial success is a first-class result. Report which items completed, which
   failed, and whether retrying a failed item is safe.
+- Fence asynchronous completion by account, resource, and request generation.
+  Replacing or dismissing a dialog must invalidate its pending loads. Optimistic
+  rollback may revert only the affected resource and current mutation, never a
+  whole list snapshot containing unrelated successful changes.
 
 ### Diagnostics and support reports
 
@@ -319,11 +331,20 @@ Nextcloud server and installed apps
 - Test observable behavior and invariants, not private call order or a copied
   implementation. A refactor that preserves behavior should not require broad
   test rewrites.
+- JUnit test methods must return `Unit`/`void`. Coroutine test bodies ending in
+  a value-returning assertion need an explicit `Unit` return type so the runner
+  can execute them.
 - Keep pure domain tests in `commonTest`, shared JVM implementation tests in the
   shared JVM test path when available, and operating-system behavior in the
   owning platform test source set.
 - Every parser and protocol boundary covers valid, missing, malformed,
   oversized, unsupported-version, and adversarial input as applicable.
+- Validate generated XML requests with a strict XML parser, including batches
+  with multiple items and escaped values. Substring assertions alone cannot
+  establish well-formed XML or correct namespace ownership.
+- JVM modules consumed by Android also need Android runtime coverage for parser
+  initialization and platform-sensitive behavior. Desktop JVM tests alone do
+  not establish Android regex, class initialization, or library compatibility.
 - Every coroutine state machine covers cancellation and stale completion.
   Durable mutation paths also cover restart, conflict, ambiguous delivery, and
   safe retry behavior.
@@ -418,6 +439,15 @@ Additional rules:
 - Write downloads and generated media to temporary files, validate them, then
   atomically promote them.
 - Never expose a partial file as complete.
+- Cache hits must not require durable index publication or a full cleanup scan
+  solely to record access time. Keep best-effort recency bookkeeping separate
+  from content integrity, retention, and recovery metadata.
+- Decode images outside composition and off the UI dispatcher with bounded
+  concurrency. Shared preview keys include account generation, resource
+  revision, size, orientation policy, and decoder identity. Retirement must
+  reject stale producers; eviction must respect native image ownership.
+- Reading transfer status must not repeatedly schedule background work. Recovery
+  scheduling belongs to explicit lifecycle or reconciliation operations.
 - Keep previews and temporary originals bounded and evictable.
 - Treat offline pins, local drafts, conflict copies, upload snapshots, and
   user-created files as stronger retention classes than previews.

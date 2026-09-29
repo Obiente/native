@@ -114,7 +114,9 @@ internal fun appWorkspaceDescription(appId: String): String = when (appId.lowerc
     "news" -> "Read your subscribed feeds in one place"
     "bookmarks" -> "Organize saved links, folders, and tags"
     "passwords" -> "Access your encrypted password vault"
-    else -> "Open its adaptive native workspace"
+    "chores" -> "Keep track of household chores"
+    "budget" -> "Review budgets, accounts, and transactions"
+    else -> ""
 }
 
 private fun Set<String>.indexOf(value: String): Int = indexOfFirst { it == value }.let { index ->
@@ -143,3 +145,5 @@ private val APP_WORKSPACE_NATIVE_IDS = setOf(
     "user_status",
 )
 private const val APP_WORKSPACE_RECENT_LIMIT = 3
+
+internal fun appWorkspaceCountLabel(count: Int): String = "$count ${if (count == 1) "app" else "apps"}"

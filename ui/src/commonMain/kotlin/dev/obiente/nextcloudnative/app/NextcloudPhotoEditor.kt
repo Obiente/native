@@ -87,7 +87,7 @@ fun NextcloudPhotoEditor(
 
     LaunchedEffect(file.path, file.fileId, file.etag, file.originalAccessAllowed, session, userId) {
         sourceState = PhotoEditorSourceState.Loading
-        sourceState = runCatching {
+        sourceState = runCatchingPreservingCancellation {
             val payload = loadFullResolutionPhotoPayload(
                 original = file,
                 loadMemories = { sourceFileId, etag ->
@@ -113,7 +113,7 @@ fun NextcloudPhotoEditor(
                     null
                 },
             )
-            val decoded = decodePhotoEditorSource(payload)
+            val decoded = sharedMediaImageDecoder.decode { decodePhotoEditorSource(payload) }
                 ?: error("The full-resolution image format is unsupported.")
             PhotoEditorSourceState.Ready(decoded, payload.source)
         }.fold(

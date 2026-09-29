@@ -68,15 +68,20 @@ internal class AndroidFileOfflineRepository(context: Context) {
         cloudMutationsAllowed = appContext.cloudMutationGate(),
     )
 
-    fun loadAvailability(
-        session: NextcloudSession,
-        userId: String,
-        files: List<NextcloudFile>,
-    ): Map<String, FileOfflineAvailability> {
+    /** Reconcile durable jobs after authenticated account initialization, never during a status read. */
+    fun recoverPendingWork(session: NextcloudSession, userId: String) {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val persisted = synchronized(STATE_LOCK) { store.load() }
         persisted.queue.jobs.filter { it.key.accountId == accountId && it.status.isRunnable() }
             .forEach { enqueue(it, accountId, userId) }
+    }
+
+    fun loadAvailability(
+        session: NextcloudSession,
+        files: List<NextcloudFile>,
+    ): Map<String, FileOfflineAvailability> {
+        val accountId = NextcloudDocumentIds.accountKey(session)
+        val persisted = synchronized(STATE_LOCK) { store.load() }
         return files.associate { file ->
             val availability = if (file.isDirectory) {
                 persisted.folderAvailability(accountId, file.path)

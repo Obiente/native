@@ -59,14 +59,13 @@ fun groupwareDavAddressBookMultiGetRequest(
         }
     }
     require(safeHrefs.distinct().size == safeHrefs.size) { "The CardDAV multiget batch contains duplicates." }
-    val hrefElements = safeHrefs.joinToString("\n") { href -> "  <d:href>${href.escapeDavXml()}</d:href>" }
-    val body = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <card:addressbook-multiget xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
-          <d:prop><d:getetag /><card:address-data /></d:prop>
-        $hrefElements
-        </card:addressbook-multiget>
-    """.trimIndent()
+    val body = buildString {
+        appendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+        appendLine("<card:addressbook-multiget xmlns:d=\"DAV:\" xmlns:card=\"urn:ietf:params:xml:ns:carddav\">")
+        appendLine("  <d:prop><d:getetag /><card:address-data /></d:prop>")
+        safeHrefs.forEach { href -> appendLine("  <d:href>${href.escapeDavXml()}</d:href>") }
+        append("</card:addressbook-multiget>")
+    }
     return GroupwareDavRequest(
         method = "REPORT",
         relativePath = collectionHref,

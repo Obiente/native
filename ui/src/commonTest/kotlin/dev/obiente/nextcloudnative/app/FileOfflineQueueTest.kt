@@ -8,6 +8,36 @@ import kotlin.test.assertNull
 
 class FileOfflineQueueTest {
     @Test
+    fun repeatedAvailabilityReadsDoNotRescanQueueLists() {
+        val template = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
+        var recordReads = 0
+        var jobReads = 0
+        val records = object : AbstractList<FileOfflinePinRecord>() {
+            override val size = 1_000
+            override fun get(index: Int): FileOfflinePinRecord {
+                recordReads += 1
+                val source = template.records.single()
+                return source.copy(descriptor = source.descriptor.copy(key = FileOfflineKey("account", "item-$index")))
+            }
+        }
+        val jobs = object : AbstractList<FileOfflineJob>() {
+            override val size = 1_000
+            override fun get(index: Int): FileOfflineJob {
+                jobReads += 1
+                return template.jobs.single().copy(id = index + 1L, key = FileOfflineKey("account", "item-$index"))
+            }
+        }
+        val snapshot = FileOfflineQueueState(records, jobs, nextJobId = 1_001)
+        recordReads = 0
+        jobReads = 0
+        repeat(1_000) { index ->
+            assertEquals(FileOfflineAvailability.Queued, snapshot.availability(FileOfflineKey("account", "item-$index")))
+        }
+        assertEquals(0, recordReads)
+        assertEquals(0, jobReads)
+    }
+
+    @Test
     fun pinQueuesOnlyAGuardedDownloadAndCoalescesRepeatedIntent() {
         val request = pin(etag = "\"remote-1\"")
         val first = planFileOfflineRequest(FileOfflineQueueState(), request, nowEpochMillis = 10)

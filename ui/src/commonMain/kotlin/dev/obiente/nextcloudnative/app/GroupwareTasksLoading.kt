@@ -6,6 +6,7 @@ internal data class GroupwareTaskCalendarLoadResult(
     val concurrentlyDeletedObjectCount: Int = 0,
     val omittedObjectCount: Int = 0,
     val completedCalendarHrefs: Set<String> = emptySet(),
+    val failedCalendarHrefs: Set<String> = emptySet(),
 )
 
 private data class GroupwareTaskObjectReference(
@@ -23,6 +24,7 @@ internal suspend fun loadGroupwareTaskCalendars(
     var concurrentlyDeletedObjectCount = 0
     var omittedObjectCount = 0
     val completedCalendarHrefs = mutableSetOf<String>()
+    val failedCalendarHrefs = mutableSetOf<String>()
     calendars.forEach { calendar ->
         var omitted = false
         runCatchingPreservingCancellation {
@@ -38,10 +40,11 @@ internal suspend fun loadGroupwareTaskCalendars(
             if (!omitted) completedCalendarHrefs += calendar.href
         }.onFailure {
             failures += calendar.displayName
+            failedCalendarHrefs += calendar.href
         }
     }
     return GroupwareTaskCalendarLoadResult(
-        tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount, completedCalendarHrefs,
+        tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount, completedCalendarHrefs, failedCalendarHrefs,
     )
 }
 
@@ -73,16 +76,13 @@ internal fun groupwareDavCalendarMultiGetRequest(
     require(safeHrefs.distinct().size == safeHrefs.size) {
         "The CalDAV multiget batch contains duplicates."
     }
-    val hrefElements = safeHrefs.joinToString("\n") { href ->
-        "  <d:href>${href.escapeDavXml()}</d:href>"
+    val body = buildString {
+        appendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+        appendLine("<c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\">")
+        appendLine("  <d:prop><d:getetag /><c:calendar-data /></d:prop>")
+        safeHrefs.forEach { href -> appendLine("  <d:href>${href.escapeDavXml()}</d:href>") }
+        append("</c:calendar-multiget>")
     }
-    val body = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-          <d:prop><d:getetag /><c:calendar-data /></d:prop>
-        $hrefElements
-        </c:calendar-multiget>
-    """.trimIndent()
     return GroupwareDavRequest(
         method = "REPORT",
         relativePath = collectionHref,

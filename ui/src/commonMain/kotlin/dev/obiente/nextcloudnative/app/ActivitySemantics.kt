@@ -158,6 +158,9 @@ fun NextcloudActivity.activityOpenAction(
     installedAppIds: Set<String>,
     serverUrl: String,
 ): ActivityOpenAction? {
+    preferredNativeEntryLink(serverUrl, link, installedAppIds)?.let { target ->
+        return ActivityOpenAction(label = "Open", sameOriginUrl = target)
+    }
     val hasFilesDestination = installedAppIds.any { it.equals("files", true) }
     val producedByFiles = app.equals("files", ignoreCase = true) ||
         type.startsWith("file_", ignoreCase = true) ||

@@ -96,6 +96,7 @@ fun DynamicAppDescriptor.singleSafeContextualChild(
 fun DynamicAppDescriptor.preferredSemanticContextualChild(
     context: DynamicResourceRecordContext,
 ): DynamicNavigationDestination? {
+    preferredMediaCollectionChild(context)?.let { return it }
     val actionsById = actions.associateBy(DynamicAction::id)
     val collectionLayoutsById = layouts
         .filter(DynamicLayout::isCollectionNavigationLayout)
@@ -129,7 +130,6 @@ fun DynamicAppDescriptor.preferredSemanticContextualChild(
         .singleOrNull()
         ?.first
 }
-
 /**
  * Keeps protocol and response-helper resources out of normal content tabs while retaining them as
  * explicitly selectable advanced views. The rule uses relationship shape and semantic names, never
@@ -388,10 +388,10 @@ fun DynamicAppDescriptor.planDynamicNavigation(
                 .thenBy(DynamicNavigationDestination::layoutId),
         )
         .toList()
-
     val rootResourceIds = rootDestinations.mapTo(linkedSetOf()) { it.resourceId }
     val rootForms = forms.mapNotNull { form ->
         val action = actionsById[form.actionId] ?: return@mapNotNull null
+        if (!action.hasMaterializableRequiredFormInputs(form)) return@mapNotNull null
         if (action.binding.method == HttpMethod.GET || action.binding.pathParameters.isNotEmpty()) return@mapNotNull null
         val rootResponseFieldIds = rootDestinations
             .asSequence()
@@ -458,12 +458,12 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         .distinctBy(DynamicNavigationDestination::actionId)
         .sortedWith(compareBy(DynamicNavigationDestination::label, DynamicNavigationDestination::layoutId))
         .toList()
-
     val contextualForms = forms
         .takeIf { selectedRecord.actionBindingProvenanceValid }
         .orEmpty()
         .mapNotNull { form ->
             val action = actionsById[form.actionId] ?: return@mapNotNull null
+            if (!action.hasMaterializableRequiredFormInputs(form)) return@mapNotNull null
             if (action.binding.method == HttpMethod.GET) return@mapNotNull null
             if (
                 action.effect == ActionEffect.upload &&
@@ -754,8 +754,7 @@ private fun DynamicAction.isPinnedChoresInvitationAccept(
     app: AppIdentity,
     context: DynamicResourceRecordContext,
 ): Boolean =
-    app.id == "chores" &&
-        app.version == "0.1.0" &&
+    app.isSupportedChoresVersion() &&
         context.resourceId.sameResourceAs("invites") &&
         resourceId.sameResourceAs("invitations") &&
         binding.method == HttpMethod.POST &&

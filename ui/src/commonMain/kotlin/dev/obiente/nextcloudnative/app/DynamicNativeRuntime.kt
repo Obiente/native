@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.model.verifiedRecordIdentityFieldId
+
 import dev.obiente.nextcloudnative.template.scanBracedTemplate
 
 import dev.obiente.nextcloudnative.nativeui.model.AdvertisedOpenApi
@@ -154,7 +156,7 @@ suspend fun discoverDynamicAppDescriptor(
             "Finding a verified app package",
         ),
     )
-    val acquired = runCatching {
+    val acquired = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic) {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
         return sameOrigin.copy(
@@ -168,7 +170,7 @@ suspend fun discoverDynamicAppDescriptor(
             "Only app metadata is available.",
     )
     val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
-    val document = runCatching {
+    val document = observeDynamicDiscoveryStage(DynamicDiscoveryStage.ContractParsing, services::recordSupportDiagnostic) {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
     }.getOrNull() ?: return sameOrigin.copy(
         diagnostics = sameOrigin.diagnostics + "The acquired App Store contract contained invalid JSON.",
@@ -204,7 +206,7 @@ suspend fun discoverDynamicAppDescriptor(
             "Preparing the native workspace",
         ),
     )
-    val descriptor = runCatching {
+    val descriptor = observeDynamicDiscoveryStage(DynamicDiscoveryStage.DescriptorCompilation, services::recordSupportDiagnostic) {
         DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
                 app = AppIdentity(app.id, app.name, acquired.appVersion),
@@ -387,7 +389,7 @@ internal suspend fun discoverDynamicAppDescriptor(
             ),
         )
         val path = "$OCS_API_VIEWER_SPEC_PATH/${specId.encodeUrlComponent()}"
-        val response = runCatching { execute(dynamicDiscoveryRequest(path)) }
+        val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(path)) }
             .onFailure { failure ->
                 diagnostics += "OCS API Viewer could not load $specId: ${failure.message ?: "request failed"}."
             }
@@ -407,7 +409,7 @@ internal suspend fun discoverDynamicAppDescriptor(
                 "Preparing the native workspace",
             ),
         )
-        val descriptor = runCatching {
+        val descriptor = runCatchingPreservingCancellation {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.onFailure { failure ->
             diagnostics += "OCS API Viewer returned an unusable specification for $specId: " +
@@ -434,7 +436,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         ),
     )
     staticCandidates.forEach { path ->
-        val response = runCatching {
+        val response = runCatchingPreservingCancellation {
             execute(dynamicDiscoveryRequest(path))
         }.getOrNull() ?: return@forEach
         if (response.status !in 200..299 || response.contentType?.contains("json", ignoreCase = true) != true) {
@@ -447,7 +449,7 @@ internal suspend fun discoverDynamicAppDescriptor(
                 "Preparing the native workspace",
             ),
         )
-        val descriptor = runCatching {
+        val descriptor = runCatchingPreservingCancellation {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.getOrNull() ?: return@forEach
         return DynamicDescriptorDiscovery(
@@ -484,7 +486,7 @@ private suspend fun discoverOfficialViewerSpecIds(
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     diagnostics: MutableList<String>,
 ): List<String> {
-    val response = runCatching { execute(dynamicDiscoveryRequest(OCS_API_VIEWER_CATALOG_PATH)) }
+    val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(OCS_API_VIEWER_CATALOG_PATH)) }
         .onFailure { failure ->
             diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint: " +
                 (failure.message ?: "request failed") + "."
@@ -498,7 +500,7 @@ private suspend fun discoverOfficialViewerSpecIds(
         diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint (HTTP ${response.status})."
         return emptyList()
     }
-    val catalog = runCatching { dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonArray }
+    val catalog = runCatchingPreservingCancellation { dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonArray }
         .getOrNull()
     if (catalog == null) {
         diagnostics += "OCS API Viewer returned an invalid app catalog${response.contentTypeDiagnostic()}."
@@ -660,12 +662,25 @@ internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
     }
     val safeMessage = (metadata["message"] as? JsonPrimitive)
         ?.contentOrNull
-        ?.toSafeDynamicErrorMessage()
+        ?.toSafeDynamicMutationErrorMessage()
     return NativeActionExecutionResult.Failure(
         message = safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
             ?: "The OCS endpoint rejected ${action.label}.",
         outcome = NativeActionFailureOutcome.Rejected,
     )
+}
+
+private fun String.toSafeDynamicMutationErrorMessage(): String? {
+    val compact = trim().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        .split(' ').filter(String::isNotBlank).joinToString(" ")
+        .take(240)
+    if (compact.isBlank() || compact.any(Char::isISOControl) || '<' in compact || '>' in compact) return null
+    val normalized = compact.lowercase()
+    if (normalized == "internal server error" || normalized == "error" || normalized == "failure") return null
+    if (normalized.startsWith("mailbox ") && normalized.endsWith(" is not cached")) {
+        return "This mailbox has not been synchronized on the server yet."
+    }
+    return compact.removeSuffix(".") + "."
 }
 
 private fun malformedDynamicOcsActionResult(
@@ -718,7 +733,7 @@ internal suspend fun loadDynamicRecordsWithOutcome(
         actionId = actionId,
         boundValues = runtimeContext + values,
         execute = { candidate ->
-            val candidateValues = remapReadFallbackValues(action, candidate, values)
+            val candidateValues = reviewedPlaylistReadValues(descriptor, candidate, remapReadFallbackValues(action, candidate, values))
             val request = buildDynamicApiRequest(
                 descriptor = descriptor,
                 action = candidate,
@@ -727,7 +742,7 @@ internal suspend fun loadDynamicRecordsWithOutcome(
             ).copy(cachePolicy = cachePolicy)
             services.executeNextcloudApi(session, request).also { response ->
                 if (response.status !in 200..299) {
-                    throw response.toDynamicReadLoadException(candidate, request.relativePath)
+                    throw response.toDynamicReadLoadException(candidate)
                 }
             }
         },
@@ -1008,21 +1023,6 @@ internal fun parseDynamicRecords(
     )
 }
 
-private fun DynamicAppDescriptor.verifiedRecordIdentityFieldId(action: DynamicAction): String? {
-    if (
-        app.id != "chores" || app.version != "0.1.0" ||
-        action.binding.method != HttpMethod.GET ||
-        action.binding.path != "/apps/chores/api/v1.0/account/invites" ||
-        action.confidence != Confidence.verified ||
-        action.provenance.none { provenance -> provenance.kind == ProvenanceKind.verifiedAppPackage } ||
-        action.responseFieldIds.count { fieldId -> fieldId == "inviteId" } != 1 ||
-        actions.count { candidate -> candidate.id == action.id } != 1
-    ) {
-        return null
-    }
-    return "inviteId"
-}
-
 private fun DynamicAction.dynamicCollectionNameHints(): Set<String> =
     listOf(resourceId, label)
         .flatMap { value ->
@@ -1078,65 +1078,6 @@ private fun ByteArray.hasBoundedDynamicJsonDepth(): Boolean {
         }
     }
     return true
-}
-
-private class DynamicReadLoadException(
-    message: String,
-    val specificity: Int,
-) : IllegalStateException(message)
-
-private fun NextcloudApiResponse.toDynamicReadLoadException(
-    action: DynamicAction,
-    resolvedPath: String? = null,
-): DynamicReadLoadException {
-    val serverMessage = body.decodeToString()
-        .take(MAX_DYNAMIC_ERROR_BODY_CHARS)
-        .let { raw -> runCatching { dynamicJson.parseToJsonElement(raw) }.getOrNull() }
-        ?.findDynamicErrorMessage()
-        ?.toSafeDynamicErrorMessage()
-    val resourceLabel = action.resourceId.substringAfterLast('.')
-        .map { character -> if (character.isLetterOrDigit()) character else ' ' }
-        .joinToString("")
-        .trim()
-        .replaceFirstChar { character -> character.uppercase() }
-        .ifBlank { "this view" }
-    val message = if (serverMessage != null) {
-        "Could not load $resourceLabel: $serverMessage"
-    } else {
-        // Keep the template, method and status visible so a rejected dynamic
-        // route can be corrected from the contract instead of being mistaken
-        // for a general account-authentication failure. Parameter values are
-        // intentionally not included.
-        "Could not load $resourceLabel (HTTP $status ${action.binding.method} " +
-            (resolvedPath ?: action.binding.path) + ")."
-    }
-    return DynamicReadLoadException(message, specificity = if (serverMessage == null) 1 else 2)
-}
-
-private fun JsonElement.findDynamicErrorMessage(): String? {
-    val root = this as? JsonObject ?: return null
-    val candidates = listOf(
-        root["message"],
-        (root["data"] as? JsonObject)?.get("message"),
-        (root["error"] as? JsonObject)?.get("message"),
-        ((root["ocs"] as? JsonObject)?.get("meta") as? JsonObject)?.get("message"),
-    )
-    return candidates.firstNotNullOfOrNull { candidate ->
-        (candidate as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
-    }
-}
-
-private fun String.toSafeDynamicErrorMessage(): String? {
-    val compact = trim().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-        .split(' ').filter(String::isNotBlank).joinToString(" ")
-        .take(MAX_DYNAMIC_ERROR_MESSAGE_CHARS)
-    if (compact.isBlank() || compact.any(Char::isISOControl) || '<' in compact || '>' in compact) return null
-    val normalized = compact.lowercase()
-    if (normalized == "internal server error" || normalized == "error" || normalized == "failure") return null
-    if (normalized.startsWith("mailbox ") && normalized.endsWith(" is not cached")) {
-        return "This mailbox has not been synchronized on the server yet."
-    }
-    return compact.removeSuffix(".") + "."
 }
 
 private data class DynamicActionExecution(
@@ -2492,7 +2433,5 @@ private fun String.encodeUrlComponent(): String = buildString {
 }
 
 private const val DYNAMIC_HEX = "0123456789ABCDEF"
-private const val MAX_DYNAMIC_ERROR_BODY_CHARS = 8_192
-private const val MAX_DYNAMIC_ERROR_MESSAGE_CHARS = 240
 private const val OCS_API_VIEWER_CATALOG_PATH = "/index.php/apps/ocs_api_viewer/apps"
 private const val OCS_API_VIEWER_SPEC_PATH = "/index.php/apps/ocs_api_viewer/apps"

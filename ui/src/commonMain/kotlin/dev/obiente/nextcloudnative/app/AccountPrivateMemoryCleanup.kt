@@ -6,7 +6,9 @@ object AccountPrivateMemoryCleanup {
 
     internal fun purgeRetiredAccount(accountStorageKey: String) {
         require(accountStorageKey.length == 64 && accountStorageKey.all { it in '0'..'9' || it in 'a'..'f' })
+        sharedAccountPlaybackRetirementRegistry.purgeRetiredAccount(accountStorageKey)
         sharedPreviewMemoryCache.purgeRetiredAccount(accountStorageKey)
+        sharedMediaThumbnailCache.purgeRetiredAccount(accountStorageKey)
         sharedNextcloudNotesCache.purgeRetiredAccount(accountStorageKey)
         sharedDynamicNativeMemoryCache.retireAccount(accountStorageKey)
         sharedDashboardStatusMemoryCache.purgeRetiredAccount(accountStorageKey)

@@ -5,8 +5,7 @@ versioned Nextcloud server apps without embedding their web interfaces. It is
 for contributors changing transport, discovery, repositories, caching, sync,
 or native feature adapters.
 
-**Last reviewed: 2026-08-20.** Architecture rules may have changed. The
-[default-branch document](https://github.com/obiente/native/blob/main/ADAPTER_ARCHITECTURE.md)
+The [default-branch document](https://github.com/obiente/native/blob/main/ADAPTER_ARCHITECTURE.md)
 is the source of truth for the maintained contract.
 
 Current product status belongs in [COMPATIBILITY.md](COMPATIBILITY.md). Planned
@@ -105,7 +104,70 @@ every product feature. When Android and desktop implementations repeat protocol
 logic, extract a shared adapter or repository. Keep separate implementations
 when lifecycle or operating-system semantics are genuinely different.
 
+`DynamicApiCachePolicy` owns common GET cache selection and request coalescing.
+`JvmDynamicApiExecution` shares mutation invalidation and cache orchestration
+through typed callbacks; platform services retain their actual network mapping.
+`JvmDetachedDownload` shares authenticated bounded streaming and cancellation.
+Its explicit ETag policy preserves Android's `OC-Etag` fallback and desktop's
+ETag-only behavior. Sharing code must not erase a verified platform difference.
+
+## Browser sign-in attempt ownership
+
+`LoginAttemptState` owns one cancellable browser approval attempt with a five-minute
+deadline spanning challenge creation, browser handoff, polling, and network waits.
+The screen distinguishes contacting the server, waiting for approval, retrying a
+connection, and completing sign-in. Cancellation releases challenge bookkeeping
+and rejects late results before they can persist credentials. Final credential
+commit remains owned by the existing authenticated-session transition.
+
+Only a classified DNS failure before an HTTP exchange may retry automatically.
+An ambiguous response after the one-time exchange requires a new sign-in attempt.
+Network retry copy describes the last observed failure; it cannot establish the
+current health of DNS, the server, or a VPN. See [sign-in recovery](docs/login-diagnostics.md).
+
+## Cache work and image ownership
+
+Encoded previews coalesce concurrent requests by account incarnation and resource
+revision. Decoded thumbnails use a separate bounded cache keyed by source,
+revision, variant, and requested dimensions. `MediaImageDecoder` limits concurrent
+native decoding to two workers off the presentation dispatcher. The decoded cache
+retains at most 256 images and budgets 24 MiB at eight bytes per pixel; mounted
+views may retain additional references. Eviction drops cache references instead
+of recycling an image still displayed by Compose. Account retirement clears both
+caches and prevents old producers from repopulating them.
+
+Desktop read-cache hits update recency in memory. The next cache mutation persists
+those hints, so a restart may lose recent access ordering but cannot turn partial
+content into a complete entry. A warm read does not publish the index or scan the
+cache directory merely to record access.
+
+Android offline availability reads inspect queue state without scheduling the
+same work on each UI poll. Recovery is explicit when the account is opened;
+enqueue and worker transitions remain scheduling owners. Queue snapshots index
+records and jobs for repeated resource lookups. This does not remove persistence
+reads or claim a fully reactive offline status stream.
+
+## Text editing recovery
+
+`TextEditorState` owns the original content, local edits, revision readiness,
+and ambiguous-save verification. An upload checkpoint is persisted before PUT;
+restoration compares the authoritative remote content before another write. A
+successful response without a replacement ETag clears the old revision. Failed
+favorites restore only the affected flag, and share dialog responses must match
+the current request generation before entering UI state.
+
+Android and desktop bind text recovery to the opaque account identity and remote
+path. `JvmTextEditorDraftStorage` encrypts and authenticates bounded files using
+AES-GCM, publishes them atomically, and rejects old account-generation bindings.
+Android supplies its Keystore key; desktop supplies a key from its secret store.
+Unreadable recovery is preserved rather than overwritten. Capacity failures are
+reported without evicting another draft. Successfully persisted edits survive a
+new editor owner; edits still awaiting persistence are not a crash guarantee.
+These source and deterministic-test contracts do not establish platform lifecycle
+or released-artifact qualification.
+
 ## Capability and discovery rules
+
 
 Capabilities and versioned API descriptions are authoritative. Navigation
 entries and successful guesses are not proof that an operation is safe.
@@ -121,6 +183,35 @@ entries and successful guesses are not proof that an operation is safe.
 
 See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md) and
 [NATIVE_SCHEMA.md](NATIVE_SCHEMA.md) for the serialized trust boundaries.
+
+Dynamic application GETs share a bounded account session adapter in
+[`JvmAuthenticatedAppReadSession.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmAuthenticatedAppReadSession.kt).
+Its read-only OCS profile bootstrap keeps cookies in process memory and scopes
+them to the account origin and application path. Credential replacement and
+account retirement invalidate pending and prepared sessions. Repeated response
+cookies replace earlier values by domain, path, and name; matching cookies use
+more specific paths first. Mutation and public acquisition clients do not use
+this cookie store. See [authenticated application reads](DYNAMIC_APP_DESCRIPTOR.md#authenticated-application-reads)
+for bounds, failure behavior, source evidence, and deterministic coverage.
+
+Native audio uses that same private session adapter for application stream GETs.
+Each stream or range request refreshes an expired session on its stream worker;
+the playback queue does not freeze credentials or cookies into media metadata.
+The call owns cancellation of session preparation and streaming, permits only
+the selected source URL and GET, and refuses redirects. DAV audio remains an
+authenticated file read without application cookies. See
+[`JvmNativeAudioRead.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmNativeAudioRead.kt).
+`AccountPlaybackRetirement` registers the current queue against the existing
+account incarnation. Account cleanup clears pending credentials, cancels preparation
+and streams, and dispatches platform player disposal. Lazy jobs publish under the
+account gate before starting; stale queues cannot restart after account reactivation.
+Deterministic owner tests cover account isolation, replacement, release, and stale
+producer rejection. Platform playback and removal remain separate device checks.
+
+File Copy and Move use the shared `FileTransferDialog` and remote folder picker.
+The dialog owns only temporary name and destination choices. The parent captures
+an immutable validated destination for the existing typed mutation, while the
+transport retains source ETag and no-overwrite preconditions.
 
 ## Mutation policy
 
@@ -205,6 +296,8 @@ scheduling or reconciliation needs it. Provider construction can precede Android
 Startup initialization and must not require the scheduler singleton.
 
 Android folder capability cleanup uses demand-driven one-time WorkManager work.
+Application startup starts reconciliation after AndroidX provider initialization;
+constructing a file-sync engine does not acquire or schedule WorkManager work.
 Empty stores and committed pairs do not keep cleanup work alive. Outstanding
 selections retain a retry owner until bound or abandoned; reconciliation preserves
 selections already delivered to an open setup.
@@ -261,10 +354,20 @@ Before merging an adapter or repository change, confirm:
 
 ## Groupware compatibility failures
 
+CardDAV and CalDAV multiget request builders append escaped object hrefs without
+indenting an XML declaration through multiline interpolation. Strict XML tests
+cover one-item and multi-item batches, namespace ownership, and escaped hrefs.
+
 Contacts and Tasks fall back from multiget REPORT to individual object reads
 only for HTTP 405 or 501. Other server failures and throttling stop the affected
 collection refresh instead of multiplying requests across its objects. A failed
 collection remains a visible failure, not a successful empty result.
+
+A successful contact DELETE is followed by an authoritative object GET within
+the mutation coroutine before its detail view closes. Only 404 or 410 proves
+absence and permits clearing the exact durable recovery record. An unchanged
+object, failed verification, or cancellation retains recovery; screen effects
+also reconcile that record after restart.
 
 CardDAV and CalDAV multiget retain healthy records when another requested resource has
 an explicit 404 or 410 status, and reports the deletion count as a partial
@@ -279,6 +382,10 @@ Tasks track completed refreshes by calendar href, not display name or aggregate
 warning text. A missing selection is cleared after its own calendar completes,
 even if another calendar fails. Failed or budget-truncated calendars do not
 prove deletion; selection retains its calendar identity across restoration.
+An initial refresh where every task list fails shows an error, not an empty
+task count. Later failures retain previously loaded tasks within the existing
+memory budget, mark the result incomplete, and withhold writes for calendars
+whose refresh did not complete. Successfully refreshed lists remain usable.
 
 Whole-object task deletion requires one balanced VCALENDAR containing exactly
 one top-level VTODO and no sibling data components. Supporting VTIMEZONE and
@@ -520,3 +627,25 @@ creation and promotion; network downloads remain outside the registry lock.
 
 Ordinary reconciliation keeps live reselections abandonable; account retirement
 adopts matching configured-pair ownership before retiring drafts.
+
+### Activity and Search entry navigation
+
+Activity and unified Search first pass a supplied link through the shared
+account-aware link policy. Supported Files IDs and paths retain their exact
+identity instead of being replaced with a parent-folder or provider-app hint.
+The existing asynchronous Files ID resolver remains the authority for the
+current file location; no DAV path or resource ID is inferred from a label.
+
+Unsupported app-specific record URLs retain their existing native app-root or
+folder fallback. This does not qualify native exact-record navigation for Notes,
+Deck, Calendar, or other app-specific web routes. Adding those routes requires a
+reviewed mapping to an existing typed native destination and its verified identity.
+Foreign origins, malformed links, unknown query semantics, and conflicting file
+IDs never become exact native destinations through provider metadata.
+Dynamic navigation restoration saves bounded record IDs, route parameters and
+history only. It does not persist record titles or payloads. Restored records
+remain unsafe for actions until the existing authoritative-read path renews
+their data. Headers, subtitles and section menus use the verified resource label
+when only a restored ID is available, or "Selected item" if no useful resource
+label exists. A parent name is not recovered from its child's response; it
+returns when that parent is authoritatively loaded again.

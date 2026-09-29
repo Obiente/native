@@ -258,7 +258,7 @@ fun NativeMediaCollectionCover(
     modifier: Modifier = Modifier,
 ) {
     val coverFile = remember(collection.key, collection.cover) { collection.asNextcloudCoverFileOrNull() }
-    var image by remember(collection.key, collection.cover) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember(session, collection.key, collection.cover) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(
         session,
         coverFile?.fileId,
@@ -267,14 +267,12 @@ fun NativeMediaCollectionCover(
         coverFile?.memoriesRenderAllowed,
     ) {
         image = coverFile?.let { file ->
-            services.loadMediaThumbnailDecoded(
+            services.loadMediaThumbnailImage(
                 session = session,
                 file = file,
                 width = 480,
                 height = 480,
-            ) { payload ->
-                decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-            }
+            )
         }
     }
     Box(
@@ -377,7 +375,7 @@ private fun NativeMediaItemTile(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
 ) {
-    var image by remember(
+    var image by remember(session,
         file.fileId,
         file.etag,
         file.hasPreview,
@@ -392,14 +390,12 @@ private fun NativeMediaItemTile(
         file.hasPreview,
         file.memoriesRenderAllowed,
     ) {
-        image = services.loadMediaThumbnailDecoded(
+        image = services.loadMediaThumbnailImage(
             session = session,
             file = file,
             width = 384,
             height = 384,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     Box(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f)

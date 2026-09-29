@@ -60,7 +60,7 @@ private suspend fun captureMarketingScreenshots(
     val initialCaptureSourceHashes = captureSourceHashes(repositoryRoot, captureSources)
     val avatarSha256 = Files.readAllBytes(
         repositoryRoot.resolve(
-            "ui/src/desktopMain/resources/marketing/obiente-avatar.png",
+            "ui/src/desktopTest/resources/marketing/obiente-avatar.png",
         ),
     ).sha256()
 
@@ -125,7 +125,7 @@ private suspend fun captureMarketingScreenshots(
         require(
             Files.readAllBytes(
                 repositoryRoot.resolve(
-                    "ui/src/desktopMain/resources/marketing/obiente-avatar.png",
+                    "ui/src/desktopTest/resources/marketing/obiente-avatar.png",
                 ),
             ).sha256() == avatarSha256,
         ) {
@@ -211,7 +211,7 @@ private const val CAPTURE_FONT_SCALE = 1f
 
 internal fun deterministicCaptureTypography(repositoryRoot: Path): Typography {
     val fontDirectory = repositoryRoot.resolve(
-        "ui/src/desktopMain/resources/marketing/fonts",
+        "ui/src/desktopTest/resources/marketing/fonts",
     )
     val fontFamily = FontFamily(
         Font(fontDirectory.resolve("NotoSans-Regular.ttf").toFile(), FontWeight.Normal),

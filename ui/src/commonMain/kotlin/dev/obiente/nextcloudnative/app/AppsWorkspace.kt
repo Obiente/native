@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
@@ -97,7 +99,7 @@ internal fun NativeAppsWorkspace(
             title = { Text(entry.app.name) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(entry.description)
+                    if (entry.description.isNotBlank()) Text(entry.description)
                     Text(entry.category.title, color = MaterialTheme.colorScheme.primary)
                     Text(if (entry.nativeWorkspace) "Dedicated native workspace" else "Available actions are checked when opened")
                     if (entry.pinned) Text("Pinned to shortcuts")
@@ -133,6 +135,8 @@ internal fun NativeAppsWorkspace(
             serverInfo = serverInfo,
             error = error,
             query = query,
+            category = selectedCategory,
+            onCategorySelected = { selectedCategoryName = it.name },
             presentation = presentation,
             onQueryChanged = { query = it },
             onRetry = onRetry,
@@ -254,6 +258,8 @@ private fun CompactAppsWorkspace(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     query: String,
+    category: AppWorkspaceCategory,
+    onCategorySelected: (AppWorkspaceCategory) -> Unit,
     presentation: AppWorkspacePresentation,
     pinError: String?,
     canPinMore: Boolean,
@@ -266,41 +272,109 @@ private fun CompactAppsWorkspace(
     onTogglePinnedApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        WorkspaceHeader("Apps", "Everything connected to your cloud", onSettings, onSearch)
+        WorkspaceHeader("Apps", if (serverInfo == null) "Your cloud apps" else appWorkspaceCountLabel(presentation.totalCount),
+            onSettings, onSearch, showGlobalSearch = false)
         when {
             error != null -> AppsErrorState(error, onRetry)
             serverInfo == null -> AppsLoadingState()
             else -> {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChanged,
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium)
-                        .semantics { contentDescription = "Search apps" },
-                    leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                    placeholder = { Text("Find an app or workspace") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                )
                 pinError?.let { AppsPinError(it) }
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(220.dp),
+                    columns = GridCells.Adaptive(320.dp),
+                    modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(NextcloudSpacing.Medium),
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
-                    items(presentation.entries, key = { it.app.id }) { entry ->
-                        AppWorkspaceCard(
-                            entry = entry,
-                            selected = false,
-                            onSelect = { onSelected(entry) },
-                            onOpen = { onOpenApp(entry.app) },
-                            onTogglePinned = { onTogglePinnedApp(entry.app.id) },
-                            canPin = canPinMore,
-                            primaryActionLabel = "Open ${entry.app.name}",
+                    item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = onQueryChanged,
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search apps" },
+                            leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+                            placeholder = { Text("Find an app") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(NextcloudRadii.Card),
                         )
+                    }
+                    item(key = "categories", span = { GridItemSpan(maxLineSpan) }) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                            items(presentation.visibleCategories, key = AppWorkspaceCategory::name) { item ->
+                                FilterChip(selected = category == item, onClick = { onCategorySelected(item) },
+                                    label = { Text(item.title) })
+                            }
+                        }
+                    }
+                    if (query.isBlank() && category == AppWorkspaceCategory.All &&
+                        presentation.pinnedEntries.isNotEmpty()
+                    ) {
+                        item(key = "shortcuts", span = { GridItemSpan(maxLineSpan) }) {
+                            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                Text("Pinned", style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold)
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                    items(presentation.pinnedEntries, key = { it.app.id }) { entry ->
+                                        RecentAppCard(entry, { onOpenApp(entry.app) }, Modifier.width(200.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item(key = "results", span = { GridItemSpan(maxLineSpan) }) {
+                        Text(if (query.isBlank()) category.title else "${appWorkspaceCountLabel(presentation.entries.size)} found",
+                            modifier = Modifier.padding(top = NextcloudSpacing.Small),
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (presentation.entries.isEmpty()) {
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                            AppsEmptyState(query, category)
+                        }
+                    }
+                    items(presentation.entries, key = { it.app.id }) { entry ->
+                        CompactAppRow(entry, { onSelected(entry) }, { onOpenApp(entry.app) },
+                            { onTogglePinnedApp(entry.app.id) }, canPinMore)
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CompactAppRow(
+    entry: AppWorkspaceEntry,
+    onDetails: () -> Unit,
+    onOpen: () -> Unit,
+    onTogglePinned: () -> Unit,
+    canPin: Boolean,
+) {
+    var expanded by remember(entry.app.id) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            onOpen = onOpen, onShowActions = { expanded = true },
+            openLabel = "Open ${entry.app.name}", actionsLabel = "Actions for ${entry.app.name}"),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Row(Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppIcon(entry.app.id, Modifier.size(44.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(entry.app.name, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (entry.description.isNotBlank()) {
+                    Text(entry.description, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
+            NextcloudCardOverflow(itemLabel = entry.app.name,
+                actions = listOf(
+                    NextcloudCardAction("App details", "app-details", onClick = onDetails),
+                    NextcloudCardAction(if (entry.pinned) "Unpin from shortcuts" else "Pin to shortcuts",
+                        if (entry.pinned) "unpin-app" else "pin-app", enabled = entry.pinned || canPin,
+                        onClick = onTogglePinned)),
+                expanded = expanded, onExpandedChange = { expanded = it })
         }
     }
 }
@@ -311,9 +385,11 @@ private fun WorkspaceHeader(
     subtitle: String,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
+    showGlobalSearch: Boolean = true,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.Large),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 76.dp).padding(
+            horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -325,7 +401,7 @@ private fun WorkspaceHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = onSearch) {
+        if (showGlobalSearch) IconButton(onClick = onSearch) {
             Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
         }
         IconButton(onClick = onSettings) {
@@ -415,12 +491,14 @@ private fun RecentAppCard(entry: AppWorkspaceEntry, onOpen: () -> Unit, modifier
         ) {
             AppIcon(entry.app.id, modifier = Modifier.size(38.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(entry.app.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                Text(entry.app.name, style = MaterialTheme.typography.titleSmall, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
                 Text(
                     entry.category.title,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Icon(NextcloudIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -491,7 +569,7 @@ private fun AppWorkspaceCard(
                     onExpandedChange = { actionsExpanded = it },
                 )
             }
-            Text(
+            if (entry.description.isNotBlank()) Text(
                 entry.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

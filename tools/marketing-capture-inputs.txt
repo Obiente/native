@@ -6,9 +6,11 @@ gradle/libs.versions.toml
 gradle/wrapper/gradle-wrapper.properties
 ui/build.gradle.kts
 ui/src/commonMain/kotlin
+ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/captures
 ?ui/src/commonMain/resources
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview
-ui/src/desktopMain/resources/marketing
+ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/preview
+ui/src/desktopTest/resources/marketing
 website/public/demo-media/field-notes.webp
 website/public/demo-media/forest-trail.webp
 website/public/demo-media/north-sea.webp

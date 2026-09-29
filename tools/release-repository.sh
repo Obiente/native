@@ -7,3 +7,10 @@ case "${repository,,}" in
     *) printf 'Unsupported release repository: %s\n' "$repository" >&2; exit 2 ;;
 esac
 release_url_repository="Obiente/nc-native"
+
+# Native Windows jq emits CRLF. Normalize only line terminators, not metadata,
+# and preserve jq failures with pipefail. This also supports Unix jq 1.6.
+release_jq() (
+    set -o pipefail
+    jq "$@" | sed 's/\r$//'
+)

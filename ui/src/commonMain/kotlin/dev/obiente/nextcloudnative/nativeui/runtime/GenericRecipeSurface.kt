@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -42,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -52,7 +55,12 @@ internal fun GenericRecipeCollection(
     rows: List<Pair<NativeRecord, NativeRecipePresentation>>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     imageLoader: NativeImageLoader?,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
 ) {
+    val gridState = rememberLazyGridState()
+    NativeCollectionGridAutoPager(gridState, onLoadMore, loadingMore, loadMoreError)
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
     val categories = remember(rows) { nativeRecipeCategories(rows) }
@@ -94,70 +102,76 @@ internal fun GenericRecipeCollection(
                 }
             }
         }
-        if (filteredRows.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
-                Text(
-                    "No recipes match your search.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Adaptive(220.dp),
+            modifier = Modifier.fillMaxSize().weight(1f),
+            contentPadding = PaddingValues(NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            if (filteredRows.isEmpty()) {
+                item(key = "recipe-empty", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        if (onLoadMore != null || loadingMore || loadMoreError != null)
+                            "No loaded recipes match your search." else "No recipes match your search.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(220.dp),
-                modifier = Modifier.fillMaxSize().weight(1f),
-                contentPadding = PaddingValues(NextcloudSpacing.Large),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                items(filteredRows, key = { (record, _) -> record.id }) { (record, recipe) ->
-                    val interaction = onSelectRecord
-                        ?.let { callback -> Modifier.clickable { callback(record) } }
-                        ?: Modifier
-                    Card(
-                        modifier = interaction.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        Column {
-                            RecipeImage(
-                                path = recipe.imagePath ?: recipe.placeholderImagePath,
-                                title = recipe.title,
-                                imageLoader = imageLoader,
-                                modifier = Modifier.fillMaxWidth().height(138.dp),
+            items(filteredRows, key = { (record, _) -> record.id }) { (record, recipe) ->
+                val interaction = onSelectRecord
+                    ?.let { callback -> Modifier.clickable { callback(record) } }
+                    ?: Modifier
+                Card(
+                    modifier = interaction.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Column {
+                        RecipeImage(
+                            path = recipe.imagePath ?: recipe.placeholderImagePath,
+                            title = recipe.title,
+                            imageLoader = imageLoader,
+                            modifier = Modifier.fillMaxWidth().height(138.dp),
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                        ) {
+                            Text(
+                                recipe.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                            ) {
+                            recipe.collectionMetadata?.let { metadata ->
                                 Text(
-                                    recipe.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    metadata,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                recipe.collectionMetadata?.let { metadata ->
-                                    Text(
-                                        metadata,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                if (recipe.keywords.isNotEmpty()) {
-                                    Text(
-                                        recipe.keywords.take(3).joinToString(" · "),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                            }
+                            if (recipe.keywords.isNotEmpty()) {
+                                Text(
+                                    recipe.keywords.take(3).joinToString(" · "),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                         }
                     }
+                }
+            }
+            if (loadingMore || loadMoreError != null) {
+                item(key = "recipe-paging", span = { GridItemSpan(maxLineSpan) }) {
+                    NativeCollectionPagingStatus(loadingMore, loadMoreError, onLoadMore)
                 }
             }
         }
@@ -172,12 +186,14 @@ internal fun GenericRecipeDetailHeader(
     selectedServings: Double?,
     onSelectedServingsChange: ((Double) -> Unit)?,
 ) {
-    RecipeImage(
-        path = recipe.imagePath ?: recipe.placeholderImagePath,
-        title = recipe.title,
-        imageLoader = imageLoader,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 320.dp).height(260.dp),
-    )
+    (recipe.imagePath ?: recipe.placeholderImagePath)?.let { path ->
+        RecipeImage(
+            path = path,
+            title = recipe.title,
+            imageLoader = imageLoader,
+            modifier = Modifier.fillMaxWidth().height(if (recipe.imagePath != null) 260.dp else 80.dp),
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
         Text(
             recipe.title,
@@ -331,7 +347,15 @@ private fun RecipeImage(
     var image by remember(path, imageLoader) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(path, imageLoader) {
         image = path?.let { relativePath ->
-            imageLoader?.let { loader -> runCatching { loader.load(relativePath) }.getOrNull() }
+            imageLoader?.let { loader ->
+                try {
+                    loader.load(relativePath)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+            }
         }
     }
     Surface(

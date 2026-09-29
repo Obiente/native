@@ -9,6 +9,32 @@ import kotlinx.serialization.json.jsonObject
 
 class DynamicOpenApiServerTrustTest {
     @Test
+    fun `trusted whole host template without port uses authenticated account authority`() {
+        listOf("https://cloud.example.test:8443", "https://[2001:db8::1]:8443").forEach { origin ->
+            assertEquals("/ocs/v2.php/apps/example/api", openApiServerBase(
+                document("https://{host}/ocs/v2.php/apps/example/api"), origin, allowTrustedRebase = true))
+            assertFailsWith<IllegalArgumentException> {
+                openApiServerBase(document("https://{host}/ocs/v2.php/apps/example/api"), origin,
+                    allowTrustedRebase = false)
+            }
+        }
+        assertEquals("/apps/example", openApiServerBase(document("https://{host}:8443/apps/example"),
+            "https://cloud.example.test:8443", allowTrustedRebase = true))
+    }
+
+    @Test
+    fun `implicit template port never relaxes concrete origins explicit ports schemes or paths`() {
+        listOf("https://{host}:443/apps/example", "https://{host}:9443/apps/example",
+            "http://{host}/apps/example", "https://foreign.example.test/apps/example",
+            "https://{tenant}.example.test/apps/example", "https://{host}/apps/{app}",
+            "https://{host}/../apps/example", "https://{host}/apps/example?token=synthetic",
+            "https://user@{host}/apps/example", "https://{host/apps/example").forEach { server ->
+            assertFailsWith<IllegalArgumentException>(server) {
+                openApiServerBase(document(server), "https://cloud.example.test:8443", allowTrustedRebase = true)
+            }
+        }
+    }
+    @Test
     fun `trusted single cross origin server rebases to its declared path`() {
         assertEquals(
             "/ocs/v2.php/apps/example/api",

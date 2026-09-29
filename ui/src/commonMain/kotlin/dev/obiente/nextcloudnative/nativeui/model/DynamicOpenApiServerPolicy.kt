@@ -120,8 +120,8 @@ private fun normalizeOpenApiServer(value: String, origin: String): NormalizedOpe
             accountPort.startsWith(':') -> accountPort.drop(1).validHttpPort()
             else -> null
         }
-        require(effectiveAccountPort != null && (declaredPort.isOpenApiVariable() ||
-            (if (declaredPort.isEmpty()) defaultHttpPort(scheme) else declaredPort.validHttpPort()) == effectiveAccountPort)) {
+        require(effectiveAccountPort != null && (declaredPort.isEmpty() || declaredPort.isOpenApiVariable() ||
+            declaredPort.validHttpPort() == effectiveAccountPort)) {
             "A templated OpenAPI server cannot change its declared port: $value"
         }
     }

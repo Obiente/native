@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,11 +25,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -81,13 +80,13 @@ internal fun MediaTransferCenterScreen(
             onBack = onBack,
         )
         LazyColumn(
-            modifier = Modifier.widthIn(max = 1100.dp).fillMaxSize(),
+            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 1100.dp).fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+            contentPadding = PaddingValues(NextcloudSpacing.Medium),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
             item(key = "summary") {
-                MediaTransferSummary(state.summary)
+                MediaTransferSummary(state.summary, onReviewFailures = { onSelectSection(MediaTransferSection.Failed) })
             }
             item(key = "filters") {
                 MediaTransferFilters(
@@ -222,7 +221,7 @@ internal fun MediaTransferCenterScreen(
 }
 
 @Composable
-private fun MediaTransferSummary(summary: MediaBackupLedgerSummary) {
+private fun MediaTransferSummary(summary: MediaBackupLedgerSummary, onReviewFailures: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
@@ -232,19 +231,19 @@ private fun MediaTransferSummary(summary: MediaBackupLedgerSummary) {
             modifier = Modifier.padding(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
-            Text(
-                "${summary.uploading} active | ${summary.pending} pending",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Text("Upload queue", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${summary.uploading} active | ${summary.pending} pending",
+                style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
                 Text("${summary.failed} need attention", style = MaterialTheme.typography.bodySmall,
                     color = if (summary.failed > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${summary.succeeded} completed", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (summary.uploading > 0) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            if (summary.uploading > 0) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            if (summary.failed > 0) {
+                TextButton(onClick = onReviewFailures) { Text("Review failed uploads") }
             }
         }
     }
@@ -347,7 +346,6 @@ private fun MediaTransferCard(
                 if (busy) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 }
-                MediaBackupStatusIndicator(record.resolveMediaBackupStatus())
                 NextcloudCardOverflow(
                     itemLabel = label,
                     actions = actions,
@@ -355,6 +353,7 @@ private fun MediaTransferCard(
                     onExpandedChange = { menuExpanded = it },
                 )
             }
+            MediaBackupStatusIndicator(record.resolveMediaBackupStatus())
             val metadata = buildList {
                 record.local?.size?.let { add(formatTransferBytes(it)) }
                 add(mediaTransferProgressLabel(record))

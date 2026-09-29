@@ -8,7 +8,7 @@ import kotlin.test.assertFailsWith
 
 class DynamicOpenApiTemplateTransportTest {
     @Test
-    fun onlyTemplatedOriginComponentsMayBeRebased() {
+    fun wholeHostTemplatesInheritUnspecifiedPortsButRetainConcreteSchemeAndPort() {
         val origins = listOf("https://cloud.example.test", "https://cloud.example.test:443",
             "https://cloud.example.test:8443", "http://cloud.example.test", "http://cloud.example.test:8080",
             "https://[2001:db8::1]", "https://[2001:db8::1]:8443")
@@ -20,7 +20,7 @@ class DynamicOpenApiTemplateTransportTest {
                 listOf("", ":80", ":443", ":8080", ":8443", ":{port}", ":0", ":65536").forEach { port ->
                     val server = "$scheme://{host}$port/apps/example"
                     val declaredPort = if (port.isEmpty()) (if (scheme == "https") 443 else 80) else port.drop(1).toIntOrNull()
-                    val accepted = scheme == accountScheme && (port == ":{port}" || declaredPort == accountPort)
+                    val accepted = scheme == accountScheme && (port.isEmpty() || port == ":{port}" || declaredPort == accountPort)
                     val document = Json.parseToJsonElement("""{"servers":[{"url":"$server"}]}""").jsonObject
                     if (accepted) assertEquals("/apps/example", openApiServerBase(document, origin, true), "$origin / $server")
                     else assertFailsWith<IllegalArgumentException>("$origin / $server") { openApiServerBase(document, origin, true) }

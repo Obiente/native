@@ -9,6 +9,16 @@ import kotlin.test.assertTrue
 
 class JvmLoginFlowHttpPolicyTest {
     @Test
+    fun `malformed server addresses show guidance without echoing input`() {
+        listOf("https://", "https://cloud.example.test/private path", "https://[broken").forEach { address ->
+            val failure = assertFailsWith<IllegalArgumentException> { normalizeServerUrl(address) }
+            assertEquals("Enter a valid server address, such as https://cloud.example.com.", failure.message)
+            assertIs<java.net.URISyntaxException>(failure.cause)
+        }
+        assertEquals("https://cloud.example.test/nextcloud", normalizeServerUrl(" cloud.example.test/nextcloud/index.php/ "))
+    }
+
+    @Test
     fun `challenge parsing validates endpoints and builds safe diagnostics`() {
         val interpretation = interpretLoginChallengeHttpResponse(
             status = 200,

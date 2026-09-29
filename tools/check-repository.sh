@@ -27,6 +27,7 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_directory"' EXIT
 
 bash tools/test-text-hygiene.sh
+node --test tools/test-ci-source-scopes.mjs
 bash tools/test-kotlin-architecture.sh
 bash tools/check-kotlin-architecture.sh
 rustc --edition=2021 tools/text-hygiene.rs \
@@ -71,5 +72,7 @@ bash tools/test-update-channel-promotion.sh
 bash tools/test-download-channel-promotion.sh
 bash tools/test-linux-package-metadata.sh
 bash tools/test-desktop-update-manifest.sh
+
+bash tools/test-jq-output-portability.sh
 
 printf 'Repository hygiene checks passed.\n'

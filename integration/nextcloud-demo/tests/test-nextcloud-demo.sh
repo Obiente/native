@@ -7,6 +7,9 @@ helper="$project_root/tools/nextcloud-demo.sh"
 manifest="$demo_root/apps/representative.tsv"
 
 bash -n "$helper"
+bash "$demo_root/tests/test-nextcloud-demo-certificates.sh"
+bash "$demo_root/tests/test-nextcloud-demo-office.sh"
+bash "$demo_root/tests/test-nextcloud-demo-validation.sh"
 "$helper" --help | grep -Fq 'reset --confirm'
 "$helper" --help | grep -Fq 'credentials, and certificates for reinitialization'
 "$helper" --help | grep -Fq 'stage-catalog'

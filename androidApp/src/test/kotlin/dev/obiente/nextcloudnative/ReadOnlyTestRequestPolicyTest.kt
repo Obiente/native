@@ -197,7 +197,7 @@ class ReadOnlyTestRequestPolicyTest {
             "/remote.php/dav/addressbooks/users/nc-native-e2e/contacts/record.vcf",
             "/remote.php/dav/calendars/nc-native-e2e",
             "/remote.php/dav/calendars/nc-native-e2e/personal/event.ics",
-            "/remote.php/dav/files/nc-native-e2e/NC-Native-E2E",
+            "/remote.php/dav/files/nc-native-e2e",
         ).forEach { path ->
             assertNull(ScopedTestWriteAuthorization.create("https://cloud.example.test", path), path)
         }

@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.PhotoTimelineDateScrubber
 import dev.obiente.nextcloudnative.app.PhotoTimelineEntry
-import dev.obiente.nextcloudnative.app.PhotoTimelineScrubberTouchLaneWidth
 import dev.obiente.nextcloudnative.app.buildPhotoTimelineDateIndex
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -82,9 +81,9 @@ private fun PhotoTimelineSyntheticPreview() {
                 columns = GridCells.Fixed(3),
                 state = gridState,
                 contentPadding = PaddingValues(
-                    start = NextcloudSpacing.Small,
+                    start = 4.dp,
                     top = NextcloudSpacing.Large,
-                    end = PhotoTimelineScrubberTouchLaneWidth,
+                    end = 4.dp,
                     bottom = NextcloudSpacing.XLarge,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),

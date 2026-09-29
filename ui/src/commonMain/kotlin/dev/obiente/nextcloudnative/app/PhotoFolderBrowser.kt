@@ -570,16 +570,14 @@ private fun PhotoFolderPreviewImage(
             memoriesRenderAllowed = true,
         )
     }
-    var image by remember(fileId) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember(session, fileId) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(session, fileId) {
-        image = services.loadMediaThumbnailDecoded(
+        image = services.loadMediaThumbnailImage(
             session = session,
             file = file,
             width = 320,
             height = 320,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     image?.let { bitmap ->
         Image(
@@ -639,7 +637,7 @@ private fun PhotoFolderMediaListItem(
     userId: String?,
     onClick: () -> Unit,
 ) {
-    var image by remember(
+    var image by remember(session,
         stack.cover.fileId,
         stack.cover.etag,
         stack.cover.hasPreview,
@@ -656,13 +654,11 @@ private fun PhotoFolderMediaListItem(
         stack.cover.memoriesRenderAllowed,
     ) {
         if (stack.cover.fileId == null) return@LaunchedEffect
-        image = services.loadMediaThumbnailDecoded(
+        image = services.loadMediaThumbnailImage(
             session = session,
             file = stack.cover,
             userId = userId,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),

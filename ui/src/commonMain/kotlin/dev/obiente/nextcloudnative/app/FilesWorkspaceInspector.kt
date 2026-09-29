@@ -81,19 +81,17 @@ internal fun FilesInspector(
             return@Column
         }
         var menuExpanded by remember(file.path) { mutableStateOf(false) }
-        var preview by remember(file.fileId, file.etag, file.hasPreview) { mutableStateOf<ImageBitmap?>(null) }
+        var preview by remember(session, file.fileId, file.etag, file.hasPreview) { mutableStateOf<ImageBitmap?>(null) }
         LaunchedEffect(session, userId, file.fileId, file.etag, file.hasPreview) {
             file.fileId ?: return@LaunchedEffect
             if (file.isDirectory || !file.isPhotoMedia()) return@LaunchedEffect
-            preview = services.loadMediaThumbnailDecoded(
+            preview = services.loadMediaThumbnailImage(
                 session = session,
                 userId = userId,
                 file = file,
                 width = 620,
                 height = 420,
-            ) { payload ->
-                decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-            }
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Details", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))

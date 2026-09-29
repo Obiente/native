@@ -2,12 +2,15 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -27,7 +30,8 @@ internal fun ContactDetailDialog(
         icon = { Icon(NextcloudIcons.app("contacts"), contentDescription = null) },
         title = { Text(contact.displayName) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 contact.organization?.let { Text(it, fontWeight = FontWeight.SemiBold) }
                 contact.emails.forEach { Text(it) }
                 contact.phones.forEach { Text(it) }

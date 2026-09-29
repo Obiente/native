@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
- * Small process-local LRU for previews. It removes repeated network and decode work while browsing
+ * Small process-local LRU for encoded previews. It removes repeated network work while browsing
  * between grids and viewers. Persistent encrypted/offline caching remains a separate repository
  * concern because it needs account lifecycle, quotas, and platform storage policies.
  */
@@ -13,6 +15,30 @@ internal class PreviewMemoryCache(
 ) {
     private val entries = linkedMapOf<PreviewCacheKey, ByteArray>()
     private var bytes = 0
+    private val pending = mutableMapOf<Pair<PreviewCacheKey, Long>, PendingPreview>()
+
+    private class PendingPreview(val mutex: Mutex = Mutex(), var users: Int = 0, var result: ByteArray? = null)
+
+    suspend fun load(key: PreviewCacheKey, fetch: suspend () -> ByteArray): ByteArray {
+        val producer = producer(key) ?: return fetch()
+        val requestKey = key to producer.incarnation
+        val request = gate.withLock {
+            pending.getOrPut(requestKey) { PendingPreview() }.also { it.users += 1 }
+        }
+        try {
+            return request.mutex.withLock {
+                gate.read(producer, null) { request.result ?: get(key) } ?: fetch().also {
+                    request.result = it
+                    put(key, it, producer)
+                }
+            }
+        } finally {
+            gate.withLock {
+                request.users -= 1
+                if (request.users == 0) pending.remove(requestKey)
+            }
+        }
+    }
 
     init {
         require(maximumBytes > 0)
@@ -90,8 +116,7 @@ internal suspend fun loadPreviewMemoryCached(
     load: suspend () -> ByteArray,
 ): ByteArray {
     if (key == null) return load()
-    val producer = cache.producer(key)
-    return cache.get(key) ?: load().also { cache.put(key, it, producer) }
+    return cache.load(key, load)
 }
 
 internal suspend fun NextcloudPlatformServices.loadPreviewCached(

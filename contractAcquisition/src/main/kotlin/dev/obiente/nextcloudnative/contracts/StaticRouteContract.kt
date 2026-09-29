@@ -172,10 +172,11 @@ internal fun synthesizeReadOnlyRouteContract(
             return@forEach
         }
 
+        val routeParameters = if (route.verb == "GET") controller.readParameters else controller.parameters
         val parameters = JSONArray()
         val pathParameterNames = fullPathPlaceholders
         pathParameterNames.forEach { name ->
-            val declaredParameter = controller.parameters[route.method.normalizedPhpName()]
+            val declaredParameter = routeParameters[route.method.normalizedPhpName()]
                 ?.firstOrNull { parameter -> parameter.name.equals(name, ignoreCase = true) }
             parameters.put(
                 JSONObject()
@@ -186,7 +187,7 @@ internal fun synthesizeReadOnlyRouteContract(
             )
         }
         if (route.verb == "GET" || operationalRefreshWrite) {
-            controller.parameters[route.method.normalizedPhpName()].orEmpty()
+            routeParameters[route.method.normalizedPhpName()].orEmpty()
                 .filterNot { parameter ->
                     pathParameterNames.any { pathName -> pathName.equals(parameter.name, ignoreCase = true) }
                 }
@@ -641,16 +642,11 @@ internal data class StaticApiController(
     val singleParameters: Map<String, StaticPhpParameter>,
     val parameters: Map<String, List<StaticPhpParameter>>,
     val completeParameters: Map<String, List<StaticPhpParameter>>,
+    val readParameters: Map<String, List<StaticPhpParameter>>,
     val methodsWithRequestInput: Set<String>,
 ) {
     val normalizedName: String = name.removeSuffix("Controller").normalizedPhpName()
 }
-
-internal data class StaticPhpParameter(
-    val name: String,
-    val type: String,
-    val required: Boolean = true,
-)
 
 private data class StaticSettingsSetter(
     val resourceId: String,
@@ -668,9 +664,8 @@ private fun isVerifiedChoresController(
     controller: StaticApiController,
     controllerSource: String?,
 ): Boolean =
-    appId == "chores" && appVersion == "0.1.0" &&
-        controller.normalizedName == "api" && controllerSource != null &&
-        controllerSource.sha256() == CHORES_0_1_0_API_CONTROLLER_SHA256
+    appId == "chores" && controller.normalizedName == "api" && controllerSource != null &&
+        isVerifiedChoresControllerDigest(appVersion, controllerSource.sha256())
 
 /**
  * Declares the exact identities and invitation bindings serialized by the pinned Chores
@@ -935,9 +930,6 @@ private fun choresRepeatScheduleSchema(): JSONObject {
         .put("x-nextcloud-native-enum-labels", JSONObject(choices))
 }
 
-private const val CHORES_0_1_0_API_CONTROLLER_SHA256 =
-    "146286dcb68bddd025e0a47e7edc134fbc94f0e9f594e9030663bb0f217f3cc6"
-
 /**
  * Proves only conventional scalar CRUD signatures. Every route placeholder and every required
  * controller argument must have one serializable declaration. Unsupported optional arguments are
@@ -1025,7 +1017,7 @@ private sealed interface PhpLiteral {
     data class Entry(val key: String?, val value: PhpLiteral)
 }
 
-private sealed interface PhpToken {
+internal sealed interface PhpToken {
     data class Word(val value: String) : PhpToken
     data class Text(val value: String) : PhpToken
     data class Symbol(val value: Char) : PhpToken
@@ -1346,6 +1338,7 @@ private fun parseApiController(
             name = methodName,
             singleParameter = singleSerializableParameter(tokens, nameIndex),
             parameters = serializableParameters(tokens, nameIndex),
+            readParameters = serializableParameters(tokens, nameIndex, allowScalarUnions = true),
             completeParameters = serializableParameters(
                 tokens = tokens,
                 methodNameIndex = nameIndex,
@@ -1367,6 +1360,9 @@ private fun parseApiController(
         completeParameters = methodEntries.mapNotNull { method ->
             method.completeParameters?.let { method.name to it }
         }.toMap(),
+        readParameters = methodEntries.mapNotNull { method ->
+            method.readParameters?.let { method.name to it }
+        }.toMap(),
         methodsWithRequestInput = methodEntries
             .filter(ParsedStaticMethod::readsRequestInput)
             .mapTo(linkedSetOf(), ParsedStaticMethod::name),
@@ -1378,6 +1374,7 @@ private data class ParsedStaticMethod(
     val singleParameter: StaticPhpParameter?,
     val parameters: List<StaticPhpParameter>?,
     val completeParameters: List<StaticPhpParameter>?,
+    val readParameters: List<StaticPhpParameter>?,
     val readsRequestInput: Boolean,
 )
 
@@ -1458,151 +1455,6 @@ private fun List<PhpToken>.containsRequestInputAccess(): Boolean {
     val words = filterIsInstance<PhpToken.Word>().map { token -> token.value.lowercase() }
     if ("request" !in words) return false
     return words.any { word -> word in STATIC_REQUEST_INPUT_ACCESSORS }
-}
-
-/**
- * Parses only ordinary scalar PHP controller arguments. Unsupported signatures simply do not
- * contribute query parameters; no PHP source is evaluated and no default expression is used.
- */
-private fun serializableParameters(
-    tokens: List<PhpToken>,
-    methodNameIndex: Int,
-    allowUnsupportedOptional: Boolean = true,
-): List<StaticPhpParameter>? {
-    val signature = methodParameterTokens(tokens, methodNameIndex) ?: return null
-    if (signature.isEmpty()) return emptyList()
-    val segments = mutableListOf<List<PhpToken>>()
-    var start = 0
-    var nesting = 0
-    signature.forEachIndexed { index, token ->
-        val symbol = token as? PhpToken.Symbol
-        when (symbol?.value) {
-            '(', '[', '{' -> nesting += 1
-            ')', ']', '}' -> {
-                nesting -= 1
-                if (nesting < 0) return null
-            }
-            ',' -> if (nesting == 0) {
-                segments += signature.subList(start, index)
-                start = index + 1
-            }
-        }
-    }
-    if (nesting != 0) return null
-    if (start < signature.size) {
-        segments += signature.subList(start, signature.size)
-    }
-    if (segments.isEmpty()) return null
-    return segments.mapNotNull { segment ->
-        parseSerializableParameter(segment) ?: if (allowUnsupportedOptional && segment.hasOptionalDefault()) {
-            null
-        } else {
-            // Never erase an unknown required argument: doing so could make a write or a
-            // parameterized read look callable without all of its required inputs.
-            return null
-        }
-    }
-}
-
-private fun List<PhpToken>.hasOptionalDefault(): Boolean {
-    var nesting = 0
-    forEach { token ->
-        val symbol = token as? PhpToken.Symbol ?: return@forEach
-        when (symbol.value) {
-            '(', '[', '{' -> nesting += 1
-            ')', ']', '}' -> nesting -= 1
-            '=' -> if (nesting == 0) return true
-        }
-    }
-    return false
-}
-
-private fun parseSerializableParameter(tokens: List<PhpToken>): StaticPhpParameter? {
-    if (tokens.isEmpty()) return null
-    val dollarIndex = tokens.indexOfFirst { token ->
-        token is PhpToken.Symbol && token.value == '$'
-    }
-    if (dollarIndex <= 0) return null
-    if (tokens.take(dollarIndex).any { token ->
-            token is PhpToken.Symbol && token.value !in setOf('?')
-        }
-    ) return null
-    val type = (tokens.getOrNull(dollarIndex - 1) as? PhpToken.Word)?.value?.lowercase()
-        ?.takeIf { it in STATIC_SERIALIZABLE_PARAMETER_TYPES }
-        ?: return null
-    val name = (tokens.getOrNull(dollarIndex + 1) as? PhpToken.Word)?.value
-        ?.takeIf(::isSafePhpParameterName)
-        ?: return null
-    val remainder = tokens.drop(dollarIndex + 2)
-    val required = when {
-        remainder.isEmpty() -> true
-        (remainder.firstOrNull() as? PhpToken.Symbol)?.value == '=' -> false
-        else -> return null
-    }
-    return StaticPhpParameter(name = name, type = type, required = required)
-}
-
-private fun methodParameterTokens(
-    tokens: List<PhpToken>,
-    methodNameIndex: Int,
-): List<PhpToken>? {
-    val open = (methodNameIndex + 1 until tokens.size).firstOrNull { index ->
-        (tokens[index] as? PhpToken.Symbol)?.value == '('
-    } ?: return null
-    var depth = 0
-    for (index in open until tokens.size) {
-        val symbol = tokens[index] as? PhpToken.Symbol ?: continue
-        if (symbol.value == '(') depth += 1
-        if (symbol.value == ')') {
-            depth -= 1
-            if (depth == 0) return tokens.subList(open + 1, index)
-        }
-    }
-    return null
-}
-
-private fun isSafePhpParameterName(name: String): Boolean =
-    name.length in 1..64 && name.first().let { it.isLetter() || it == '_' } &&
-        name.all { it.isLetterOrDigit() || it == '_' }
-
-private fun singleSerializableParameter(
-    tokens: List<PhpToken>,
-    methodNameIndex: Int,
-): StaticPhpParameter? {
-    val open = (methodNameIndex + 1 until tokens.size).firstOrNull { index ->
-        (tokens[index] as? PhpToken.Symbol)?.value == '('
-    } ?: return null
-    var depth = 0
-    var close = -1
-    for (index in open until tokens.size) {
-        val symbol = tokens[index] as? PhpToken.Symbol ?: continue
-        if (symbol.value == '(') depth += 1
-        if (symbol.value == ')') {
-            depth -= 1
-            if (depth == 0) {
-                close = index
-                break
-            }
-        }
-    }
-    if (close <= open + 1) return null
-    val signature = tokens.subList(open + 1, close)
-    if (signature.any { token ->
-            token is PhpToken.Symbol && token.value in setOf(',', '=', '&', '?')
-        }
-    ) return null
-    val dollarIndex = signature.indexOfFirst { token ->
-        token is PhpToken.Symbol && token.value == '$'
-    }
-    if (dollarIndex <= 0) return null
-    val type = (signature.getOrNull(dollarIndex - 1) as? PhpToken.Word)?.value?.lowercase()
-        ?.takeIf { it in STATIC_SERIALIZABLE_PARAMETER_TYPES }
-        ?: return null
-    val name = (signature.getOrNull(dollarIndex + 1) as? PhpToken.Word)?.value
-        ?.takeIf { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]{0,63}")) }
-        ?: return null
-    if (dollarIndex + 2 != signature.size) return null
-    return StaticPhpParameter(name, type)
 }
 
 private fun hasSafeJsonReturnType(tokens: List<PhpToken>, methodNameIndex: Int): Boolean {
@@ -1808,16 +1660,6 @@ private fun String.isSensitiveWriteField(): Boolean {
         normalized.contains("signature")
 }
 
-private fun StaticPhpParameter.toOpenApiSchema(): JSONObject = when (type) {
-    "bool" -> JSONObject().put("type", "boolean")
-    "int" -> JSONObject().put("type", "integer")
-    "float" -> JSONObject().put("type", "number")
-    "array" -> JSONObject()
-        .put("type", "array")
-        .put("items", JSONObject().put("type", "string"))
-    else -> JSONObject().put("type", "string")
-}
-
 /**
  * A `setFlags(array $flags)` controller accepts a JSON object whose keys are flag names and whose
  * values are booleans. Treating that associative PHP array as a list makes verified Mail-style
@@ -1845,7 +1687,6 @@ private val STATIC_NON_DATA_RETURN_TYPES = setOf("Response", "IResponse")
 private val STATIC_REQUEST_INPUT_ACCESSORS = setOf(
     "post", "put", "patch", "delete", "getparam", "getparams", "getuploadedfile",
 )
-private val STATIC_SERIALIZABLE_PARAMETER_TYPES = setOf("array", "bool", "float", "int", "string")
 private val SETTINGS_METHOD_PREFIXES = setOf("enable", "save", "set", "update", "user")
 private val OPERATIONAL_REFRESH_METHODS = setOf("refresh", "sync")
 private val STATIC_ROUTE_VERBS = setOf("GET", "POST", "PUT", "PATCH", "DELETE")

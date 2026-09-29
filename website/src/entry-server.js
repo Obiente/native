@@ -62,7 +62,7 @@ export async function render(pathname) {
     applicationCategory: "UtilitiesApplication",
     operatingSystem: "Android, Linux, Windows",
     description:
-      "An open-source native alpha client for Nextcloud on Android, Linux, and Windows, with verified Files, media, Calendar, app, offline, and sync foundations.",
+      "An open-source app for your existing Nextcloud account. Browse files, photos, Talk history and calendars on Android, Linux and Windows. Alpha software.",
     url: siteUrl,
     codeRepository: "https://github.com/obiente/native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",

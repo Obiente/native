@@ -50,7 +50,7 @@ const canonicalObienteAvatar = path.join(
   repositoryRoot,
   "ui",
   "src",
-  "desktopMain",
+  "desktopTest",
   "resources",
   "marketing",
   "obiente-avatar.png",

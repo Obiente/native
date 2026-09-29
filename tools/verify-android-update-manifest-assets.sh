@@ -27,14 +27,14 @@ apk_name="$(basename "$apk")"
 apk_size="$(stat --format='%s' "$apk")"
 apk_sha256="$(sha256sum "$apk" | awk '{print $1}')"
 [[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
-jq -en \
+release_jq -en \
     --argjson apk_size "$apk_size" \
     --argjson maximum "$max_android_apk_bytes" \
     '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
 apk_url="https://github.com/${release_url_repository}/releases/download/${tag}/${apk_name}"
 release_notes_url="https://github.com/${release_url_repository}/releases/tag/${tag}"
 
-jq -e \
+release_jq -e \
     --arg channel "$channel" \
     --arg version_name "$version_name" \
     --argjson version_code "$version_code" \

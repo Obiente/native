@@ -41,8 +41,32 @@ function captureMetadataPlugin() {
   };
 }
 
+function roadmapLoadingBoundary() {
+  return {
+    name: "roadmap-loading-boundary",
+    generateBundle(_options, bundle) {
+      const visited = new Set();
+      const inspect = (fileName) => {
+        if (visited.has(fileName)) return;
+        visited.add(fileName);
+        const chunk = bundle[fileName];
+        if (!chunk || chunk.type !== "chunk") return;
+        if (Object.keys(chunk.modules).some((id) => /\/generated\/roadmap\.js$/.test(id.replaceAll("\\", "/")))) {
+          this.error("The roadmap dataset must load with its route, outside the initial client bundle.");
+        }
+        chunk.imports.forEach(inspect);
+      };
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type === "chunk" && chunk.isEntry && !chunk.facadeModuleId?.endsWith("entry-server.js")) {
+          inspect(chunk.fileName);
+        }
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [vue(), captureMetadataPlugin()],
+  plugins: [vue(), captureMetadataPlugin(), roadmapLoadingBoundary()],
   build: {
     rolldownOptions: {
       output: {

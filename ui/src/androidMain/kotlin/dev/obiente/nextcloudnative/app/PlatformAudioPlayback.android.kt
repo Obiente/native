@@ -34,7 +34,7 @@ private class AndroidAudioPlaybackEngine(
         currentIndex: Int,
     ) {
         if (sources.isEmpty() || currentIndex !in sources.indices) return
-        AndroidAudioPlaybackBridge.pendingRequest = AndroidAudioPlaybackRequest(session, sources, currentIndex)
+        if (!AndroidAudioPlaybackBridge.submit(session, sources, currentIndex)) return
         send(AndroidAudioPlaybackService.ACTION_PLAY)
     }
 
@@ -70,4 +70,5 @@ internal data class AndroidAudioPlaybackRequest(
     val session: NextcloudSession,
     val sources: List<NativeAudioPlaybackSource>,
     val currentIndex: Int,
+    val producer: AccountPrivateMemoryProducer,
 )

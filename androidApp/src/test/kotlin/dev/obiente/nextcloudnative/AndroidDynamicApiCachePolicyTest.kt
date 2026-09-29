@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.executeDynamicApiGet
+
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
@@ -47,7 +49,7 @@ class AndroidDynamicApiCachePolicyTest {
         var networkLoads = 0
         val committed = mutableListOf<NextcloudApiResponse>()
 
-        val result = executeAndroidDynamicApiGet(
+        val result = executeDynamicApiGet(
             accountId = "a".repeat(64),
             requestIdentity = "GET /apps/deck/api/v1.1/boards/7",
             cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
@@ -79,7 +81,7 @@ class AndroidDynamicApiCachePolicyTest {
         var networkLoads = 0
 
         kotlin.test.assertFailsWith<IllegalStateException> {
-            executeAndroidDynamicApiGet(
+            executeDynamicApiGet(
                 accountId = "a".repeat(64),
                 requestIdentity = "GET /dashboard/widgets",
                 cachePolicy = NextcloudApiCachePolicy.RefreshNetwork,

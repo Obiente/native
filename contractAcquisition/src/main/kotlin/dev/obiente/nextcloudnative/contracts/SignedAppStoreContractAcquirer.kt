@@ -179,12 +179,13 @@ class SignedAppStoreContractAcquirer(
             requireSecureUrl(release.downloadUrl)
             val archiveResponse = execute(Request.Builder().url(release.downloadUrl).get().build())
             val archive = archiveResponse.use { response ->
+                requireSecureResponse(response)
+                if (response.code in setOf(404, 410) && verifiedRouteFallbacks.isNotEmpty()) return@use null
                 check(response.isSuccessful) {
                     "Downloading the signed ${request.appId} package failed (HTTP ${response.code})."
                 }
-                requireSecureResponse(response)
                 response.readBodyLimited(MAX_ARCHIVE_BYTES)
-            }
+            } ?: continue
             try {
                 val verified = trustVerifier.verifyAndExtract(release, archive)
                 if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
@@ -203,22 +204,7 @@ class SignedAppStoreContractAcquirer(
                 }
                 return cacheContract(
                     request,
-                    VerifiedOpenApiContract(
-                        appId = verified.appId,
-                        appVersion = request.installedAppVersion ?: verified.appVersion,
-                        contractVersion = verified.appVersion,
-                        specFile = verified.specFile,
-                        document = verified.document,
-                        catalogUrl = release.catalogUrl,
-                        packageUrl = release.downloadUrl,
-                        sourceUrl = "${release.downloadUrl}#${verified.specFile}",
-                        sourceKind = if (release.version == request.installedAppVersion) {
-                            OpenApiContractSourceKind.SignedAppPackage
-                        } else {
-                            OpenApiContractSourceKind.SignedCompatibleAppPackage
-                        },
-                        contractKind = verified.contractKind,
-                    ),
+                    verified.asPackageContract(request, release),
                 )
             } catch (_: OpenApiContractMissingException) {
                 missingPackageContracts += release
@@ -232,26 +218,28 @@ class SignedAppStoreContractAcquirer(
             }
         }
         val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return null
-        return cacheContract(
-            request,
-            VerifiedOpenApiContract(
-                appId = verified.appId,
-                appVersion = request.installedAppVersion ?: verified.appVersion,
-                contractVersion = verified.appVersion,
-                specFile = verified.specFile,
-                document = verified.document,
-                catalogUrl = release.catalogUrl,
-                packageUrl = release.downloadUrl,
-                sourceUrl = "${release.downloadUrl}#${verified.specFile}",
-                sourceKind = if (release.version == request.installedAppVersion) {
-                    OpenApiContractSourceKind.SignedAppPackage
-                } else {
-                    OpenApiContractSourceKind.SignedCompatibleAppPackage
-                },
-                contractKind = verified.contractKind,
-            ),
-        )
+        return cacheContract(request, verified.asPackageContract(request, release))
     }
+
+    private fun VerifiedPackageContract.asPackageContract(
+        request: ContractAcquisitionRequest,
+        release: AppStoreRelease,
+    ) = VerifiedOpenApiContract(
+        appId = appId,
+        appVersion = request.installedAppVersion ?: appVersion,
+        contractVersion = appVersion,
+        specFile = specFile,
+        document = document,
+        catalogUrl = release.catalogUrl,
+        packageUrl = release.downloadUrl,
+        sourceUrl = "${release.downloadUrl}#$specFile",
+        sourceKind = if (release.version == request.installedAppVersion) {
+            OpenApiContractSourceKind.SignedAppPackage
+        } else {
+            OpenApiContractSourceKind.SignedCompatibleAppPackage
+        },
+        contractKind = contractKind,
+    )
 
     private fun cacheContract(
         request: ContractAcquisitionRequest,

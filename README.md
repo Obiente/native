@@ -2,9 +2,9 @@
   <img src="design/brand/banner.svg" width="960" alt="nati.ve">
 </p>
 
-<h1 align="center">Your cloud, natively.</h1>
+<h1 align="center">nati.ve: one app for your Nextcloud account</h1>
 
-<p align="center">A native workspace for your Nextcloud.</p>
+<p align="center">Browse files and photos, read Talk conversations, and use your calendar on Android, Linux and Windows.</p>
 
 <p align="center">
   <a href="https://nati.ve">Website</a> ·
@@ -15,26 +15,27 @@
 [![Build and test](https://github.com/obiente/native/actions/workflows/ci.yml/badge.svg)](https://github.com/obiente/native/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-nati.ve is an independent Obiente project for building a fast,
-consistent client across Nextcloud Files and installed Nextcloud apps. It
-turns verified APIs and data relationships into real native interfaces instead
-of embedding remote web pages or exposing raw API responses.
+nati.ve is a free, open-source app you install on your phone or computer and
+connect to an existing Nextcloud account. Nextcloud is software for hosting
+files, photos, calendars and other services on a server you or your provider
+runs. You need that server's address and an account to use nati.ve; the app
+does not provide cloud storage or replace your server.
 
-The goal is larger than putting many apps behind one icon. Nextcloud should
-feel like one operating-system service:
+For example, you can open a document from your Nextcloud Files, browse a photo
+album, read a Talk conversation and check your calendar without switching
+between separate clients or browser tabs. nati.ve provides its own screens
+for these tasks and connects to the same data on your server.
 
-- files available through native browsers, pickers, sharing, offline access,
-  and dependable synchronization;
-- photos, videos, RAW files, albums, people, backups, and edits presented as a
-  complete media library;
-- Talk messages, attachments, notifications, media, and eventually calls using
-  platform integrations;
-- calendars, contacts, tasks, mail, notes, music, recipes, boards, tables,
-  budgets, and other installed apps sharing one interaction language;
-- administration, settings, and app management exposed only when permissions
-  and authentication make them safe;
-- useful native support for previously unseen apps through typed contracts and
-  reusable semantic components.
+The alpha includes file browsing and previews, photo browsing, Talk history,
+Calendar and Notes. Other installed Nextcloud apps have varying levels of
+support; installing an app on your server does not guarantee that all of its
+features will work in nati.ve. See the [compatibility details](COMPATIBILITY.md)
+and each release's limitations before trying a workflow.
+
+Start with the [Android setup guide](https://nati.ve/guides/android/getting-started/)
+or [Linux and Windows setup guide](https://nati.ve/guides/desktop/getting-started/).
+The longer-term goal is to bring more of your Nextcloud account into one app;
+the [planned work](#planned-work) below is separate from what the alpha offers.
 
 > **Alpha software:** nati.ve is under active development. Current
 > prereleases are for testing and contribution, not yet a replacement for every
@@ -325,7 +326,7 @@ read-only session reuse, and device deployment, read
 
 | Path | Purpose |
 | --- | --- |
-| `src/` and `tests/` | Rust semantic compiler, schema model, inference, and contract tests |
+| `src/` and `tests/` | Rust reference compiler/schema subset and contract tests; Windows shell registration helper |
 | `contractAcquisition/` | Exact-version signed package and source contract acquisition |
 | `ui/` | Shared Compose domain UI plus Android/desktop implementations |
 | `androidApp/` | Android launcher and platform integrations |

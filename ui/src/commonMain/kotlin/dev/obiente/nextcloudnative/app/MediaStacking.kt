@@ -290,7 +290,7 @@ internal suspend fun <T> loadFirstUsableFullResolutionMediaSource(
             require(isBoundedDisplayImagePayload(payload.bytes, maximumPayloadBytes)) {
                 "The server did not return a bounded full-resolution image."
             }
-            requireNotNull(decode(payload)) { "The full-resolution image could not be decoded." } to payload.source
+            requireNotNull(sharedMediaImageDecoder.decode { decode(payload) }) { "The full-resolution image could not be decoded." } to payload.source
         } catch (failure: Exception) {
             if (failure is CancellationException) throw failure
             null

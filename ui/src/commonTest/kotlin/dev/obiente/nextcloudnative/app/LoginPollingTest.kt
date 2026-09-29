@@ -36,7 +36,7 @@ class LoginPollingTest {
             add(LoginPollResult.Approved(session))
         }
         val waits = mutableListOf<Pair<Long, Boolean>>()
-        val statuses = mutableListOf<String>()
+        val statuses = mutableListOf<LoginAttemptPhase>()
 
         val approved = pollLoginUntilApproved(
             poll = { results.removeFirst() },
@@ -47,8 +47,8 @@ class LoginPollingTest {
 
         assertEquals(session, approved)
         assertEquals(listOf(2_000L to true, 4_000L to true, 2_000L to false), waits)
-        assertTrue(statuses.first().contains("temporarily unavailable"))
-        assertEquals("Finish signing in in your browser, then return here.", statuses.last())
+        assertEquals(LoginAttemptPhase.WaitingForNetwork, statuses.first())
+        assertEquals(LoginAttemptPhase.AwaitingApproval, statuses.last())
     }
 
     @Test

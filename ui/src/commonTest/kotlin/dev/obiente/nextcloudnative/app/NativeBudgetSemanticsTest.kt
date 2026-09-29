@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.model.*
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSection
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
@@ -138,7 +139,7 @@ class NativeBudgetSemanticsTest {
             app = AppIdentity("budget", "Budget", "2.39.1"),
             confidence = Confidence.verified,
             views = listOf(accounts),
-            actions = listOf(createTransaction, budgetReport),
+            actions = listOf(accountsListAction(), createTransaction, budgetReport),
         )
         val adapted = schema.withNativeBudgetDashboard()
         val dashboard = adapted.views.first()
@@ -179,6 +180,7 @@ class NativeBudgetSemanticsTest {
             app = AppIdentity("budget", "Budget", "2.39.1"),
             confidence = Confidence.verified,
             views = listOf(accounts),
+            actions = listOf(accountsListAction()),
         )
 
         val adapted = schema.withNativeBudgetDashboard(listOf(descriptorReport))
@@ -216,7 +218,7 @@ class NativeBudgetSemanticsTest {
     fun financeSummaryModelUsesDedicatedSummaryActions() {
         val accountSummary = budgetRead("account-summary", "accounts", "/apps/budget/api/accounts/summary")
         val reports = budgetRead("report-summary", "reports", "/apps/budget/api/reports/summary")
-        val accounts = budgetRead("accounts-list", "accounts", "/apps/budget/api/accounts")
+        val accounts = budgetRead("accounts-list", "accounts", "/apps/budget/api/accounts").copy(intent = ActionIntent.list)
         val reads = nativeBudgetDashboardReads("budget", listOf(accounts, reports, accountSummary))
         val model = buildNativeBudgetDashboardModel(
             reads,
@@ -312,6 +314,101 @@ class NativeBudgetSemanticsTest {
         assertEquals(mapOf("limit" to "5"), read.values)
     }
 
+    @Test
+    fun dashboardSkipsAccountDetailAndRequiresAnUnboundCollectionRead() {
+        val list = accountsListAction()
+        val listView = ViewSpec("accounts.list", "Accounts", "accounts", NativeComponent.collectionList,
+            list.id, Confidence.verified)
+        val detail = list.copy(id = "accounts.detail", intent = ActionIntent.read,
+            binding = list.binding.copy(path = "/apps/budget/api/accounts/{id}",
+                pathParameterNames = listOf("id"), requiredPathParameterNames = listOf("id")))
+        val detailView = listView.copy(id = "accounts.detail", component = NativeComponent.detail,
+            sourceActionId = detail.id)
+        val schema = NativeAppSchema("test", AppIdentity("budget", "Budget", "2.54.0"), Confidence.high,
+            actions = listOf(detail, list), views = listOf(detailView, listView))
+        assertEquals(list.id, schema.withNativeBudgetDashboard().views.first().sourceActionId)
+        listOf(
+            list.copy(binding = list.binding.copy(requiredPathParameterNames = listOf("id"))),
+            list.copy(binding = list.binding.copy(requiredQueryParameterNames = listOf("accountId"))),
+            list.copy(binding = list.binding.copy(method = HttpMethod.POST)),
+            list.copy(intent = ActionIntent.read),
+            list.copy(risk = ActionRisk.mutating),
+            list.copy(confidence = Confidence.low),
+        ).forEach { unavailable ->
+            val adapted = schema.copy(actions = listOf(detail, unavailable)).withNativeBudgetDashboard()
+            assertTrue(adapted.views.none { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID })
+        }
+        assertTrue(schema.copy(actions = listOf(detail)).withNativeBudgetDashboard().views.none {
+            it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID
+        })
+    }
+
+    @Test
+    fun signedBudget254DescriptorWithoutAccountsCollectionViewStillOpensDashboard() {
+        // Exact acquired shape: the OCS list action survives, but only a detail layout is inferred.
+        val proof = listOf(Provenance(ProvenanceKind.verifiedAppPackage,
+            "https://fixture.invalid/openapi.json", "Budget 2.54.0 contract fragment"))
+        val list = DynamicAction("listaccounts", "List accounts", "accounts", ActionIntent.list,
+            ActionRisk.readOnly, false, DynamicHttpBinding(HttpMethod.GET,
+                "/ocs/v2.php/apps/budget/api/v1/accounts"), responseFieldIds = listOf("ocs"),
+            confidence = Confidence.high, provenance = proof)
+        val detail = list.copy(id = "route-account-show", intent = ActionIntent.read,
+            binding = DynamicHttpBinding(HttpMethod.GET, "/apps/budget/api/accounts/{id}",
+                pathParameters = listOf(HttpParameter("id", true, JsonPrimitive("integer"), ParameterSource.resourceField))))
+        val descriptor = DynamicAppDescriptor(DYNAMIC_APP_DESCRIPTOR_VERSION,
+            AppIdentity("budget", "Budget", "2.54.0"), EndpointPolicy("https://fixture.invalid:8443",
+                listOf("/apps/budget", "/ocs/v2.php/apps/budget")),
+            resources = listOf(DynamicResource("accounts", "Accounts", true, listOf(
+                DynamicField("ocs", "Ocs", FieldKind.objectValue, true, false, false, false,
+                    confidence = Confidence.high, provenance = proof)),
+                confidence = Confidence.high, provenance = proof)),
+            actions = listOf(detail, list), layouts = listOf(DynamicLayout("accounts.detail", "Accounts",
+                "accounts", LayoutKind.detail, sourceActionId = detail.id, confidence = Confidence.high, provenance = proof)))
+        val mapped = descriptor.toNativeAppSchema()
+        assertEquals(listOf(NativeComponent.detail), mapped.views.map { it.component })
+        val adapted = mapped.withNativeBudgetDashboard(descriptor.actions)
+        val dashboard = adapted.views.first()
+        assertEquals(NATIVE_BUDGET_DASHBOARD_VIEW_ID, dashboard.id)
+        assertEquals("accounts", dashboard.resourceId)
+        assertEquals("listaccounts", dashboard.sourceActionId)
+        val action = adapted.actions.single { it.id == dashboard.sourceActionId }
+        assertTrue(action.binding.requiredPathParameterNames.isEmpty())
+        assertTrue(action.binding.requiredQueryParameterNames.isEmpty())
+        assertEquals(mapped.views, adapted.views.drop(1))
+        assertEquals(mapped.actions, adapted.actions)
+    }
+    @Test
+    fun verifiedOcsAccountsPopulateDashboardWithoutInventingNetWorthFromPartialBalances() {
+        val primary = budgetRead("listaccounts", "accounts", "/ocs/v2.php/apps/budget/api/v1/accounts").copy(
+            intent = ActionIntent.list, responseFieldIds = listOf("ocs"),
+            binding = DynamicHttpBinding(HttpMethod.GET, "/ocs/v2.php/apps/budget/api/v1/accounts",
+                ocs = OcsMetadata(apiRequestHeader = true, responseDataPointer = "/ocs/data", responseMetaPointer = "/ocs/meta")))
+        val fallback = primary.copy(id = "route-account-index", fallbackOnly = true,
+            binding = DynamicHttpBinding(HttpMethod.GET, "/apps/budget/api/accounts"))
+        val reads = nativeBudgetDashboardReads("budget", listOf(fallback, primary))
+        assertEquals(primary.id, reads.single().action.id)
+        val records = parseDynamicRecords(primary, NextcloudApiResponse(200,
+            """{"ocs":{"meta":{"status":"ok","statuscode":200},"data":[{"id":1,"name":"Synthetic account","balance":"42.50","currency":"EUR"}]}}""".encodeToByteArray(),
+            "application/json", null), primary.responseFieldIds.toSet())
+        val model = buildNativeBudgetDashboardModel(reads, mapOf(primary.id to records))
+        assertEquals("Synthetic account", model.accounts.single().name)
+        assertEquals(42.5, model.accounts.single().balance)
+        assertEquals("EUR", model.accounts.single().currency)
+        assertNull(model.netWorth)
+        assertTrue(nativeBudgetDashboardReads("budget", listOf(fallback)).isEmpty())
+        for (invalid in listOf(primary.copy(intent = ActionIntent.read), primary.copy(risk = ActionRisk.mutating),
+            primary.copy(confidence = Confidence.low), primary.copy(binding = primary.binding.copy(
+                pathParameters = listOf(HttpParameter("id", true, JsonPrimitive("integer"), ParameterSource.resourceField)))))) {
+            assertTrue(nativeBudgetDashboardReads("budget", listOf(invalid)).isEmpty())
+        }
+    }
+    private fun accountsListAction() = ActionSpec(
+        id = "accounts.list", label = "Accounts", resourceId = "accounts",
+        binding = dev.obiente.nextcloudnative.nativeui.model.ApiBinding(HttpMethod.GET,
+            "/ocs/v2.php/apps/budget/api/v1/accounts", "listAccounts"),
+        intent = ActionIntent.list, risk = ActionRisk.readOnly, requiresConfirmation = false,
+        confidence = Confidence.verified,
+    )
     private fun budgetRead(id: String, resourceId: String, path: String) = DynamicAction(
         id = id,
         label = id,
