@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,8 +51,27 @@ internal data class FileShareRecipientPickerUiState(
         query.trim().length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
             "Search your Nextcloud server and select a result."
         !loading && error == null && results.isEmpty() -> target.presentation().emptyMessage
+        !loading && error == null -> "Select a result to continue."
         else -> null
     }
+}
+
+/**
+ * Chooses the recipient the person already typed in full, so an email address or federated
+ * cloud ID does not need a second confirming tap. Only an exact server result whose identity
+ * equals the query qualifies; people and groups always need an explicit choice because a
+ * display name can match several accounts.
+ */
+internal fun automaticFileShareRecipient(
+    target: FileShareTarget,
+    query: String,
+    results: List<FileShareRecipient>,
+): FileShareRecipient? {
+    if (target != FileShareTarget.Email && target != FileShareTarget.Remote) return null
+    val normalized = query.trim()
+    return results
+        .filter { it.exact && it.target == target && it.id.equals(normalized, ignoreCase = true) }
+        .singleOrNull()
 }
 
 @Composable
@@ -70,6 +90,8 @@ internal fun FileShareRecipientPicker(
         mutableStateOf(FileShareRecipientPickerUiState(selectedRecipient = selectedRecipient))
     }
     var retryAttempt by remember(session, target, file.path) { mutableStateOf(0) }
+    val currentOnSelected by rememberUpdatedState(onSelected)
+    val currentOnResultsObserved by rememberUpdatedState(onResultsObserved)
 
     LaunchedEffect(state.query, target, file.path, session, selectedRecipient, retryAttempt) {
         val normalized = state.query.trim()
@@ -96,7 +118,11 @@ internal fun FileShareRecipientPicker(
         try {
             val results = services.searchFileShareRecipients(session, normalized, target, file)
             state = state.copy(results = results, loading = false)
-            onResultsObserved(results)
+            currentOnResultsObserved(results)
+            automaticFileShareRecipient(target, normalized, results)?.let { recipient ->
+                state = state.copy(results = listOf(recipient), selectedRecipient = recipient.id)
+                currentOnSelected(recipient)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {

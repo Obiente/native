@@ -64,12 +64,12 @@ class MediaInformationTest {
 
     @Test
     fun byteAndDurationFormattingRemainBoundedAndReadable() {
-        assertEquals("0 B", formatMediaInformationBytes(0))
-        assertEquals("1 KiB", formatMediaInformationBytes(1_024))
-        assertEquals("1.5 GiB", formatMediaInformationBytes(1_610_612_736))
+        assertEquals("0 B", formatByteSize(0))
+        assertEquals("1 KiB", formatByteSize(1_024))
+        assertEquals("1.5 GiB", formatByteSize(1_610_612_736))
         assertEquals("0:09", formatMediaDuration(9))
         assertEquals("1:01:01", formatMediaDuration(3_661))
-        assertTrue(formatMediaInformationBytes(Long.MAX_VALUE).endsWith("TiB"))
+        assertTrue(formatByteSize(Long.MAX_VALUE).endsWith("TiB"))
     }
 
     private fun mediaFile() = NextcloudFile(

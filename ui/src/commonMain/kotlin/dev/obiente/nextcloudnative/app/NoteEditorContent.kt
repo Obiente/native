@@ -96,7 +96,7 @@ internal fun NoteEditorContent(
                     }
                 }
             }
-            if (!compact) Text(formatNoteSize(contentBytes), style = MaterialTheme.typography.bodySmall)
+            if (!compact) Text(formatByteSize(contentBytes), style = MaterialTheme.typography.bodySmall)
             if (!previewAvailable || contentBytes > MAX_NOTE_BYTES || loadError != null || saveError != null) {
                 Column(Modifier.heightIn(max = 88.dp).verticalScroll(rememberScrollState())) {
                     if (!previewAvailable) Text("Preview is disabled for notes larger than ${MAX_NOTE_MARKDOWN_PREVIEW_BYTES / 1024} KiB to keep editing responsive.",
@@ -134,10 +134,4 @@ private fun NoteEditorMetadata(
             }
         }
     }
-}
-
-private fun formatNoteSize(bytes: Long): String = when {
-    bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
-    bytes >= 1024 -> "${bytes / 1024} KiB"
-    else -> "$bytes B"
 }

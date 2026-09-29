@@ -358,16 +358,10 @@ internal fun documentMetadataSummary(
         },
     )
     descriptor.mimeType?.let(::add)
-    file.size?.let { add(documentByteLabel(it)) }
+    file.size?.let { add(formatByteSize(it)) }
     add(if (file.permissions?.contains('W') == true) "Writable" else "Read-only or permission unknown")
     file.etag?.takeIf(String::isNotBlank)?.let { add("Versioned") }
 }.joinToString(" · ")
-
-private fun documentByteLabel(bytes: Long): String = when {
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MiB"
-    bytes >= 1024L -> "${bytes / 1024L} KiB"
-    else -> "$bytes B"
-}
 
 @Composable
 private fun DocumentPreviewBody(preview: DocumentPreview, filename: String) {

@@ -1621,7 +1621,7 @@ class DesktopNextcloudServices(
         val freed = windowsFreed + (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
-                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+                "Freed ${formatByteSize(freed)} of disposable virtual file content."
             } else {
                 "No disposable virtual file content could be freed. Active files were kept."
             },

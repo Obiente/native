@@ -86,7 +86,7 @@ fun NextcloudFile.basicMediaInformation(): MediaInformation {
                 MediaInformationField(
                     key = "size",
                     label = "File size",
-                    value = formatMediaInformationBytes(it),
+                    value = formatByteSize(it),
                     importance = MediaInformationImportance.Primary,
                 ),
             )
@@ -186,23 +186,6 @@ private fun NextcloudFile.mediaFormatLabel(): String {
     return listOfNotNull(extension, family, type)
         .distinct()
         .joinToString(" - ")
-}
-
-internal fun formatMediaInformationBytes(bytes: Long): String {
-    if (bytes < 0L) return "Unknown"
-    val units = listOf("B", "KiB", "MiB", "GiB", "TiB")
-    var value = bytes.toDouble()
-    var unitIndex = 0
-    while (value >= 1024.0 && unitIndex < units.lastIndex) {
-        value /= 1024.0
-        unitIndex += 1
-    }
-    return if (unitIndex == 0) {
-        "$bytes ${units[unitIndex]}"
-    } else {
-        val rounded = kotlin.math.round(value * 10.0) / 10.0
-        "${if (rounded % 1.0 == 0.0) rounded.toLong() else rounded} ${units[unitIndex]}"
-    }
 }
 
 internal fun formatMediaDuration(seconds: Int): String {

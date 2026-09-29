@@ -435,10 +435,10 @@ fun NativeGroupwareContactsScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator() }
-                is ContactsLoadState.Error -> ContactsError(value.message) { loadAttempt += 1 }
+                is ContactsLoadState.Error -> WorkspaceLoadError(value.message) { loadAttempt += 1 }
                 is ContactsLoadState.Ready -> {
                     if (value.addressBooks.isEmpty()) {
-                        ContactsError("No address books were found.") { loadAttempt += 1 }
+                        WorkspaceLoadError("No address books were found.") { loadAttempt += 1 }
                     } else {
                         ContactList(filtered, onSelect = { selectedContactHref = it.href })
                     }
@@ -770,19 +770,6 @@ private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareCo
         if (contacts.isEmpty()) item {
             Text("No contacts match your search.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-}
-
-@Composable
-private fun ContactsError(message: String, retry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = retry) { Text("Try again") }
     }
 }
 

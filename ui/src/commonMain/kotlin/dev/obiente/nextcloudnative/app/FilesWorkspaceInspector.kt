@@ -160,7 +160,7 @@ internal fun FilesInspector(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         InspectorProperty("Location", "/${file.path}")
         InspectorProperty("Modified", file.lastModified.readableFileDate())
-        if (!file.isDirectory) InspectorProperty("Size", formatWorkspaceBytes(file.size))
+        if (!file.isDirectory) InspectorProperty("Size", formatOptionalByteSize(file.size))
         file.ownerDisplayName?.let { InspectorProperty("Owner", it) }
         offlineAvailability?.readableStatus()?.let { InspectorProperty("Offline", it) }
         if (file.unreadComments > 0) InspectorProperty("Comments", "${file.unreadComments} unread")

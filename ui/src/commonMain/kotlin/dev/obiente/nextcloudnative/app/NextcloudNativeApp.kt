@@ -7668,7 +7668,7 @@ private fun FileList(
                     Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         availability.readableStatus()
-                            ?: if (file.isDirectory) "Folder" else formatBytes(file.size),
+                            ?: if (file.isDirectory) "Folder" else formatOptionalByteSize(file.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -7823,7 +7823,7 @@ private fun FileGridTile(
             Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
             Text(
                 offlineAvailability.readableStatus()
-                    ?: if (file.isDirectory) "Folder" else formatBytes(file.size),
+                    ?: if (file.isDirectory) "Folder" else formatOptionalByteSize(file.size),
                 maxLines = 1,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -10666,7 +10666,7 @@ private fun FileInfoScreen(
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
                         FileMetadataLine("Type", if (file.isDirectory) "Folder" else file.mimeType ?: "Unknown")
-                        if (!file.isDirectory) FileMetadataLine("Size", formatBytes(file.size))
+                        if (!file.isDirectory) FileMetadataLine("Size", formatOptionalByteSize(file.size))
                         file.lastModified?.let { FileMetadataLine("Modified", it) }
                         if (!file.isDirectory) {
                             FileMetadataLine("Image preview", if (file.hasPreview) "Available" else "Unavailable")
@@ -11195,14 +11195,6 @@ private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
     "tables" -> "typed data table"
     "cookbook" -> "recipe collection"
     else -> "adaptive collection"
-}
-
-internal fun formatBytes(bytes: Long?): String = when {
-    bytes == null -> "File"
-    bytes < 1_024 -> "$bytes B"
-    bytes < 1_048_576 -> "${bytes / 1_024} KB"
-    bytes < 1_073_741_824 -> "${bytes / 1_048_576} MB"
-    else -> "${bytes / 1_073_741_824} GB"
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024

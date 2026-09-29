@@ -19,23 +19,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -51,7 +41,6 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
-import kotlinx.coroutines.launch
 
 @Composable
 internal fun GenericRecordTable(
@@ -88,12 +77,7 @@ internal fun GenericRecordTable(
         GenericRecordList(projectedResource, projectedRecords, onSelectRecord, modifier)
         return
     }
-    var activeEdit by remember(schema, projection) { mutableStateOf<NativeCellEditPlan?>(null) }
-    var editValue by remember { mutableStateOf("") }
-    var editError by remember { mutableStateOf<String?>(null) }
-    var savingEdit by remember { mutableStateOf(false) }
-    val editedValues = remember(schema, projection) { mutableStateMapOf<NativeCellAddress, String>() }
-    val scope = rememberCoroutineScope()
+    val cellEdits = remember(schema, projection) { NativeCellEditSession() }
     val actionWidth = if (onSelectRecord == null) 0.dp else 48.dp
     val frozenField = fields.firstOrNull { it.id == projection.frozenFieldId }
     val scrollingFields = fields.filterNot { it.id == frozenField?.id }
@@ -143,19 +127,14 @@ internal fun GenericRecordTable(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     frozenField?.let { field ->
-                        val address = NativeCellAddress(record.id, field.id)
                         val plan = nativeCellEditPlan(schema, resource, projection, record, field)
                         GenericTableValueCell(
                             field = field,
-                            rawValue = editedValues[address] ?: record.presentationValue(field.id),
+                            rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
                             editPlan = plan,
                             width = field.nativeTableColumnWidth(),
                             emphasized = true,
-                            onEdit = {
-                                activeEdit = it.copy(originalValue = editedValues[address] ?: it.originalValue)
-                                editValue = editedValues[address] ?: it.originalValue
-                                editError = null
-                            },
+                            onEdit = cellEdits::begin,
                         )
                     }
                     Row(
@@ -163,19 +142,14 @@ internal fun GenericRecordTable(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         scrollingFields.forEachIndexed { index, field ->
-                            val address = NativeCellAddress(record.id, field.id)
                             val plan = nativeCellEditPlan(schema, resource, projection, record, field)
                             GenericTableValueCell(
                                 field = field,
-                                rawValue = editedValues[address] ?: record.presentationValue(field.id),
+                                rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
                                 editPlan = plan,
                                 width = field.nativeTableColumnWidth(),
                                 emphasized = frozenField == null && index == 0,
-                                onEdit = {
-                                    activeEdit = it.copy(originalValue = editedValues[address] ?: it.originalValue)
-                                    editValue = editedValues[address] ?: it.originalValue
-                                    editError = null
-                                }
+                                onEdit = cellEdits::begin,
                             )
                         }
                         if (onSelectRecord != null) {
@@ -197,57 +171,7 @@ internal fun GenericRecordTable(
             )
         }
     }
-    activeEdit?.let { plan ->
-        AlertDialog(
-            onDismissRequest = { if (!savingEdit) activeEdit = null },
-            title = { Text("Edit ${plan.field.label}") },
-            text = {
-                OutlinedTextField(
-                    value = editValue,
-                    onValueChange = {
-                        editValue = it
-                        editError = null
-                    },
-                    enabled = !savingEdit,
-                    label = { Text(plan.field.label) },
-                    supportingText = editError?.let { message -> { Text(message) } },
-                    isError = editError != null,
-                    singleLine = plan.field.kind != FieldKind.longText,
-                    minLines = if (plan.field.kind == FieldKind.longText) 3 else 1,
-                )
-            },
-            dismissButton = {
-                TextButton(enabled = !savingEdit, onClick = { activeEdit = null }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !savingEdit,
-                    onClick = {
-                        val validation = validateNativeCellEdit(plan.field, editValue)
-                        if (validation != null) {
-                            editError = validation
-                        } else {
-                            savingEdit = true
-                            scope.launch {
-                                when (val result = actionExecutor.execute(plan.request(editValue.trim()))) {
-                                    is NativeActionExecutionResult.Success -> {
-                                        editedValues[NativeCellAddress(plan.recordId, plan.field.id)] = editValue.trim()
-                                        activeEdit = null
-                                        onInlineActionSucceeded?.invoke(plan.action)
-                                    }
-                                    is NativeActionExecutionResult.Failure -> editError = result.message
-                                }
-                                savingEdit = false
-                            }
-                        }
-                    },
-                ) {
-                    if (savingEdit) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Text("Save")
-                }
-            },
-        )
-    }
+    NativeCellEditDialog(cellEdits, actionExecutor, onInlineActionSucceeded)
 }
 
 
@@ -330,4 +254,3 @@ private fun GenericTableValueCell(
     }
 }
 
-internal data class NativeCellAddress(val recordId: String, val fieldId: String)

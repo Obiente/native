@@ -129,17 +129,17 @@ internal fun VirtualFileStorageCard(
                 ) {
                     VirtualFileStorageMetric(
                         label = "Cached locally",
-                        value = formatVirtualFileBytes(snapshot.cachedBytes),
+                        value = formatByteSize(snapshot.cachedBytes),
                         modifier = Modifier.weight(1f),
                     )
                     VirtualFileStorageMetric(
                         label = "Kept offline",
-                        value = formatVirtualFileBytes(snapshot.pinnedBytes),
+                        value = formatByteSize(snapshot.pinnedBytes),
                         modifier = Modifier.weight(1f),
                     )
                     VirtualFileStorageMetric(
                         label = "Device free",
-                        value = snapshot.availableFreeBytes?.let(::formatVirtualFileBytes) ?: "Unknown",
+                        value = snapshot.availableFreeBytes?.let(::formatByteSize) ?: "Unknown",
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -147,7 +147,7 @@ internal fun VirtualFileStorageCard(
                     if (snapshot.policy.automaticCleanup) {
                         buildString {
                             append("Auto cleanup keeps at least ")
-                            append(formatVirtualFileBytes(snapshot.policy.minimumFreeSpaceBytes))
+                            append(formatByteSize(snapshot.policy.minimumFreeSpaceBytes))
                             append(" free")
                             snapshot.policy.unusedFileAgeMillis?.let { age ->
                                 append(
@@ -377,7 +377,7 @@ internal fun VirtualFileStorageCard(
                     ) {
                         Text(
                             if (snapshot.reclaimableBytes > 0L) {
-                                "Free up ${formatVirtualFileBytes(snapshot.reclaimableBytes)}"
+                                "Free up ${formatByteSize(snapshot.reclaimableBytes)}"
                             } else {
                                 "Nothing to free"
                             },
@@ -406,7 +406,7 @@ private fun VirtualFileCacheTierRow(label: String, tier: VirtualFileCacheTierSna
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(label, style = MaterialTheme.typography.labelLarge)
                 Text(
-                    if (tier?.available == true) formatVirtualFileBytes(tier.cachedBytes) else "Unavailable",
+                    if (tier?.available == true) formatByteSize(tier.cachedBytes) else "Unavailable",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (tier?.available == true) {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -424,7 +424,7 @@ private fun VirtualFileCacheTierRow(label: String, tier: VirtualFileCacheTierSna
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "Pinned ${formatVirtualFileBytes(it.pinnedBytes)} - Free ${it.availableFreeBytes?.let(::formatVirtualFileBytes) ?: "unknown"}",
+                    "Pinned ${formatByteSize(it.pinnedBytes)} - Free ${it.availableFreeBytes?.let(::formatByteSize) ?: "unknown"}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

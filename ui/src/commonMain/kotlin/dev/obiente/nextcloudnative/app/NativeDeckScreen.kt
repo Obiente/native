@@ -1851,7 +1851,7 @@ private fun DeckAttachment.toDeckUiAttachment(
         fileName = name,
         supportingText = listOfNotNull(
             mimeType,
-        byteCount?.let(::deckByteCountLabel),
+        byteCount?.let(::formatByteSize),
         createdBy,
     ).joinToString(" - ").ifBlank { null },
         canOpen = handoffCapability != null &&
@@ -1866,12 +1866,6 @@ private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = 
         "No installed app can open this attachment."
     is ExternalFileHandoffResult.Rejected -> message
     is ExternalFileHandoffResult.Unsupported -> reason
-}
-
-private fun deckByteCountLabel(bytes: Long): String = when {
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
 }
 
 private fun Throwable.deckMessage(): String =

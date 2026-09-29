@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.app.formatByteSize
+
 /** Display-only attachment metadata. Remote IDs and URLs never become action authority. */
 internal data class NativeMailAttachment(val name: String, val mime: String?, val size: String?)
 
@@ -38,15 +40,8 @@ private fun NativeStructuredValue.mailAttachment(): NativeMailAttachment? {
     val mime = listOf("mime", "mimetype", "contenttype").firstNotNullOfOrNull(fields::get)
         ?.takeIf { it.isNotBlank() && it.length <= 255 && it.none(Char::isISOControl) }
     val size = listOf("size", "filesize", "bytes").firstNotNullOfOrNull(fields::get)
-        ?.toLongOrNull()?.takeIf { it >= 0 }?.formatAttachmentBytes()
+        ?.toLongOrNull()?.takeIf { it >= 0 }?.let(::formatByteSize)
     return NativeMailAttachment(name, mime, size)
 }
 
 private fun String.attachmentSemanticKey(): String = lowercase().filter(Char::isLetterOrDigit)
-
-private fun Long.formatAttachmentBytes(): String = when {
-    this >= 1_073_741_824 -> "${(this / 107_374_182.4).toLong() / 10.0} GB"
-    this >= 1_048_576 -> "${(this / 104_857.6).toLong() / 10.0} MB"
-    this >= 1_024 -> "${(this / 102.4).toLong() / 10.0} KB"
-    else -> "$this B"
-}

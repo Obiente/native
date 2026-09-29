@@ -1439,7 +1439,7 @@ private fun MediaFolderSuggestions(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Text(
-                                    "Estimated size ${formatOfflineBytes(suggestion.totalBytes)}",
+                                    "Estimated size ${formatByteSize(suggestion.totalBytes)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1643,7 +1643,7 @@ private fun MediaFolderPreview(
                 preview != null -> {
                     val totalLabel = buildString {
                         append(preview.totalItems).append(if (preview.totalItems == 1) " item" else " items")
-                        append(" | ").append(formatOfflineBytes(preview.totalBytes))
+                        append(" | ").append(formatByteSize(preview.totalBytes))
                     }
                     Text(totalLabel, style = MaterialTheme.typography.titleSmall)
                     preview.message?.let { message ->
@@ -1750,7 +1750,7 @@ private fun MediaFolderPreviewTile(item: MediaSyncFolderPreviewItem) {
         Text(
             buildString {
                 append(if (item.mimeType?.startsWith("video/") == true) "Video" else "Photo")
-                item.sizeBytes?.let { append(" | ").append(formatOfflineBytes(it)) }
+                item.sizeBytes?.let { append(" | ").append(formatByteSize(it)) }
             },
             maxLines = 1,
             style = MaterialTheme.typography.bodySmall,
@@ -2101,7 +2101,7 @@ internal fun VirtualFileStoragePolicyEditor(
                 options = VIRTUAL_CACHE_SIZE_OPTIONS,
                 selected = policy.maximumCacheBytes,
                 enabled = !busy,
-                label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
+                label = { value -> value?.let(::formatByteSize) ?: "No limit" },
                 onSelected = { selected -> onPolicyChanged(policy.copy(maximumCacheBytes = selected)) },
             )
         }
@@ -2113,7 +2113,7 @@ internal fun VirtualFileStoragePolicyEditor(
                     options = VIRTUAL_CACHE_SIZE_OPTIONS,
                     selected = policy.overflowMaximumCacheBytes,
                     enabled = !busy,
-                    label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
+                    label = { value -> value?.let(::formatByteSize) ?: "No limit" },
                     onSelected = { selected ->
                         onPolicyChanged(policy.copy(overflowMaximumCacheBytes = selected))
                     },
@@ -2126,7 +2126,7 @@ internal fun VirtualFileStoragePolicyEditor(
                     options = VIRTUAL_FREE_SPACE_OPTIONS,
                     selected = policy.overflowMinimumFreeSpaceBytes,
                     enabled = !busy,
-                    label = ::formatVirtualFileBytes,
+                    label = ::formatByteSize,
                     onSelected = { selected ->
                         onPolicyChanged(policy.copy(overflowMinimumFreeSpaceBytes = selected))
                     },
@@ -2140,7 +2140,7 @@ internal fun VirtualFileStoragePolicyEditor(
                 options = VIRTUAL_FREE_SPACE_OPTIONS,
                 selected = policy.minimumFreeSpaceBytes,
                 enabled = !busy,
-                label = ::formatVirtualFileBytes,
+                label = ::formatByteSize,
                 onSelected = { selected -> onPolicyChanged(policy.copy(minimumFreeSpaceBytes = selected)) },
             )
         }
@@ -2162,9 +2162,9 @@ internal fun VirtualFileStoragePolicyEditor(
                 shape = RoundedCornerShape(NextcloudRadii.Small),
             ) {
                 Text(
-                    "Currently ${formatVirtualFileBytes(snapshot.cachedBytes)} cached, " +
-                        "${formatVirtualFileBytes(snapshot.reclaimableBytes)} reclaimable, and " +
-                        "${formatVirtualFileBytes(snapshot.pinnedBytes)} pinned.",
+                    "Currently ${formatByteSize(snapshot.cachedBytes)} cached, " +
+                        "${formatByteSize(snapshot.reclaimableBytes)} reclaimable, and " +
+                        "${formatByteSize(snapshot.pinnedBytes)} pinned.",
                     modifier = Modifier.padding(NextcloudSpacing.Medium),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -2301,8 +2301,8 @@ internal fun OfflineCenterSummaryCard(
                 Text(
                     buildString {
                         append(qualifier)
-                        append(formatOfflineBytes(usage.usedBytes))
-                        usage.capacityBytes?.let { append(" of ${formatOfflineBytes(it)}") }
+                        append(formatByteSize(usage.usedBytes))
+                        usage.capacityBytes?.let { append(" of ${formatByteSize(it)}") }
                     },
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -2381,7 +2381,7 @@ internal fun OfflineCenterItemCard(
                 )
             }
             val metadata = listOfNotNull(
-                item.sizeBytes?.let(::formatOfflineBytes),
+                item.sizeBytes?.let(::formatByteSize),
                 item.detail,
             )
             if (metadata.isNotEmpty()) {
@@ -2524,13 +2524,6 @@ private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
     FileSyncPowerPolicy.AnyPower -> "Any battery level"
     FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
     FileSyncPowerPolicy.Charging -> "Only while charging"
-}
-
-private fun formatOfflineBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
 }
 
 internal fun fileOfflineRefreshEnabled(

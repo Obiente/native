@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -44,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -376,7 +374,7 @@ fun NativeGroupwareTasksScreen(
                 TasksLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                is TasksLoadState.Error -> TasksError(current.message) { if (!operations.busy) loadAttempt += 1 }
+                is TasksLoadState.Error -> WorkspaceLoadError(current.message) { if (!operations.busy) loadAttempt += 1 }
                 is TasksLoadState.Ready -> LazyColumn(
                     contentPadding = PaddingValues(NextcloudSpacing.Large),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -663,19 +661,6 @@ internal fun boundedGroupwareTaskQuery(value: String): String =
     value.take(MAX_GROUPWARE_TASK_QUERY_LENGTH)
 
 internal const val MAX_GROUPWARE_TASK_QUERY_LENGTH = 256
-
-@Composable
-private fun TasksError(message: String, retry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = retry) { Text("Try again") }
-    }
-}
 
 internal fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
     "${substring(6, 8)}-${substring(4, 6)}-${take(4)}"

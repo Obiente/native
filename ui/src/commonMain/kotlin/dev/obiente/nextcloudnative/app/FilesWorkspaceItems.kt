@@ -166,7 +166,7 @@ internal fun NativeFileWorkspaceList(
                         }
                         if (columns.size) {
                             Text(
-                                if (file.isDirectory) "-" else formatWorkspaceBytes(file.size),
+                                if (file.isDirectory) "-" else formatOptionalByteSize(file.size),
                                 modifier = Modifier.width(72.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -333,7 +333,7 @@ private fun NativeFileWorkspaceTile(
         Column(modifier = Modifier.padding(NextcloudSpacing.Medium)) {
             Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
             Text(
-                availability.readableStatus() ?: if (file.isDirectory) "Folder" else formatWorkspaceBytes(file.size),
+                availability.readableStatus() ?: if (file.isDirectory) "Folder" else formatOptionalByteSize(file.size),
                 maxLines = 1,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

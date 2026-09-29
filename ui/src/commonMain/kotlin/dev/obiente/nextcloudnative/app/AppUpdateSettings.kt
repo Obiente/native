@@ -458,9 +458,9 @@ internal fun AppUpdateSettingsCard(
                             )
                             Text(
                                 buildString {
-                                    append(formatBytes(releaseState.downloadedBytes))
+                                    append(formatByteSize(releaseState.downloadedBytes))
                                     append(" of ")
-                                    append(formatBytes(releaseState.totalBytes))
+                                    append(formatByteSize(releaseState.totalBytes))
                                     if (releaseState.resumedFromBytes > 0) append(" - resumed")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
@@ -493,7 +493,7 @@ internal fun AppUpdateSettingsCard(
                         is AppUpdateInstallState.Cancelled -> {
                             Text(
                                 if (releaseState.canResume) {
-                                    "${formatBytes(releaseState.downloadedBytes)} saved for resume."
+                                    "${formatByteSize(releaseState.downloadedBytes)} saved for resume."
                                 } else {
                                     "The download was paused before any data was saved."
                                 },

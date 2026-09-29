@@ -22,7 +22,7 @@ class FileShareVisualCaptureTest {
         val ready = FileShareRecipientPickerUiState(query = "de", results = results)
 
         assertEquals(8, ready.visibleResults.size)
-        assertNull(ready.supportingMessage(FileShareTarget.User))
+        assertEquals("Select a result to continue.", ready.supportingMessage(FileShareTarget.User))
         assertEquals(
             "Search your Nextcloud server and select a result.",
             FileShareRecipientPickerUiState(query = "d").supportingMessage(FileShareTarget.User),

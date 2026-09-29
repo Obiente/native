@@ -801,7 +801,7 @@ private fun FileSyncLocationsStep(
                     when {
                         mediaPreviewLoading -> "Checking the selected media folder..."
                         mediaPreviewError != null -> mediaPreviewError
-                        mediaPreview != null -> "${mediaPreview.totalItems} items - ${mediaPreview.totalBytes.fileSyncBytes()}"
+                        mediaPreview != null -> "${mediaPreview.totalItems} items - ${formatByteSize(mediaPreview.totalBytes)}"
                         else -> "Preview will appear before sync is enabled."
                     },
                     style = MaterialTheme.typography.bodySmall,

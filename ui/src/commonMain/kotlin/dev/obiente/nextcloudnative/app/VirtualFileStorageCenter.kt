@@ -195,23 +195,6 @@ fun defaultVirtualFileStorageSnapshot(): VirtualFileStorageSnapshot = VirtualFil
     providerState = VirtualFileProviderState.NotApplicable,
 )
 
-fun formatVirtualFileBytes(bytes: Long): String {
-    require(bytes >= 0L)
-    val units = listOf("B", "KiB", "MiB", "GiB", "TiB")
-    var value = bytes.toDouble()
-    var unit = 0
-    while (value >= 1024.0 && unit < units.lastIndex) {
-        value /= 1024.0
-        unit += 1
-    }
-    return if (unit == 0) {
-        "$bytes ${units[unit]}"
-    } else {
-        val rounded = (value * 10.0).toLong() / 10.0
-        "$rounded ${units[unit]}"
-    }
-}
-
 private const val MAX_VIRTUAL_FILE_LIMITATIONS = 8
 private const val MAX_VIRTUAL_FILE_LIMITATION_LENGTH = 512
 internal const val MAX_VIRTUAL_FILE_ACTION_MESSAGE_LENGTH = 512

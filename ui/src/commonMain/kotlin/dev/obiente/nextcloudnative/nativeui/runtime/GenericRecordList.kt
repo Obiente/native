@@ -11,14 +11,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,7 +20,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
@@ -42,12 +35,10 @@ import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
-import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 
 @Composable
 internal fun GenericRecordList(
@@ -278,12 +269,7 @@ internal fun GenericEditableTableRecordList(
             nativeTableFields(projection.resource, records)
         }
     }.distinctBy(FieldSpec::id)
-    var activeEdit by remember(schema, projection) { mutableStateOf<NativeCellEditPlan?>(null) }
-    var editValue by remember { mutableStateOf("") }
-    var editError by remember { mutableStateOf<String?>(null) }
-    var savingEdit by remember { mutableStateOf(false) }
-    val editedValues = remember(schema, projection) { mutableStateMapOf<NativeCellAddress, String>() }
-    val scope = rememberCoroutineScope()
+    val cellEdits = remember(schema, projection) { NativeCellEditSession() }
     val listState = rememberLazyListState()
     NativeCollectionAutoPager(
         listState = listState,
@@ -306,7 +292,7 @@ internal fun GenericEditableTableRecordList(
     ) {
         items(records, key = NativeRecord::id) { record ->
             val editedFields = fields.mapNotNull { field ->
-                editedValues[NativeCellAddress(record.id, field.id)]?.let { field.id to it }
+                cellEdits.savedValue(record.id, field.id)?.let { field.id to it }
             }.toMap()
             val displayRecord = record.copy(
                 values = record.values + editedFields,
@@ -328,18 +314,8 @@ internal fun GenericEditableTableRecordList(
                 secondaryActions = editPlans.map { plan ->
                     NextcloudCardAction(
                         label = "Edit ${plan.field.label}",
-                        enabled = !savingEdit,
-                        onClick = {
-                            activeEdit = plan.copy(
-                                originalValue = editedValues[
-                                    NativeCellAddress(plan.recordId, plan.field.id)
-                                ] ?: plan.originalValue,
-                            )
-                            editValue = editedValues[
-                                NativeCellAddress(plan.recordId, plan.field.id)
-                            ] ?: plan.originalValue
-                            editError = null
-                        },
+                        enabled = !cellEdits.saving,
+                        onClick = { cellEdits.begin(plan) },
                     )
                 },
             )
@@ -351,60 +327,5 @@ internal fun GenericEditableTableRecordList(
         )
     }
 
-    activeEdit?.let { plan ->
-        AlertDialog(
-            onDismissRequest = { if (!savingEdit) activeEdit = null },
-            title = { Text("Edit ${plan.field.label}") },
-            text = {
-                OutlinedTextField(
-                    value = editValue,
-                    onValueChange = {
-                        editValue = it
-                        editError = null
-                    },
-                    enabled = !savingEdit,
-                    label = { Text(plan.field.label) },
-                    supportingText = editError?.let { message -> { Text(message) } },
-                    isError = editError != null,
-                    singleLine = plan.field.kind != FieldKind.longText,
-                    minLines = if (plan.field.kind == FieldKind.longText) 3 else 1,
-                )
-            },
-            dismissButton = {
-                TextButton(enabled = !savingEdit, onClick = { activeEdit = null }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !savingEdit,
-                    onClick = {
-                        val validation = validateNativeCellEdit(plan.field, editValue)
-                        if (validation != null) {
-                            editError = validation
-                        } else {
-                            savingEdit = true
-                            scope.launch {
-                                when (val result = actionExecutor.execute(plan.request(editValue.trim()))) {
-                                    is NativeActionExecutionResult.Success -> {
-                                        editedValues[
-                                            NativeCellAddress(plan.recordId, plan.field.id)
-                                        ] = editValue.trim()
-                                        activeEdit = null
-                                        onInlineActionSucceeded?.invoke(plan.action)
-                                    }
-                                    is NativeActionExecutionResult.Failure -> editError = result.message
-                                }
-                                savingEdit = false
-                            }
-                        }
-                    },
-                ) {
-                    if (savingEdit) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Save")
-                    }
-                }
-            },
-        )
-    }
+    NativeCellEditDialog(cellEdits, actionExecutor, onInlineActionSucceeded)
 }

@@ -355,7 +355,7 @@ private fun MediaTransferCard(
             }
             MediaBackupStatusIndicator(record.resolveMediaBackupStatus())
             val metadata = buildList {
-                record.local?.size?.let { add(formatTransferBytes(it)) }
+                record.local?.size?.let { add(formatByteSize(it)) }
                 add(mediaTransferProgressLabel(record))
             }
             if (metadata.isNotEmpty()) {
@@ -405,13 +405,6 @@ private fun MediaTransferAction.label(): String = when (this) {
     MediaTransferAction.Details -> "Details"
     MediaTransferAction.Retry -> "Retry upload"
     MediaTransferAction.Cancel -> "Cancel upload"
-}
-
-private fun formatTransferBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
 }
 
 internal enum class MediaTransferClearHistoryConfirmation {

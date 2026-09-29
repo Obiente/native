@@ -380,7 +380,7 @@ private fun TalkAttachmentMetadata(
         Text(
             buildString {
                 append(model.visual.displayLabel())
-                model.attachment.size?.let { append(" · ").append(formatTalkBytes(it)) }
+                model.attachment.size?.let { append(" · ").append(formatByteSize(it)) }
                 if (model.attachment.hideDownload) append(" · Preview only")
             },
             style = MaterialTheme.typography.bodySmall,
@@ -481,13 +481,6 @@ private fun TalkAttachmentVisual.displayLabel(): String = when (this) {
     TalkAttachmentVisual.AudioRecording -> "Audio recording"
     TalkAttachmentVisual.VideoRecording -> "Video recording"
     TalkAttachmentVisual.File -> "File"
-}
-
-private fun formatTalkBytes(bytes: Long): String = when {
-    bytes < 1_024L -> "$bytes B"
-    bytes < 1_024L * 1_024L -> "${bytes / 1_024L} KiB"
-    bytes < 1_024L * 1_024L * 1_024L -> "${bytes / (1_024L * 1_024L)} MiB"
-    else -> "${bytes / (1_024L * 1_024L * 1_024L)} GiB"
 }
 
 private const val MAX_VISIBLE_REACTIONS = 5

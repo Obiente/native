@@ -97,7 +97,7 @@ import dev.obiente.nextcloudnative.app.VirtualFileProviderState
 import dev.obiente.nextcloudnative.app.VirtualFileStorageActionResult
 import dev.obiente.nextcloudnative.app.VirtualFileStorageSnapshot
 import dev.obiente.nextcloudnative.app.VirtualFileStorageSupport
-import dev.obiente.nextcloudnative.app.formatVirtualFileBytes
+import dev.obiente.nextcloudnative.app.formatByteSize
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
@@ -1608,7 +1608,7 @@ internal class AndroidNextcloudServices(
         val freed = (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
-                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+                "Freed ${formatByteSize(freed)} of disposable virtual file content."
             } else {
                 "No disposable virtual file content could be freed. Pinned and active files were kept."
             },

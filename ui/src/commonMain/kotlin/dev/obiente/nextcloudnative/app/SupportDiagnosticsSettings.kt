@@ -584,7 +584,7 @@ private fun PrivacyTab(
         Text(
             if (summary.available) {
                 summary.eventCount.toString() + " events, " + summary.errorCount + " errors, " +
-                    summary.warningCount + " warnings, " + formatVirtualFileBytes(summary.storedBytes)
+                    summary.warningCount + " warnings, " + formatByteSize(summary.storedBytes)
             } else {
                 summary.explanation ?: "Diagnostic storage is unavailable on this device."
             },
