@@ -1,242 +1,346 @@
 # Platform strategy
 
-This document defines the platform boundary for nati.ve. It separates
-portable product behavior from operating-system integration so shared code does
-not erase native security, lifecycle, accessibility, or filesystem semantics.
+This document defines which code is shared across platforms and which code
+belongs to one operating system. Read it before adding a source file, moving
+code between source sets, or implementing a platform service. Shared code must
+not erase native security, lifecycle, accessibility, or filesystem behavior.
 
-**Last reviewed: 2026-09-01.** Implementation and release availability may
-have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
-is the source of truth for published artifacts and their limitations.
+**Last reviewed: 2026-10-02.** The implementation and release availability may
+have changed since then. The [GitHub Releases page](https://github.com/obiente/native/releases)
+is the source of truth for published artifacts and their limitations. Planned
+work and acceptance gates live in [ROADMAP.md](ROADMAP.md).
 
-The target architecture has three portable layers and thin platform products:
+## Layers
 
-1. The Kotlin semantic compiler produces the schema consumed by the app.
-   The Rust compiler maintains a reference subset; see the explicit
-   [schema ownership and compatibility boundary](NATIVE_SCHEMA.md#contract-ownership).
-2. Shared Kotlin repositories own account state, caching, pagination,
-   conflicts, and actions.
-3. Shared Compose components render semantic workflows without HTML.
-4. Platform launchers own lifecycle, layout adaptation, secure storage,
-   background work, files, notifications, media, sharing, and packaging.
+The app is built from four layers. Only the last one is platform-specific.
 
-## Reviewed implementation snapshot
+1. **Semantic compiler.** The Kotlin compiler turns discovered app contracts
+   into the schema the app renders. The Rust crate keeps a smaller reference
+   model; see [schema ownership](NATIVE_SCHEMA.md#contract-ownership).
+2. **Shared repositories.** Kotlin repositories own account state, caching,
+   pagination, conflicts, and actions.
+3. **Shared Compose UI.** Compose components render semantic workflows without
+   HTML.
+4. **Platform launchers and services.** Each platform owns lifecycle, layout
+   adaptation, secure storage, background work, files, notifications, media,
+   sharing, and packaging.
 
-This table describes the repository state at the review date. It is not a
-support guarantee. A packaged artifact is not supported for a workflow until
-its platform acceptance criteria pass and its limitations are documented.
+## Modules and source sets
 
-| Platform | Runtime | Current state | Platform-specific direction |
+This section describes where code lives today. The Gradle build has three
+modules (`settings.gradle.kts`); the Rust crate is built separately.
+
+| Location | What it owns |
+| --- | --- |
+| `ui/src/commonMain` | Platform-neutral models, policies, repositories, the dynamic descriptor compiler (`nativeui/model`), the native renderer (`nativeui/runtime`), and Compose screens. The `NextcloudPlatformServices` interface is declared here. |
+| `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
+| `ui/src/androidMain` | Android `actual` implementations used by the shared UI, such as audio and video playback services, image decoding, back handling, the embedded Office editor, and server certificate trust. |
+| `ui/src/desktopMain` | The complete desktop platform: `DesktopNextcloudServices`, secret stores, the desktop sync engine and its SQLite stores, Linux FUSE virtual files, Windows Cloud Files, tray integration, and packaging resources. |
+| `androidApp/src/main` | The Android application: `MainActivity`, `AndroidNextcloudServices`, Keystore-backed credentials, WorkManager workers, `NextcloudDocumentsProvider`, folder sync, media backup, and share-target activities. |
+| `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. Both `androidApp` and the desktop target depend on it; `commonMain` does not. |
+| `src/` (Rust crate) | The reference schema and descriptor compiler, plus the Windows Explorer shell registrar binary that the desktop Windows package bundles. The Rust compiler is not linked into the app. |
+
+`jvmMain` is not a separate Kotlin Multiplatform source set. The `ui` build adds
+`src/jvmMain/kotlin` as an extra source directory to both `androidMain` and
+`desktopMain`, so each target compiles its own copy of that code. Files named
+`*.jvm.kt` there provide one `actual` implementation for both targets. Because
+the code is compiled for Android too, it must work on the Android runtime as
+well as on desktop JVMs.
+
+Android platform services live in the `androidApp` module, not in
+`ui/src/androidMain`. Desktop platform services live in `ui/src/desktopMain`.
+That asymmetry is why some Android and desktop implementations look alike
+without being in a shared source set.
+
+### Shared code ownership status
+
+This subsection records which Android and desktop implementations are shared
+and which remain duplicated, with their migration status. Keep entries scoped
+to code that exists in source and link each one to its tracking issue.
+
+AGENTS.md forbids byte-identical Android and desktop source files. Code that
+behaves identically on both JVM targets belongs in `ui/src/jvmMain`. Code that
+differs because of lifecycle, storage, or operating-system APIs stays in the
+platform module, with the difference documented and tested.
+
+**Last reviewed: 2026-10-02.** This is a source inventory, not a plan. The code
+may have changed since; the default branch is the source of truth. Similarity
+figures came from comparing function bodies after removing the `Android` and
+`Desktop` name prefixes.
+
+**Already shared.** All Compose UI, the sync domain model (planning,
+conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
+policy, and the `NextcloudPlatformServices` interface live in `commonMain`.
+Both service containers implement that interface. `jvmMain` shares login and
+authenticated request policy, application read sessions, detached downloads,
+the resumable chunk-upload state machine, staging-space reservations, support
+diagnostics and intake, text-draft encryption, and WebDAV href decoding.
+
+**Still duplicated.** The gap is below the shared interface: each platform has
+its own HTTP request code, protocol adapters, XML parsers, and sync executor.
+
+| Priority | Area | Android | Desktop | Shared owner to aim for |
+| --- | --- | --- | --- | --- |
+| High | Protocol adapters and HTTP request code. About 57 functions are at least 90% similar; desktop has notes and template functions Android lacks | `AndroidNextcloudServices.kt` | `DesktopNextcloudServices.kt` | One `jvmMain` HTTP gateway plus typed per-domain adapters in `commonMain` |
+| High | WebDAV and XML parsing, written four ways with different hardening | `SafeXmlParser.kt`, `NextcloudDocumentWebDav.kt` | `DocumentBuilderFactory` setups in `DesktopNextcloudServices.kt` and `DesktopFileVersionDav.kt`, `DesktopFileSyncDavParser.kt` | One hardened parser and typed multistatus parsers in `jvmMain`, with Android runtime tests |
+| High | Same-origin redirect rule, written three times | `AndroidNextcloudRedirect.kt` | `DesktopNextcloudServices.kt` | `NextcloudAuthenticatedRequestPolicy` in `jvmMain` |
+| High | Folder sync execution and owned-upload reconciliation. Behavior differs: when a folder replaces a remote file, desktop keeps a backup and Android does not; desktop records the uploaded ETag and Android rescans | `AndroidFileSyncEngine.kt`, `AndroidFileSyncRemoteTree.kt`, `NextcloudChunkUploadWebDav.kt` | `DesktopFileSyncEngine.kt`, `DesktopFileSyncRemoteTree.kt`, `DesktopFileSyncChunkUploadRemote.kt` | Step by step: a `jvmMain` owned-stage reconciler, then one WebDAV file client, then a `commonMain` orchestrator. Each step needs restart, conflict, cancellation, and ambiguous-result tests |
+| Medium | Sync persistence. Desktop uses SQLite; Android stores encoded blobs | `AndroidFileSyncStore.kt`, `AndroidFileSyncUploadCleanupStore.kt` | `DesktopFileSyncStore.kt` and related stores | A `commonMain` SQLite store with a tested one-time Android migration |
+| Medium | Dynamic discovery cache. Most of the logic is identical | `AndroidDynamicDiscoveryCache.kt` | `DesktopDynamicDiscoveryCache.kt` | One `jvmMain` cache |
+| Medium | Deck card draft codec, capacity, and migration policy | `AndroidDeckCardDraftStore.kt` | `DesktopDeckCardDraftStore.kt` | `commonMain` policy behind a storage port |
+| Medium | File read cache. Android skips leased entries during eviction; desktop eviction has no lease check | `AndroidFileReadCache.kt`, `AndroidVirtualFileCache.kt` | `DesktopFileReadCache.kt` | A `jvmMain` blob store |
+| Medium | Account removal stages and journals | Five `AndroidAccountRemoval*` files | `DesktopAccountRemoval.kt` | A `commonMain` removal state machine |
+| Medium | Pure policy kept in platform code | `AndroidFileSyncContentEvidence.kt` | `DesktopFileSyncRetryPolicy.kt`, `DesktopFileSyncBatchResult.kt`, `DesktopFileSyncContentSlices.kt` | `commonMain` |
+| Low | Small identical helpers: streaming multipart body, document-editing capability parsing, bounded reads, `sha256Hex` copies, update-channel preferences | Several files | Several files | `jvmMain` |
+
+**Intentionally platform-specific.** Credential storage (Keystore versus
+Secret Service, Credential Manager, and Keychain), local file access (SAF and
+MediaStore versus `java.nio`), virtual files (DocumentsProvider versus FUSE and
+Windows Cloud Files), background scheduling (WorkManager versus the desktop
+tray and runtime conditions), and external file launch. Only the logic around
+them, such as range hashing and handoff validation, should be shared.
+
+**Test gap.** `jvmMain` code is tested only by `desktopTest`; Android unit tests
+do not run it. Several suites exist once per platform and should merge when the
+code they test is shared: dynamic discovery cache, Deck draft store, account
+operation guard, file read cache, and file sync store.
+
+**Check gap.** The byte-identical check in `tools/check-kotlin-architecture.sh`
+compares only same-named files in `ui/src/androidMain` and `ui/src/desktopMain`.
+Most Android platform code lives in `androidApp`, and its files carry an
+`Android` prefix, so the check cannot detect the duplicates listed above.
+
+## Platform status
+
+This table describes the repository at the review date. It is not a support
+guarantee. A platform supports a workflow only after that workflow's platform
+acceptance tests pass and its limitations are recorded in
+[COMPATIBILITY.md](COMPATIBILITY.md). Packaging alone is not feature parity.
+
+| Platform | Runtime | State in source and packaging | Platform-specific direction |
 | --- | --- | --- | --- |
-| Android | Compose Multiplatform | Active launcher and signed alpha APK/AAB | Keystore, WorkManager, DocumentsProvider, permissions, notifications, shares, media sessions, camera backup, and calls |
-| Linux | Compose Desktop | Primary interactive desktop target; alpha RPM/DEB | Secret Service, desktop file integration, notifications, media keys, portals, and conventional sync roots |
-| Windows | Compose Desktop | Unsigned x86-64 MSI with Credential Manager, attested builds, and Cloud Files integration under prerelease qualification | Explorer validation, free trusted signing when available, notifications, media controls, and updates |
-| macOS | Compose Desktop | Early DMG packaging artifact; Keychain storage is source-tested, but authenticated use has not been live-validated or qualified | Keychain, File Provider/Finder integration, notifications, media controls, and updates |
-| iOS / iPadOS | Planned Compose target | No supported launcher is shipped | Keychain, File Provider, background transfer, share extension, notifications, media, and CallKit |
+| Android | Compose Multiplatform | Active launcher; signed alpha APK and AAB. Source includes Keystore-backed credentials, WorkManager workers, a `DocumentsProvider`, selected-folder sync, media backup, Media3 playback sessions, and share targets. | Notifications and push, calls, and the platform acceptance gates in the roadmap |
+| Linux | Compose Desktop | Primary interactive desktop target; alpha RPM and DEB. Source includes Secret Service storage through `secret-tool`, a StatusNotifier tray, selected-folder sync, and a FUSE virtual filesystem (`LinuxVirtualFileSystem.kt`). | Portals, notifications, media keys, and conventional sync roots |
+| Windows | Compose Desktop | Unsigned x86-64 MSI with Credential Manager storage, build provenance, and a Cloud Files provider (`WindowsCloudFilesProvider.kt`) under prerelease qualification. | Explorer validation, trusted signing when available, notifications, media controls, and updates |
+| macOS | Compose Desktop | Early DMG packaging artifact. Keychain storage (`MacOsKeychainSecretStore`) is present in source and unit-tested, but authenticated use has not been live-validated or qualified. | Keychain, File Provider and Finder integration, notifications, media controls, and updates |
+| iOS / iPadOS | None | No iOS target exists in the Gradle build and no launcher is shipped. | Keychain, File Provider, background transfer, share extension, notifications, media, and CallKit |
 
-Packaging is not feature parity. A platform becomes supported for a workflow
-only after its platform-specific acceptance tests pass and the limitation is
-recorded in [COMPATIBILITY.md](COMPATIBILITY.md).
-
-Standard CI builds Android packages and runs Android unit tests, but it does not
-run connected-device instrumentation. A package or passing unit-test job is not
-evidence that device-specific acceptance criteria have passed.
-
-Notes uses an editor toolbar with Save outside the scrolling content. Short
-windows move title and folder controls into an accessible Details dialog, leaving
-space for the text or preview. The shared Markdown typography uses content-sized
-headings across Notes, files, Deck, Talk, and news. `NoteEditorContentTest` covers
-the short-window controls and preservation of temporary form values; device
-rotation and visual evidence are separate platform acceptance checks.
-
-The compact Apps browser uses a searchable list with category filters and
-pinned shortcuts. Long labels truncate explicitly, and the header can grow with
-text size. Desktop retains its catalog grid. Photos places the date scrubber
-over edge-to-edge timeline content with symmetric padding; its accessible thumb
-and narrow rail retain date navigation while the surrounding area accepts photo
-taps. Contact detail bodies scroll independently of their Edit/Delete buttons.
-Focused scene tests cover these interactions; dated device observations belong
-in [COMPATIBILITY.md](COMPATIBILITY.md).
+Standard CI builds Android packages and runs Android unit tests. It does not
+run connected-device instrumentation, although instrumented tests exist under
+`androidApp/src/androidTest`. A package or a passing unit-test job is not
+evidence that device acceptance criteria have passed.
 
 ## Shared boundaries
 
-Android and desktop dynamic application reads use the same JVM account-session
-adapter, including native audio stream requests. Playback refreshes expired
-sessions per request on a stream worker and cancels preparation with the stream.
-Account retirement also clears pending Android requests and stops the matching
-MediaSession queue; leaving a screen still permits background playback. Desktop
-retirement cancels the matching download and disposes its player and staged file.
-Queue identities prevent delayed cleanup from stopping a replacement queue.
-Deterministic JVM tests cover cookie rotation, path isolation,
-credential replacement, cancellation, and retirement. This shared test coverage
-does not establish Android device or live-server compatibility; versioned server
-and platform evidence belongs in [COMPATIBILITY.md](COMPATIBILITY.md).
-
+These rules decide where new code goes:
 
 - Shared modules must not import Android, Apple, Windows, macOS, or Linux APIs.
 - Platform services implement interfaces owned by shared domain code.
 - Protocol parsing, permission rules, sync policy, retries, conflicts, and
-  account identity belong in shared code. Existing duplication should move
-  toward that boundary rather than becoming a new platform-specific design.
-- Secure credentials remain inside the platform credential store.
-- Filesystem providers and sync roots expose shared file and transfer semantics
-  while retaining each operating system's native provider model.
-- Shared Compose components contain behavior and semantics. Platform layouts
-  may arrange them differently.
+  account identity belong in shared code. Move existing duplication toward
+  that boundary instead of designing a new platform-specific copy.
+- Credentials stay inside the platform credential store.
+- Filesystem providers and sync roots expose shared file and transfer
+  semantics while keeping each operating system's native provider model.
+- Shared Compose components carry behavior and semantics. Platform layouts may
+  arrange them differently.
 
-### Shared workspace interaction components
+### Shared application read session
 
-Source review: 2026-08-30. This section describes the working implementation,
-not availability in a published package.
+Android and desktop use the same JVM adapter for dynamic application reads,
+including native audio stream requests
+([`JvmAuthenticatedAppReadSession.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmAuthenticatedAppReadSession.kt)).
 
-`NextcloudCollectionWorkspaceScaffold` uses the same typed destinations and
-selection callbacks across layouts. Compact workspaces use short text tabs for
-small destination sets. For larger sets, the current workspace title opens the
-section chooser without a second header row. Back remains a separate action.
-The bottom sheet includes search when there are more than seven sections.
-Tablets and desktop retain rails and collapsible sidebars. A section
-change does not bypass the host's draft or mutation navigation guards.
+- Playback refreshes an expired session per request on a stream worker, and
+  cancelling the stream cancels its preparation.
+- Account retirement clears pending Android requests and stops the matching
+  MediaSession queue. Leaving a screen does not stop background playback.
+- Desktop retirement cancels the matching download and disposes its player and
+  staged file.
+- Queue identities prevent a delayed cleanup from stopping a replacement queue.
 
-The shared app shell uses Home consistently across platforms. On phone and
-tablet, the Apps navigation slot identifies the open app; selecting it opens
-the app switcher with pinned and recent apps, installed-app search, Folder sync
-and a route to the full app catalog. Opening or dismissing the switcher leaves
-the workspace mounted. Switching apps still uses the host's guarded callbacks.
-Phone-to-tablet layout changes move the same workspace composition so local
-draft state is retained within that running session, not recreated by the
-navigation breakpoint.
+Deterministic JVM tests cover cookie rotation, path isolation, credential
+replacement, cancellation, and retirement. They do not establish Android device
+or live-server compatibility; that evidence belongs in
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
-Desktop sidebars collapse on request and below 900dp. Both widths retain pinned,
-recent and current apps, with one selected app, labeled controls and full-name
-tooltips. Settings and the clickable account entry share the utility footer.
-Short windows scroll that footer with the navigation. Collapse state is a
-saveable presentation preference, not a server setting. Phone/tablet navigation
-and app switching also scroll at short heights and larger text sizes.
+### Shared workspace components
 
-`MediaImageCanvas` shares bounded zoom and pan behavior across touch, mouse,
-touchpad scroll, keyboard, and visible controls. Pinch or double-tap zooms;
-scrolling zooms around the pointer. When the image has keyboard focus, `+` and
-`-` zoom, `0` fits the image, `1` selects actual size, and arrow keys pan while
-zoomed. At fit size, Left/Right continue to navigate media through the viewer.
-Visible Fit and 1:1 controls distinguish fitting the window from one decoded
-image pixel per viewport pixel. Percentages describe the displayed decoded
-image, not a higher-resolution original that has not been loaded. These controls do not edit
-the source image. OS decoding, EXIF handling, and file access remain in their
-existing owners.
+This section describes behavior present in source, not availability in a
+published package. Shared rendering and deterministic tests do not prove
+identical input handling on every operating system or touchpad; native-device
+interaction validation is still required.
 
-Desktop Files can hide the library or details pane. Intermediate window widths
-show only one secondary pane at a time so the file list remains usable. App
-tiles open directly; pinning and compatibility details remain in overflow
-menus. Activity separates actionable notices from the remaining event history,
-and Settings opens account details on demand rather than reserving a permanent
-inspector for them.
+**Navigation and app shell**
 
-Folder sync presents queue state and last scan time separately. A completed
-scan is not presented as a successful completed sync. Phone pair rows open
-dedicated details; desktop retains a pair table and inspector. Conflict choices
-explain their consequences before the existing confirmation and revision checks.
-Storage distinguishes integration availability, connection state and retained
-edits, while transfer history uses verified receipt time for completed uploads.
+- `NextcloudCollectionWorkspaceScaffold` uses the same typed destinations and
+  selection callbacks in every layout. Compact layouts use short text tabs for
+  small destination sets. For larger sets, the workspace title opens a section
+  chooser, which adds search above seven sections. Tablets and desktop keep
+  rails and collapsible sidebars. Changing section never bypasses the host's
+  draft or mutation navigation guards.
+- The app shell uses Home on every platform. On phone and tablet, the Apps
+  navigation slot names the open app and opens an app switcher with pinned and
+  recent apps, installed-app search, Folder sync, and the full catalog. Opening
+  the switcher keeps the workspace mounted, and switching apps still uses the
+  host's guarded callbacks.
+- A phone-to-tablet layout change moves the same workspace composition, so
+  local drafts survive within the running session.
+- Desktop sidebars collapse on request and below 900dp. Both widths keep pinned,
+  recent, and current apps with labeled controls and full-name tooltips.
+  Settings and the account entry share a utility footer that scrolls in short
+  windows. Collapse state is a saved presentation preference, not a server
+  setting.
+- The compact Apps browser is a searchable list with category filters and
+  pinned shortcuts. Long labels truncate explicitly and the header grows with
+  text size. Desktop keeps its catalog grid. App tiles open directly; pinning
+  and compatibility details are in overflow menus.
 
-Existing Calendar events and editable dynamic records use in-place workspace
-editors. They reuse the same fields, validation and mutation paths as their
-dialog presentations. Save and Cancel stay with the form; dirty drafts require
-an explicit discard decision before navigation, and pending saves block leaving.
-Creation, pickers and short confirmations can still use dialogs.
+**Media**
 
-Calendar uses shared view selection, time-first event rows, named calendar
-checkboxes and event detail facts. Phone Month shows a compact date grid above
-the selected day's events; Week uses a day strip. Desktop has a continuous month
-grid with actionable event overflow and scrollable week columns. Shared date
-grouping includes multi-day events within a bounded visible window and respects
-exclusive all-day ends. The bounded editor prioritizes title and schedule, with
-compact recurrence and calendar selectors. Save/Cancel stay outside its scroll
-area. Production and captures use the same components. Talk bounds the
-composer and desktop message width. A failed Talk send retains the draft;
-refreshing only reads the conversation, and an uncertain resend needs explicit
-confirmation. Message timestamps show UTC without inferring delivery or read state.
+- `MediaImageCanvas` shares bounded zoom and pan across touch, mouse, touchpad,
+  keyboard, and visible controls. Pinch or double-tap zooms, and scrolling zooms
+  around the pointer. With keyboard focus, `+` and `-` zoom, `0` fits, `1`
+  shows actual size, and arrow keys pan while zoomed. At fit size, Left and
+  Right move to the previous or next item.
+- Fit and 1:1 controls distinguish fitting the window from one decoded pixel
+  per viewport pixel. Percentages describe the decoded image, not an original
+  that has not been loaded. These controls never edit the source image.
+- Photos places the date scrubber over edge-to-edge timeline content. The thumb
+  and narrow rail keep date navigation while the surrounding area still accepts
+  photo taps.
 
-These source behaviors still require native-device interaction validation;
-shared rendering and deterministic tests are not a claim of identical input
-delivery on every operating system or touchpad.
-Office uses native document selection. Android embeds only user-requested
-Direct Editing sessions, not the Nextcloud dashboard or app navigation; desktop
-opens editing sessions in the system browser. Preview and Edit are separate
-actions, with editing gated by advertised MIME support and current permissions.
-This does not provide an automatic web fallback for other apps.
-See [ADR 0001](docs/architecture-decisions/0001-android-office-web-integration.md)
-for the authentication, provider selection, and retry boundaries. Device-level
-Office acceptance remains separate from compiling or packaging this integration.
+**Files, Activity, and Folder sync**
+
+- Desktop Files can hide the library or details pane. At intermediate widths
+  only one secondary pane is shown, so the file list stays usable.
+- Activity separates actionable notices from the rest of the event history.
+  Settings opens account details on demand.
+- Folder sync shows queue state and last scan time separately. A completed scan
+  is never presented as a completed sync. Phone pair rows open dedicated
+  details; desktop keeps a pair table and inspector. Conflict choices explain
+  their consequences before the existing confirmation and revision checks.
+- Storage distinguishes integration availability, connection state, and
+  retained edits. Transfer history uses the verified receipt time for completed
+  uploads.
+
+**Editors**
+
+- Existing Calendar events and editable dynamic records use in-place workspace
+  editors with the same fields, validation, and mutation paths as their dialog
+  versions. Save and Cancel stay with the form. A dirty draft needs an explicit
+  discard decision before navigation, and a pending save blocks leaving.
+  Creation, pickers, and short confirmations may still use dialogs.
+- Notes uses an editor toolbar with Save outside the scrolling content. In
+  short windows, title and folder controls move into an accessible Details
+  dialog. Shared Markdown typography uses content-sized headings in Notes,
+  Files, Deck, Talk, and news. `NoteEditorContentTest` covers the short-window
+  controls and preservation of temporary form values.
+- Contact detail bodies scroll independently of their Edit and Delete buttons.
+
+**Calendar and Talk**
+
+- Calendar shares view selection, time-first event rows, named calendar
+  checkboxes, and event detail facts. Phone Month shows a compact date grid
+  above the selected day's events, and Week uses a day strip. Desktop has a
+  continuous month grid with event overflow and scrollable week columns.
+- Shared date grouping includes multi-day events within a bounded window and
+  respects exclusive all-day end dates. The editor puts title and schedule
+  first, with compact recurrence and calendar selectors.
+- Talk bounds the composer and the desktop message width. A failed send keeps
+  the draft. Refresh only reads the conversation, and an uncertain resend needs
+  explicit confirmation. Timestamps show UTC and do not imply delivery or read
+  state.
+
+**Office**
+
+- Office uses native document selection. Android embeds only a Direct Editing
+  session the user asked for, never the Nextcloud dashboard or app navigation.
+  Desktop opens editing sessions in the system browser. Preview and Edit are
+  separate actions, and Edit is gated by advertised MIME support and current
+  permissions. This is not an automatic web fallback for other apps. See
+  [ADR 0001](docs/architecture-decisions/0001-android-office-web-integration.md)
+  for the authentication, provider selection, and retry boundaries.
+
+Focused scene tests cover many of these interactions. Device rotation, visual
+evidence, and dated device observations belong in
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Mobile product rules
 
-App-specific presentation groups related values around the task. Budget gives
-the account balance and period spending priority, keeps category limits and
-carryover together, and omits unavailable totals instead of displaying zero.
-Music playlists keep ordered tracks and playback controls together. Calendar
-editors group Schedule and Details while Save/Cancel remain outside the scrolling
-body. Transfer history puts queue status and the failed-upload filter before
-individual records, with a centered bounded layout on wider windows. These
-surfaces reuse the existing typed models, action bindings, and recovery policies.
-Pantry collection cards emphasize household and list descriptions; grocery task
-rows include quantity without replacing completion recovery. Tables cards keep
-declared counts visible and secondary metadata expandable. Record details group
-typed cells under their primary value without repeating that value as a second
-field. Compact table controls wrap when horizontal space is limited.
-Focused scene tests cover enlarged text, visible actions, and playlist order;
-platform observations are recorded separately in [COMPATIBILITY.md](COMPATIBILITY.md).
+Every mobile surface must provide:
 
-View switchers and form choices use common native components on phone and
-desktop. Calendar, compact Chores, Budget categories and dynamic enum fields
-share selection, focus and overflow behavior without sharing domain state or
-write policy. See [shared native choice controls](docs/shared-ui-controls.md)
-for the component contracts and current consumers.
+- correct safe-area insets, system back, touch targets, and permission flows;
+- state restoration across rotation, activity recreation, and process death;
+- durable background work that is honest about Android and iOS scheduling
+  limits;
+- progressive layouts for large phones, tablets, foldables, and external
+  displays;
+- native share and open-with, notifications, media sessions, filesystem
+  providers, camera and media discovery, and calling surfaces.
 
-- Correct safe-area insets, system back, touch targets, and permission flows.
-- State restoration across rotation, activity recreation, and process death.
-- Durable background work that is honest about Android/iOS scheduling limits.
-- Progressive layouts for large phones, tablets, foldables, and external
-  displays.
-- Native share/open-with, notifications, media sessions, filesystem providers,
-  camera/media discovery, and calling surfaces.
+App-specific presentation groups related values around the task. These
+surfaces reuse the existing typed models, action bindings, and recovery
+policies:
+
+- Budget puts account balance and period spending first, keeps category
+  limits and carryover together, and omits unavailable totals instead of
+  showing zero.
+- Music playlists keep ordered tracks and playback controls together.
+- Calendar editors group Schedule and Details, with Save and Cancel outside the
+  scrolling body.
+- Transfer history puts queue status and the failed-upload filter before the
+  records, centered and bounded on wider windows.
+- Pantry collection cards emphasize household and list descriptions. Grocery
+  rows show quantity without replacing completion recovery.
+- Tables cards keep declared counts visible and secondary metadata expandable.
+  Record details group typed cells under their primary value without repeating
+  it. Compact table controls wrap when space is limited.
+
+View switchers and form choices use shared native components on phone and
+desktop. Calendar, compact Chores, Budget categories, and dynamic enum fields
+share selection, focus, and overflow behavior without sharing domain state or
+write policy. See [shared native choice controls](docs/shared-ui-controls.md).
 
 ## Desktop product rules
 
-Interrupted account cleanup has a separate retry screen from unavailable secure
-storage. It preserves the saved sign-in and offers no sign-in reset action while
-cleanup is pending or its records need review. Unrecognized cleanup records direct
-the user to Obiente support for recovery guidance. Pending cleanup explains how to
-reopen the app for another cleanup attempt and contact support if it stays blocked;
-the screen's check action only reloads session state.
+Every desktop surface should provide, where the workflow benefits:
 
-Desktop credential-save recovery records persist a terminal marker before their
-identity fields are erased. Restart recovery can finish this cleanup at every
-interruption point without treating a completed save as an incomplete rollback.
-The deterministic preference-boundary test is
-`DesktopCompletedCredentialSaveCleanupTest`; this is source and test evidence,
-not a claim about a published installer.
-
-Desktop account cleanup remains pending when legacy Deck drafts cannot be
-attributed because the keyring or encrypted content is unreadable. Existing
-files are preserved. Restoring keyring access permits a cleanup retry; a
-permanently damaged legacy draft can continue blocking that cleanup until its
-ownership or deliberate removal is resolved. This does not claim automatic
-recovery of corrupt encrypted drafts.
-A desktop account registry written by a newer format blocks startup sign-in with
-compatibility guidance. Saved credentials and registry data remain unchanged;
-reopening a compatible app version is required instead of repeating browser login.
-Malformed registry data without a recoverable legacy session instead shows
-retained-data and support guidance, without offering a reset or claiming that an
-update is needed. A valid legacy session can still repair malformed registry data.
-
-- Resizable master-detail and multi-pane workspaces where the workflow benefits.
-- Keyboard navigation, pointer selection, context menus, drag-and-drop, and
-  accessibility focus.
-- Dense tables, persistent inspectors, multi-selection, and broad content views
-  instead of phone cards stretched across a window.
-- Conventional sync roots or native virtual-file providers according to the
-  operating system.
-- Secret storage, notifications, system media controls, file associations,
+- resizable master-detail and multi-pane workspaces;
+- keyboard navigation, pointer selection, context menus, drag-and-drop, and
+  accessibility focus;
+- dense tables, persistent inspectors, multi-selection, and broad content views
+  instead of phone cards stretched across a window;
+- conventional sync roots or native virtual-file providers, according to the
+  operating system;
+- secret storage, notifications, system media controls, file associations,
   updates, and native packaging.
+
+### Desktop account recovery
+
+These are source and deterministic-test guarantees, not claims about a
+published installer.
+
+- **Interrupted account cleanup** has its own retry screen, separate from
+  unavailable secure storage. It keeps the saved sign-in and offers no sign-in
+  reset while cleanup is pending or needs review. Unrecognized cleanup records
+  direct the user to Obiente support. The screen explains how to reopen the app
+  for another attempt; its check action only reloads session state.
+- **Credential-save recovery** persists a terminal marker before erasing its
+  identity fields, so a restart can finish cleanup at any interruption point
+  without mistaking a completed save for an incomplete rollback. See
+  `DesktopCompletedCredentialSaveCleanupTest`.
+- **Legacy Deck drafts** that cannot be attributed, because the keyring or
+  encrypted content is unreadable, keep account cleanup pending and the files
+  preserved. Restoring keyring access permits a retry. A permanently damaged
+  draft can keep blocking cleanup until its ownership or deliberate removal is
+  resolved; corrupt encrypted drafts are not recovered automatically.
+- **A registry written by a newer format** blocks sign-in with compatibility
+  guidance. Credentials and registry data are unchanged, and the user must
+  reopen a compatible app version instead of repeating browser login.
+- **Malformed registry data** without a recoverable legacy session shows
+  retained-data and support guidance, without a reset or an update claim. A
+  valid legacy session can still repair malformed registry data.
 
 ## Platform delivery rule
 
@@ -251,28 +355,37 @@ The dependency order and acceptance gates are defined in
 
 ## Installed display names
 
-Android's application label is `nati.ve`. Linux launcher and AppStream names are
-`nati.ve`, including the launcher rewritten into Debian packages. macOS packages
-use `nati.ve.app` and the `nati.ve` Dock name. Windows product and shortcut names
-are described in [Windows release packaging](docs/windows-release.md#installed-application-name).
+The displayed brand is `nati.ve` on every platform:
+
+- Android's application label is `nati.ve`.
+- Linux launcher and AppStream names are `nati.ve`, including the launcher
+  rewritten into Debian packages.
+- macOS packages use `nati.ve.app` and the `nati.ve` Dock name.
+- Windows product and shortcut names are described in
+  [Windows release packaging](docs/windows-release.md#installed-application-name).
 
 The Android application ID, Linux package and desktop-file IDs, persisted data
-paths, and Windows upgrade identity remain unchanged. These are compatibility
-identifiers, independent of the displayed brand. On macOS, remove the previous
-`NextcloudNative.app` after installing `nati.ve.app` to avoid keeping two app
-bundles; the DMG does not migrate an existing bundle automatically.
+paths, and Windows upgrade identity are compatibility identifiers and have not
+changed. On macOS, remove the previous `NextcloudNative.app` after installing
+`nati.ve.app`; the DMG does not migrate an existing bundle.
 
-These names describe source packaging configuration, not confirmation that a
-release containing it has been published. Check the
-[release artifacts](https://github.com/Obiente/native/releases) for availability.
+These names describe source packaging configuration. Check the
+[release artifacts](https://github.com/Obiente/native/releases) to see whether a
+published release contains them.
 
 ## Desktop SQLite runtime verification
 
-The JVM SQLite dependency is constrained to 2.6.2 because the 2.7.0 and 2.7.1
-artifacts omit the Intel macOS native library. `DesktopSqliteRuntimeTest` checks
-the native resources for each packaged desktop architecture and opens an
-in-memory database on the test host. An Intel macOS CI job validates relevant
-dependency and packaging changes. Nightly and prerelease macOS packages run their
-launcher with `--verify-sqlite-runtime`, before creating application services.
-This check does not inspect accounts or modify user databases. A resource check
-on one OS does not establish runtime validation on another OS.
+The desktop sync stores use the bundled AndroidX SQLite driver
+(`androidx.sqlite:sqlite-bundled`). The version is pinned to 2.6.2 in
+`gradle/libs.versions.toml` because the 2.7.0 and 2.7.1 JVM artifacts omit the
+Intel macOS native library.
+
+- `DesktopSqliteRuntimeTest` checks the native resources for each packaged
+  desktop architecture and opens an in-memory database on the test host.
+- An Intel macOS CI job validates relevant dependency and packaging changes.
+- Nightly and prerelease macOS packages run their launcher with
+  `--verify-sqlite-runtime` before creating application services. This check
+  does not read accounts or modify user databases.
+
+A resource check on one operating system does not establish runtime validation
+on another.

@@ -1,4 +1,4 @@
-package dev.obiente.nextcloudnative
+package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

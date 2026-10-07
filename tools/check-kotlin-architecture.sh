@@ -83,9 +83,18 @@ mapfile -d '' kotlin_files < <(
         -type f -name '*.kt' -print0 2>/dev/null
 )
 
+# Count all files with one wc process; per-file subprocesses are slow on Windows.
+declare -A line_counts=()
+if [[ "${#kotlin_files[@]}" -gt 0 ]]; then
+    while read -r count path; do
+        [[ "$path" == total ]] && continue
+        line_counts["$path"]="$count"
+    done < <(printf '%s\0' "${kotlin_files[@]}" | xargs -0 wc -l)
+fi
+
 for file in "${kotlin_files[@]}"; do
     relative_path="${file#"$project_root/"}"
-    line_count="$(wc -l < "$file")"
+    line_count="${line_counts[$file]}"
     if is_test_source "$relative_path"; then
         default_limit="$test_limit"
     else

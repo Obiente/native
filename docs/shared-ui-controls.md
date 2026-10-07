@@ -1,9 +1,12 @@
 # Shared native choice controls
 
-`app/design/NextcloudSegmentedControl.kt` and `NextcloudChoiceField.kt` live in
-`commonMain`. Phone and desktop use the same selection and keyboard behavior.
-The caller supplies stable IDs, labels, current selection, availability and a
-callback. Neither component interprets a schema, saves data or grants permission.
+`NextcloudSegmentedControl` and `NextcloudChoiceField` live in
+[`ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/`](../ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/).
+Phone and desktop share the same selection and keyboard behavior.
+
+The caller supplies stable IDs, labels, the current selection, availability and
+a callback. Neither component interprets a schema, saves data or grants
+permission.
 
 ## Choose the right control
 

@@ -1,12 +1,23 @@
 # nati.ve product and engineering roadmap
 
-**Last reviewed: 2026-08-20.** Planned scope, ordering, and priorities may have
+This roadmap defines what nati.ve must deliver, in which dependency order, and
+the acceptance gates each milestone must pass. Read it to understand why work is
+sequenced as it is and what evidence a milestone needs. It describes planned
+scope; it does not claim that any listed feature exists. What is implemented is
+described in the architecture documents and [COMPATIBILITY.md](COMPATIBILITY.md).
+
+**Last reviewed: 2026-10-02.** Planned scope, ordering, and priorities may have
 changed. The [public GitHub Project](https://github.com/orgs/Obiente/projects/4)
-is the source of truth for active work and priority.
+is the source of truth for active work, priority, and completion.
 
-nati.ve is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
+nati.ve is an independent Obiente project, not affiliated with Nextcloud GmbH.
+The goal is not to collect many Nextcloud apps behind one launcher. It is to be
+the most trustworthy, coherent, and useful Nextcloud client on every supported
+platform.
 
-This roadmap is dependency-driven rather than date-driven. Milestones advance only when their acceptance gates pass. Feature count does not override data safety, battery use, accessibility, protocol correctness, or preservation of originals.
+The roadmap is ordered by dependency, not by date. A milestone advances only
+when its acceptance gates pass. Feature count never overrides data safety,
+battery use, accessibility, protocol correctness, or preservation of originals.
 
 ## 1. Product promise
 
@@ -49,19 +60,19 @@ These rules extend the boundaries in [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECT
 
 ## 3. Roadmap scope
 
-The roadmap must deliver these foundations in dependency order:
-
-- one shared, bounded transport and typed protocol layer;
-- durable account metadata, caches, operation journals, and conflict state;
-- complete Files actions, selective offline storage, and crash-safe two-way sync;
-- dependable messaging, notifications, media, groupware, and separately gated
-  Talk calling;
-- verified dynamic-app contracts that cannot invent operations or permissions;
-- native operating-system integration with explicit platform acceptance gates;
-- repeatable compatibility, accessibility, security, migration, and release
-  evidence before stable support is declared.
+In dependency order, the roadmap delivers: a shared bounded transport and typed
+protocol layer; durable account metadata, caches, journals, and conflict state;
+complete Files actions, selective offline storage, and crash-safe two-way sync;
+messaging, notifications, media, groupware, and separately gated Talk calling;
+verified dynamic-app contracts that cannot invent operations or permissions;
+native operating-system integration with platform acceptance gates; and
+repeatable compatibility, accessibility, security, migration, and release
+evidence before stable support is declared.
 
 ## 4. Target architecture
+
+This is the target shape, not the current one. The current modules and source
+sets are described in [PLATFORMS.md](PLATFORMS.md#modules-and-source-sets).
 
 ```text
 Compose feature UI and platform surfaces
@@ -71,7 +82,7 @@ Typed feature repositories and use cases
     |-- action policy: permission, risk, idempotency, confirmation
     |
 Shared metadata/cache/sync engine
-    |-- account-scoped SQLite/SQLDelight database
+    |-- account-scoped SQLite database
     |-- sync journal, tombstones, pending operations, conflicts
     |-- blob cache and offline pin manager
     |
@@ -91,13 +102,16 @@ Platform integrations
 
 ### 4.1 Shared module boundary
 
-The intended repository split is:
+The repository has three Gradle modules today: `ui` (shared Kotlin
+Multiplatform code plus the desktop platform), `androidApp`, and
+`contractAcquisition`, plus the Rust reference crate. The module split below is
+planned. It is not evidence that any of these modules exists:
 
 | Module | Responsibility | Must not contain |
 |---|---|---|
 | `core-model` | Account, file, action, conflict, cache, sync, capability, and error types | HTTP or Compose |
 | `transport` | Request execution, authentication, streaming, DAV verbs, same-origin policy, redaction | App-specific parsing |
-| `storage` | SQLDelight schema, migrations, transactions, blob metadata, encryption hooks | Credentials |
+| `storage` | SQLite schema, migrations, transactions, blob metadata, encryption hooks | Credentials |
 | `sync-engine` | Reconciliation plan, journal, tombstones, retries, conflict generation | Platform UI |
 | `adapters-*` | Versioned protocol translation and capability gates | Platform APIs or presentation state |
 | `repositories` | Cached state, pagination, refresh, pending writes, cross-adapter identity | Raw JSON/XML |
@@ -106,7 +120,10 @@ The intended repository split is:
 | platform apps/extensions | Keychain, filesystem provider, workers, notifications, WebRTC, signing | Domain policy duplication |
 
 Runtime repositories, transport, storage, and sync are planned as Kotlin
-Multiplatform boundaries. The application uses the Kotlin deterministic
+Multiplatform boundaries. Persistence today is per feature: the desktop sync
+stores and the media backup ledger use the bundled AndroidX SQLite driver, and
+SQLDelight has not been adopted. Choosing a shared database layer is part of
+gate G2 and needs an ADR. The application uses the Kotlin deterministic
 adapter compiler; Rust provides a reference subset. See
 [schema ownership](NATIVE_SCHEMA.md#contract-ownership). Any consolidation or
 UniFFI/FFI embedding must first prove preservation of runtime extensions,
@@ -153,7 +170,7 @@ Later milestones refer to these gates.
 |---|---|---|
 | G0: transport | One shared streaming transport with DAV verbs, OCS helpers, safe XML, response headers, cancellation, redirect policy, and redaction | Android + desktop contract tests against a mock server and a real test server |
 | G1: capabilities | Typed account capability snapshot plus opaque sealed JSON tree, versioned adapter manifests, and refresh invalidation | Unknown fields/versions survive; app enable/disable refresh changes routing |
-| G2: metadata store | Account-scoped SQLDelight/SQLite schema, migrations, transactions, indexes, and encrypted-storage hooks | Upgrade/downgrade fixtures, process-kill recovery, no credentials in DB |
+| G2: metadata store | Account-scoped SQLite schema, migrations, transactions, indexes, and encrypted-storage hooks | Upgrade/downgrade fixtures, process-kill recovery, no credentials in DB |
 | G3: blob store | Atomic content-addressed cache with quotas and pin classes | Partial downloads never appear complete; eviction never removes dirty/conflict data |
 | G4: sync journal | Base ETag/hash, local/remote generations, tombstones, pending operations, conflicts, retry history | Deterministic reconciliation tests and crash recovery at every transition |
 | G5: background scheduler | Shared work descriptions plus Android/iOS/desktop scheduling drivers | Constraints, cancellation, backoff, reboot/account removal, and user-visible progress tested |
@@ -185,7 +202,7 @@ Work may proceed in parallel only when dependencies are satisfied. For example, 
 
 ### Scope
 
-1. Move duplicated Android/desktop HTTP and protocol helpers behind `NextcloudTransport`.
+1. Move duplicated Android/desktop HTTP and protocol helpers behind one shared transport (planned as `NextcloudTransport`; no such type exists yet).
 2. Preserve response headers case-insensitively, streaming bodies without whole-file buffering.
 3. Add typed error categories: authentication, permission, capability missing, conflict, quota, rate limit, transient server, offline, TLS, malformed response, cancelled, and ambiguous result.
 4. Persist capability snapshots and adapter compatibility ranges.
@@ -206,7 +223,7 @@ Work may proceed in parallel only when dependencies are satisfied. For example, 
 ### Principal risks
 
 - A rushed transport migration can regress working product paths. Move one adapter at a time behind contract tests.
-- SQLDelight support and encryption choices vary by target. Store secrets separately regardless of database encryption, and define an explicit threat model before promising encrypted offline files.
+- SQLite driver support and encryption choices vary by target. Store secrets separately regardless of database encryption, and define an explicit threat model before promising encrypted offline files.
 
 ## 8. M1: best-in-class online Files
 
@@ -235,6 +252,8 @@ The protocol source of truth is the official [Nextcloud WebDAV API](https://docs
 ## 9. M2: Android cloud filesystem integration
 
 Android's official [`DocumentsProvider`](https://developer.android.com/reference/android/provider/DocumentsProvider) is designed for durable local or cloud documents and requires stable document IDs, fast metadata queries, capability flags, cancellation, and system-mediated URI grants. The official Nextcloud Android client provides a useful comparison in [`DocumentsStorageProvider.java`](https://github.com/nextcloud/android/blob/master/app/src/main/java/com/owncloud/android/providers/DocumentsStorageProvider.java), including its asynchronous folder refresh and local-cache behavior.
+
+An early `NextcloudDocumentsProvider` and selected-folder sync already exist in source (see [PLATFORMS.md](PLATFORMS.md#platform-status)). This milestone defines the gates they must pass before they are supported.
 
 ### Product modes
 
@@ -637,13 +656,13 @@ The shared domain contract applies everywhere; filesystem, background, RTC, noti
 ### Windows
 
 - Credential Manager/DPAPI, native notifications, share/open-with, startup/background behavior, media devices.
-- Cloud Files API placeholder/hydration integration modeled after the official Nextcloud desktop client's [`vfs/cfapi`](https://github.com/nextcloud/desktop/tree/master/src/libsync/vfs/cfapi), plus conventional sync roots.
+- Cloud Files API placeholder/hydration integration modeled after the official Nextcloud desktop client's [`vfs/cfapi`](https://github.com/nextcloud/desktop/tree/master/src/libsync/vfs/cfapi), plus conventional sync roots. An early Cloud Files provider exists in source under prerelease qualification; this milestone qualifies it.
 - MSIX and signed installer evaluation; update channel and rollback tested.
 
 ### Linux
 
 - Secret Service, XDG portals, notifications, MIME/open-with, systemd user scheduling where packaged appropriately, PipeWire media/screen share.
-- Conventional sync root is the primary reliable integration. Optional FUSE/GVfs-style on-demand filesystem is a later isolated driver, never required for core sync.
+- Conventional sync root is the primary reliable integration. An early FUSE virtual filesystem exists in source as an optional on-demand driver; it stays isolated and is never required for core sync.
 - Flatpak permissions/portals tested; GitHub AppImage/tarball and distro-friendly packages follow reproducible release work.
 
 ### Cross-platform acceptance criteria

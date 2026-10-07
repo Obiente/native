@@ -5,30 +5,48 @@ have changed. Check the [current source](https://github.com/obiente/native/blob/
 and the release notes for the installed build before assuming a released version
 includes these controls.
 
-Sign-in distinguishes connecting to the server, awaiting browser approval,
-retrying a connection, and completing the account transition. During browser
-approval or network retries, **Cancel sign-in** stops the attempt and makes the
-server address editable. Android system Back performs the same cancellation.
-Cancellation does not revoke credentials already issued by the server.
-The form scrolls when a short window, landscape layout, or larger text makes its
-controls taller than the available space, and keeps a bounded width in landscape.
-Malformed server addresses show correction guidance without displaying the URL
-parser's exception text.
+## Sign-in stages
 
-A name-resolution message records a DNS failure observed before a request reached
-the server. It does not prove the server is down or that the same failure still
-exists. Verify the address and the device's network or VPN connection. The app
-retries this pre-exchange failure with a bounded delay; a successful pending
-response restores the browser-approval status. You can cancel and start a fresh
-attempt after changing the address or connection.
+Sign-in shows which stage it is in: connecting to the server, waiting for you
+to approve in the browser, retrying a connection, or finishing the account
+setup.
 
-The attempt has a five-minute deadline, including network waits. If the response
-became ambiguous after the one-time approval exchange, start a new sign-in instead
-of replaying that exchange. The app does not automatically retry this outcome.
+While the app waits for browser approval or retries the connection,
+**Cancel sign-in** stops the attempt and lets you edit the server address
+again. On Android, the system Back action does the same. Cancelling does not
+revoke credentials the server has already issued.
 
-**Export login diagnostics** remains available before sign-in. Review any support
-report privately before sharing it. Do not post credentials, approval URLs,
-tokens, private server addresses, or raw account responses in public issues.
+The form scrolls when a short window, landscape layout or larger text makes it
+taller than the screen. In landscape it keeps a bounded width. If the server
+address is malformed, the app explains how to correct it instead of showing
+the URL parser's error text.
+
+## Connection problems
+
+A name-resolution message means a DNS lookup failed before any request reached
+the server. It does not prove the server is down, or that the failure is still
+happening. Check the address and the device's network or VPN connection.
+
+The app retries this kind of failure after a bounded delay. When the server
+answers again, the browser-approval status returns. You can also cancel, change
+the address or connection, and start a fresh attempt.
+
+## Time limit and uncertain results
+
+Each attempt has a five-minute deadline, including network waits.
+
+If the result became uncertain after the one-time approval exchange, start a
+new sign-in. Do not try to replay that exchange. The app does not retry this
+case automatically.
+
+## Sharing diagnostics safely
+
+**Export login diagnostics** is available before you sign in. Review any
+support report privately before sharing it. Do not post credentials, approval
+URLs, tokens, private server addresses or raw account responses in public
+issues.
+
+## Test coverage
 
 Synthetic regression tests in `LoginPollingTest` and `LoginAttemptStateTest`
 exercise retry phases, timeout, cancellation, browser-handoff failure, and late

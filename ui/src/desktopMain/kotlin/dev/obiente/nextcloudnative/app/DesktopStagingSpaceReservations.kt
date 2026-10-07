@@ -27,4 +27,6 @@ internal class DesktopStagingSpaceReservations(
     }
 }
 
-internal val sharedDesktopStagingSpaceReservations = DesktopStagingSpaceReservations()
+/** Uses the process-wide JVM ledger so sync, handoff, and export staging cannot double-claim space. */
+internal val sharedDesktopStagingSpaceReservations =
+    DesktopStagingSpaceReservations(ledger = sharedJvmStagingSpaceReservations)

@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
+import dev.obiente.nextcloudnative.app.decodeDavHref
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
@@ -90,7 +91,6 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
-import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
 import dev.obiente.nextcloudnative.app.VirtualFilePlatformIntegration
 import dev.obiente.nextcloudnative.app.VirtualFileProviderState
@@ -162,13 +162,9 @@ import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toFileSyncActionDiagnosticSummary
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
-import dev.obiente.nextcloudnative.app.ambiguousLoginPollResponse
-import dev.obiente.nextcloudnative.app.loginResultOriginMatchesEntered
 import dev.obiente.nextcloudnative.app.toLoginPollFailureDiagnostic
-import dev.obiente.nextcloudnative.app.validateLoginEndpointRelationships
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
-import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.diagnosticOutcome
@@ -185,7 +181,6 @@ import dev.obiente.nextcloudnative.app.PeopleTransportRequest
 import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
-import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.buildFileFavoritePropPatch
 import dev.obiente.nextcloudnative.app.buildFavoriteFilesDavReport
@@ -235,7 +230,6 @@ import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
-import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache

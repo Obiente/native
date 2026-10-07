@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -162,7 +161,7 @@ private class DesktopDavResponseBuilder {
 
     private fun decodedPath(userId: String): String? {
         val encodedHref = href ?: return null
-        val decoded = URLDecoder.decode(encodedHref.replace("+", "%2B"), StandardCharsets.UTF_8)
+        val decoded = decodeDavHref(encodedHref)
         val accountRoot = "/files/$userId/"
         if (accountRoot !in decoded) return null
         return decoded.substringAfter(accountRoot).trim('/')

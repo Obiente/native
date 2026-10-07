@@ -13,10 +13,9 @@ the current automated release checks.
 ## Current trust state
 
 At the review date, Windows MSIs are published without an Authenticode
-signature. A
-self-signed certificate is not used because it would not be trusted by normal
-Windows installations and asking users to install a custom root certificate
-would weaken their security boundary.
+signature. The project does not use a self-signed certificate: normal Windows
+installations would not trust it, and asking users to install a custom root
+certificate would weaken their security.
 
 Microsoft Defender SmartScreen may therefore warn before installation. After
 confirming that the MSI came from the project's GitHub release, a user on an
@@ -42,17 +41,19 @@ An unsigned MSI is release-eligible only when all of these controls pass:
 5. A published release asset is never replaced in place. A corrected build
    receives a new version, tag, URL, checksum, and attestation.
 
-Verify a downloaded MSI's provenance with GitHub CLI:
+Verify a downloaded MSI's provenance with GitHub CLI. Replace
+`<downloaded>.msi` with the name of the file you downloaded:
 
 ```powershell
-gh attestation verify .\NextcloudNative-<version>.msi `
+gh attestation verify .\<downloaded>.msi `
   --repo obiente/native
 ```
 
-Verify its release checksum with PowerShell:
+Compute its SHA-256 digest with PowerShell and compare it with the value in
+the release's `SHA256SUMS`:
 
 ```powershell
-Get-FileHash .\NextcloudNative-<version>.msi -Algorithm SHA256
+Get-FileHash .\<downloaded>.msi -Algorithm SHA256
 ```
 
 GitHub provenance and checksums detect replacement and identify the source

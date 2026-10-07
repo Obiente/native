@@ -232,9 +232,14 @@ Nextcloud server and installed apps
   only after at least two callers need the same semantics, not merely similar
   syntax.
 - `commonMain` owns platform-neutral models, policies, repositories, and
-  Compose UI. `jvmMain` owns behavior that is genuinely identical across JVM
-  targets. Android and desktop source sets own their lifecycle and operating
-  system integration.
+  Compose UI. `ui/src/jvmMain` owns behavior that is genuinely identical
+  across JVM targets; it is a source directory compiled into both the Android
+  and desktop targets, not a separate source set, and only `desktopTest` runs
+  its tests today. Android platform services live in the `androidApp` module,
+  so `jvmMain` APIs they call must be public. Desktop platform code lives in
+  `ui/src/desktopMain`. See
+  [PLATFORMS.md](PLATFORMS.md#shared-code-ownership-status) for what is still
+  duplicated.
 - Platform service implementations are adapters, not alternate application
   architectures. Shared request classification, validation, retry policy,
   response parsing, and domain mapping belong behind shared typed contracts.

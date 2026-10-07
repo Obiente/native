@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRequestPolicy
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
+import dev.obiente.nextcloudnative.app.decodeDavHref
 import dev.obiente.nextcloudnative.app.executeNextcloudAuthenticatedRequest
 import java.io.ByteArrayOutputStream
 import java.io.IOException

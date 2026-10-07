@@ -15,7 +15,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.URI
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -5790,7 +5789,7 @@ class DesktopNextcloudServices(
             for (index in 0 until responses.length) {
                 val response = responses.item(index)
                 val name = response.firstText(DAV, "displayname") ?: continue
-                val href = URLDecoder.decode(response.firstText(DAV, "href").orEmpty(), StandardCharsets.UTF_8)
+                val href = decodeDavHref(response.firstText(DAV, "href").orEmpty())
                 val path = href.substringAfter("/files/$userId/", name).trimEnd('/').ifBlank { name }
                 add(
                     NextcloudFile(

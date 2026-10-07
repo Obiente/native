@@ -1,4 +1,4 @@
-androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4138
+androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4132
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidProjectContentClient.kt|985
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/NextcloudDocumentsProvider.kt|900
 contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt|1212
@@ -48,7 +48,7 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopAppUpdates.kt|9
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileReadCache.kt|1536
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncEngine.kt|884
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncRemoteTree.kt|857
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6170
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6169
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCache.kt|2759
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem.kt|1697
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1085
