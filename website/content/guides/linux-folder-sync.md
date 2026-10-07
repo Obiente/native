@@ -8,7 +8,7 @@ device: Desktop
 platforms: Linux
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-30
+lastUpdated: 2026-10-08
 captureScenarios: guide-linux-folder-sync-workspace, guide-linux-folder-sync-locations, guide-linux-folder-sync-rules
 prerequisites: A connected Linux account, A local directory you can safely test, Enough local and Nextcloud storage for the first scan
 ---
@@ -55,5 +55,7 @@ If a conflict or ambiguous interrupted operation appears, compare both versions 
 A desktop sync pair supports no more than 100,000 selected entries or planned operations. The early check covers the local selection only and runs before the client hashes local file content. A larger remote tree or combined change plan can reach the limit later, so choose narrower roots or add ignore rules.
 
 Automatic checks wait longer after each repeated item failure. After five failed attempts, the item stays in the visible failed state until you use **Sync now** to request another attempt. Review the failure first. Repeatedly requesting a retry cannot repair a permissions error, an unsupported name, or a file that another application keeps changing.
+
+A check continues when one local item cannot be read: for example a lock file that disappears while Git or another tool is working, a file held open by another application, a folder you cannot list, or a socket or other special file. That item and everything below it are skipped for that check, their Nextcloud copies are left unchanged, and the pair counts it as skipped and lists up to 20 skipped items with their reasons under **Current work**. The rest of the folder synchronizes normally, and the skipped item is checked again on the next sync. Use an ignore rule for items that should never sync.
 
 The **Review** setup step keeps direction, conflict policy and deletion policy visible before you start. In **Choose what syncs**, a partial checkbox means only some descendants are selected; opening that folder does not expand the sync scope. Removal is under the selected pair's **Settings** tab and still requires confirmation.

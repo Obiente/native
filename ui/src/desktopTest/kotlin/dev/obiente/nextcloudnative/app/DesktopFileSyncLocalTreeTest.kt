@@ -28,7 +28,7 @@ class DesktopFileSyncLocalTreeTest {
 
             val entries = DesktopFileSyncLocalTree(root.toFile()).scan(includes = { path, kind ->
                 configuration.includesSyncPath(path, kind)
-            }).map { it.entry.relativePath }
+            }).documents.map { it.entry.relativePath }
 
             assertEquals(listOf("Photos", "Photos/Keep", "Photos/Keep/a.RAF", "Photos/Keep/a.jpg"), entries)
         } finally {
@@ -88,7 +88,7 @@ class DesktopFileSyncLocalTreeTest {
             root.resolve(".notes.nextcloud-native-download-archive").writeText("keep")
             root.resolve(".notes.nextcloud-native-backup-personal").writeText("keep too")
 
-            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().map { it.entry.relativePath }
+            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().documents.map { it.entry.relativePath }
 
             assertTrue(".notes.nextcloud-native-download-archive" in entries)
             assertTrue(".notes.nextcloud-native-backup-personal" in entries)
@@ -106,7 +106,7 @@ class DesktopFileSyncLocalTreeTest {
             val backup = ".notes.txt.nextcloud-native-backup-0b88c03f-55d1-4ccb-b92e-aa8ee32caf65"
             root.resolve(backup).writeText("protected original")
 
-            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().map { it.entry.relativePath }
+            val entries = DesktopFileSyncLocalTree(root.toFile()).scan().documents.map { it.entry.relativePath }
 
             assertTrue("notes.txt" in entries)
             assertFalse(backup in entries)
@@ -171,7 +171,7 @@ class DesktopFileSyncLocalTreeTest {
             Files.setLastModifiedTime(file, FileTime.fromMillis(-1_000L))
             val tree = DesktopFileSyncLocalTree(root.toFile())
 
-            assertEquals(null, tree.scan().single().entry.modifiedEpochMillis)
+            assertEquals(null, tree.scan().documents.single().entry.modifiedEpochMillis)
             assertEquals(null, requireNotNull(tree.resolve("archive.txt")).entry.modifiedEpochMillis)
         } finally {
             root.toFile().deleteRecursively()
@@ -191,12 +191,12 @@ class DesktopFileSyncLocalTreeTest {
                 digestCount += 1
                 "a".repeat(64)
             }
-            val first = tree.scan()
+            val first = tree.scan().documents
             val cachedRevisions = first.associate { document ->
                 document.entry.relativePath to document.entry.revision
             }
 
-            val second = tree.scan(cachedRevisions)
+            val second = tree.scan(cachedRevisions).documents
 
             assertEquals(first.map { it.entry }, second.map { it.entry })
             assertEquals(1, digestCount)
@@ -218,7 +218,7 @@ class DesktopFileSyncLocalTreeTest {
                 digestCount += 1
                 "b".repeat(64)
             }
-            val first = tree.scan()
+            val first = tree.scan().documents
 
             tree.scan(first.associate { it.entry.relativePath to it.entry.revision })
 
@@ -238,7 +238,7 @@ class DesktopFileSyncLocalTreeTest {
             root.resolve("Notes/today.md").writeText("inside")
             outside.resolve("today.md").writeText("outside")
             val tree = DesktopFileSyncLocalTree(root.toFile())
-            val scanned = tree.scan().single { it.entry.relativePath == "Notes/today.md" }
+            val scanned = tree.scan().documents.single { it.entry.relativePath == "Notes/today.md" }
             Files.move(root.resolve("Notes"), root.resolve("Notes-original"))
             val linked = runCatching { Files.createSymbolicLink(root.resolve("Notes"), outside) }.isSuccess
             if (!linked) return

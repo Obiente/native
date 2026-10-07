@@ -131,7 +131,7 @@ internal class DesktopFileSyncEngine(
                 ?: return@transaction FileSyncCenterActionResult.Rejected("Choose the local folder again.")
             val canonical = selected.canonicalFile
             DesktopFileSyncLocalTree(canonical)
-            val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
+            val normalizedRemote = normalizeDesktopFileSyncRemoteRoot(remoteRootPath)
             val accountId = desktopFileCacheAccountId(session)
             val current = store.load()
             if (current.coordinator.pairs.any { pair ->
@@ -352,15 +352,23 @@ internal class DesktopFileSyncEngine(
         val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
             baseline.localRevision?.let { revision -> baseline.relativePath to revision }
         }.toMap()
-        val scannedLocalEntries = try {
-            local.scan(cachedLocalRevisions, includes, shouldContinue).map(DesktopLocalSyncDocument::entry)
+        val localScan = try {
+            local.scan(cachedLocalRevisions, includes, shouldContinue)
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         } catch (failure: DesktopFileSyncScanLimitException) {
             onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(pairId, DesktopFileSyncScanStage.Local))
             throw failure
         }
-        val scannedRemoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
+        // Unreadable local subtrees are withheld from both sides and reported as skipped work.
+        val observed = withholdUnavailableFileSyncPaths(
+            localScan.documents.map(DesktopLocalSyncDocument::entry),
+            remote.scan(includes).map(DesktopRemoteSyncDocument::entry),
+            localScan.unavailable,
+        )
+        val scannedLocalEntries = observed.localEntries
+        val scannedRemoteEntries = observed.remoteEntries
+        val unavailableReports = observed.unavailable.take(MAX_FILE_SYNC_UNAVAILABLE_REPORTS)
         val cachedMismatchResults = currentFileSyncContentVerificationResults(
             scannedLocalEntries,
             scannedRemoteEntries,
@@ -392,7 +400,7 @@ internal class DesktopFileSyncEngine(
                     shouldContinue,
                 ).also { outcome ->
                     progressByPath.remove(slice.candidate.relativePath)
-                    outcome.progress?.let { progress ->
+                    outcome?.progress?.let { progress ->
                         progressByPath[progress.candidate.relativePath] = progress
                     }
                 }
@@ -400,7 +408,7 @@ internal class DesktopFileSyncEngine(
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         }
-        val verificationResults = cachedMismatchResults + completedSlices.mapNotNull { it.result }
+        val verificationResults = cachedMismatchResults + completedSlices.mapNotNull { it?.result }
         val verifiedPaths = verificationResults.mapTo(mutableSetOf()) { it.candidate.relativePath }
         val pendingCandidates = candidates.filterNot { it.relativePath in verifiedPaths }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
@@ -426,11 +434,11 @@ internal class DesktopFileSyncEngine(
                 localEntries,
                 remoteEntries,
                 System.currentTimeMillis(),
-                maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
+                maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS - unavailableReports.size,
                 verifiedContentMismatches = verifiedMismatches,
                 verifiedContentMismatchHashes = verifiedMismatchHashes,
                 contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
-            ),
+            ).withUnavailableFileSyncReports(pairId, unavailableReports),
         )
         val scannedPair = persisted.coordinator.pairs.single()
         if (!scannedPair.retainsResolvedFileSyncDecisions(expectedResolvedWorkIds)) {
@@ -444,11 +452,11 @@ internal class DesktopFileSyncEngine(
                     localEntries,
                     remoteEntries,
                     System.currentTimeMillis(),
-                    maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
+                    maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS - unavailableReports.size,
                     verifiedContentMismatches = verifiedMismatches,
                     verifiedContentMismatchHashes = verifiedMismatchHashes,
                     contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
-                ),
+                ).withUnavailableFileSyncReports(pairId, unavailableReports),
             )
             store.savePair(persisted, pairId)
             return FileSyncCenterActionResult.Rejected(
@@ -588,13 +596,7 @@ internal class DesktopFileSyncEngine(
                 if (execution.hasPendingDesktopUploadCleanup()) break
             }
         }
-        val message = buildString {
-            append(completed).append(" sync operation")
-            if (completed != 1) append('s')
-            append(" completed.")
-            if (conflicts > 0) append(' ').append(conflicts).append(" conflicts need review.")
-            if (failures > 0) append(' ').append(failures).append(" operations failed.")
-        }
+        val message = desktopFileSyncRunMessage(completed, conflicts, failures, observed.unavailable.size)
         return if (failures > 0) FileSyncCenterActionResult.Rejected(message)
         else FileSyncCenterActionResult.Completed(message)
     }
@@ -866,16 +868,6 @@ internal class DesktopFileSyncEngine(
     ) = requireDesktopFileSyncDownloadCapacity(
         stagingRoot, minimumFreeSpaceBytes, local, relativePath, downloadBytes,
     )
-
-    private fun normalizeRemoteRoot(path: String): String {
-        val normalized = path.trim().trim('/')
-        if (normalized.isEmpty()) return ""
-        require(normalized.length <= MAX_FILE_SYNC_PATH_LENGTH)
-        normalized.split('/').forEach { segment ->
-            require(segment.isNotBlank() && segment !in setOf(".", "..") && segment.none(Char::isISOControl))
-        }
-        return normalized
-    }
 
     private fun safeFailureMessage(failure: Throwable, fallback: String): String =
         failure.message?.map { if (it.isISOControl()) ' ' else it }?.joinToString("")
