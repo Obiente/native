@@ -2,7 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import android.content.Intent
 import android.net.Uri
-import android.util.Base64
+import java.io.IOException
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -15,6 +15,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.OkHttpClient
 
 internal object AndroidAudioPlaybackBridge {
@@ -32,6 +35,23 @@ internal object AndroidAudioPlaybackBridge {
 
     @Volatile
     var pendingRequest: AndroidAudioPlaybackRequest? = null
+
+    private val pendingRetirement = AccountPlaybackRetirementOwner()
+
+    fun submit(session: NextcloudSession, sources: List<NativeAudioPlaybackSource>, currentIndex: Int): Boolean {
+        val producer = sharedAccountPrivateMemoryGate.producer(previewCacheDigest(session)) ?: return false
+        val request = AndroidAudioPlaybackRequest(session, sources, currentIndex, producer)
+        return pendingRetirement.bind(producer,
+            onRetired = { if (pendingRequest === request) pendingRequest = null },
+            publish = { pendingRequest = request })
+    }
+
+    fun clearPending(expected: AndroidAudioPlaybackRequest? = null) = sharedAccountPrivateMemoryGate.withLock {
+        if (expected == null || pendingRequest === expected) {
+            pendingRetirement.clear()
+            pendingRequest = null
+        }
+    }
 
     fun update(value: NativeAudioEngineState) {
         mutableState.value = value
@@ -52,6 +72,10 @@ class AndroidAudioPlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var mediaSession: MediaSession? = null
     private var positionJob: Job? = null
+    private var preparationJob: Job? = null
+    @Volatile private var preparedReads: Call.Factory? = null
+    @Volatile private var activeRequest: AndroidAudioPlaybackRequest? = null
+    private val playbackRetirement = AccountPlaybackRetirementOwner()
 
     override fun onCreate() {
         super.onCreate()
@@ -61,20 +85,10 @@ class AndroidAudioPlaybackService : MediaSessionService() {
             .followSslRedirects(false)
             .build()
         val authenticatedFactory = DataSource.Factory {
-            val request = AndroidAudioPlaybackBridge.pendingRequest
-            val authorization = request?.session?.let { session ->
-                Base64.encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
-                    Base64.NO_WRAP,
-                )
-            }
-            OkHttpDataSource.Factory(httpClient)
+            OkHttpDataSource.Factory(Call.Factory { request ->
+                (preparedReads ?: throw IOException("Audio playback stopped.")).newCall(request)
+            })
                 .setUserAgent("nati.ve")
-                .apply {
-                    if (authorization != null) {
-                        setDefaultRequestProperties(mapOf("Authorization" to "Basic $authorization"))
-                    }
-                }
                 .createDataSource()
         }
         player = ExoPlayer.Builder(this)
@@ -92,18 +106,17 @@ class AndroidAudioPlaybackService : MediaSessionService() {
             ACTION_PAUSE -> player.pause()
             ACTION_RESUME -> player.play()
             ACTION_SEEK -> player.seekTo(intent.getLongExtra(EXTRA_POSITION_MILLIS, 0L).coerceAtLeast(0))
-            ACTION_STOP -> {
-                positionJob?.cancel()
-                player.stop()
-                player.clearMediaItems()
-                AndroidAudioPlaybackBridge.update(NativeAudioEngineState())
-                stopSelf()
-            }
+            ACTION_STOP -> stopPlayback()
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onDestroy() {
+        playbackRetirement.clear()
+        activeRequest?.let(AndroidAudioPlaybackBridge::clearPending)
+        activeRequest = null
+        preparationJob?.cancel()
+        preparedReads = null
         positionJob?.cancel()
         mediaSession?.release()
         mediaSession = null
@@ -113,9 +126,29 @@ class AndroidAudioPlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
+    private fun stopPlayback(expected: AndroidAudioPlaybackRequest? = null) {
+        playbackRetirement.clear()
+        activeRequest = null
+        preparationJob?.cancel()
+        preparedReads = null
+        AndroidAudioPlaybackBridge.clearPending(expected)
+        positionJob?.cancel()
+        player.stop()
+        player.clearMediaItems()
+        AndroidAudioPlaybackBridge.update(NativeAudioEngineState())
+        if (AndroidAudioPlaybackBridge.pendingRequest == null) stopSelf()
+    }
+
     private fun playPendingRequest() {
         val request = AndroidAudioPlaybackBridge.pendingRequest ?: return
         val source = request.sources.getOrNull(request.currentIndex) ?: return
+        if (!playbackRetirement.bind(request.producer, onRetired = {
+                preparationJob?.cancel()
+                preparedReads = null
+                scope.launch(Dispatchers.Main) {
+                    if (activeRequest === request) stopPlayback(request)
+                }
+            }, publish = { activeRequest = request })) return
         val items = request.sources.map { queueSource ->
             MediaItem.Builder()
                 .setMediaId(queueSource.id)
@@ -138,11 +171,40 @@ class AndroidAudioPlaybackService : MediaSessionService() {
         AndroidAudioPlaybackBridge.update(
             NativeAudioEngineState(sourceId = source.id, status = NativeAudioEngineStatus.Loading),
         )
-        player.setMediaItems(items, request.currentIndex, 0L)
-        player.prepare()
-        player.playWhenReady = true
+        preparationJob?.cancel()
+        player.stop()
+        player.clearMediaItems()
+        val preparation = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val reads = prepareNativeAudioReads(request.session, request.sources, httpClient)
+                if (AndroidAudioPlaybackBridge.pendingRequest !== request) return@launch
+                sharedAccountPrivateMemoryGate.read(request.producer, Unit) {
+                    if (activeRequest === request) {
+                        preparedReads = reads
+                        player.setMediaItems(items, request.currentIndex, 0L)
+                        player.prepare()
+                        player.playWhenReady = true
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (AndroidAudioPlaybackBridge.pendingRequest === request) {
+                    AndroidAudioPlaybackBridge.update(NativeAudioEngineState(
+                        sourceId = source.id, status = NativeAudioEngineStatus.Error,
+                        error = "Could not prepare this audio. Try again.",
+                    ))
+                }
+            }
+        }
+        val accepted = sharedAccountPrivateMemoryGate.read(request.producer, false) {
+            if (activeRequest !== request) false else {
+                preparationJob = preparation
+                true
+            }
+        }
+        if (accepted) preparation.start() else preparation.cancel()
     }
-
     private val playbackListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (player.playbackState == Player.STATE_ENDED) return

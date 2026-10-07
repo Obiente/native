@@ -93,13 +93,16 @@ assert "nightly-20260801-1830-run406-03ebaf9d" in " ".join(release.itertext())
 assert "verified" not in " ".join(release.itertext()).lower()
 PY
 
-deb_root="$temporary/deb-root"
-deb_directory="$temporary/deb-package"
-mkdir -p \
-  "$deb_root/DEBIAN" \
-  "$deb_root/opt/nextcloudnative/lib/app" \
-  "$deb_directory"
-cat >"$deb_root/DEBIAN/control" <<'EOF'
+# Building a real .deb needs dpkg-deb, which only Debian-based systems ship.
+# CI always runs this block; local runs elsewhere skip it explicitly.
+if command -v dpkg-deb >/dev/null 2>&1; then
+  deb_root="$temporary/deb-root"
+  deb_directory="$temporary/deb-package"
+  mkdir -p \
+    "$deb_root/DEBIAN" \
+    "$deb_root/opt/nextcloudnative/lib/app" \
+    "$deb_directory"
+  cat >"$deb_root/DEBIAN/control" <<'EOF'
 Package: nextcloudnative
 Version: 1.0.2971
 Architecture: amd64
@@ -107,7 +110,7 @@ Maintainer: Obiente
 Depends: libasound2t64, libc6, libpng16-16t64
 Description: nati.ve test package
 EOF
-cat >"$deb_root/opt/nextcloudnative/lib/app/nextcloudnative-NextcloudNative.desktop" <<'EOF'
+  cat >"$deb_root/opt/nextcloudnative/lib/app/nextcloudnative-NextcloudNative.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=NextcloudNative
@@ -116,22 +119,28 @@ Categories=Network;
 Icon=nextcloudnative-NextcloudNative
 Exec=/opt/nextcloudnative/bin/NextcloudNative
 EOF
-dpkg-deb --build --root-owner-group \
-  "$deb_root" "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" >/dev/null
-bash "$project_root/tools/enrich-deb-appstream.sh" \
-  "$deb_directory" \
-  "$rendered_metadata" \
-  "$project_root/LICENSE" \
-  "$project_root/website/public/icon-512.png" >/dev/null
-dpkg-deb --extract "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" "$temporary/branded-deb"
-grep -Fxq 'Name=nati.ve' \
-  "$temporary/branded-deb/usr/share/applications/nextcloudnative-NextcloudNative.desktop"
-deb_dependencies="$(
-  dpkg-deb --field "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" Depends
-)"
-grep -Fq 'libasound2t64 | libasound2' <<<"$deb_dependencies"
-grep -Fq 'libpng16-16t64 | libpng16-16' <<<"$deb_dependencies"
-grep -Fq 'libsecret-tools' <<<"$deb_dependencies"
+  dpkg-deb --build --root-owner-group \
+    "$deb_root" "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" >/dev/null
+  bash "$project_root/tools/enrich-deb-appstream.sh" \
+    "$deb_directory" \
+    "$rendered_metadata" \
+    "$project_root/LICENSE" \
+    "$project_root/website/public/icon-512.png" >/dev/null
+  dpkg-deb --extract "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" "$temporary/branded-deb"
+  grep -Fxq 'Name=nati.ve' \
+    "$temporary/branded-deb/usr/share/applications/nextcloudnative-NextcloudNative.desktop"
+  deb_dependencies="$(
+    dpkg-deb --field "$deb_directory/nextcloudnative_1.0.2971_amd64.deb" Depends
+  )"
+  grep -Fq 'libasound2t64 | libasound2' <<<"$deb_dependencies"
+  grep -Fq 'libpng16-16t64 | libpng16-16' <<<"$deb_dependencies"
+  grep -Fq 'libsecret-tools' <<<"$deb_dependencies"
+elif [[ "${CI:-}" == true ]]; then
+  printf 'dpkg-deb is required in CI to verify Debian package metadata.\n' >&2
+  exit 1
+else
+  printf 'Skipped Debian package build check: dpkg-deb is not installed. CI still runs it.\n' >&2
+fi
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \

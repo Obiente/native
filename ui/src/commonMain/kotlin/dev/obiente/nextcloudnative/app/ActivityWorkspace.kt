@@ -1020,9 +1020,9 @@ private fun ActivityPreviewOrIcon(
     LaunchedEffect(previewCacheScope, preview?.fileId) {
         image = null
         image = preview?.let { candidate ->
-            runCatching {
+            runCatchingPreservingCancellation {
                 loadPreview(candidate)?.let { encoded ->
-                    decodePlatformImage(encoded, EncodedImageOrientationPolicy.PixelsAlreadyUpright)
+                    decodePlatformImageInBackground(encoded, EncodedImageOrientationPolicy.PixelsAlreadyUpright)
                 }
             }.getOrNull()
         }

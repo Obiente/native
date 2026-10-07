@@ -306,7 +306,7 @@ private fun FileVersionRow(
         )
         val metadata = buildList {
             version.lastModified?.takeUnless { it == version.label }?.let(::add)
-            version.sizeBytes?.let { add(formatFileVersionBytes(it)) }
+            version.sizeBytes?.let { add(formatByteSize(it)) }
             version.author?.let { add("Edited by $it") }
         }
         if (metadata.isNotEmpty()) {
@@ -390,16 +390,10 @@ private fun FileVersionPreviewDialog(
 ) {
     val mimeType = preview.content.mimeType?.substringBefore(';')?.lowercase()
         ?: file.mimeType?.substringBefore(';')?.lowercase()
-    val image: ImageBitmap? = remember(preview) {
-        if (mimeType?.startsWith("image/") == true) {
-            decodePlatformImageSampled(
-                preview.content.bytes,
-                MAX_FILE_VERSION_IMAGE_PREVIEW_DIMENSION,
-            )?.image
-        } else {
-            null
-        }
-    }
+    val image = rememberDecodedImage(
+        preview.content.bytes.takeIf { mimeType?.startsWith("image/") == true },
+        maximumDimension = MAX_FILE_VERSION_IMAGE_PREVIEW_DIMENSION,
+    ).image
     val text = remember(preview) {
         if (file.isEditableText() || mimeType?.startsWith("text/") == true || mimeType in TEXTUAL_VERSION_MIME_TYPES) {
             runCatching {
@@ -419,7 +413,7 @@ private fun FileVersionPreviewDialog(
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 Text(
-                    "${formatFileVersionBytes(preview.content.bytes.size.toLong())} downloaded as a temporary read-only preview.",
+                    "${formatByteSize(preview.content.bytes.size.toLong())} downloaded as a temporary read-only preview.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -474,13 +468,6 @@ private fun ExternalFileHandoffResult.fileVersionActionMessage(): String = when 
     is ExternalFileHandoffResult.NoCompatibleApplication -> "No app can receive this historical copy."
     is ExternalFileHandoffResult.Rejected -> message
     is ExternalFileHandoffResult.Unsupported -> reason
-}
-
-private fun formatFileVersionBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
 }
 
 private data class HistoricalPreview(

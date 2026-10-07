@@ -15,7 +15,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.URI
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -1327,6 +1326,7 @@ class DesktopNextcloudServices(
         kept.forEach { rule -> scheduleVirtualFolderHydration(session, userId, rule.relativePath, accountId, cache) }
     }
     private val localUploadPicker = DesktopLocalUploadPicker()
+    private val textEditorDrafts = DesktopTextEditorDrafts()
     private val deckCardDrafts = DesktopDeckCardDraftStore()
     private val fileSyncEngine = DesktopFileSyncEngine(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
@@ -1620,7 +1620,7 @@ class DesktopNextcloudServices(
         val freed = windowsFreed + (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
-                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+                "Freed ${formatByteSize(freed)} of disposable virtual file content."
             } else {
                 "No disposable virtual file content could be freed. Active files were kept."
             },
@@ -3814,8 +3814,9 @@ class DesktopNextcloudServices(
         supportDiagnostics.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
+        cleanup.accountStorageKey?.let(textEditorDrafts::removeAccount)
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
-        cleanup.accountStorageKey?.let(AccountPrivateMemoryLifecycle::retireAccount)
+        cleanup.accountStorageKey?.let(sharedJvmAuthenticatedAppReadSessions::retireAccount)
         cleanup.accountStorageKey?.let { accountStorageKey ->
             homeWorkspaceLayoutStorage.removeAccount(accountStorageKey, cleanup.legacyAccountScopeDigest)
         }
@@ -3842,7 +3843,7 @@ class DesktopNextcloudServices(
 
     private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String, fileCacheAccountId: String) {
         fileReadCache.retireAccount(fileCacheAccountId)
-        AccountPrivateMemoryLifecycle.retireAccount(accountStorageKey)
+        sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
         dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }
 
@@ -3853,6 +3854,9 @@ class DesktopNextcloudServices(
             deckCardDrafts.migrateLegacyEntries(session)
         }
     }
+    override fun textEditorDraftStore(session: NextcloudSession, path: String): TextEditorDraftStore =
+        textEditorDrafts.bind(session, path, accountOperationGuard, accountCredentials)
+
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
@@ -4845,7 +4849,7 @@ class DesktopNextcloudServices(
             mutationExecutor = fileMutationHttpExecutor,
             onAmbiguousMutationResult = ::invalidateAffectedMetadata,
         )
-        if (response.status !in 200..299) throw fileOperationException(response.status)
+        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
         invalidateAffectedMetadata()
         NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
@@ -4862,12 +4866,6 @@ class DesktopNextcloudServices(
             )
         }
         val accountId = desktopFileCacheAccountId(session)
-        val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method != NextcloudApiMethod.GET) {
-            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
-                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
-            }
-        }
         suspend fun executeNetworkRequest(): NextcloudApiResponse {
             var responseBodyMayHaveStarted = false
             val response = try {
@@ -4879,7 +4877,9 @@ class DesktopNextcloudServices(
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = noRedirectHttpClient,
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                        recordDesktopRequestDiagnostic(session, it)
+                    },
                     onFailurePhase = { phase ->
                         responseBodyMayHaveStarted = phase == JvmNetworkFailurePhase.ResponseBody
                     },
@@ -4889,57 +4889,24 @@ class DesktopNextcloudServices(
                 if (safeRequest.method != NextcloudApiMethod.GET) throw failure
                 throw NextcloudApiReadFailure(responseBodyMayHaveStarted, failure)
             }
-            return NextcloudApiResponse(
-                response.status,
-                response.body,
-                response.contentType,
-                response.etag,
-                response.location,
-            )
+            if (response.status == 401) sharedJvmAuthenticatedAppReadSessions.invalidate(session)
+            return NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
         }
-        if (safeRequest.method != NextcloudApiMethod.GET) {
-            return@withContext try {
-                executeNetworkRequest()
-            } finally {
-                dynamicApiRequestCoalescer.invalidateAccount(accountId) {
-                    runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
-                }
-            }
-        }
-        executeDesktopDynamicApiGet(
-            accountId = accountId,
-            requestIdentity = cacheIdentity,
-            cachePolicy = safeRequest.cachePolicy,
-            coalescer = dynamicApiRequestCoalescer,
-            loadCached = {
-                dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
-                    ?.let { cached ->
-                        NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
-                    }
-            },
-            invalidateCached = {
-                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
-            },
-            executeNetwork = ::executeNetworkRequest,
-            commit = { result ->
-                if (
-                    result.status in 200..299 &&
-                    result.contentType?.contains("json", ignoreCase = true) == true
-                ) {
-                    runCatching {
-                        dynamicApiReadCache.store(
-                            accountId,
-                            cacheIdentity,
-                            CachedDynamicApiResponse(
-                                result.status,
-                                result.body,
-                                result.contentType,
-                                result.etag,
-                            ),
-                        )
-                    }
+        executeJvmDynamicApiRequest(
+            accountId, safeRequest, dynamicApiRequestCoalescer,
+            loadCached = { identity, maximumBytes ->
+                dynamicApiReadCache.load(accountId, identity, maximumBytes)?.let {
+                    NextcloudApiResponse(it.status, it.body, it.contentType, it.etag)
                 }
             },
+            invalidateCached = { dynamicApiReadCache.invalidate(accountId, it) },
+            invalidateAccountCache = { dynamicApiReadCache.invalidateAccount(accountId) },
+            storeCached = { identity, result ->
+                dynamicApiReadCache.store(accountId, identity, CachedDynamicApiResponse(
+                    result.status, result.body, result.contentType, result.etag,
+                ))
+            },
+            executeNetworkRequest = ::executeNetworkRequest,
         )
     }
 
@@ -5401,7 +5368,7 @@ class DesktopNextcloudServices(
                 session,
                 ocsRequest = true,
             )
-            check(response.status in 200..299) { "Loading people from Memories failed (HTTP ${response.status})." }
+            requireMemoriesPeopleListSuccess(backend, response.status, response.text)
             val data = JSONArray(response.text)
             buildList {
                 for (index in 0 until data.length()) {
@@ -5822,7 +5789,7 @@ class DesktopNextcloudServices(
             for (index in 0 until responses.length) {
                 val response = responses.item(index)
                 val name = response.firstText(DAV, "displayname") ?: continue
-                val href = URLDecoder.decode(response.firstText(DAV, "href").orEmpty(), StandardCharsets.UTF_8)
+                val href = decodeDavHref(response.firstText(DAV, "href").orEmpty())
                 val path = href.substringAfter("/files/$userId/", name).trimEnd('/').ifBlank { name }
                 add(
                     NextcloudFile(

@@ -226,7 +226,16 @@ private fun DynamicAppDescriptor.compositeDataGridViews(): List<ViewSpec> {
     }
     return linkedReads.groupBy(CompositeLinkedRead::parentResourceId).mapNotNull { (parentResourceId, reads) ->
         val columns = reads.mapNotNull { read -> read.resource.columnDefinitionShape()?.let { read to it } }
-        val rows = reads.mapNotNull { read -> read.resource.rowCellMapField()?.let { read to it } }
+        val rowCandidates = reads.mapNotNull { read -> read.resource.rowCellMapField()?.let { read to it } }
+        // A container may expose the same cell-map field as its rows. Its declared child read
+        // distinguishes the actual row collection without choosing between unrelated candidates.
+        val rows = rowCandidates.filterNot { (candidate, _) ->
+            rowCandidates.any { (other, _) ->
+                other.resource.id != candidate.resource.id && linkedReads.any { child ->
+                    child.parentResourceId == candidate.resource.id && child.resource.id == other.resource.id
+                }
+            }
+        }
         if (columns.size != 1 || rows.size != 1) return@mapNotNull null
         val (columnRead, columnShape) = columns.single()
         val (rowRead, rowCellField) = rows.single()

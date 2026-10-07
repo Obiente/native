@@ -1079,7 +1079,7 @@ private fun DeckCardInspector(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
                     Text("Description", style = MaterialTheme.typography.labelMedium)
-                    Markdown(content = description)
+                    Markdown(typography = nativeMarkdownTypography(), content = description)
                 }
             }
         }

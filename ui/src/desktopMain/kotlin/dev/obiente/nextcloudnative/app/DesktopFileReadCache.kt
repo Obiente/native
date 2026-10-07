@@ -13,9 +13,9 @@ import kotlinx.serialization.json.Json
 /**
  * Disposable, account-private Files read cache for desktop.
  *
- * Metadata and content are persisted separately. Content is addressed by canonical path plus ETag,
- * and a successful folder refresh removes generations that disappeared or changed. All index and
- * blob writes publish atomically and every dimension has a hard bound.
+ * Metadata and ETag-addressed content are persisted separately with bounded atomic publication.
+ * Folder refresh removes disappeared or changed generations. Reads touch only the bounded memory
+ * index's access times; the next content or metadata mutation persists those hints.
  */
 internal class DesktopFileReadCache(
     private val root: File,
@@ -270,12 +270,12 @@ internal class DesktopFileReadCache(
         if (bytes.size.toLong() != record.size) return null
         if (sha256Hex(bytes) != record.sha256) return null
         val current = load(accountId)
-        save(
+        rememberLoadedIndex(
             accountId,
             current.copy(
                 content = current.content.map { cached ->
                     if (cached.path == normalized) {
-                        cached.copy(lastAccessedAtEpochMillis = System.currentTimeMillis())
+                        cached.copy(lastAccessedAtEpochMillis = maxOf(cached.lastAccessedAtEpochMillis, System.currentTimeMillis()))
                     } else {
                         cached
                     }

@@ -215,6 +215,9 @@ initialize() {
         printf '[subject]\n'
         printf 'CN=NC Native demo server\n'
         printf '[extensions]\n'
+        printf 'basicConstraints=critical,CA:FALSE\n'
+        printf 'keyUsage=critical,digitalSignature,keyEncipherment\n'
+        printf 'extendedKeyUsage=serverAuth\n'
         printf 'subjectAltName=@alternate_names\n'
         printf '[alternate_names]\n'
         printf 'DNS.1=localhost\n'
@@ -231,6 +234,8 @@ initialize() {
 
     openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3650 \
         -subj '/CN=NC Native Demo Development CA' \
+        -addext 'basicConstraints=critical,CA:TRUE' \
+        -addext 'keyUsage=critical,keyCertSign,cRLSign' \
         -keyout "$state_root/tls/ca.key" \
         -out "$state_root/tls/ca.crt" >/dev/null 2>&1
     openssl req -newkey rsa:3072 -sha256 -nodes \
@@ -499,6 +504,10 @@ seed_fixtures() {
     curl --config "$curl_config" --header 'Content-Type: text/calendar; charset=utf-8' \
         --upload-file "$demo_root/fixtures/task.ics" \
         "$base_url/remote.php/dav/calendars/$user/tasks/nc-native-e2e-task.ics" >/dev/null
+    if app_is_enabled memories; then
+        occ user:setting "$user" memories timelinePath '/NC Native E2E' >/dev/null
+        occ memories:index --user="$user" --path='/NC Native E2E' --skip-cleanup
+    fi
     printf 'Seeded bounded DAV fixtures for %s.\n' "$user"
 }
 
@@ -516,20 +525,22 @@ configure_office() {
     if ! app_is_enabled richdocuments || ! app_is_enabled richdocumentscode; then
         return
     fi
-    local base_url
-    local public_code_url
-    base_url="$(server_url)"
-    public_code_url="$base_url/custom_apps/richdocumentscode/proxy.php?req="
+    local code_path='/custom_apps/richdocumentscode/proxy.php?req='
+    local internal_code_url="http://localhost$code_path"
+    local public_code_url="$(server_url)$code_path"
+    local probe_code_url="$(local_server_url)$code_path"
     occ config:system:set default_certificates_bundle_path \
         --value='/etc/ssl/certs/ca-certificates.crt' >/dev/null
+    # CODE and Nextcloud share this container; the emulator's host alias is not an internal route.
     compose exec -T nextcloud curl --silent --show-error --fail --max-time 120 \
-        --output /dev/null "$public_code_url/hosting/discovery"
+        --output /dev/null "$internal_code_url/hosting/discovery"
     occ richdocuments:activate-config \
-        --wopi-url="$public_code_url" \
+        --wopi-url="$internal_code_url" \
         --callback-url='http://localhost' >/dev/null
     occ config:app:set richdocuments public_wopi_url --value="$public_code_url" >/dev/null
+    # The host probe verifies the same HTTPS gateway through its localhost certificate name.
     curl --config "$state_root/curl.conf" --output /dev/null --max-time 120 \
-        "$public_code_url/hosting/discovery"
+        "$probe_code_url/hosting/discovery"
 }
 
 configure_proxy_protocol() {
@@ -684,8 +695,8 @@ validate() {
         cd "$demo_root"
         export POSTGRES_PASSWORD="$(grep -m1 '^NC_DEMO_DATABASE_PASSWORD=' .env.example | cut -d= -f2-)"
         export NEXTCLOUD_ADMIN_PASSWORD="$(grep -m1 '^NC_DEMO_ADMIN_PASSWORD=' .env.example | cut -d= -f2-)"
-        podman compose --env-file .env.example -f compose.yml config --quiet
-    )
+        podman compose --env-file .env.example -f compose.yml config >/dev/null
+    ) || return $?
     printf 'Nextcloud demo configuration is valid.\n'
 }
 

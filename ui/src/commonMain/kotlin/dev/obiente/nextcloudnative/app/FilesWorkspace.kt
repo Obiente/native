@@ -95,6 +95,39 @@ internal fun NativeFilesWorkspace(
             inspectorClosed, selectedFile != null,
         )
         val desktop = panes.desktop
+        val browserPane: @Composable (Modifier, Boolean) -> Unit = { paneModifier, desktopPane ->
+            FilesBrowserPane(
+                modifier = paneModifier,
+                files = files,
+                libraryFiles = libraryFiles,
+                totalFilesInFolder = totalFilesInFolder,
+                listingSource = listingSource,
+                query = query,
+                searchScope = searchScope,
+                searchLoading = searchLoading,
+                searchError = searchError,
+                filter = filter,
+                onFilterChanged = onFilterChanged,
+                sortMode = sortMode,
+                onSortModeChanged = onSortModeChanged,
+                sortDirection = sortDirection,
+                onSortDirectionChanged = onSortDirectionChanged,
+                layout = layout,
+                offlineAvailability = offlineAvailability,
+                offlineStorageSupported = offlineStorageSupported,
+                fileSharing = fileSharing,
+                externalHandoffCapability = externalHandoffCapability,
+                services = services,
+                session = session,
+                userId = userId,
+                selectedFile = selectedFile,
+                onSelectedFileChanged = onSelectedFileChanged,
+                onOpenPath = onOpenPath,
+                onOpenFile = onOpenFile,
+                onAction = onAction,
+                desktop = desktopPane,
+            )
+        }
         Column(modifier = Modifier.fillMaxSize()) {
             FilesCommandBar(
                 path = path,
@@ -136,37 +169,7 @@ internal fun NativeFilesWorkspace(
                         )
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
-                    FilesBrowserPane(
-                        modifier = Modifier.weight(1f),
-                        files = files,
-                        libraryFiles = libraryFiles,
-                        totalFilesInFolder = totalFilesInFolder,
-                        listingSource = listingSource,
-                        query = query,
-                        searchScope = searchScope,
-                        searchLoading = searchLoading,
-                        searchError = searchError,
-                        filter = filter,
-                        onFilterChanged = onFilterChanged,
-                        sortMode = sortMode,
-                        onSortModeChanged = onSortModeChanged,
-                        sortDirection = sortDirection,
-                        onSortDirectionChanged = onSortDirectionChanged,
-                        layout = layout,
-                        offlineAvailability = offlineAvailability,
-                        offlineStorageSupported = offlineStorageSupported,
-                        fileSharing = fileSharing,
-                        externalHandoffCapability = externalHandoffCapability,
-                        services = services,
-                        session = session,
-                        userId = userId,
-                        selectedFile = selectedFile,
-                        onSelectedFileChanged = onSelectedFileChanged,
-                        onOpenPath = onOpenPath,
-                        onOpenFile = onOpenFile,
-                        onAction = onAction,
-                        desktop = true,
-                    )
+                    browserPane(Modifier.weight(1f), true)
                     AnimatedVisibility(visible = panes.showInspector) {
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         FilesInspector(
@@ -187,37 +190,7 @@ internal fun NativeFilesWorkspace(
                     }
                 }
             } else {
-                FilesBrowserPane(
-                    modifier = Modifier.fillMaxSize(),
-                    files = files,
-                    libraryFiles = libraryFiles,
-                    totalFilesInFolder = totalFilesInFolder,
-                    listingSource = listingSource,
-                    query = query,
-                    searchScope = searchScope,
-                    searchLoading = searchLoading,
-                    searchError = searchError,
-                    filter = filter,
-                    onFilterChanged = onFilterChanged,
-                    sortMode = sortMode,
-                    onSortModeChanged = onSortModeChanged,
-                    sortDirection = sortDirection,
-                    onSortDirectionChanged = onSortDirectionChanged,
-                    layout = layout,
-                    offlineAvailability = offlineAvailability,
-                    offlineStorageSupported = offlineStorageSupported,
-                    fileSharing = fileSharing,
-                    externalHandoffCapability = externalHandoffCapability,
-                    services = services,
-                    session = session,
-                    userId = userId,
-                    selectedFile = selectedFile,
-                    onSelectedFileChanged = onSelectedFileChanged,
-                    onOpenPath = onOpenPath,
-                    onOpenFile = onOpenFile,
-                    onAction = onAction,
-                    desktop = false,
-                )
+                browserPane(Modifier.fillMaxSize(), false)
             }
         }
     }

@@ -1,39 +1,19 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,24 +27,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
-import dev.obiente.nextcloudnative.app.design.NextcloudIcons
-import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
-import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 internal data class CalendarMonth(val year: Int, val month: Int) {
     init {
@@ -121,11 +90,13 @@ fun NativeGroupwareCalendarScreen(
     var deleting by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
     var deletingInProgress by remember { mutableStateOf(false) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
+    var mutationRequestRunning by remember(accountScope) { mutableStateOf(false) }
     var mutationRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var mutationRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
-    val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
-        mutationRecoveryState?.let { decodeCalendarMutationRecoveryState(it, accountScope) }
+    val recoverySnapshot = remember(accountScope, mutationRecoveryState) {
+        calendarRecoverySnapshot(mutationRecoveryState, accountScope)
     }
+    val mutationPostcondition = recoverySnapshot.postcondition
     val durableMutationInProgress =
         !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
     val mutationInProgress = mutationOrLinkCommitBlocksInteraction(
@@ -178,12 +149,13 @@ fun NativeGroupwareCalendarScreen(
             onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
         }
+        mutationRequestRunning = true
         mutationRecoveryState = encoded
         return true
     }
 
-    suspend fun clearMutationRecovery(): Boolean {
-        val expectedEncoded = mutationRecoveryState ?: return false
+    suspend fun clearMutationRecovery(expectedRecord: String? = mutationRecoveryState): Boolean {
+        val expectedEncoded = expectedRecord ?: return false
         val cleared = try {
             services.clearDurableMutationRecovery(
                 accountScope,
@@ -208,6 +180,7 @@ fun NativeGroupwareCalendarScreen(
             return false
         }
         mutationRecoveryState = null
+        showRecoveryOptions = false
         mutationOperationInProgress = false
         mutationError = null
         refreshError = null
@@ -233,8 +206,8 @@ fun NativeGroupwareCalendarScreen(
         }
     }
 
-    LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
-        if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
+    LaunchedEffect(accountScope, mutationRecoveryLoaded, recoverySnapshot) {
+        if (mutationRecoveryLoaded && recoverySnapshot.unreadable) {
             refreshError = "The previous calendar recovery record cannot be read. Writes remain blocked."
             showRecoveryOptions = true
         }
@@ -321,7 +294,7 @@ fun NativeGroupwareCalendarScreen(
             CalendarWorkspaceMemoryCache.store(session, userId, loaded, cacheProducer)
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
-                    if (!clearMutationRecovery()) return@onSuccess
+                    if (!clearMutationRecovery(recoverySnapshot.encoded)) return@onSuccess
                     when (mutationPostcondition) {
                         is CalendarMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
@@ -350,8 +323,8 @@ fun NativeGroupwareCalendarScreen(
         refreshing = false
     }
 
-    LaunchedEffect(session, userId, month, queryWindow, loadAttempt, mutationRecoveryLoaded) {
-        if (mutationRecoveryLoaded) reload()
+    LaunchedEffect(session, userId, month, queryWindow, loadAttempt, mutationRecoveryLoaded, recoverySnapshot, mutationRequestRunning) {
+        if (recoverySnapshot.readyToVerify(mutationRecoveryLoaded, mutationRequestRunning)) reload()
     }
 
     val ready = state as? CalendarLoadState.Ready
@@ -484,6 +457,8 @@ fun NativeGroupwareCalendarScreen(
                                         } catch (_: Exception) {
                                             mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                                             loadAttempt += 1
+                                        } finally {
+                                            mutationRequestRunning = false
                                         }
                                     }
                                 },
@@ -513,9 +488,9 @@ fun NativeGroupwareCalendarScreen(
                         }
                     }
                 } else if (displayed == null) {
-                    CalendarError((state as CalendarLoadState.Error).message) { loadAttempt += 1 }
+                    WorkspaceLoadError((state as CalendarLoadState.Error).message) { loadAttempt += 1 }
                 } else if (!initialLoading && displayed.calendars.isEmpty()) {
-                    CalendarError("No event calendars were found.") { loadAttempt += 1 }
+                    WorkspaceLoadError("No event calendars were found.") { loadAttempt += 1 }
                 } else if (desktop) {
                     val selectedEvent = displayed.events.firstOrNull { event ->
                         event.instanceId == selectedEventId
@@ -696,6 +671,8 @@ fun NativeGroupwareCalendarScreen(
                     } catch (_: Exception) {
                         mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                         loadAttempt += 1
+                    } finally {
+                        mutationRequestRunning = false
                     }
                 }
             },
@@ -776,6 +753,7 @@ fun NativeGroupwareCalendarScreen(
                                 mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                                 loadAttempt += 1
                             } finally {
+                                mutationRequestRunning = false
                                 deletingInProgress = false
                             }
                         }
@@ -789,19 +767,6 @@ fun NativeGroupwareCalendarScreen(
                 }
             },
         )
-    }
-}
-
-@Composable
-private fun CalendarError(message: String, retry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = retry) { Text("Try again") }
     }
 }
 
@@ -873,84 +838,6 @@ internal data class EventDraft(
     fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
     else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
 }
-
-@Serializable
-internal sealed interface CalendarMutationPostcondition {
-    val href: String
-    fun isSatisfiedBy(response: NextcloudApiResponse): Boolean
-
-    @Serializable
-    data class Upsert(
-        override val href: String,
-        val calendarHref: String,
-        val expectedUid: String,
-        val previousEtag: String?,
-        val draft: EventDraft,
-    ) : CalendarMutationPostcondition {
-        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
-            if (response.status !in 200..299) return false
-            val expected = draft.normalizedForDav()
-            val event = parseGroupwareCalendarEventsFromContent(
-                calendarHref = calendarHref,
-                href = href,
-                etag = response.etag,
-                content = response.body.decodeToString(),
-            ).firstOrNull { candidate ->
-                candidate.uid == expectedUid && candidate.recurrenceId == null
-            } ?: return false
-            return event.href == href &&
-                event.uid == expectedUid &&
-                event.title == expected.title &&
-                event.allDay == expected.allDay &&
-                event.location.orEmpty() == expected.location &&
-                event.description.orEmpty() == expected.description &&
-                event.recurrenceRule == expected.recurrenceRule &&
-                event.start == expected.startValue() &&
-                event.end == expected.endValue()
-        }
-    }
-
-    @Serializable
-    data class Delete(override val href: String) : CalendarMutationPostcondition {
-        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
-            groupwareDeleteResponseProvesAbsence(response.status)
-    }
-}
-
-@Serializable
-internal data class CalendarMutationRecoveryState(
-    val accountScope: String,
-    val postcondition: CalendarMutationPostcondition,
-) {
-    init {
-        require(accountScope.isCanonicalGroupwareMutationAccountScope())
-    }
-}
-
-private val calendarMutationRecoveryJson = Json {
-    encodeDefaults = true
-    ignoreUnknownKeys = true
-}
-
-fun durableMutationAccountScope(session: NextcloudSession): String =
-    publicContentSha256(
-        listOf(session.serverUrl.trimEnd('/'), session.loginName)
-            .joinToString("|") { value -> "${value.length}:$value" }
-            .encodeToByteArray(),
-    )
-
-internal fun String.isCanonicalGroupwareMutationAccountScope(): Boolean =
-    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
-
-internal fun CalendarMutationRecoveryState.encodeForSavedState(): String =
-    calendarMutationRecoveryJson.encodeToString(this)
-
-internal fun decodeCalendarMutationRecoveryState(
-    encoded: String,
-    expectedAccountScope: String,
-): CalendarMutationPostcondition? = runCatching {
-    calendarMutationRecoveryJson.decodeFromString<CalendarMutationRecoveryState>(encoded)
-}.getOrNull()?.takeIf { recovery -> recovery.accountScope == expectedAccountScope }?.postcondition
 
 internal fun calendarEventDraftIsDirty(
     initial: EventDraft,

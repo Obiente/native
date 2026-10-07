@@ -87,14 +87,33 @@ private fun portableOpenApiServerPath(value: String): String? {
         val separator = value.indexOf("://")
         if (separator <= 0 || value.substring(0, separator).lowercase() !in setOf("http", "https")) return null
         val remainder = value.substring(separator + 3)
-        if (!remainder.substringBefore('/').matches(PORTABLE_OPEN_API_HOST)) return null
+        if (!isPortableOpenApiAuthority(remainder.substringBefore('/'))) return null
         remainder.indexOf('/').takeIf { it >= 0 }?.let(remainder::substring).orEmpty()
     }
     return path.takeIf { '{' !in it && '}' !in it && it.split('/').none { part -> part == "." || part == ".." } }
 }
 
-private val PORTABLE_OPEN_API_HOST =
-    Regex("\\{[A-Za-z_][A-Za-z0-9_.-]*}(?::(?:[0-9]{1,5}|\\{[A-Za-z_][A-Za-z0-9_.-]*}))?")
+// Literal brace regex syntax differs between Android ICU and the desktop JVM.
+// Parse only the supported complete host variable and optional port shapes.
+private fun isPortableOpenApiAuthority(authority: String): Boolean {
+    val hostEnd = authority.indexOf('}')
+    if (hostEnd < 0 || !isOpenApiAuthorityVariable(authority.substring(0, hostEnd + 1))) return false
+    val suffix = authority.substring(hostEnd + 1)
+    if (suffix.isEmpty()) return true
+    if (!suffix.startsWith(':')) return false
+    val port = suffix.substring(1)
+    return (port.length in 1..5 && port.all { it in '0'..'9' }) || isOpenApiAuthorityVariable(port)
+}
+
+private fun isOpenApiAuthorityVariable(value: String): Boolean {
+    if (value.length < 3 || value.first() != '{' || value.last() != '}') return false
+    fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
+    if (!value[1].isAsciiLetter() && value[1] != '_') return false
+    return (2 until value.lastIndex).all { index ->
+        val character = value[index]
+        character.isAsciiLetter() || character in '0'..'9' || character in "_.-"
+    }
+}
 
 private fun openApiPreference(path: String): Int {
     val normalized = path.lowercase()

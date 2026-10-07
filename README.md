@@ -2,9 +2,9 @@
   <img src="design/brand/banner.svg" width="960" alt="nati.ve">
 </p>
 
-<h1 align="center">Your cloud, natively.</h1>
+<h1 align="center">nati.ve: one app for your Nextcloud account</h1>
 
-<p align="center">A native workspace for your Nextcloud.</p>
+<p align="center">Browse files and photos, read Talk conversations, and use your calendar on Android, Linux and Windows.</p>
 
 <p align="center">
   <a href="https://nati.ve">Website</a> ·
@@ -15,45 +15,84 @@
 [![Build and test](https://github.com/obiente/native/actions/workflows/ci.yml/badge.svg)](https://github.com/obiente/native/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-nati.ve is an independent Obiente project for building a fast,
-consistent client across Nextcloud Files and installed Nextcloud apps. It
-turns verified APIs and data relationships into real native interfaces instead
-of embedding remote web pages or exposing raw API responses.
+nati.ve is a free, open-source app for your phone or computer. It connects to
+an existing Nextcloud account.
 
-The goal is larger than putting many apps behind one icon. Nextcloud should
-feel like one operating-system service:
+Nextcloud is software that hosts files, photos, calendars and other services
+on a server that you or your provider runs. To use nati.ve you need that
+server's address and an account on it. nati.ve does not provide cloud storage
+and does not replace your server.
 
-- files available through native browsers, pickers, sharing, offline access,
-  and dependable synchronization;
-- photos, videos, RAW files, albums, people, backups, and edits presented as a
-  complete media library;
-- Talk messages, attachments, notifications, media, and eventually calls using
-  platform integrations;
-- calendars, contacts, tasks, mail, notes, music, recipes, boards, tables,
-  budgets, and other installed apps sharing one interaction language;
-- administration, settings, and app management exposed only when permissions
-  and authentication make them safe;
-- useful native support for previously unseen apps through typed contracts and
-  reusable semantic components.
+With nati.ve you can, for example, open a document from Nextcloud Files,
+browse a photo album, read a Talk conversation and check your calendar in one
+app. You do not need to switch between separate clients or browser tabs.
+nati.ve draws its own screens for these tasks and works with the same data on
+your server.
 
-> **Alpha software:** nati.ve is under active development. Current
-> prereleases are for testing and contribution, not yet a replacement for every
-> production workflow or the only copy of important data.
+> **Alpha software.** nati.ve is under active development. Testing builds are
+> for trying the app and for contributors. Do not rely on it as your only
+> client for important work or as the only copy of important data.
 
-> **Status snapshot:** Last reviewed: **2026-08-20**. Implementation,
-> compatibility, packaging, and release availability may have changed. The
-> [GitHub Releases page](https://github.com/obiente/native/releases) is the
-> source of truth for published builds and their known limitations.
+nati.ve is an independent Obiente project. It is not affiliated with,
+sponsored by, or endorsed by Nextcloud GmbH.
 
-nati.ve is unofficial and is not affiliated with, sponsored by, or
-endorsed by Nextcloud GmbH.
+## What works today
+
+The alpha includes file browsing and previews, photo browsing, Talk history,
+Calendar and Notes. Other Nextcloud apps have varying levels of support.
+Installing an app on your server does not mean that all of its features work
+in nati.ve.
+
+Before you rely on a workflow, check the
+[compatibility details](COMPATIBILITY.md) and the known limitations in the
+[release notes](https://github.com/obiente/native/releases). The longer list
+under [Implemented alpha surfaces](#implemented-alpha-surfaces) describes the
+source code in more detail. [Planned work](#planned-work) is listed separately.
+
+## Install
+
+Start with a setup guide:
+
+- [Android setup guide](https://nati.ve/guides/android/getting-started/)
+- [Linux and Windows setup guide](https://nati.ve/guides/desktop/getting-started/)
+
+### Quick downloads
+
+**Last reviewed: 2026-10-02.** Release channels and published packages may
+have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
+is the source of truth for published builds, checksums and known limitations.
+
+At the review date, Nightly is the only update channel you can select in the
+app. These links always point to the newest Nightly build.
+
+| Platform | Download |
+| --- | --- |
+| Android 8.0 or newer | [APK](https://nati.ve/d/android-latest) |
+| Linux (Debian, Ubuntu) | [DEB](https://nati.ve/d/linux-deb-latest) |
+| Linux (Fedora, RHEL) | [RPM](https://nati.ve/d/linux-rpm-latest) |
+| Windows x86-64 | [MSI](https://nati.ve/d/windows-latest) |
+| macOS Intel (packaging preview) | [DMG](https://nati.ve/d/macos-latest) |
+
+Things to know before installing:
+
+- **All builds are prereleases.** Versions stay below `1.0.0` until the
+  product, data-safety, security and platform gates pass. Read each release's
+  known limitations before you install over an existing test build.
+- **Android** builds are signed with the project's protected release key.
+- **Windows** MSI packages are not Authenticode-signed. SmartScreen may warn
+  before installation; after you confirm the file came from the project's
+  GitHub release, choose `More info > Run anyway`. Each MSI has GitHub build
+  provenance you can verify. See
+  [Windows MSI qualification](docs/windows-release.md).
+- **macOS** packages are an early packaging preview. Keychain storage is
+  covered by source tests, but signing in has not been validated on a real
+  Mac.
 
 ## Product showcase
 
-These captures come from the real Compose application using deterministic
-synthetic fixtures. They demonstrate implemented interface behavior and
-responsive layout; they are not evidence that every pictured workflow is
-complete on every platform or server version.
+These pictures come from the real app, running with made-up test data. They
+show the interface and its responsive layout. They do not prove that every
+pictured workflow is complete on every platform or server version.
 
 <table>
   <tr>
@@ -101,36 +140,19 @@ complete on every platform or server version.
   </tr>
 </table>
 
-## Quick downloads
-
-At the review date, Nightly is the default and only selectable in-app update
-track for direct installations.
-
-| Platform | Latest build | Explicit Nightly |
-| --- | --- | --- |
-| Android 8.0+ | [Download APK](https://nati.ve/d/android-latest) | [Nightly APK](https://nati.ve/d/android-nightly) |
-| Linux (Debian/Ubuntu) | [Download DEB](https://nati.ve/d/linux-deb-latest) | [Nightly DEB](https://nati.ve/d/linux-deb-nightly) |
-| Linux (Fedora/RHEL) | [Download RPM](https://nati.ve/d/linux-rpm-latest) | [Nightly RPM](https://nati.ve/d/linux-rpm-nightly) |
-| Windows x86-64 | [Download MSI](https://nati.ve/d/windows-latest) | [Nightly MSI](https://nati.ve/d/windows-nightly) |
-| macOS Intel preview | [Download DMG](https://nati.ve/d/macos-latest) | [Nightly DMG](https://nati.ve/d/macos-nightly) |
-
-The macOS package is a packaging preview and cannot sign in yet. Windows builds
-are not Authenticode-signed. See the current release notes for platform-specific
-limitations, checksums, and Windows provenance verification.
-
 ## Why this project exists
 
-The Nextcloud ecosystem has excellent server apps, but their mobile and desktop
-experiences vary. Some have separate clients, some rely on the browser, some
-expose only part of their server functionality, and each uses different
-navigation and interaction patterns.
+Nextcloud has excellent server apps, but their mobile and desktop experiences
+vary. Some have their own client, some only work in the browser, and some
+expose only part of what the server can do. Each one looks and behaves
+differently.
 
-nati.ve provides a shared native product layer without reducing every
-app to the same generic screen. A table should behave like a table, a deck like
-a board, a mailbox like mail, a recipe like something a person can cook from,
-and an expense project like a financial workspace. The common layer supplies
-identity, permissions, caching, actions, search, settings, navigation, and
-platform behavior. Semantic components supply the workflow.
+nati.ve adds one shared native layer on top, without forcing every app into
+the same generic screen. A table should behave like a table, a deck like a
+board, a mailbox like mail, a recipe like something you can cook from, and an
+expense project like a budget. The shared layer handles sign-in, permissions,
+caching, actions, search, settings, navigation and platform behavior. Each
+kind of content gets a component built for its workflow.
 
 ## How adaptive native apps work
 
@@ -140,64 +162,68 @@ platform behavior. Semantic components supply the workflow.
   <img src="docs/assets/adaptive-native-architecture-light.svg" alt="nati.ve architecture from verified evidence through typed resources and semantic models to platform-adapted native UI">
 </picture>
 
-Discovery is deterministic before it is heuristic. The runtime can infer field
-roles, relationships, component families, labels, and useful entry points, but
-it may not invent an endpoint, payload, permission, resource ID, or retry
-guarantee.
+nati.ve learns what a server app offers from verified sources first, such as
+published API contracts. Only then does it use heuristics. It may guess field
+roles, relationships, labels and a good starting screen. It may never invent
+an endpoint, request body, permission, resource ID or retry guarantee.
 
-Small verified adapters are welcome when they provide meaningful behavior that
-cannot be inferred safely. The important distinction is that an adapter
-enhances the same typed runtime rather than creating an isolated second app.
+Small, verified adapters for a specific app are welcome when they add useful
+behavior that cannot be inferred safely. An adapter extends the same shared
+runtime; it does not become a separate app inside the app.
 
-See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
-[NATIVE_SCHEMA.md](NATIVE_SCHEMA.md), and
-[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) for the trust and execution
-boundaries.
+The trust and execution rules are in
+[DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
+[NATIVE_SCHEMA.md](NATIVE_SCHEMA.md) and
+[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md).
 
 ## Implemented alpha surfaces
 
-**Last reviewed: 2026-09-01.** Repository implementation may have changed. The
+**Last reviewed: 2026-09-01.** The code may have changed since then. The
 [default branch](https://github.com/obiente/native/tree/main) is the source of
-truth for current code. A listed surface can still have platform, version,
-action, or lifecycle limitations and is not a shipped-support guarantee.
+truth. A listed surface can still have platform, version, action or lifecycle
+limitations. Being listed here does not mean it is supported for normal use.
 
-The repository already contains runnable Android and Linux desktop
-applications with:
+The repository contains runnable Android and desktop applications (Linux,
+Windows, and an early macOS package) with:
 
-- Nextcloud Login Flow v2 with Android Keystore, Linux Secret Service, Windows
-  Credential Manager, and source-tested macOS Keychain credential storage;
-- authenticated native Files browsing, list/grid layouts, previews, sharing
-  foundations, text editing, and media viewing;
-- Photos and Memories collections, albums, tags, people, favorites, RAW/JPEG
-  grouping, zoom-gated original loading, and non-destructive edit foundations;
-- native Talk history and typed message cards for text, files, recordings,
-  calls, system events, and shared objects;
-- Notes with folders, ETag-aware writes, and native Markdown edit/preview;
-- Activity, global search, Dashboard, user status, and app navigation;
-- native semantic flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks,
-  Tables, Deck, Cospend, Budget, and administration inventory
-  at different levels of completeness;
-- a native Office document browser and capability-driven editor choices,
-  document-only embedded Office sessions on Android,
-  and a system-browser handoff on desktop. This is web integration, not a native
-  Office engine or a claim of verified compatibility with every suite;
-- signed-contract acquisition from exact Nextcloud App Store releases plus a
-  guarded exact-source fallback for apps that do not advertise a contract;
-- shape-driven tables, boards, forms, settings, summaries, charts, collection
-  browsers, and detail inspectors that can be reused by unfamiliar apps;
-- dark/light/system appearance and responsive shared Compose components;
-- deterministic mock services, visible isolated Android emulators, and
-  synthetic screenshot generation from the real Compose UI.
+- Nextcloud Login Flow v2, with credentials kept in Android Keystore, Linux
+  Secret Service or Windows Credential Manager. macOS Keychain storage exists
+  in source and is covered by deterministic tests;
+- Files: browsing, list and grid layouts, previews, sharing foundations, text
+  editing and media viewing;
+- Photos and Memories: collections, albums, tags, people, favorites, RAW and
+  JPEG grouping, full-quality originals loaded on zoom, and foundations for
+  edits that keep the original;
+- Talk history, with message cards for text, files, recordings, calls, system
+  events and shared objects;
+- Notes, with folders, ETag-aware saving and Markdown editing and preview;
+- Activity, global search, Dashboard, user status and app navigation;
+- native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
+  Deck, Cospend, Budget and administration inventory, at different levels of
+  completeness;
+- an Office document browser with editor choices based on server
+  capabilities. Android embeds only the chosen document's editing session;
+  desktop hands it to the system browser. This is web integration, not a
+  native Office engine, and not verified against every Office suite;
+- contract acquisition from signed, exact-version Nextcloud App Store
+  releases, plus a guarded fallback to the exact source release for apps that
+  do not publish a contract;
+- reusable tables, boards, forms, settings, summaries, charts, collection
+  browsers and detail inspectors for apps nati.ve has not seen before;
+- dark, light and system appearance, with responsive shared Compose
+  components;
+- deterministic mock services, isolated visible Android emulators, and
+  screenshots generated from the real Compose UI with synthetic data.
 
-This is a meaningful application baseline, not a completeness claim. Some app
-surfaces remain read-heavy, some actions still need stronger context binding,
-contract discovery and persistent caching need further work, and native UX
-quality varies by workflow. The public Project tracks those gaps.
+This is a solid baseline, not a finished product. Some apps are still mostly
+read-only. Some actions need stronger binding to the item they act on. Contract
+discovery and persistent caching need more work, and native UX quality varies
+by workflow. The [public Project](https://github.com/orgs/Obiente/projects/4)
+tracks these gaps.
 
 ## Planned work
 
-The project is strengthening the foundations required for a dependable daily
-client.
+The project is strengthening the foundations a dependable daily client needs.
 
 | Workstream | What this phase delivers |
 | --- | --- |
@@ -211,127 +237,97 @@ client.
 | Desktop product | Resizable multi-pane workspaces, keyboard and pointer UX, dense tables, persistent inspectors, desktop file integration, notifications, and update/packaging quality |
 | Administration | Native read-only inventory and diagnostics, safe preflight and lifecycle plans, settings generated from verified schemas, and explicit browser/authentication handoff for strict operations |
 
-The dependency gates and data-safety criteria are in
-[ROADMAP.md](ROADMAP.md). Live status, priorities, and completed work are in the
-[GitHub Project](https://github.com/orgs/Obiente/projects/4).
+[ROADMAP.md](ROADMAP.md) has the dependency order and data-safety gates. The
+[GitHub Project](https://github.com/orgs/Obiente/projects/4) has live status,
+priorities and completed work.
 
 ## Platform status
 
 **Last reviewed: 2026-09-01.** Platform availability may have changed. The
 [GitHub Releases page](https://github.com/obiente/native/releases) is the
 source of truth for published artifacts and limitations. This table is not a
-stable-support guarantee.
+promise of stable support.
 
-| Platform | Current state |
+| Platform | State |
 | --- | --- |
-| Android | Active application target with signed APK/AAB prereleases; hosted CI covers unit tests and packaging, while connected-device instrumentation remains separate |
-| Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
-| Windows | x86-64 MSI, native Credential Manager login storage, and Cloud Files sync under active prerelease qualification |
-| macOS | Early DMG packaging artifact; native Keychain storage is covered by deterministic source tests, but authenticated use has not been live-validated or qualified |
-| iOS / iPadOS | Planned platform target; no supported launcher is shipped yet |
+| Android | Main mobile target. Signed APK and AAB prereleases. Hosted CI runs unit tests and packaging; connected-device tests run separately |
+| Linux | Main desktop development target. App image plus RPM and DEB prereleases |
+| Windows | x86-64 MSI with Credential Manager sign-in storage and Cloud Files sync, in prerelease qualification |
+| macOS | Early DMG packaging artifact. Keychain storage is source-tested, but authenticated use has not been live-validated |
+| iOS / iPadOS | Planned. No app is shipped yet |
 
-Android and desktop already share domain models, semantic components, and
-product rules. The next-phase architecture moves duplicated transport and
-state into shared repositories without requiring the same layout everywhere.
-Mobile prioritizes touch, lifecycle, background work, and compact navigation.
-Desktop prioritizes multi-pane workflows, keyboard/pointer control, density,
-resize behavior, and operating-system file integration.
+Android and desktop share domain models, semantic components and product
+rules, but not identical layouts. Mobile focuses on touch, lifecycle,
+background work and compact navigation. Desktop focuses on multi-pane
+workflows, keyboard and pointer control, dense layouts, resizing and
+operating-system file integration.
 
-See [PLATFORMS.md](PLATFORMS.md) for the platform boundary and
-[COMPATIBILITY.md](COMPATIBILITY.md) for verified server/app coverage.
+See [PLATFORMS.md](PLATFORMS.md) for what is shared and what is
+platform-specific, and [COMPATIBILITY.md](COMPATIBILITY.md) for verified
+server and app coverage.
 
 ## Product and safety principles
 
-- No automatic WebView fallback for installed apps.
-- No endpoint, payload, permission, or ID invented by AI or UI inference.
-- Reads do not imply writes. Every write needs verified provenance,
-  permissions, target identity, validation, conflict behavior, retry policy,
-  confirmation, and postcondition recovery.
-- Unknown non-idempotent outcomes are visible and reconciled, not blindly
-  retried.
-- Cached, viewed, available offline, uploaded, and synchronized are distinct
-  states.
-- Originals are preserved by default. Edits create a new file unless the user
-  explicitly chooses a guarded replacement.
-- A Login Flow app password is never treated as the primary account password.
-- Credentials, share tokens, server URLs, account identifiers, filenames,
-  messages, contacts, and other private data stay out of logs, fixtures,
-  screenshots, issues, and public artifacts.
-- Real-account QA is explicitly authorized and enforced read-only. Write tests
-  use disposable synthetic data on an isolated server.
-- Previously visited content should appear from cache immediately and refresh
-  without throwing away useful state.
-- Unsupported behavior is explained honestly instead of presented as a broken
-  action.
-
-## Try a prerelease
-
-Testing builds are published on the
-[GitHub Releases page](https://github.com/obiente/native/releases).
-Releases remain below `1.0.0` and are marked as prereleases until the published
-product, data-loss, security, and platform gates pass.
-
-Android release artifacts are signed with the project's protected release key.
-Desktop packages are provided per successful platform build. Windows MSI
-packages use native Credential Manager storage, include keyless GitHub build
-provenance, and are currently unsigned, so SmartScreen may require choosing
-`More info > Run anyway`. The source includes deterministically tested macOS
-Keychain integration, but the macOS package remains a packaging artifact until
-authenticated use passes a live macOS acceptance run.
-Read each release's known limitations before installing over an existing test
-build.
+- Installed apps never fall back to an embedded web page automatically.
+- AI or UI inference never invents an endpoint, request body, permission or ID.
+- Being able to read something does not allow writing it. Every write needs a
+  verified source, permissions, the exact target, validation, conflict
+  handling, a retry policy, confirmation and a way to recover.
+- If the result of a non-repeatable action is unknown, nati.ve shows that and
+  checks the server. It does not blindly retry.
+- "Cached," "viewed," "available offline," "uploaded" and "synchronized" are
+  different states and are never used as synonyms.
+- Originals are kept by default. Edits create a new file unless you choose a
+  guarded replacement.
+- A Login Flow app password is never treated as your main account password.
+- Credentials, share tokens, server URLs, account IDs, filenames, messages,
+  contacts and other private data stay out of logs, fixtures, screenshots,
+  issues and public artifacts.
+- Testing against a real account requires explicit permission and is enforced
+  read-only. Write tests use disposable synthetic data on an isolated server.
+- Content you opened before appears from the cache right away and refreshes in
+  place.
+- Unsupported behavior is explained honestly, not shown as a broken button.
 
 ## Build from source
 
-Requirements:
-
-- JDK 21;
-- Rust stable;
-- Android SDK Platform 36 and Build Tools 35.0.0 for Android builds.
-
-Use `ANDROID_HOME` or `ANDROID_SDK_ROOT` for your own SDK installation. Do not
-commit `local.properties` or a home-directory path.
+You need JDK 21, Rust stable, and, for Android, the Android SDK with
+Platform 36 and Build Tools 35.0.0. Point `ANDROID_HOME` or `ANDROID_SDK_ROOT`
+at your SDK. Never commit `local.properties` or a home-directory path.
 
 ```bash
 git clone https://github.com/obiente/native.git
 cd native
 
-cargo test --locked
-./gradlew --no-daemon :ui:desktopTest
-./gradlew --no-daemon :ui:createDistributable
-./gradlew --no-daemon :androidApp:assembleDebug
-bash tools/check-repository.sh
+./gradlew :ui:run                      # start the desktop app from source
+./gradlew :androidApp:assembleDev      # build an Android APK that installs beside release builds
+./gradlew --no-daemon :ui:desktopTest  # run the shared and desktop tests
+bash tools/check-repository.sh         # run repository checks
 ```
 
-For a locally signed app that installs alongside release and nightly builds, use the dedicated
-development variant:
+The Android `dev` build type installs as `dev.obiente.nextcloudnative.dev`
+with the label `nati.ve Dev`, so it never replaces the signed
+`dev.obiente.nextcloudnative` app.
 
-```bash
-./tools/deploy-android-dev.sh
-```
-
-It installs as `dev.obiente.nextcloudnative.dev` with the label `nati.ve Dev`, so local
-testing never replaces the signed `dev.obiente.nextcloudnative` package.
-
-The Gradle wrapper pins Gradle itself, and the project build targets JDK 21.
-Build and test jobs are path-filtered where appropriate so documentation-only
-changes do not rebuild unrelated application targets.
-
-For the complete local test matrix, isolated visible Android emulators, optional
-read-only session reuse, and device deployment, read
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full quick start, the test matrix,
+isolated Android emulators, device deployment and troubleshooting.
 
 ## Repository map
 
 | Path | Purpose |
 | --- | --- |
-| `src/` and `tests/` | Rust semantic compiler, schema model, inference, and contract tests |
-| `contractAcquisition/` | Exact-version signed package and source contract acquisition |
-| `ui/` | Shared Compose domain UI plus Android/desktop implementations |
-| `androidApp/` | Android launcher and platform integrations |
-| `website/` | Self-hosted project site, news, public roadmap, and synthetic real-UI screenshots |
-| `tools/` | Repository checks, deployment, emulators, screenshots, and release validation |
-| `docs/` | Release notes and operational documentation |
+| `ui/` | Shared Compose Multiplatform UI and domain code (`commonMain`, `jvmMain`), Android library code and the desktop JVM app |
+| `androidApp/` | Android application: launcher, build types and platform integrations |
+| `contractAcquisition/` | Exact-version signed package and source contract acquisition (JVM) |
+| `src/` and `tests/` | Rust reference compiler and schema subset with contract tests; `src/bin/` holds the Windows Explorer registration helper |
+| `integration/` | Disposable [Nextcloud compatibility instance](integration/nextcloud-demo/README.md) with synthetic data |
+| `server-companion/` | Optional [server apps](server-companion/README.md) that add narrow capabilities |
+| `release/` | Public release inputs: Android signing-certificate digest, Linux AppStream and packaging templates, and a prerelease update-contract fixture |
+| `changes/` | [Changelog fragments](changes/README.md) for unreleased and archived releases |
+| `design/` | [Brand and icon sources](design/README.md) |
+| `website/` | Project [website](website/README.md), guides, news and synthetic real-UI screenshots |
+| `tools/` | Repository checks, deployment, emulators, screenshots and release validation |
+| `docs/` | Operational and release documentation; start at the [documentation index](docs/README.md) |
 
 Architecture and protocol references:
 
@@ -341,7 +337,7 @@ Architecture and protocol references:
 - [Native Schema](NATIVE_SCHEMA.md)
 - [Platform strategy](PLATFORMS.md)
 - [Compatibility matrix](COMPATIBILITY.md)
-- [Login diagnostics and local export](docs/login-diagnostics.md)
+- [Sign-in recovery and login diagnostics](docs/login-diagnostics.md)
 - [Linux package repositories](docs/linux-package-repositories.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
@@ -351,25 +347,26 @@ Architecture and protocol references:
 Contributions are welcome, especially:
 
 - reusable semantic components and relationship inference;
-- Files, DAV, sync, media, Talk, and platform integration work;
+- Files, DAV, sync, media, Talk and platform integration;
 - protocol research backed by official upstream sources;
 - versioned compatibility fixtures and mock-server tests;
-- accessibility, responsive desktop/mobile UX, and performance improvements;
-- translations, documentation, packaging, and deterministic visual QA.
+- accessibility, responsive desktop and mobile UX, and performance;
+- translations, documentation, packaging and deterministic visual QA.
 
 Start with an issue or a focused item in the
 [public Project](https://github.com/orgs/Obiente/projects/4). A small
-app-specific adapter is appropriate when it provides verified behavior that
-cannot be inferred safely. It should still reuse shared models, actions, state,
-and components.
+app-specific adapter is fine when it adds verified behavior that cannot be
+inferred safely; it should still reuse shared models, actions, state and
+components.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before
-changing implementation behavior. AI-assisted contributions must remain
-human-led and accountable; disclosure is appreciated but optional. See
+changing how the app behaves. AI-assisted contributions must stay human-led
+and accountable. Disclosure is appreciated but optional; see
 [AI_POLICY.md](AI_POLICY.md).
 
 Report security issues privately through
 [GitHub private vulnerability reporting](https://github.com/obiente/native/security/advisories/new).
+See the [security policy](SECURITY.md).
 
 ## License and trademark
 

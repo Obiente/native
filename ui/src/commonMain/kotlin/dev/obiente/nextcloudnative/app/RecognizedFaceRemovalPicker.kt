@@ -197,10 +197,10 @@ private fun RecognizedFaceTile(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    var image by remember(face.detectionId, face.file.etag) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(face.detectionId, face.file.etag) {
-        image = runCatching {
-            decodePlatformImage(
+    var image by remember(session, face.detectionId, face.file.etag) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(session, face.detectionId, face.file.etag) {
+        image = runCatchingPreservingCancellation {
+            decodePlatformImageInBackground(
                 services.loadPreviewCached(
                     session = session,
                     file = face.file,

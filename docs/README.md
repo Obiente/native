@@ -3,7 +3,7 @@
 Use this index to find the maintained document for a question instead of
 copying status or policy into another file.
 
-**Last reviewed: 2026-08-20.** The documentation set may have changed. The
+**Last reviewed: 2026-10-02.** The documentation set may have changed. The
 [default-branch index](https://github.com/obiente/native/blob/main/docs/README.md)
 is the source of truth for maintained public documents.
 
@@ -23,11 +23,21 @@ is the source of truth for maintained public documents.
   and execution policy.
 - [Native Schema](../NATIVE_SCHEMA.md): the trust boundary between discovery
   and native presentation.
+- [Shared choice controls](shared-ui-controls.md): when to use the shared
+  segmented control and choice field, and the behavior they guarantee.
+- [ADR 0001: Android Office integration](architecture-decisions/0001-android-office-web-integration.md):
+  why Android embeds only a selected document's Office session.
 
-## Contributing and security
+## Contributing, testing and security
 
-- [Contributing](../CONTRIBUTING.md): setup, verification, test-account safety,
-  pull requests, and authorship requirements.
+- [Sign-in recovery and login diagnostics](login-diagnostics.md): browser approval,
+  connection retries, cancellation, and saving a diagnostics report before sign-in.
+- [Contributing](../CONTRIBUTING.md): quick start, running the apps and tests,
+  troubleshooting, test-account safety, pull requests, and authorship.
+- [Nextcloud compatibility instance](../integration/nextcloud-demo/README.md):
+  a disposable test server with synthetic data for authenticated testing.
+- [Server companions](../server-companion/README.md): optional server apps
+  that add narrow capabilities.
 - [Repository maintenance guide](../AGENTS.md): code ownership, documentation,
   Compose, diagnostics, testing, and safe refactoring requirements for humans
   and agents.
@@ -54,7 +64,7 @@ is the source of truth for maintained public documents.
   and deployment configuration.
 - [Design assets](../design/README.md): canonical icon sources and asset
   ownership.
-- [Marketing capture assets](../ui/src/desktopMain/resources/marketing/README.md):
+- [Marketing capture assets](../ui/src/desktopTest/resources/marketing/README.md):
   provenance for the synthetic organization avatar.
 
 Time-sensitive documents state when they were last reviewed. Treat that date

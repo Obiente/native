@@ -1418,7 +1418,7 @@ private fun MediaFolderSuggestions(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Text(
-                                    "Estimated size ${formatOfflineBytes(suggestion.totalBytes)}",
+                                    "Estimated size ${formatByteSize(suggestion.totalBytes)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1622,7 +1622,7 @@ private fun MediaFolderPreview(
                 preview != null -> {
                     val totalLabel = buildString {
                         append(preview.totalItems).append(if (preview.totalItems == 1) " item" else " items")
-                        append(" | ").append(formatOfflineBytes(preview.totalBytes))
+                        append(" | ").append(formatByteSize(preview.totalBytes))
                     }
                     Text(totalLabel, style = MaterialTheme.typography.titleSmall)
                     preview.message?.let { message ->
@@ -1694,9 +1694,7 @@ private fun MediaFolderPreviewTile(item: MediaSyncFolderPreviewItem) {
         modifier = Modifier.size(width = 112.dp, height = 142.dp),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
     ) {
-        val image = remember(item.stableId, item.thumbnailBytes) {
-            item.thumbnailBytes?.let(::decodePlatformImage)
-        }
+        val image = rememberDecodedImage(item.thumbnailBytes).image
         Surface(
             modifier = Modifier.size(112.dp, 96.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -1731,7 +1729,7 @@ private fun MediaFolderPreviewTile(item: MediaSyncFolderPreviewItem) {
         Text(
             buildString {
                 append(if (item.mimeType?.startsWith("video/") == true) "Video" else "Photo")
-                item.sizeBytes?.let { append(" | ").append(formatOfflineBytes(it)) }
+                item.sizeBytes?.let { append(" | ").append(formatByteSize(it)) }
             },
             maxLines = 1,
             style = MaterialTheme.typography.bodySmall,
@@ -2082,7 +2080,7 @@ internal fun VirtualFileStoragePolicyEditor(
                 options = VIRTUAL_CACHE_SIZE_OPTIONS,
                 selected = policy.maximumCacheBytes,
                 enabled = !busy,
-                label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
+                label = { value -> value?.let(::formatByteSize) ?: "No limit" },
                 onSelected = { selected -> onPolicyChanged(policy.copy(maximumCacheBytes = selected)) },
             )
         }
@@ -2094,7 +2092,7 @@ internal fun VirtualFileStoragePolicyEditor(
                     options = VIRTUAL_CACHE_SIZE_OPTIONS,
                     selected = policy.overflowMaximumCacheBytes,
                     enabled = !busy,
-                    label = { value -> value?.let(::formatVirtualFileBytes) ?: "No limit" },
+                    label = { value -> value?.let(::formatByteSize) ?: "No limit" },
                     onSelected = { selected ->
                         onPolicyChanged(policy.copy(overflowMaximumCacheBytes = selected))
                     },
@@ -2107,7 +2105,7 @@ internal fun VirtualFileStoragePolicyEditor(
                     options = VIRTUAL_FREE_SPACE_OPTIONS,
                     selected = policy.overflowMinimumFreeSpaceBytes,
                     enabled = !busy,
-                    label = ::formatVirtualFileBytes,
+                    label = ::formatByteSize,
                     onSelected = { selected ->
                         onPolicyChanged(policy.copy(overflowMinimumFreeSpaceBytes = selected))
                     },
@@ -2121,7 +2119,7 @@ internal fun VirtualFileStoragePolicyEditor(
                 options = VIRTUAL_FREE_SPACE_OPTIONS,
                 selected = policy.minimumFreeSpaceBytes,
                 enabled = !busy,
-                label = ::formatVirtualFileBytes,
+                label = ::formatByteSize,
                 onSelected = { selected -> onPolicyChanged(policy.copy(minimumFreeSpaceBytes = selected)) },
             )
         }
@@ -2143,9 +2141,9 @@ internal fun VirtualFileStoragePolicyEditor(
                 shape = RoundedCornerShape(NextcloudRadii.Small),
             ) {
                 Text(
-                    "Currently ${formatVirtualFileBytes(snapshot.cachedBytes)} cached, " +
-                        "${formatVirtualFileBytes(snapshot.reclaimableBytes)} reclaimable, and " +
-                        "${formatVirtualFileBytes(snapshot.pinnedBytes)} pinned.",
+                    "Currently ${formatByteSize(snapshot.cachedBytes)} cached, " +
+                        "${formatByteSize(snapshot.reclaimableBytes)} reclaimable, and " +
+                        "${formatByteSize(snapshot.pinnedBytes)} pinned.",
                     modifier = Modifier.padding(NextcloudSpacing.Medium),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -2233,7 +2231,7 @@ private val VIRTUAL_UNUSED_AGE_OPTIONS = listOf<Long?>(
 )
 
 @Composable
-private fun OfflineCenterSummaryCard(
+internal fun OfflineCenterSummaryCard(
     snapshot: FileOfflineCenterSnapshot?,
     loading: Boolean,
 ) {
@@ -2282,8 +2280,8 @@ private fun OfflineCenterSummaryCard(
                 Text(
                     buildString {
                         append(qualifier)
-                        append(formatOfflineBytes(usage.usedBytes))
-                        usage.capacityBytes?.let { append(" of ${formatOfflineBytes(it)}") }
+                        append(formatByteSize(usage.usedBytes))
+                        usage.capacityBytes?.let { append(" of ${formatByteSize(it)}") }
                     },
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -2303,7 +2301,7 @@ private fun OfflineCenterSummaryCard(
 }
 
 @Composable
-private fun OfflineCenterItemCard(
+internal fun OfflineCenterItemCard(
     item: FileOfflineCenterItem,
     busy: Boolean,
     onRetry: () -> Unit,
@@ -2362,7 +2360,7 @@ private fun OfflineCenterItemCard(
                 )
             }
             val metadata = listOfNotNull(
-                item.sizeBytes?.let(::formatOfflineBytes),
+                item.sizeBytes?.let(::formatByteSize),
                 item.detail,
             )
             if (metadata.isNotEmpty()) {
@@ -2380,59 +2378,6 @@ private fun OfflineCenterItemCard(
                     },
                 )
             }
-        }
-    }
-}
-
-@Composable
-internal fun MarketingOfflineFileTransferScenario() {
-    val snapshot = FileOfflineCenterSnapshot(
-        support = FileOfflineCenterSupport.Available,
-        items = listOf(
-            FileOfflineCenterItem(
-                key = FileOfflineKey("00000000000000000000000000000000", "Travel/Boarding-pass.pdf"),
-                displayName = "Boarding-pass.pdf",
-                sizeBytes = 1_842_176,
-                availability = FileOfflineAvailability.Available,
-                detail = "Complete file verified for offline use.",
-                canRetry = false,
-                canRemove = true,
-            ),
-            FileOfflineCenterItem(
-                key = FileOfflineKey("00000000000000000000000000000000", "Travel/Route-map.gpx"),
-                displayName = "Route-map.gpx",
-                sizeBytes = 284_672,
-                availability = FileOfflineAvailability.WaitingForNetwork,
-                detail = "Waiting for a permitted network.",
-                canRetry = true,
-                canRemove = true,
-            ),
-            FileOfflineCenterItem(
-                key = FileOfflineKey("00000000000000000000000000000000", "Travel/Hotel-confirmation.pdf"),
-                displayName = "Hotel-confirmation.pdf",
-                sizeBytes = 943_104,
-                availability = FileOfflineAvailability.Failed,
-                detail = "The file changed in Nextcloud during download. Download the updated version.",
-                canRetry = true,
-                canRemove = true,
-            ),
-        ),
-        storageUsage = FileOfflineStorageUsage(
-            usedBytes = 2_785_280,
-            capacityBytes = 64L * 1024L * 1024L * 1024L,
-            estimated = false,
-        ),
-        limitations = emptyList(),
-        folderAvailability = FileOfflineFolderAvailability.RecursiveDownloadOnly,
-    )
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        ScreenHeader(title = "Offline files", subtitle = "Downloads and local copies", onBack = {})
-        OfflineCenterSummaryCard(snapshot, loading = false)
-        snapshot.items.forEach { item ->
-            OfflineCenterItemCard(item = item, busy = false, onRetry = {}, onRemove = {})
         }
     }
 }
@@ -2558,13 +2503,6 @@ private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
     FileSyncPowerPolicy.AnyPower -> "Any battery level"
     FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
     FileSyncPowerPolicy.Charging -> "Only while charging"
-}
-
-private fun formatOfflineBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
 }
 
 internal fun fileOfflineRefreshEnabled(

@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
+
 import dev.obiente.nextcloudnative.app.publicContentSha256
 import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
@@ -154,7 +156,7 @@ internal fun nativeChoresInviteMutationRecoveryPlan(
 ): NativeCreateMutationRecoveryPlan? {
     val action = createPlan.action
     if (
-        schema.app.id != "chores" || schema.app.version != "0.1.0" || !collectionComplete ||
+        !schema.app.isSupportedChoresVersion() || !collectionComplete ||
         action.intent != ActionIntent.create || action.effect != ActionEffect.create ||
         action.risk == ActionRisk.readOnly || action.binding.method != HttpMethod.POST ||
         action.binding.path != "/apps/chores/api/v1.0/team/{teamId}/invites" ||

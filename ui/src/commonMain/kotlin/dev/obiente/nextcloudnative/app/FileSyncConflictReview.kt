@@ -272,17 +272,10 @@ internal fun FileSyncDecisionChoice.isDestructiveSyncDecision(): Boolean =
 
 private fun FileSyncConflictSideSummary.syncConflictSideDescription(): String = buildString {
     append(if (kind == SyncEntryKind.File) "File" else "Folder")
-    sizeBytes?.let { append(" | ").append(it.fileSyncBytes()) }
+    sizeBytes?.let { append(" | ").append(formatByteSize(it)) }
     modifiedEpochMillis?.let { append(" | Modified ").append(it.fileSyncModifiedTime()) }
 }
 
 private fun Long.fileSyncModifiedTime(): String = runCatching {
     Instant.fromEpochMilliseconds(this).toString().replace('T', ' ').take(16) + " UTC"
 }.getOrDefault("Unknown time")
-
-internal fun Long.fileSyncBytes(): String = when {
-    this >= 1024L * 1024L * 1024L -> "${this / (1024L * 1024L * 1024L)} GB"
-    this >= 1024L * 1024L -> "${this / (1024L * 1024L)} MB"
-    this >= 1024L -> "${this / 1024L} KB"
-    else -> "$this B"
-}

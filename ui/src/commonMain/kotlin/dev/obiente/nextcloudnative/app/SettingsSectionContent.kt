@@ -210,23 +210,6 @@ internal fun SettingsAppearanceSectionContent(
                 )
             }
         }
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(NextcloudRadii.Card),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-            ) {
-                Text("Designed for this screen", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "The workspace keeps platform navigation conventions and adapts its content to the available window.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
     }
 }
 

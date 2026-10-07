@@ -105,7 +105,12 @@ internal fun nativeBudgetDashboardReads(
         actions.firstOrNull { action ->
             action.binding.method == HttpMethod.GET &&
                 !action.fallbackOnly &&
-                action.binding.path.endsWith(suffix) &&
+                (if (kind == NativeBudgetDashboardDataKind.Accounts)
+                    action.resourceId.normalizedBudgetResourceId() == "accounts" &&
+                        action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list &&
+                        action.risk == dev.obiente.nextcloudnative.nativeui.model.ActionRisk.readOnly &&
+                        action.confidence in setOf(Confidence.high, Confidence.verified)
+                else action.binding.path.endsWith(suffix)) &&
                 action.binding.pathParameters.none { it.required } &&
                 action.binding.queryParameters.filter { it.required }.all { it.name in values }
         }?.let { action -> NativeBudgetDashboardRead(kind, action, values) }
@@ -116,10 +121,12 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(
     descriptorActions: List<DynamicAction> = emptyList(),
 ): NativeAppSchema {
     if (!isNativeBudgetApp(app.id) || views.any { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }) return this
-    val accounts = views.firstOrNull { view ->
-        view.resourceId.normalizedBudgetResourceId() == "accounts" &&
-            view.component != NativeComponent.form &&
-            view.sourceActionId.isNotBlank()
+    val accounts = actions.firstOrNull { action ->
+        action.resourceId.normalizedBudgetResourceId() == "accounts" && action.binding.method == HttpMethod.GET &&
+            action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list &&
+            action.risk == dev.obiente.nextcloudnative.nativeui.model.ActionRisk.readOnly &&
+            action.confidence in setOf(Confidence.high, Confidence.verified) &&
+            action.binding.requiredPathParameterNames.isEmpty() && action.binding.requiredQueryParameterNames.isEmpty()
     } ?: return this
     val budgetReport = actions.firstOrNull { action ->
         action.binding.method == HttpMethod.GET &&
@@ -167,7 +174,7 @@ internal fun NativeAppSchema.withNativeBudgetDashboard(
                 title = "Dashboard",
                 resourceId = accounts.resourceId,
                 component = NativeComponent.dashboard,
-                sourceActionId = accounts.sourceActionId,
+                sourceActionId = accounts.id,
                 confidence = Confidence.verified,
             ),
         ) + listOfNotNull(

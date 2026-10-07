@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +44,20 @@ internal fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
         Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
         Text(message, color = MaterialTheme.colorScheme.error)
         onRetry?.let { retry -> OutlinedButton(onClick = retry) { Text("Try again") } }
+    }
+}
+
+/** Full-screen load failure for a workspace whose content could not be shown at all. */
+@Composable
+internal fun WorkspaceLoadError(message: String, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
+        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
+        Button(onClick = onRetry) { Text("Try again") }
     }
 }
 

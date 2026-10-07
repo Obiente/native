@@ -22,7 +22,8 @@ release.
 
 ## Privacy and security
 
-- [ ] Repository hygiene and secret scanning pass.
+- [ ] `bash tools/check-repository.sh` passes, including its machine-path and
+      credential-pattern scans, and no secret-scanning alerts are open.
 - [ ] Logs, screenshots, fixtures, tests, and release notes contain no account,
       endpoint, credential, contact, message, file, or personal media data.
 - [ ] Authentication storage, TLS behavior, external links, and exported

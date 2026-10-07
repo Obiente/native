@@ -9,14 +9,6 @@ internal fun workspaceFileIcon(file: NextcloudFile): ImageVector = when {
     else -> NextcloudIcons.File
 }
 
-internal fun formatWorkspaceBytes(bytes: Long?): String = when {
-    bytes == null -> "Unknown size"
-    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
-    bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
-    bytes >= 1024L -> "${bytes / 1024L} KB"
-    else -> "$bytes B"
-}
-
 internal data class FileTableColumns(val modified: Boolean, val size: Boolean)
 
 internal fun fileTableColumns(width: Float, enabled: Boolean) = FileTableColumns(

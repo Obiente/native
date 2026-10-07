@@ -166,7 +166,7 @@ internal fun NativeFileWorkspaceList(
                         }
                         if (columns.size) {
                             Text(
-                                if (file.isDirectory) "-" else formatWorkspaceBytes(file.size),
+                                if (file.isDirectory) "-" else formatOptionalByteSize(file.size),
                                 modifier = Modifier.width(72.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -259,19 +259,17 @@ private fun NativeFileWorkspaceTile(
     onAction: (FileMenuAction) -> Unit,
 ) {
     var menuExpanded by remember(file.path) { mutableStateOf(false) }
-    var preview by remember(file.fileId, file.etag, file.hasPreview) { mutableStateOf<ImageBitmap?>(null) }
+    var preview by remember(session, file.fileId, file.etag, file.hasPreview) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(session, userId, file.fileId, file.etag, file.hasPreview) {
         file.fileId ?: return@LaunchedEffect
         if (file.isDirectory || !file.isPhotoMedia()) return@LaunchedEffect
-        preview = services.loadMediaThumbnailDecoded(
+        preview = services.loadMediaThumbnailImage(
             session = session,
             userId = userId,
             file = file,
             width = 420,
             height = 300,
-        ) { payload ->
-            decodePlatformImage(payload.bytes, payload.kind.orientationPolicy())
-        }
+        )
     }
     Card(
         modifier = Modifier.fillMaxWidth().semantics { if (onDoubleClick != null) this.selected = selected }.combinedClickable(
@@ -335,7 +333,7 @@ private fun NativeFileWorkspaceTile(
         Column(modifier = Modifier.padding(NextcloudSpacing.Medium)) {
             Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
             Text(
-                availability.readableStatus() ?: if (file.isDirectory) "Folder" else formatWorkspaceBytes(file.size),
+                availability.readableStatus() ?: if (file.isDirectory) "Folder" else formatOptionalByteSize(file.size),
                 maxLines = 1,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

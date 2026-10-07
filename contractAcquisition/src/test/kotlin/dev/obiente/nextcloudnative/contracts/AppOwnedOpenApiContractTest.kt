@@ -92,6 +92,25 @@ class AppOwnedOpenApiContractTest {
     }
 
     @Test
+    fun `portable authority variables and ports use bounded ASCII syntax`() {
+        listOf("{host}", "{_host}", "{host-name}", "{host.name}", "{host}:1", "{host}:65535", "{host}:{port}")
+            .forEach { authority ->
+                assertTrue(isAppOwnedOpenApiDocument(
+                    "example", "openapi.json", document(listOf("/items"), "https://$authority/apps/example"),
+                ), authority)
+            }
+        listOf(
+            "{host", "host}", "{{host}}", "{host}{other}", "{host}:", "{host}:123456",
+            "{host}:{port", "{host}:port}", "{host}:{}", "{host}:{{port}}", "{host}:{port}:80",
+            "{1host}", "{host}:{1port}", "{höst}", "{host}:１２", "%7Bhost%7D",
+        ).forEach { authority ->
+            assertFalse(isAppOwnedOpenApiDocument(
+                "example", "openapi.json", document(listOf("/items"), "https://$authority/apps/example"),
+            ), authority)
+        }
+    }
+
+    @Test
     fun `vendor and cross app contracts are rejected`() {
         assertFalse(
             isAppOwnedOpenApiDocument(

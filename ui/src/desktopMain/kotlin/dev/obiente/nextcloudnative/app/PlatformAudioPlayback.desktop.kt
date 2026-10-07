@@ -7,16 +7,19 @@ import javafx.application.Platform
 import javafx.scene.media.Media
 import javafx.scene.media.MediaException
 import javafx.scene.media.MediaPlayer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import okhttp3.Credentials
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,6 +48,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
         .build()
     private val generation = AtomicLong(0)
     private val playbackLock = Any()
+    private val playbackRetirement = AccountPlaybackRetirementOwner()
     private var downloadJob: Job? = null
     private var positionJob: Job? = null
     @Volatile
@@ -56,21 +60,38 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
     private var backend: DesktopAudioBackend? = null
 
     override fun play(session: NextcloudSession, source: NativeAudioPlaybackSource) {
-        val playGeneration = synchronized(playbackLock) {
-            val nextGeneration = generation.incrementAndGet()
-            activeCall?.cancel()
-            downloadJob?.cancel()
-            positionJob?.cancel()
-            disposePlayerAndFile()
-            mutableState.value = NativeAudioEngineState(
-                sourceId = source.id,
-                status = NativeAudioEngineStatus.Loading,
-            )
-            nextGeneration
-        }
-        downloadJob = scope.launch {
-            val staged = runCatching { stageAuthenticatedAudio(session, source) }
+        val producer = sharedAccountPrivateMemoryGate.producer(previewCacheDigest(session)) ?: return
+        var playGeneration = 0L
+        if (!playbackRetirement.bind(producer, onRetired = {
+                val retiredGeneration = playGeneration + 1L
+                if (generation.compareAndSet(playGeneration, retiredGeneration)) {
+                    activeCall?.cancel()
+                    downloadJob?.cancel()
+                    scope.launch {
+                        synchronized(playbackLock) {
+                            if (generation.get() == retiredGeneration) stopLocked()
+                        }
+                    }
+                }
+            }, publish = {
+                playGeneration = synchronized(playbackLock) {
+                    val nextGeneration = generation.incrementAndGet()
+                    activeCall?.cancel()
+                    downloadJob?.cancel()
+                    positionJob?.cancel()
+                    disposePlayerAndFile()
+                    mutableState.value = NativeAudioEngineState(
+                        sourceId = source.id,
+                        status = NativeAudioEngineStatus.Loading,
+                    )
+                    nextGeneration
+                }
+            })) return
+        val download = scope.launch(start = CoroutineStart.LAZY) {
+            if (generation.get() != playGeneration) return@launch
+            val staged = runCatching { stageAuthenticatedAudio(session, source, playGeneration) }
                 .getOrElse { failure ->
+                    if (failure is CancellationException) throw failure
                     if (generation.get() == playGeneration) {
                         mutableState.value = mutableState.value.copy(
                             status = NativeAudioEngineStatus.Error,
@@ -102,7 +123,16 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                 }
                 runCatching {
                     val mediaPlayer = MediaPlayer(Media(staged.toUri().toString()))
-                    player = mediaPlayer
+                    val accepted = synchronized(playbackLock) {
+                        if (generation.get() != playGeneration) false else {
+                            player = mediaPlayer
+                            true
+                        }
+                    }
+                    if (!accepted) {
+                        mediaPlayer.dispose()
+                        return@runLater
+                    }
                     mediaPlayer.setOnReady {
                         if (generation.get() != playGeneration) return@setOnReady
                         mutableState.value = mutableState.value.copy(
@@ -115,10 +145,12 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                         startPositionUpdates(playGeneration)
                     }
                     mediaPlayer.setOnPlaying {
+                        if (generation.get() != playGeneration) return@setOnPlaying
                         mutableState.value = mutableState.value.copy(status = NativeAudioEngineStatus.Playing)
                         startPositionUpdates(playGeneration)
                     }
                     mediaPlayer.setOnPaused {
+                        if (generation.get() != playGeneration) return@setOnPaused
                         positionJob?.cancel()
                         mutableState.value = mutableState.value.copy(
                             status = NativeAudioEngineStatus.Paused,
@@ -126,6 +158,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                         )
                     }
                     mediaPlayer.setOnEndOfMedia {
+                        if (generation.get() != playGeneration) return@setOnEndOfMedia
                         positionJob?.cancel()
                         mutableState.value = mutableState.value.copy(
                             status = NativeAudioEngineStatus.Ended,
@@ -133,11 +166,23 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                         )
                     }
                     mediaPlayer.setOnError {
+                        if (generation.get() != playGeneration) return@setOnError
                         failPlayback(mediaPlayer.error)
                     }
-                }.onFailure(::failPlayback)
+                }.onFailure { failure ->
+                    if (generation.get() == playGeneration) failPlayback(failure)
+                }
             }
         }
+        val accepted = sharedAccountPrivateMemoryGate.read(producer, false) {
+            synchronized(playbackLock) {
+                if (generation.get() != playGeneration) false else {
+                    downloadJob = download
+                    true
+                }
+            }
+        }
+        if (accepted) download.start() else download.cancel()
     }
 
     override fun pause() {
@@ -161,37 +206,47 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
     }
 
     override fun stop() {
-        synchronized(playbackLock) {
-            generation.incrementAndGet()
-            activeCall?.cancel()
-            downloadJob?.cancel()
-            positionJob?.cancel()
-            disposePlayerAndFile()
-            mutableState.value = NativeAudioEngineState()
-        }
+        // Keep the lock order gate -> playback; retirement also follows that order.
+        playbackRetirement.clear()
+        synchronized(playbackLock) { stopLocked() }
     }
 
+    private fun stopLocked() {
+        generation.incrementAndGet()
+        activeCall?.cancel()
+        activeCall = null
+        downloadJob?.cancel()
+        downloadJob = null
+        positionJob?.cancel()
+        disposePlayerAndFile()
+        mutableState.value = NativeAudioEngineState()
+    }
     override fun release() {
         stop()
         scope.cancel()
     }
 
-    private fun stageAuthenticatedAudio(
+    private suspend fun stageAuthenticatedAudio(
         session: NextcloudSession,
         source: NativeAudioPlaybackSource,
+        playGeneration: Long,
     ): Path {
+        val reads = prepareNativeAudioReads(session, listOf(source), client)
         val request = Request.Builder()
             .url(nativeAudioPlaybackUrl(session, source))
-            .header("Authorization", Credentials.basic(session.loginName, session.appPassword))
             .header("Accept", source.mimeType)
             .header("User-Agent", "nati.ve")
             .get()
             .build()
         val suffix = source.mimeType.audioFileSuffix()
+        val call = reads.newCall(request)
         val destination = Files.createTempFile("nextcloud-native-audio-", suffix)
-        val call = client.newCall(request)
-        activeCall = call
         try {
+            currentCoroutineContext().ensureActive()
+            synchronized(playbackLock) {
+                if (generation.get() != playGeneration) throw CancellationException("Audio playback changed.")
+                activeCall = call
+            }
             call.execute().use { response ->
                 if (!response.isSuccessful) {
                     throw IOException("Audio download failed with HTTP ${response.code}.")
@@ -222,7 +277,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
             Files.deleteIfExists(destination)
             throw failure
         } finally {
-            if (activeCall === call) activeCall = null
+            synchronized(playbackLock) { if (activeCall === call) activeCall = null }
         }
     }
 
@@ -231,6 +286,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
         positionJob = scope.launch {
             while (generation.get() == playGeneration) {
                 DesktopJavaFxRuntime.runLater {
+                    if (generation.get() != playGeneration) return@runLater
                     val activePlayer = player ?: return@runLater
                     mutableState.value = mutableState.value.copy(
                         positionMillis = activePlayer.currentTime.toMillis().coerceAtLeast(0.0).toLong(),
@@ -310,11 +366,12 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
         stagedFile = null
         val oldBackend = backend
         backend = null
-        if (oldBackend == DesktopAudioBackend.JavaFx || player != null) {
+        val oldPlayer = player
+        player = null
+        if (oldBackend == DesktopAudioBackend.JavaFx || oldPlayer != null) {
             DesktopJavaFxRuntime.runLater {
-                player?.stop()
-                player?.dispose()
-                player = null
+                oldPlayer?.stop()
+                oldPlayer?.dispose()
                 oldFile?.let { runCatching { Files.deleteIfExists(it) } }
             }
         } else {

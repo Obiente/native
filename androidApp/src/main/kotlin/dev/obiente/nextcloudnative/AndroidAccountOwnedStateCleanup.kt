@@ -34,9 +34,11 @@ internal class AndroidAccountOwnedStateCleanup(
     private val durableUploads = AndroidDurableUploadAccountCleanup(appContext)
     private val mediaBackupLedger = AndroidMediaBackupAccountCleanup(appContext)
     private val mutationRecovery = AndroidAccountMutationRecoveryCleanup(appContext)
+    private val textEditorDrafts = AndroidTextEditorDrafts(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     suspend fun remove(session: NextcloudSession) {
+        dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(session.accountId.storageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val cacheIdentity = NextcloudDocumentIds.cacheAccountId(session)
@@ -70,6 +72,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { textEditorDrafts.removeAccount(session.accountId.storageKey) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
@@ -86,6 +89,7 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String?,
         legacyAccountScopeDigest: String?,
     ) {
+        dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(session.accountId.storageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
         val cacheIdentity = previewCacheIdentity ?: NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
@@ -115,6 +119,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { textEditorDrafts.removeAccount(session.accountId.storageKey) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
@@ -131,6 +136,7 @@ internal class AndroidAccountOwnedStateCleanup(
         durableMutationIdentity: String? = null,
         legacyAccountScopeDigest: String? = null,
     ) {
+        dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(accountStorageKey)
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
@@ -166,6 +172,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeLegacyAndroidFileSyncStaging(File(appContext.cacheDir, "file-sync-staging")) },
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { textEditorDrafts.removeAccount(accountStorageKey) },
                 { deckCardDrafts.removeAccount(accountStorageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },

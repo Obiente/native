@@ -38,7 +38,7 @@ esac
 android_manifest_code() {
     local manifest="$1"
     local required_tag="$2"
-    jq -er \
+    release_jq -er \
         --arg channel "$expected_channel" \
         --arg required_tag "$required_tag" \
         --argjson maximum_apk_size "$max_android_apk_bytes" \
@@ -91,7 +91,7 @@ android_manifest_code() {
 
 desktop_manifest_code() {
     local manifest="$1"
-    jq -er \
+    release_jq -er \
         --arg channel "$expected_channel" \
         --arg tag "$immutable_tag" \
         '
@@ -118,7 +118,7 @@ desktop_manifest_code() {
 desktop_pointer_state() {
     local manifest="$1"
     local candidate_code="$2"
-    jq -er \
+    release_jq -er \
         --arg channel "$expected_channel" \
         --argjson candidate "$candidate_code" \
         '
@@ -234,7 +234,7 @@ for name in "${!candidates[@]}"; do
                 current_state=$'replace\tinvalid'
             else
                 current_state="$(
-                    jq -nr \
+                    release_jq -nr \
                         --argjson current "$current_code" \
                         --argjson candidate "${candidate_codes[$name]}" \
                         '[

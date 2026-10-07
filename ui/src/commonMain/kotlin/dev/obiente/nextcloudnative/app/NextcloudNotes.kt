@@ -62,7 +62,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private enum class NoteViewMode { Edit, Preview }
 
 internal fun String?.isUsableNoteDeletionEtag(): Boolean =
     !isNullOrBlank() && length <= 4_096 && none(Char::isISOControl)
@@ -1170,151 +1169,15 @@ internal fun NextcloudNoteEditor(
             !contentAvailable -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            else -> Column(
-                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Title") },
-                        singleLine = true,
-                        enabled = !readOnly && !mutationInProgress,
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = category,
-                        onValueChange = { category = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Folder") },
-                        singleLine = true,
-                        enabled = !readOnly && !mutationInProgress,
-                    )
-                    Button(
-                        enabled = dirty && !readOnly && !mutationInProgress && contentBytes <= MAX_NOTE_BYTES,
-                        onClick = ::saveNote,
-                    ) {
-                        Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text(if (saving) "Saving..." else "Save", modifier = Modifier.padding(start = 8.dp))
-                    }
-                }
-                if (folderOptions.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        FilterChip(
-                            selected = category.isBlank(),
-                            onClick = { category = "" },
-                            label = { Text("Uncategorized") },
-                            enabled = !readOnly && !mutationInProgress,
-                        )
-                        folderOptions.forEach { path ->
-                            FilterChip(
-                                selected = category == path,
-                                onClick = { category = path },
-                                label = { Text(path) },
-                                enabled = !readOnly && !mutationInProgress,
-                            )
-                        }
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    FilterChip(
-                        selected = viewMode == NoteViewMode.Edit,
-                        onClick = { viewMode = NoteViewMode.Edit },
-                        label = { Text("Edit") },
-                        leadingIcon = { Icon(NextcloudIcons.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    )
-                    FilterChip(
-                        selected = viewMode == NoteViewMode.Preview,
-                        onClick = { viewMode = NoteViewMode.Preview },
-                        label = { Text("Preview") },
-                        leadingIcon = { Icon(NextcloudIcons.File, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        enabled = previewAvailable,
-                    )
-                    Text(
-                        formatNoteSize(contentBytes),
-                        modifier = Modifier.padding(start = NextcloudSpacing.Small),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (viewMode == NoteViewMode.Edit) {
-                    MarkdownFormattingToolbar(
-                        value = content,
-                        onValueChange = { content = it },
-                        enabled = !readOnly && !mutationInProgress,
-                    )
-                    OutlinedTextField(
-                        value = content,
-                        onValueChange = { content = it },
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        label = { Text("Markdown") },
-                        enabled = !readOnly && !mutationInProgress,
-                    )
-                } else {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = RoundedCornerShape(NextcloudRadii.Card),
-                    ) {
-                        if (!previewAvailable) {
-                            Box(
-                                modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    "Switch to Edit to continue. Large Markdown previews are disabled.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        } else if (content.text.isBlank()) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("This note is empty.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } else {
-                            Markdown(
-                                content = content.text,
-                                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                                    .padding(NextcloudSpacing.Large),
-                            )
-                        }
-                    }
-                }
-                if (!previewAvailable) {
-                    Text(
-                        "Preview is disabled for notes larger than " +
-                            "${MAX_NOTE_MARKDOWN_PREVIEW_BYTES / 1024} KiB to keep editing responsive.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (contentBytes > MAX_NOTE_BYTES) {
-                    Text(
-                        "This note is larger than ${MAX_NOTE_BYTES / (1024 * 1024)} MiB and cannot be saved.",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                loadError?.let {
-                    Text("Could not refresh from the server. $it", color = MaterialTheme.colorScheme.error)
-                }
-                saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            }
+            else -> NoteEditorContent(
+                title = title, category = category, content = content, folderOptions = folderOptions,
+                viewMode = viewMode, readOnly = readOnly, mutationInProgress = mutationInProgress,
+                canSave = dirty && !readOnly && !mutationInProgress && contentBytes <= MAX_NOTE_BYTES,
+                saving = saving, previewAvailable = previewAvailable, contentBytes = contentBytes,
+                loadError = loadError, saveError = saveError,
+                onTitleChange = { title = it }, onCategoryChange = { category = it },
+                onContentChange = { content = it }, onViewModeChange = { viewMode = it }, onSave = ::saveNote,
+            )
         }
     }
 
@@ -1558,7 +1421,7 @@ internal fun navigateAfterReleasingMutationGuard(
 }
 
 @Composable
-private fun MarkdownFormattingToolbar(
+internal fun MarkdownFormattingToolbar(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
@@ -1625,12 +1488,6 @@ internal fun String.utf8Size(): Long {
         index += 1
     }
     return bytes
-}
-
-private fun formatNoteSize(bytes: Long): String = when {
-    bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
-    bytes >= 1024 -> "${bytes / 1024} KiB"
-    else -> "$bytes B"
 }
 
 internal const val MAX_NOTE_MARKDOWN_PREVIEW_BYTES = 512L * 1024L

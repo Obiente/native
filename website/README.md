@@ -5,6 +5,11 @@ prerenders the homepage and every selected repository Markdown document to
 plain HTML, then emits a sitemap and a small client bundle for search and
 interactive previews.
 
+Roadmap components and their generated dataset load with the routes that use
+them. The Vite build checks the emitted client entry graph and rejects an eager
+roadmap dependency. Server rendering still resolves those components for complete
+prerendered pages. Keep this boundary when adding homepage or navigation imports.
+
 **Last reviewed: 2026-08-20.** Published routes, platform availability, and
 deployment configuration may have changed. The production site and current
 build configuration are the source of truth.

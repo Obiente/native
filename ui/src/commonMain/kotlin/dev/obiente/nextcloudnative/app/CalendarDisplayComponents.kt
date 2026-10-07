@@ -81,7 +81,7 @@ internal fun CalendarEventListItem(
                 Text(event.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                     maxLines = 3, overflow = TextOverflow.Ellipsis)
                 val metadata = listOfNotNull(event.location?.takeIf { it.isNotBlank() }, calendar?.displayName?.takeIf { it.isNotBlank() })
-                if (metadata.isNotEmpty()) Text(metadata.joinToString(" · "),
+                if (metadata.isNotEmpty()) Text(metadata.joinToString(" | "),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }

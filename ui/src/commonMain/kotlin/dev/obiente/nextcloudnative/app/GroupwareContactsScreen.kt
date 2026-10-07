@@ -50,10 +50,6 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,11 +87,13 @@ fun NativeGroupwareContactsScreen(
     var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
+    var mutationRequestRunning by remember(accountScope) { mutableStateOf(false) }
     var mutationRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var mutationRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
-    val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
-        mutationRecoveryState?.let { decodeContactMutationRecoveryState(it, accountScope) }
+    val recoverySnapshot = remember(accountScope, mutationRecoveryState) {
+        contactRecoverySnapshot(mutationRecoveryState, accountScope)
     }
+    val mutationPostcondition = recoverySnapshot.postcondition
     val durableMutationInProgress =
         !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
     val mutationInProgress = mutationOrLinkCommitBlocksInteraction(
@@ -144,12 +142,13 @@ fun NativeGroupwareContactsScreen(
             onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
         }
+        mutationRequestRunning = true
         mutationRecoveryState = encoded
         return true
     }
 
-    suspend fun clearMutationRecovery(): Boolean {
-        val expectedEncoded = mutationRecoveryState ?: return false
+    suspend fun clearMutationRecovery(expectedRecord: String? = mutationRecoveryState): Boolean {
+        val expectedEncoded = expectedRecord ?: return false
         val cleared = try {
             services.clearDurableMutationRecovery(
                 accountScope,
@@ -174,6 +173,7 @@ fun NativeGroupwareContactsScreen(
             return false
         }
         mutationRecoveryState = null
+        showRecoveryOptions = false
         mutationOperationInProgress = false
         mutationError = null
         refreshError = null
@@ -199,8 +199,8 @@ fun NativeGroupwareContactsScreen(
         }
     }
 
-    LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
-        if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
+    LaunchedEffect(accountScope, mutationRecoveryLoaded, recoverySnapshot) {
+        if (mutationRecoveryLoaded && recoverySnapshot.unreadable) {
             refreshError = "The previous contact recovery record cannot be read. Writes remain blocked."
             showRecoveryOptions = true
         }
@@ -211,8 +211,8 @@ fun NativeGroupwareContactsScreen(
     }
     DisposableEffect(Unit) { onDispose { onMutationInProgressChanged(false) } }
 
-    LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
-        if (!mutationRecoveryLoaded) return@LaunchedEffect
+    LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded, recoverySnapshot, mutationRequestRunning) {
+        if (!recoverySnapshot.readyToVerify(mutationRecoveryLoaded, mutationRequestRunning)) return@LaunchedEffect
         val cacheProducer = ContactsWorkspaceMemoryCache.producer(session)
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
             runCatchingPreservingCancellation {
@@ -263,7 +263,7 @@ fun NativeGroupwareContactsScreen(
             }
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
-                    if (!clearMutationRecovery()) return@onSuccess
+                    if (!clearMutationRecovery(recoverySnapshot.encoded)) return@onSuccess
                     when (mutationPostcondition) {
                         is ContactMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
@@ -435,10 +435,10 @@ fun NativeGroupwareContactsScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator() }
-                is ContactsLoadState.Error -> ContactsError(value.message) { loadAttempt += 1 }
+                is ContactsLoadState.Error -> WorkspaceLoadError(value.message) { loadAttempt += 1 }
                 is ContactsLoadState.Ready -> {
                     if (value.addressBooks.isEmpty()) {
-                        ContactsError("No address books were found.") { loadAttempt += 1 }
+                        WorkspaceLoadError("No address books were found.") { loadAttempt += 1 }
                     } else {
                         ContactList(filtered, onSelect = { selectedContactHref = it.href })
                     }
@@ -538,6 +538,8 @@ fun NativeGroupwareContactsScreen(
                     } catch (_: Exception) {
                         mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                         loadAttempt += 1
+                    } finally {
+                        mutationRequestRunning = false
                     }
                 }
             },
@@ -617,6 +619,8 @@ fun NativeGroupwareContactsScreen(
                         } catch (_: Exception) {
                             mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                             loadAttempt += 1
+                        } finally {
+                            mutationRequestRunning = false
                         }
                     }
                 },
@@ -666,17 +670,18 @@ fun NativeGroupwareContactsScreen(
                                 if (!retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))) {
                                     return@launch
                                 }
+                                val expectedRecovery = mutationRecoveryState
                                 confirmDelete = false
                                 try {
                                     val response = services.executeGroupwareDav(session, request)
                                     if (response.status !in 200..299) {
                                         if (groupwareDeleteResponseProvesAbsence(response.status)) {
-                                            if (clearMutationRecovery()) {
+                                            if (clearMutationRecovery(expectedRecovery)) {
                                                 selectedContactHref = null
                                                 loadAttempt += 1
                                             }
                                         } else if (groupwareMutationResponseProvesRejection(response.status)) {
-                                            if (clearMutationRecovery()) {
+                                            if (clearMutationRecovery(expectedRecovery)) {
                                                 mutationError = "Deleting the contact failed (HTTP ${response.status})."
                                             }
                                         } else {
@@ -685,13 +690,18 @@ fun NativeGroupwareContactsScreen(
                                         }
                                         return@launch
                                     }
-                                    selectedContactHref = null
+                                    val verified = verifyContactDeletion(contact.href) { services.executeGroupwareDav(session, it) }
+                                    if (verified) {
+                                        if (clearMutationRecovery(expectedRecovery)) selectedContactHref = null
+                                    } else mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                                     loadAttempt += 1
                                 } catch (failure: CancellationException) {
                                     throw failure
                                 } catch (_: Exception) {
                                     mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                                     loadAttempt += 1
+                                } finally {
+                                    mutationRequestRunning = false
                                 }
                             }
                         },
@@ -709,10 +719,6 @@ fun NativeGroupwareContactsScreen(
         }
     }
 }
-
-private const val CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE =
-    "The server response was interrupted, so the contact result is unknown. " +
-        "Refresh to verify it before trying another change."
 
 @Composable
 private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareContact) -> Unit) {
@@ -766,142 +772,6 @@ private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareCo
         }
     }
 }
-
-@Composable
-private fun ContactsError(message: String, retry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = retry) { Text("Try again") }
-    }
-}
-
-@Serializable
-internal data class ContactDraft(
-    val name: String,
-    val email: String,
-    val phone: String,
-    val organization: String,
-    val address: String,
-    val notes: String,
-) {
-    fun normalizedForDav(): ContactDraft = copy(
-        name = name.normalizeGroupwareTextLineEndings(),
-        email = email.trim(),
-        phone = phone.trim().normalizeGroupwareTextLineEndings(),
-        organization = organization.trim().normalizeGroupwareTextLineEndings(),
-        address = address.trim().normalizeGroupwareTextLineEndings(),
-        notes = notes.trim().normalizeGroupwareTextLineEndings(),
-    )
-}
-
-@Serializable
-internal sealed interface ContactMutationPostcondition {
-    val href: String
-    fun isSatisfiedBy(response: NextcloudApiResponse): Boolean
-
-    @Serializable
-    data class Upsert(
-        override val href: String,
-        val addressBookHref: String,
-        val expectedUid: String,
-        val previousEtag: String?,
-        val draft: ContactDraft,
-        val expectedPrimaryEmail: String = draft.email.trim(),
-        val expectedPrimaryPhone: String = draft.phone.trim().normalizeGroupwareTextLineEndings(),
-    ) : ContactMutationPostcondition {
-        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
-            if (response.status !in 200..299) return false
-            val expected = draft.normalizedForDav()
-            val contact = parseGroupwareContact(
-                addressBookHref = addressBookHref,
-                href = href,
-                etag = response.etag,
-                content = response.body.decodeToString(),
-            ) ?: return false
-            return contact.href == href &&
-                contact.uid == expectedUid &&
-                contact.displayName == expected.name &&
-                contact.emails.firstOrNull().orEmpty() == expectedPrimaryEmail &&
-                contact.phones.firstOrNull().orEmpty() == expectedPrimaryPhone &&
-                contact.organization.orEmpty() == expected.organization &&
-                contact.address.orEmpty() == expected.address &&
-                contact.notes.orEmpty() == expected.notes
-        }
-    }
-
-    @Serializable
-    data class Delete(override val href: String) : ContactMutationPostcondition {
-        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
-            groupwareDeleteResponseProvesAbsence(response.status)
-    }
-}
-
-@Serializable
-internal data class ContactMutationRecoveryState(
-    val accountScope: String,
-    val postcondition: ContactMutationPostcondition,
-) {
-    init {
-        require(accountScope.isCanonicalGroupwareMutationAccountScope())
-    }
-}
-
-private val contactMutationRecoveryJson = Json {
-    encodeDefaults = true
-    ignoreUnknownKeys = true
-}
-
-internal fun ContactMutationRecoveryState.encodeForSavedState(): String =
-    contactMutationRecoveryJson.encodeToString(this)
-
-internal fun contactUpdatePostcondition(
-    contact: GroupwareContact,
-    draft: ContactDraft,
-    updatedContent: String,
-): ContactMutationPostcondition.Upsert? {
-    val expected = parseGroupwareContact(
-        addressBookHref = contact.addressBookHref,
-        href = contact.href,
-        etag = contact.etag,
-        content = updatedContent,
-    ) ?: return null
-    return ContactMutationPostcondition.Upsert(
-        href = contact.href,
-        addressBookHref = contact.addressBookHref,
-        expectedUid = contact.uid,
-        previousEtag = contact.etag,
-        draft = draft,
-        expectedPrimaryEmail = expected.emails.firstOrNull().orEmpty(),
-        expectedPrimaryPhone = expected.phones.firstOrNull().orEmpty(),
-    )
-}
-
-internal fun decodeContactMutationRecoveryState(
-    encoded: String,
-    expectedAccountScope: String,
-): ContactMutationPostcondition? = runCatching {
-    contactMutationRecoveryJson.decodeFromString<ContactMutationRecoveryState>(encoded)
-}.getOrNull()?.takeIf { recovery -> recovery.accountScope == expectedAccountScope }?.postcondition
-
-internal fun contactDraftIsDirty(
-    initial: ContactDraft,
-    current: ContactDraft,
-    initialAddressBookHref: String?,
-    currentAddressBookHref: String?,
-): Boolean = initial != current || initialAddressBookHref != currentAddressBookHref
-
-internal fun contactDraftHasDavChanges(
-    initial: ContactDraft,
-    current: ContactDraft,
-    initialAddressBookHref: String?,
-    currentAddressBookHref: String?,
-): Boolean = initial.normalizedForDav() != current.normalizedForDav() ||
-    initialAddressBookHref != currentAddressBookHref
 
 @Composable
 private fun ContactEditorDialog(

@@ -63,6 +63,7 @@ internal fun GenericTableCollection(
     loadingMore: Boolean,
     loadMoreError: String?,
     searchQuery: String,
+    recordsGeneration: Long = 0L,
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -99,6 +100,12 @@ internal fun GenericTableCollection(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactRecordList = shouldUseCompactTableRecordList(maxWidth.value)
         Column(modifier = Modifier.fillMaxSize()) {
+            if (schema.app.id == "tables") {
+                Text(nativeTableLoadedSummary(filteredRecords.size, projection.records.size,
+                    projection.projectedFieldIds.size.takeIf { projection.composite }),
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             NativeTableBrowseControls(
                 facets = facets,
                 selections = facetSelections,
@@ -122,9 +129,11 @@ internal fun GenericTableCollection(
                     }
                 }
                 GenericCenteredState {
-                    Text("No matching records", style = MaterialTheme.typography.titleMedium)
+                    val filtering = searchQuery.isNotBlank() || facetSelections.isNotEmpty()
+                    Text(if (filtering) "No matching records" else "No records yet", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Clear or adjust the current search and filters to see more records.",
+                        if (filtering) "Clear or adjust the current search and filters to see more records."
+                        else "Records will appear here when this collection has data.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -147,6 +156,7 @@ internal fun GenericTableCollection(
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     modifier = Modifier.weight(1f),
+                    recordsGeneration = recordsGeneration,
                 )
             } else {
                 GenericRecordTable(
@@ -162,6 +172,7 @@ internal fun GenericTableCollection(
                     loadingMore,
                     loadMoreError,
                     Modifier.weight(1f),
+                    recordsGeneration,
                 )
             }
         }
@@ -188,10 +199,10 @@ private fun NativeTableBrowseControls(
         ),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
-        Row(
+        androidx.compose.foundation.layout.FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
         ) {
             Box {
                 OutlinedButton(
@@ -273,3 +284,9 @@ private fun NativeTableBrowseControls(
         }
     }
 }
+
+internal fun nativeTableLoadedSummary(visible: Int, loaded: Int, columns: Int?): String = buildList {
+    add(if (visible == loaded) "$loaded ${if (loaded == 1) "record" else "records"} loaded"
+        else "$visible of $loaded loaded records")
+    columns?.let { add("$it ${if (it == 1) "column" else "columns"}") }
+}.joinToString(" | ")

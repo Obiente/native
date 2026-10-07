@@ -14,12 +14,14 @@ if [[ "${#candidate_files[@]}" -eq 0 ]]; then
     exit 1
 fi
 
-if ! command -v rustc >/dev/null 2>&1; then
-    printf 'Rust stable is required to run repository hygiene checks.\n' >&2
-    exit 1
-fi
-if ! command -v node >/dev/null 2>&1; then
-    printf 'Node.js is required to validate changelog fragments.\n' >&2
+# Report every missing prerequisite before any slow check starts.
+missing_tools=()
+for tool in rustc node python3 jq; do
+    command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
+done
+if [[ "${#missing_tools[@]}" -gt 0 ]]; then
+    printf 'Repository checks need these tools on PATH: %s\n' "${missing_tools[*]}" >&2
+    printf 'See CONTRIBUTING.md for the development prerequisites.\n' >&2
     exit 1
 fi
 
@@ -27,6 +29,7 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_directory"' EXIT
 
 bash tools/test-text-hygiene.sh
+node --test tools/test-ci-source-scopes.mjs
 bash tools/test-kotlin-architecture.sh
 bash tools/check-kotlin-architecture.sh
 rustc --edition=2021 tools/text-hygiene.rs \
@@ -40,18 +43,26 @@ if [[ -n "$generated" ]]; then
     exit 1
 fi
 
+# Scan in batches: one grep process per file is very slow on Windows.
+scan_files=()
 for file in "${candidate_files[@]}"; do
-    [[ -f "$file" ]] || continue
-    [[ "$file" == "tools/check-repository.sh" ]] && continue
-    if grep -n -I -E "$machine_pattern" -- "$file"; then
-        printf 'Machine-specific paths or LAN addresses are present in %s.\n' "$file" >&2
-        exit 1
-    fi
-    if grep -n -I -E "$credential_pattern" -- "$file"; then
-        printf 'A credential-shaped value is present in %s.\n' "$file" >&2
-        exit 1
-    fi
+    [[ -f "$file" && "$file" != "tools/check-repository.sh" ]] && scan_files+=("$file")
 done
+scan_matches() {
+    printf '%s\0' "${scan_files[@]}" | xargs -0 grep -H -n -I -E -- "$1" || true
+}
+machine_matches="$(scan_matches "$machine_pattern")"
+if [[ -n "$machine_matches" ]]; then
+    printf '%s\n' "$machine_matches"
+    printf 'Machine-specific paths or LAN addresses are present in the files above.\n' >&2
+    exit 1
+fi
+credential_matches="$(scan_matches "$credential_pattern")"
+if [[ -n "$credential_matches" ]]; then
+    printf '%s\n' "$credential_matches"
+    printf 'A credential-shaped value is present in the files above.\n' >&2
+    exit 1
+fi
 
 bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-android-emulator.sh
@@ -72,5 +83,7 @@ bash tools/test-update-channel-promotion.sh
 bash tools/test-download-channel-promotion.sh
 bash tools/test-linux-package-metadata.sh
 bash tools/test-desktop-update-manifest.sh
+
+bash tools/test-jq-output-portability.sh
 
 printf 'Repository hygiene checks passed.\n'

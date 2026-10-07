@@ -25,26 +25,42 @@ internal fun startAndroidFileSyncCapabilityRecovery(
     capabilities: AndroidFileSyncCapabilityLifecycle,
 ) {
     scope.launch {
+        runAndroidFileSyncCapabilityStartupRecovery(
+            cancelLegacy = { WorkManager.getInstance(context).cancelUniqueWork("file-sync-capability-cleanup-v1").await() },
+            reconcile = {
+                AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+                    capabilities.reconcile(load())
+                    capabilities.hasRecoveryWork()
+                }
+            },
+            scheduleRecovery = { requestAndroidFileSyncCapabilityRecovery(context) },
+            recordFailure = { failure ->
+                android.util.Log.w("FolderCapabilityRecovery", "Folder access cleanup is awaiting recovery.", failure)
+            },
+        )
+    }
+}
+
+internal suspend fun runAndroidFileSyncCapabilityStartupRecovery(
+    cancelLegacy: suspend () -> Unit,
+    reconcile: suspend () -> Boolean,
+    scheduleRecovery: suspend () -> Unit,
+    recordFailure: (Exception) -> Unit,
+) {
+    try {
+        cancelLegacy()
+        if (reconcile()) scheduleRecovery()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
         try {
-            // Retire the old unconditional periodic schedule after upgrading.
-            WorkManager.getInstance(context).cancelUniqueWork("file-sync-capability-cleanup-v1").await()
-            AndroidFileSyncEngine.ENGINE_LOCK.withLock {
-                capabilities.reconcile(load())
-                if (capabilities.hasRecoveryWork()) requestAndroidFileSyncCapabilityRecovery(context)
-            }
+            scheduleRecovery()
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (failure: Exception) {
-            // A failed immediate cleanup must still have a durable retry owner.
-            try {
-                requestAndroidFileSyncCapabilityRecovery(context)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (schedulingFailure: Exception) {
-                failure.addSuppressed(schedulingFailure)
-            }
-            android.util.Log.w("FolderCapabilityRecovery", "Folder access cleanup is awaiting recovery.", failure)
+        } catch (schedulingFailure: Exception) {
+            failure.addSuppressed(schedulingFailure)
         }
+        recordFailure(failure)
     }
 }
 

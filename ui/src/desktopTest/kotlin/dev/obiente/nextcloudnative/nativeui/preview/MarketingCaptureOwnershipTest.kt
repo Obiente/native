@@ -50,10 +50,10 @@ class MarketingCaptureOwnershipTest {
         val captureSources = discoverCaptureSources(repositoryRoot)
         listOf("Regular", "Medium", "SemiBold", "Bold").forEach { weight ->
             assertTrue(
-                "ui/src/desktopMain/resources/marketing/fonts/NotoSans-$weight.ttf" in captureSources,
+                "ui/src/desktopTest/resources/marketing/fonts/NotoSans-$weight.ttf" in captureSources,
             )
         }
-        assertTrue("ui/src/desktopMain/resources/marketing/fonts/OFL.txt" in captureSources)
+        assertTrue("ui/src/desktopTest/resources/marketing/fonts/OFL.txt" in captureSources)
     }
 
     @Test

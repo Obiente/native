@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
+
 import dev.obiente.nextcloudnative.app.publicContentSha256
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
@@ -71,7 +73,7 @@ internal data class NativeChoresInvitationAcceptRecoveryPlan(
 internal fun isNativeChoresInvitationAcceptAction(
     schema: NativeAppSchema,
     action: ActionSpec,
-): Boolean = schema.app.id == "chores" && schema.app.version == "0.1.0" &&
+): Boolean = schema.app.isSupportedChoresVersion() &&
     action.intent == ActionIntent.execute && action.risk != ActionRisk.readOnly &&
     action.binding.method == HttpMethod.POST &&
     action.binding.path == "/apps/chores/api/v1.0/account/invites/accept" &&

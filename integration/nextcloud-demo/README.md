@@ -9,9 +9,14 @@ The default server is Nextcloud 34.0.3 with PostgreSQL, Redis, and an HTTPS
 gateway. A second HTTP port is bound exclusively to `127.0.0.1` so browser
 automation can exercise the web dashboards without weakening TLS validation or
 installing the private demo CA into a desktop profile. Android and physical
-devices use only the HTTPS origin. The Nextcloud container trusts only this
-instance's generated CA so its built-in CODE proxy can use the same HTTPS origin
-that the document editor sees. The representative app manifest covers
+devices use only the HTTPS origin. The Nextcloud container retains the normal
+system CA roots and adds this instance's generated CA. Nextcloud reaches its
+built-in CODE proxy through `http://localhost` inside the same container; the
+editor receives the separate public HTTPS URL. The provisioning health check
+uses the host's HTTPS localhost gateway with certificate verification, so the
+emulator's `10.0.2.2` alias need not resolve inside the container. This separation
+is specific to the built-in CODE service, not an external Office provider.
+The representative app manifest covers
 native DAV and API workspaces, plus Nextcloud Office document editing. Android
 embeds only the selected document's Direct Editing session and checks the
 certificate already approved inside the app. Desktop opens that session in the
@@ -43,6 +48,21 @@ tools/nextcloud-demo.sh provision
 tools/nextcloud-demo.sh status
 ```
 
+If multiple Compose providers are on `PATH`, select the provider installed for
+this Podman environment explicitly. This matters in WSL when the inherited
+Windows `PATH` also contains Docker Desktop's Compose executable. For an
+installed Linux `podman-compose`, set this before running the commands above or
+the integration tests:
+
+```bash
+export PODMAN_COMPOSE_PROVIDER="$(command -v podman-compose)"
+test -n "$PODMAN_COMPOSE_PROVIDER"
+```
+
+The selected executable must be available inside the environment running
+Podman. Do not select a Windows provider merely because it appears first on
+WSL's inherited `PATH`.
+
 The default hostname is `10.0.2.2`, the Android emulator alias for its host.
 The host-side seeder connects through `localhost`; both names are present on the
 generated certificate. To test from a physical device on the same isolated
@@ -64,6 +84,25 @@ enables the representative suite, and uploads only these bounded fixtures:
 - `NC Native E2E/README.md` in Files;
 - one synthetic vCard in the test account's Contacts address book;
 - one synthetic event in its Personal calendar and one task in its Tasks calendar.
+
+When Memories is enabled, seeding also sets this synthetic account's timeline
+folder to `/NC Native E2E` and indexes only that folder. The base fixture set
+contains no photos, so the timeline remains empty until a test uploads an image
+within that scope. This avoids the upstream first-use folder prompt, which a
+native API client cannot complete through the web interface.
+
+Memories People requires a compatible Recognize app with face recognition
+explicitly enabled on the server. Installing Recognize alone does not satisfy
+that prerequisite. The native client explains this setup condition for the
+reviewed Memories 9.0.1 response; unrelated precondition errors remain failures.
+The demo does not download recognition models or enable face analysis by default.
+
+New demo certificates include explicit CA signing and server authentication
+usage extensions and pass strict X.509 chain verification. Existing instance
+certificates are not rotated by `seed` or `up`. To replace an older certificate,
+retire the disposable instance with the documented reset workflow, initialize
+it again, and install its new CA on the isolated test device. Never disable TLS
+verification to reuse an incompatible certificate.
 
 Repeated seeding overwrites those exact fixture resources. Tests must create
 their own unique records underneath an explicitly declared app or DAV scope and
@@ -112,7 +151,10 @@ tools/nextcloud-demo.sh android-ca compatibility
 ```
 
 Install a debuggable APK, then import the disposable account. The import is
-read-only by default:
+read-only by default. Import into an empty app or reimport the same existing
+read-only test account. The debug bootstrap updates the current account store
+atomically with read-only protection; it rejects an existing normal account.
+Changing test accounts requires fresh data in the isolated emulator app:
 
 ```bash
 tools/nextcloud-demo.sh android-session compatibility
@@ -132,8 +174,8 @@ session only while streaming it into the app; the credential file is not
 rewritten or printed. The server readiness check uses the certificate's local
 host alias, so an ordinary `up` also remains usable after a LAN address change.
 
-Writes require a second, explicit command naming one exact app API subtree or
-one synthetic CardDAV or CalDAV collection. The app accepts only HTTPS, the
+Writes require a second, explicit command naming one exact app API subtree,
+synthetic CardDAV or CalDAV collection, or disposable Files folder. The app accepts only HTTPS, the
 same origin, mutation methods it recognizes, and a path under an explicit
 `/apps/<app>/api/...`, `/index.php/apps/<app>/api/...`, or
 `/ocs/v2.php/apps/<app>/api/...` subtree. DAV scopes accept only descendants of
@@ -145,6 +187,14 @@ cannot be mutated:
 tools/nextcloud-demo.sh android-write-scope compatibility \
   /apps/chores/api/v1.0/team
 ```
+
+For Files workflows, provision the folder first, then scope writes to
+`/remote.php/dav/files/nc-native-e2e/NC%20Native%20E2E`. Only descendants can be
+created, replaced, copied, moved, or deleted. The scoped folder itself and the
+account root remain protected. MOVE and COPY also require a destination inside
+the same folder and HTTPS origin. Encoded spaces are accepted; encoded path
+separators, dot segments, and other ambiguous encodings are rejected. This does
+not authorize background workers, document providers, or chunked uploads.
 
 Remove the authorization immediately after that workflow:
 

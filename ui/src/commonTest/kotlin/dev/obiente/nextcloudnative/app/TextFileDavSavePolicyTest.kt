@@ -35,15 +35,11 @@ class TextFileDavSavePolicyTest {
     }
 
     @Test
-    fun `precondition failures retain the conflict recovery message`() {
-        val failure = assertFailsWith<IllegalStateException> {
+    fun `precondition failure has a distinct typed conflict`() {
+        val failure = assertFailsWith<TextFileDavSaveConflictException> {
             confirmTextFileDavSave(412)
         }
-
-        assertEquals(
-            "The file changed on the server. Reload it before saving your changes.",
-            failure.message,
-        )
+        assertEquals("The file changed on the server.", failure.message)
     }
 
     @Test

@@ -113,6 +113,28 @@ class VerifiedContractCacheTest {
         }
     }
 
+    @Test
+    fun contractsFromBeforeGetUnionDerivationAreNotReused() {
+        val directory = Files.createTempDirectory("ncn-contract-derivation-").toFile()
+        try {
+            val request = ContractAcquisitionRequest("mail", "34.0.1", "5.4.2")
+            val cache = FileVerifiedContractCache(directory)
+            cache.store(request, contract())
+            val current = directory.listFiles().orEmpty().single()
+            val legacyIdentity = listOf("3", request.appId, request.serverVersion,
+                request.installedAppVersion.orEmpty()).joinToString("\u0000")
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(legacyIdentity.encodeToByteArray())
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            val legacy = java.io.File(directory, "$digest.json")
+            assertTrue(current.renameTo(legacy))
+            assertNull(FileVerifiedContractCache(directory).load(request))
+            assertTrue(legacy.isFile)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private fun contract() = VerifiedOpenApiContract(
         appId = "mail",
         appVersion = "5.4.2",

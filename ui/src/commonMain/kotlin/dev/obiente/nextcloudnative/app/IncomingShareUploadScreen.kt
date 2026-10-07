@@ -328,7 +328,7 @@ fun IncomingShareUploadScreen(
                             Column(Modifier.padding(NextcloudSpacing.Medium)) {
                                 Text(file.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    incomingShareFileSizeLabel(file.sizeBytes),
+                                    formatByteSize(file.sizeBytes),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -569,13 +569,6 @@ private fun AmbiguousIncomingShareActions(
             TextButton(enabled = !queueing, onClick = onDiscard) { Text("Discard...") }
         }
     }
-}
-
-private fun incomingShareFileSizeLabel(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
-    else -> "$bytes bytes"
 }
 
 internal fun incomingShareRecoveryRefreshMillis(hasRecoveries: Boolean): Long =

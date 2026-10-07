@@ -381,7 +381,7 @@ tasks.matching { task -> task.name == "createDistributable" }.configureEach {
 val desktopCaptureCompilation = kotlin.targets
     .getByName("desktop")
     .compilations
-    .getByName("main")
+    .getByName("test")
 
 tasks.register<JavaExec>("captureMarketingScreenshots") {
     group = "documentation"

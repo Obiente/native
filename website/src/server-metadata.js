@@ -107,7 +107,7 @@ export function metadataFor(path) {
   return {
     title: "nati.ve for Android, Linux and Windows | Obiente",
     description:
-      "Open-source native Nextcloud alpha for Android, Linux, and Windows. Test Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
+      "An open-source app for your existing Nextcloud account. Browse files, photos, Talk history and calendars on Android, Linux and Windows. Alpha software.",
     canonical: `${siteUrl}/`,
     type: "website",
   };

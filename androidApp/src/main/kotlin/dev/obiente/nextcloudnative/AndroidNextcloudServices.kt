@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
+import dev.obiente.nextcloudnative.app.decodeDavHref
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
@@ -41,7 +42,6 @@ import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
-import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiReadFailure
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
@@ -91,14 +91,13 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
-import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
 import dev.obiente.nextcloudnative.app.VirtualFilePlatformIntegration
 import dev.obiente.nextcloudnative.app.VirtualFileProviderState
 import dev.obiente.nextcloudnative.app.VirtualFileStorageActionResult
 import dev.obiente.nextcloudnative.app.VirtualFileStorageSnapshot
 import dev.obiente.nextcloudnative.app.VirtualFileStorageSupport
-import dev.obiente.nextcloudnative.app.formatVirtualFileBytes
+import dev.obiente.nextcloudnative.app.formatByteSize
 import dev.obiente.nextcloudnative.app.MediaSyncFolderDiscovery
 import dev.obiente.nextcloudnative.app.MAX_MEDIA_BACKUP_STATUS_PATHS
 import dev.obiente.nextcloudnative.app.MediaBackupStatus
@@ -133,6 +132,7 @@ import dev.obiente.nextcloudnative.app.NextcloudPerson
 import dev.obiente.nextcloudnative.app.syntheticMemoriesPersonFile
 import dev.obiente.nextcloudnative.app.NextcloudServerInfo
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.TextEditorDraftStore
 import dev.obiente.nextcloudnative.app.NextcloudSystemTag
 import dev.obiente.nextcloudnative.app.SavedTextFile
 import dev.obiente.nextcloudnative.app.SystemTagDavRecord
@@ -149,6 +149,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsConversationResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
+import dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkFailurePhase
@@ -161,13 +162,9 @@ import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toFileSyncActionDiagnosticSummary
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
-import dev.obiente.nextcloudnative.app.ambiguousLoginPollResponse
-import dev.obiente.nextcloudnative.app.loginResultOriginMatchesEntered
 import dev.obiente.nextcloudnative.app.toLoginPollFailureDiagnostic
-import dev.obiente.nextcloudnative.app.validateLoginEndpointRelationships
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
-import dev.obiente.nextcloudnative.app.AndroidDirectRelease
 import dev.obiente.nextcloudnative.app.AndroidUpdateChannel
 import dev.obiente.nextcloudnative.app.AppUpdateCheckResult
 import dev.obiente.nextcloudnative.app.diagnosticOutcome
@@ -184,7 +181,6 @@ import dev.obiente.nextcloudnative.app.PeopleTransportRequest
 import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
-import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.buildFileFavoritePropPatch
 import dev.obiente.nextcloudnative.app.buildFavoriteFilesDavReport
@@ -205,11 +201,10 @@ import dev.obiente.nextcloudnative.app.normalizeFileVersionHistory
 import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
 import dev.obiente.nextcloudnative.app.requireSafeFileRangeEtag
 import dev.obiente.nextcloudnative.app.discoverRecognizeBridge
-import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.DynamicDescriptorDiscovery
 import dev.obiente.nextcloudnative.app.decodePersistedDynamicDiscovery
 import dev.obiente.nextcloudnative.app.encodePersistedDynamicDiscovery
-import dev.obiente.nextcloudnative.app.dynamicReadCacheIdentity
+import dev.obiente.nextcloudnative.app.executeJvmDynamicApiRequest
 import dev.obiente.nextcloudnative.app.collectMediaSearchDavPages
 import dev.obiente.nextcloudnative.app.collectMediaTimelineDavPage
 import dev.obiente.nextcloudnative.app.mediaSearchDavRequests
@@ -235,7 +230,6 @@ import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
-import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
@@ -338,37 +332,6 @@ private suspend fun awaitValidatedAndroidNetwork(connectivity: ConnectivityManag
     }
 }
 
-internal suspend fun executeAndroidDynamicApiGet(
-    accountId: String,
-    requestIdentity: String,
-    cachePolicy: NextcloudApiCachePolicy,
-    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
-    loadCached: () -> NextcloudApiResponse?,
-    invalidateCached: () -> Unit,
-    executeNetwork: suspend () -> NextcloudApiResponse,
-    commit: (NextcloudApiResponse) -> Unit,
-): NextcloudApiResponse {
-    when (cachePolicy) {
-        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
-        NextcloudApiCachePolicy.RefreshNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity) {}
-        NextcloudApiCachePolicy.ForceNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
-    }
-    return coalescer.execute(
-        accountId = accountId,
-        requestIdentity = requestIdentity,
-        load = {
-            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
-                executeNetwork()
-            } else {
-                loadCached() ?: executeNetwork()
-            }
-        },
-        commit = commit,
-    )
-}
-
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
@@ -447,6 +410,7 @@ internal class AndroidNextcloudServices(
     )
     private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext, localUploadPicker)
+    private val textEditorDrafts = AndroidTextEditorDrafts(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -944,6 +908,9 @@ internal class AndroidNextcloudServices(
 
     override suspend fun removeAccount(accountId: NextcloudAccountId) = accountCredentials.removeAccount(accountId)
 
+    override fun textEditorDraftStore(session: NextcloudSession, path: String): TextEditorDraftStore =
+        textEditorDrafts.bind(session, path, accountCredentials)
+
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
@@ -1311,7 +1278,7 @@ internal class AndroidNextcloudServices(
                 appsAuthoritative = navigation != null,
                 recognizeBridge = discoverRecognizeBridge(capabilities.toString()),
                 fileSharing = parseNextcloudFileSharingCapabilities(capabilities.toString()),
-            )
+            ).also { fileOfflineRepository.recoverPendingWork(session, it.userId) }
         }
     override suspend fun listFiles(
         session: NextcloudSession,
@@ -1439,7 +1406,7 @@ internal class AndroidNextcloudServices(
         userId: String,
         files: List<NextcloudFile>,
     ): Map<String, FileOfflineAvailability> = withContext(Dispatchers.IO) {
-        fileOfflineRepository.loadAvailability(session, userId, files)
+        fileOfflineRepository.loadAvailability(session, files)
     }
 
     override suspend fun setFileAvailableOffline(
@@ -1635,7 +1602,7 @@ internal class AndroidNextcloudServices(
         val freed = (before - after).coerceAtLeast(0L)
         VirtualFileStorageActionResult.Completed(
             message = if (freed > 0L) {
-                "Freed ${formatVirtualFileBytes(freed)} of disposable virtual file content."
+                "Freed ${formatByteSize(freed)} of disposable virtual file content."
             } else {
                 "No disposable virtual file content could be freed. Pinned and active files were kept."
             },
@@ -2762,7 +2729,7 @@ internal class AndroidNextcloudServices(
                     maxResponseBytes = 64 * 1024,
                     accountMutationSerialized = accountMutationSerialized,
                 )
-                if (response.status !in 200..299) throw fileOperationException(response.status)
+                if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
                 val accountId = NextcloudDocumentIds.accountKey(currentSession)
                 runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
                 spec.destinationPath?.let { destination ->
@@ -2785,12 +2752,6 @@ internal class AndroidNextcloudServices(
             )
         }
         val accountId = NextcloudDocumentIds.cacheAccountId(session)
-        val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
-        if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
-            dynamicApiRequestCoalescer.invalidateAccount(accountId) {
-                runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
-            }
-        }
         suspend fun executeNetworkRequest(): NextcloudApiResponse {
             var responseBodyMayHaveStarted = false
             val response = try {
@@ -2802,7 +2763,9 @@ internal class AndroidNextcloudServices(
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = noRedirectHttpClient,
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                        recordRequestDiagnostic(session, it)
+                    },
                     onFailurePhase = { phase ->
                         responseBodyMayHaveStarted = phase == JvmNetworkFailurePhase.ResponseBody
                     },
@@ -2812,57 +2775,24 @@ internal class AndroidNextcloudServices(
                 if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) throw failure
                 throw NextcloudApiReadFailure(responseBodyMayHaveStarted, failure)
             }
-            return NextcloudApiResponse(
-                response.status,
-                response.body,
-                response.contentType,
-                response.etag,
-                response.location,
-            )
+            if (response.status == 401) sharedJvmAuthenticatedAppReadSessions.invalidate(session)
+            return NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
         }
-        if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) {
-            return@withContext try {
-                executeNetworkRequest()
-            } finally {
-                dynamicApiRequestCoalescer.invalidateAccount(accountId) {
-                    runCatching { dynamicApiReadCache.invalidateAccount(accountId) }
-                }
-            }
-        }
-        executeAndroidDynamicApiGet(
-            accountId = accountId,
-            requestIdentity = cacheIdentity,
-            cachePolicy = safeRequest.cachePolicy,
-            coalescer = dynamicApiRequestCoalescer,
-            loadCached = {
-                dynamicApiReadCache.load(accountId, cacheIdentity, safeRequest.maximumResponseBytes)
-                    ?.let { cached ->
-                        NextcloudApiResponse(cached.status, cached.body, cached.contentType, cached.etag)
-                    }
-            },
-            invalidateCached = {
-                runCatching { dynamicApiReadCache.invalidate(accountId, cacheIdentity) }
-            },
-            executeNetwork = ::executeNetworkRequest,
-            commit = { result ->
-                if (
-                    result.status in 200..299 &&
-                    result.contentType?.contains("json", ignoreCase = true) == true
-                ) {
-                    runCatching {
-                        dynamicApiReadCache.store(
-                            accountId,
-                            cacheIdentity,
-                            CachedDynamicApiResponse(
-                                result.status,
-                                result.body,
-                                result.contentType,
-                                result.etag,
-                            ),
-                        )
-                    }
+        executeJvmDynamicApiRequest(
+            accountId, safeRequest, dynamicApiRequestCoalescer,
+            loadCached = { identity, maximumBytes ->
+                dynamicApiReadCache.load(accountId, identity, maximumBytes)?.let {
+                    NextcloudApiResponse(it.status, it.body, it.contentType, it.etag)
                 }
             },
+            invalidateCached = { dynamicApiReadCache.invalidate(accountId, it) },
+            invalidateAccountCache = { dynamicApiReadCache.invalidateAccount(accountId) },
+            storeCached = { identity, result ->
+                dynamicApiReadCache.store(accountId, identity, CachedDynamicApiResponse(
+                    result.status, result.body, result.contentType, result.etag,
+                ))
+            },
+            executeNetworkRequest = ::executeNetworkRequest,
         )
     }
 
@@ -3230,7 +3160,7 @@ internal class AndroidNextcloudServices(
                 session = session,
                 ocsRequest = true,
             )
-            check(response.status in 200..299) { "Loading people from Memories failed (HTTP ${response.status})." }
+            dev.obiente.nextcloudnative.app.requireMemoriesPeopleListSuccess(backend, response.status, response.text)
             val data = JSONArray(response.text)
             buildList {
                 for (index in 0 until data.length()) {
@@ -3500,7 +3430,7 @@ internal class AndroidNextcloudServices(
         }
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
-        check(appContext.isAllowedTestRequest(method, url)) {
+        check(appContext.isAllowedTestRequest(method, url, headers.entries.singleOrNull { it.key.equals("Destination", ignoreCase = true) }?.value)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         val requestBody = when {

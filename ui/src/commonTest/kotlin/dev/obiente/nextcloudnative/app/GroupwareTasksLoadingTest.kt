@@ -9,6 +9,18 @@ import kotlin.test.assertTrue
 
 class GroupwareTasksLoadingTest {
     @Test
+    fun `all failed calendar reads retain failure identities instead of successful emptiness`() = runBlocking<Unit> {
+        val calendars = listOf(
+            GroupwareCalendar("/remote.php/dav/calendars/synthetic/a/", "Same name"),
+            GroupwareCalendar("/remote.php/dav/calendars/synthetic/b/", "Same name"),
+        )
+        val loaded = loadGroupwareTaskCalendars(calendars) { NextcloudApiResponse(500, byteArrayOf(), null, null) }
+        assertEquals(calendars.map { it.href }.toSet(), loaded.failedCalendarHrefs)
+        assertTrue(loaded.completedCalendarHrefs.isEmpty())
+        assertFailsWith<IllegalStateException> { groupwareTasksRefreshedState(calendars, loaded, null) }
+    }
+
+    @Test
     fun `task calendars load object data through bounded multiget batches`() = runBlocking {
         val calendarHref = "/remote.php/dav/calendars/person/tasks/"
         val hrefs = (1..25).map { index -> "$calendarHref$index.ics" }

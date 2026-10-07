@@ -62,12 +62,9 @@ internal fun GenericMailMessageDetail(
     onActionSucceeded: ((ActionSpec) -> Unit)?,
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
-    val structured = remember(resource, record) { nativeStructuredDetail(resource, record) }
     val threadMessages = remember(resource, record) { nativeMailThreadPresentations(resource, record) }
-    val attachments = structured.sections.filter { section ->
-        section.fieldId.lowercase().filter(Char::isLetterOrDigit) in setOf("attachments", "inlineattachments")
-    }
-    val attachmentItems = remember(attachments) { attachments.flatMap { section -> section.value.mailAttachments() } }
+    val attachments = remember(record) { nativeMailAttachments(record) }
+    val attachmentItems = attachments.items
     val htmlBody = remember(message.body, message.htmlBody) {
         message.body?.takeIf { value -> message.htmlBody || value.contains('<') && value.contains('>') }
             ?.let(::sanitizeNativeMailHtml)
@@ -260,7 +257,7 @@ internal fun GenericMailMessageDetail(
                     Icon(NextcloudIcons.File, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(attachment.name, style = MaterialTheme.typography.titleSmall)
-                        listOfNotNull(attachment.mime, attachment.size).joinToString(" · ")
+                        listOfNotNull(attachment.mime, attachment.size).joinToString(" | ")
                             .takeIf(String::isNotBlank)?.let { metadata ->
                                 Text(
                                     metadata,
@@ -272,8 +269,16 @@ internal fun GenericMailMessageDetail(
                 }
             }
         }
-        if (attachmentItems.isEmpty()) {
-            attachments.forEach { section -> GenericStructuredDetailSection(section) }
+        if (attachments.incomplete) {
+            Text("The attachment list is incomplete.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (attachmentItems.isNotEmpty()) {
+            Text("Attachment previews are not available here.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (message.attachmentCount > 0) {
+            Text("Attachment details could not be loaded.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     pendingDestructiveAction?.let { plan ->
@@ -360,39 +365,6 @@ private fun GenericMailThreadMessage(message: NativeMailMessageDetailPresentatio
             }
         }
     }
-}
-
-private data class NativeMailAttachment(val name: String, val mime: String?, val size: String?)
-
-private fun NativeStructuredValue.mailAttachments(): List<NativeMailAttachment> = when (this) {
-    is NativeStructuredValue.ListValue -> items.flatMap(NativeStructuredValue::mailAttachments)
-    is NativeStructuredValue.ObjectValue -> {
-        val values = entries.associate { entry ->
-            entry.key.lowercase().filter(Char::isLetterOrDigit) to entry.value.scalarText()
-        }
-        val name = listOf("filename", "name", "title").firstNotNullOfOrNull(values::get)
-        if (name.isNullOrBlank()) emptyList() else listOf(
-            NativeMailAttachment(
-                name = name,
-                mime = listOf("mime", "mimetype", "contenttype").firstNotNullOfOrNull(values::get),
-                size = listOf("size", "filesize", "bytes").firstNotNullOfOrNull(values::get)
-                    ?.toLongOrNull()
-                    ?.formatNativeByteSize(),
-            ),
-        )
-    }
-    is NativeStructuredValue.Scalar -> emptyList()
-}
-
-private fun NativeStructuredValue.scalarText(): String? = when (this) {
-    is NativeStructuredValue.Scalar -> value
-    else -> null
-}
-
-private fun Long.formatNativeByteSize(): String = when {
-    this >= 1_048_576 -> "${(this / 104_857.6).toLong() / 10.0} MB"
-    this >= 1_024 -> "${(this / 102.4).toLong() / 10.0} KB"
-    else -> "$this B"
 }
 
 /** Converts untrusted mail HTML into readable inert text without executing or embedding it. */

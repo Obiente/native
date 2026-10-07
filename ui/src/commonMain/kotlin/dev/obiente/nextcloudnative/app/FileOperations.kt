@@ -52,12 +52,17 @@ data class FileWebDavMutationSpec(
 )
 
 /**
- * Nextcloud evaluates collection entity tags through WebDAV's `If` header. Ordinary resources use
+ * Collection entity tags require WebDAV's `If` syntax. Servers may reject collection preconditions;
+ * they must never be silently omitted. Ordinary resources use
  * HTTP `If-Match`. Keeping this distinction in the common planner prevents Android and desktop
  * transports from silently diverging.
  */
 fun FileWebDavMutationSpec.conflictConditionHeaders(): Map<String, String> =
-    if (sourceIsDirectory) mapOf("If" to "($expectedEtag)")
+    if (sourceIsDirectory) {
+        val etag = requireSafeFileRangeEtag(expectedEtag)
+        require('[' !in etag && ']' !in etag) { "The folder ETag cannot be represented safely." }
+        mapOf("If" to "([$etag])")
+    }
     else mapOf("If-Match" to expectedEtag)
 
 data class NextcloudFileMutationResult(
@@ -116,7 +121,7 @@ fun NextcloudFileMutation.toWebDavMutationSpec(): FileWebDavMutationSpec {
     )
 }
 
-fun fileOperationException(status: Int): NextcloudFileOperationException {
+fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): NextcloudFileOperationException {
     val error = when (status) {
         401 -> NextcloudFileOperationError.AuthenticationRequired
         403 -> NextcloudFileOperationError.PermissionDenied
@@ -130,7 +135,10 @@ fun fileOperationException(status: Int): NextcloudFileOperationException {
         NextcloudFileOperationError.AuthenticationRequired -> "Sign in again before changing this file."
         NextcloudFileOperationError.PermissionDenied -> "You do not have permission to change this file."
         NextcloudFileOperationError.NotFound -> "The file no longer exists on the server."
-        NextcloudFileOperationError.Conflict -> "The file or destination changed. Refresh and try again."
+        NextcloudFileOperationError.Conflict -> if (sourceIsDirectory && status == 412) {
+            "The server could not verify the folder version. This operation did not change the folder. " +
+                "Refresh once; if this continues, use Nextcloud to change the folder."
+        } else "The file or destination changed. Refresh and try again."
         NextcloudFileOperationError.Locked -> "The file is locked by another operation."
         NextcloudFileOperationError.InsufficientStorage -> "The server does not have enough free storage."
         NextcloudFileOperationError.ServerFailure -> "The file operation failed (HTTP $status)."
@@ -263,7 +271,7 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
         FileShareTarget.Group,
         FileShareTarget.Email,
         FileShareTarget.Remote,
-        -> require(recipient != null) { "A share recipient is required." }
+        -> require(recipient != null) { "Choose a recipient from the search results." }
     }
     require(recipient == null || recipient.length <= MAX_FILE_SHARE_RECIPIENT_LENGTH &&
         recipient.none(Char::isISOControl)

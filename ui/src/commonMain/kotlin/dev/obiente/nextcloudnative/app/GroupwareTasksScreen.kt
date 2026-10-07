@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -44,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -207,37 +205,7 @@ fun NativeGroupwareTasksScreen(
                 val loaded = loadGroupwareTaskCalendars(calendars) { request ->
                     services.executeGroupwareDav(session, request)
                 }
-                val tasks = loaded.tasks.sortedWith(compareBy<GroupwareTask> { it.completed }.thenBy {
-                    it.due ?: "99999999"
-                }.thenBy {
-                    it.title.lowercase()
-                })
-                val partialFailureMessage = buildList {
-                    loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
-                        add(
-                            "Some task lists could not be refreshed: ${names.joinToString()}. " +
-                                "Other task lists remain available.",
-                        )
-                    }
-                    if (loaded.concurrentlyDeletedObjectCount > 0) {
-                        add(
-                            "${loaded.concurrentlyDeletedObjectCount} task object changed during refresh; " +
-                                "the remaining tasks are current.",
-                        )
-                    }
-                    if (loaded.omittedObjectCount > 0) {
-                        add(
-                            "${loaded.omittedObjectCount} task objects were not retained because this refresh " +
-                                "reached the safe in-memory task-data budget.",
-                        )
-                    }
-                }.joinToString(" ").takeIf(String::isNotEmpty)
-                TasksLoadState.Ready(
-                    calendars = calendars,
-                    tasks = tasks,
-                    completedCalendarHrefs = loaded.completedCalendarHrefs,
-                    partialFailureMessage = partialFailureMessage,
-                )
+                groupwareTasksRefreshedState(calendars, loaded, retained)
             }.onSuccess { loaded ->
                 state = loaded
                 refreshError = loaded.partialFailureMessage
@@ -260,7 +228,10 @@ fun NativeGroupwareTasksScreen(
                 }
             }.onFailure { failure ->
                 val message = failure.message ?: "Could not load tasks."
-                if (retained == null) state = TasksLoadState.Error(message) else refreshError = message
+                if (retained == null) state = TasksLoadState.Error(message) else {
+                    state = retained.copy(completedCalendarHrefs = emptySet(), partialFailureMessage = message)
+                    refreshError = message
+                }
             }
             refreshing = false
         }
@@ -289,7 +260,7 @@ fun NativeGroupwareTasksScreen(
         }
     }
     val selectedTaskWritable = selectedTask?.let { task ->
-        ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
+        ready?.canWrite(task.calendarHref) == true
     } == true
     val selectedTaskDeleteSafe = selectedTask?.let(::isGroupwareTaskObjectDeleteSafe) == true
     LaunchedEffect(selectedTask?.instanceId, selectedTaskWritable) {
@@ -314,7 +285,7 @@ fun NativeGroupwareTasksScreen(
                 title = {
                     Column {
                         Text("Tasks", fontWeight = FontWeight.SemiBold)
-                        ready?.let { Text("${it.tasks.count { task -> !task.completed }} open") }
+                        ready?.let { Text(it.countSummary) }
                     }
                 },
                 navigationIcon = {
@@ -328,7 +299,7 @@ fun NativeGroupwareTasksScreen(
                     }
                     IconButton(
                         onClick = { if (!interactionBlocked) creating = true },
-                        enabled = !interactionBlocked && ready?.calendars?.any(GroupwareCalendar::writable) == true,
+                        enabled = !interactionBlocked && ready?.calendars?.any { ready.canWrite(it.href) } == true,
                     ) {
                         Icon(NextcloudIcons.Add, contentDescription = "Create task")
                     }
@@ -403,16 +374,14 @@ fun NativeGroupwareTasksScreen(
                 TasksLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                is TasksLoadState.Error -> TasksError(current.message) { if (!operations.busy) loadAttempt += 1 }
+                is TasksLoadState.Error -> WorkspaceLoadError(current.message) { if (!operations.busy) loadAttempt += 1 }
                 is TasksLoadState.Ready -> LazyColumn(
                     contentPadding = PaddingValues(NextcloudSpacing.Large),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     items(visibleTasks, key = GroupwareTask::instanceId) { task ->
                         var menuExpanded by remember(task.instanceId) { mutableStateOf(false) }
-                        val taskWritable = current.calendars.any { calendar ->
-                            calendar.href == task.calendarHref && calendar.writable
-                        }
+                        val taskWritable = current.canWrite(task.calendarHref)
                         val taskDeleteSafe = isGroupwareTaskObjectDeleteSafe(task)
                         Card(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -478,7 +447,7 @@ fun NativeGroupwareTasksScreen(
                         }
                     }
                     if (visibleTasks.isEmpty()) item {
-                        Text("No tasks match this view.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(current.emptyMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -503,7 +472,7 @@ fun NativeGroupwareTasksScreen(
             calendars = if (editing) {
                 ready.calendars.filter { calendar -> calendar.href == selectedTask?.calendarHref }
             } else {
-                ready.calendars.filter(GroupwareCalendar::writable)
+                ready.calendars.filter { ready.canWrite(it.href) }
             },
             mutationInProgress = interactionBlocked,
             error = mutationError,
@@ -514,7 +483,7 @@ fun NativeGroupwareTasksScreen(
             },
             onSave = save@{ draft, calendar, editStartEtag ->
                 mutationError = null
-                if (!calendar.writable) {
+                if (!ready.canWrite(calendar.href)) {
                     mutationError = "This task list is read-only."
                     return@save
                 }
@@ -596,7 +565,7 @@ fun NativeGroupwareTasksScreen(
 
     deleting?.takeIf { task ->
         selectedTaskDeleteSafe &&
-            ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
+            ready?.canWrite(task.calendarHref) == true
     }?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!interactionBlocked) deleting = null },
@@ -692,19 +661,6 @@ internal fun boundedGroupwareTaskQuery(value: String): String =
     value.take(MAX_GROUPWARE_TASK_QUERY_LENGTH)
 
 internal const val MAX_GROUPWARE_TASK_QUERY_LENGTH = 256
-
-@Composable
-private fun TasksError(message: String, retry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = retry) { Text("Try again") }
-    }
-}
 
 internal fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
     "${substring(6, 8)}-${substring(4, 6)}-${take(4)}"

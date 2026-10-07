@@ -91,8 +91,6 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
     private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
-    private val loadCapabilityState = store::loadAndReconcileUploadCleanups
-    init { startAndroidFileSyncCapabilityRecovery(appContext, reconciliationScope, loadCapabilityState, capabilities) }
 
     suspend fun loadCenter(
         session: NextcloudSession,

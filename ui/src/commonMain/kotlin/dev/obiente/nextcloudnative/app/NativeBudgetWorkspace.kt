@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -130,14 +129,9 @@ internal fun buildNativeBudgetDashboardModel(
         .firstSemanticText("basecurrency", "defaultcurrency", "currency", "currencycode")
         ?.uppercase()
         ?.takeIf { it.length in 3..4 && it.all(Char::isLetter) }
-    val accountBalanceFallback = accountRecords
-        .takeIf { accountCurrencies.size <= 1 }
-        ?.mapNotNull { it.semanticNumber("balance", "currentbalance", "value") }
-        ?.takeIf(List<Double>::isNotEmpty)
-        ?.sum()
     val netWorth = accountSummary.firstSemanticNumber(
         "networth", "totalnetworth", "totalbalance", "balance",
-    ) ?: reportSummary.firstSemanticNumber("networth", "totalnetworth", "currentbalance") ?: accountBalanceFallback
+    ) ?: reportSummary.firstSemanticNumber("networth", "totalnetworth", "currentbalance")
     val income = reportSummary.firstSemanticNumber(
         "income", "totalincome", "monthlyincome", "incomethismonth",
     ) ?: records(NativeBudgetDashboardDataKind.IncomeSummary).firstSemanticNumber(
@@ -291,15 +285,17 @@ internal fun NativeBudgetDashboard(
                 NativeBudgetBillsCard(model, onOpenSection)
             }
         }
-        item("cash-flow") {
-            NativeBudgetCashFlowCard(model, "transactions" in availableSectionIds, onOpenSection)
+        if (model.trends.size >= 2 || model.income != null || model.expenses != null) {
+            item("cash-flow") {
+                NativeBudgetCashFlowCard(model, "transactions" in availableSectionIds, onOpenSection)
+            }
         }
         item("planning") {
             NativeBudgetPlanningRow(model, availableSectionIds, onOpenSection)
         }
         if (dashboardErrorsByActionId.isNotEmpty()) {
             item("partial-errors") {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -308,7 +304,7 @@ internal fun NativeBudgetDashboard(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Some dashboard data could not be loaded", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "${dashboardErrorsByActionId.size} section(s) may be incomplete.",
+                                "Some totals may be missing. Your loaded records are still available.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -395,7 +391,7 @@ private fun NativeBudgetDashboardLoading(modifier: Modifier) {
         CircularProgressIndicator()
         Text("Loading your finance overview", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Summary sections appear as soon as each verified Budget read completes.",
+            "Your accounts and recent activity will appear here.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -425,8 +421,8 @@ private fun NativeBudgetCashFlowCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            NativeBudgetComparisonBar("Income", income ?: 0.0, maximum, model.currency, Color(0xFF3F8F50))
-            NativeBudgetComparisonBar("Expenses", expenses ?: 0.0, maximum, model.currency, MaterialTheme.colorScheme.error)
+            income?.let { NativeBudgetComparisonBar("Income", it, maximum, model.currency, Color(0xFF3F8F50)) }
+            expenses?.let { NativeBudgetComparisonBar("Expenses", it, maximum, model.currency, MaterialTheme.colorScheme.error) }
         }
     }
 }
@@ -576,7 +572,7 @@ private fun NativeBudgetPlanningRow(
                     "alerts".takeIf { it in availableSectionIds }, onOpenSection,
                 )
             }
-            if (model.upcomingBills.isEmpty()) {
+            if (model.upcomingBills.isEmpty() && model.billCount != null) {
                 NativeBudgetStatusCard(
                     width, "Upcoming bills", model.billCount?.let { "$it scheduled" } ?: "No summary available",
                     "bills".takeIf { it in availableSectionIds }, onOpenSection,
@@ -591,7 +587,7 @@ private fun NativeBudgetPlanningRow(
                     model.debtTotal?.let { "Debt ${formatNativeBudgetMoney(it, model.currency)}" },
                     model.assetTotal?.takeIf { abs(it) >= 0.005 }
                         ?.let { "Assets ${formatNativeBudgetMoney(it, model.currency)}" },
-                ).joinToString(" · ").ifBlank { "Goals, debt and forecast" },
+                ).joinToString(" - ").ifBlank { "Goals, debt and forecast" },
                 planningDestination, onOpenSection,
             )
         }

@@ -36,12 +36,12 @@ esac
 [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
 [[ "$apk_name" == "nextcloud-native-${version}-android.apk" ]]
 [[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
-jq -en \
+release_jq -en \
   --argjson apk_size "$apk_size" \
   --argjson maximum "$max_android_apk_bytes" \
   '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
 [[ "$apk_sha256" =~ ^[a-f0-9]{64}$ ]]
-jq -e '
+release_jq -e '
   type == "array" and
   length >= 1 and
   length <= 8 and
@@ -49,7 +49,7 @@ jq -e '
   all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
 ' <<<"$signer_digests_json" >/dev/null
 mkdir -p "$(dirname "$output")"
-jq -n \
+release_jq -n \
   --argjson schemaVersion 1 \
   --arg channel "$channel" \
   --arg versionName "$version" \

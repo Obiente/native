@@ -1046,7 +1046,7 @@ private fun DeckUiCommentItem(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
-            Markdown(content = comment.messageMarkdown)
+            Markdown(typography = nativeMarkdownTypography(), content = comment.messageMarkdown)
         }
     }
 }

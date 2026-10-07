@@ -1022,7 +1022,7 @@ class SignedAppStoreContractAcquirerTest {
         val trackParameters = paths.getJSONObject("/apps/music/api/tracks").getJSONObject("get")
             .getJSONArray("parameters")
         assertEquals(
-            listOf("artist", "album", "page_size", "page", "OCS-APIRequest"),
+            listOf("artist", "album", "fulltree", "page_size", "page", "OCS-APIRequest"),
             buildList {
                 repeat(trackParameters.length()) { index -> add(trackParameters.getJSONObject(index).getString("name")) }
             },

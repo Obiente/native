@@ -263,7 +263,7 @@ export async function verifyCaptureFreshness(manifest) {
         repositoryRoot,
         "ui",
         "src",
-        "desktopMain",
+        "desktopTest",
         "resources",
         "marketing",
         "obiente-avatar.png",

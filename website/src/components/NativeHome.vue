@@ -42,11 +42,11 @@ async function onAppTabKeydown(event) {
     <section id="product" class="native-hero section-width" aria-labelledby="home-title">
       <div class="native-hero-copy">
         <p class="native-eyebrow">Independent. Open source.</p>
-        <h1 id="home-title">Your cloud,<br /><span>natively.</span></h1>
-        <p class="native-lede">A native workspace for your Nextcloud.</p>
+        <h1 id="home-title">One app for<br /><span>your whole Nextcloud.</span></h1>
+        <p class="native-lede">Built to bring your entire Nextcloud account and all its apps to your phone and computer.</p>
         <div class="native-hero-actions">
-          <button class="native-button" type="button" @click="$emit('download')">Explore the alpha</button>
-          <a class="native-text-link" href="#apps">Explore the app <ArrowRight :size="20" aria-hidden="true" /></a>
+          <button class="native-button" type="button" @click="$emit('download')">Download the alpha</button>
+          <a class="native-text-link" href="#apps">See what it does <ArrowRight :size="20" aria-hidden="true" /></a>
         </div>
         <p class="native-alpha">Alpha for Android, Linux and Windows</p>
       </div>
@@ -72,8 +72,8 @@ async function onAppTabKeydown(event) {
 
     <section id="apps" class="native-apps section-width" aria-labelledby="apps-title">
       <div class="native-apps-copy">
-        <h2 id="apps-title">Every app keeps<br />what makes it useful.</h2>
-        <p class="native-app-intro">Find a file, revisit a photo, pick up a conversation, or plan your next project. Your Nextcloud apps, together in a workspace that feels at home on your device.</p>
+        <h2 id="apps-title">Files, photos, chats<br />and calendars.</h2>
+        <p class="native-app-intro">Open a document, browse an album, read a Talk conversation or check an event in the same app. Available features depend on the apps installed on your server; support varies by app and platform.</p>
         <div class="native-app-tabs" role="tablist" aria-label="Explore Nextcloud apps" @keydown="onAppTabKeydown">
           <button v-for="(family, index) in appFamilies" :id="`app-tab-${index}`" :key="family.title"
             type="button" role="tab" :aria-selected="activeAppFamily === index" aria-controls="app-preview"
@@ -82,7 +82,7 @@ async function onAppTabKeydown(event) {
           </button>
         </div>
         <p class="native-app-description">{{ selectedAppFamily.body }}</p>
-        <a class="native-text-link" href="/compatibility/">See all apps <ArrowRight :size="18" aria-hidden="true" /></a>
+        <a class="native-text-link" href="/compatibility/">Check app support <ArrowRight :size="18" aria-hidden="true" /></a>
       </div>
       <figure id="app-preview" class="native-app-preview" role="tabpanel" :aria-labelledby="`app-tab-${activeAppFamily}`" tabindex="0">
         <div class="native-app-capture" :style="{ aspectRatio: `${selectedAppCapture.width} / ${selectedAppCapture.height}` }">

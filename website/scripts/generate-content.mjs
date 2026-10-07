@@ -50,7 +50,7 @@ const canonicalObienteAvatar = path.join(
   repositoryRoot,
   "ui",
   "src",
-  "desktopMain",
+  "desktopTest",
   "resources",
   "marketing",
   "obiente-avatar.png",
@@ -119,7 +119,7 @@ const sources = [
     title: "Platform architecture",
     shortTitle: "Platforms",
     description:
-      "How Android, iOS, Windows, macOS and Linux share domain rules while keeping native system integrations.",
+      "How Android, Linux, Windows and macOS share domain rules while keeping native system integrations, and how iOS would fit later.",
   },
   {
     file: "docs/shared-ui-controls.md",

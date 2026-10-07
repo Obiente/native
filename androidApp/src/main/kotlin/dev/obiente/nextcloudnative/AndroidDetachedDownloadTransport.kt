@@ -1,11 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
-import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRequestPolicy
 import dev.obiente.nextcloudnative.app.NextcloudSession
-import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
-import dev.obiente.nextcloudnative.app.executeCancellableNextcloudAuthenticatedRequest
-import dev.obiente.nextcloudnative.app.isFullDetachedFileResponse
+import dev.obiente.nextcloudnative.app.downloadJvmDetachedFile
 import java.io.FileOutputStream
 import okhttp3.OkHttpClient
 
@@ -24,38 +21,21 @@ internal suspend fun downloadAndroidDetachedFile(
     validateResponseEtag: (String?) -> Unit = {},
     onNetworkFailure: (Long, JvmNetworkRequestAttempt, Throwable) -> Unit,
 ): AndroidDetachedDownload {
-    require(maximumBytes > 0L)
-    val started = System.nanoTime()
-    val attempt = JvmNetworkRequestAttempt()
-    val request = NextcloudAuthenticatedRequestPolicy(session, userAgent)
-        .requestBuilder(url)
-        .get()
-        .tag(JvmNetworkRequestAttempt::class.java, attempt)
-        .header("Accept", accept)
-        .apply { requestHeaders.forEach { (name, value) -> header(name, value) } }
-        .build()
-    return executeCancellableNextcloudAuthenticatedRequest(
+    val result = downloadJvmDetachedFile(
         client = client,
-        initialRequest = request,
-        onNetworkFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-    ) { response, shouldContinue ->
-        check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
-        val body = response.body
-        val contentLength = body.contentLength()
-        check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
-        val copied = body.byteStream().copyBoundedNetworkResponseTo(
-            output = output,
-            maxBytes = maximumBytes,
-            onLimitExceeded = { error(limitMessage) },
-            onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-            shouldContinue = shouldContinue,
-        )
-        val responseEtag = response.header("ETag") ?: response.header("OC-Etag")
-        validateResponseEtag(responseEtag)
-        AndroidDetachedDownload(
-            byteCount = copied,
-            mimeType = body.contentType()?.toString(),
-            etag = handoffEtag ?: responseEtag,
-        )
-    }
+        session = session,
+        url = url,
+        output = output,
+        maximumBytes = maximumBytes,
+        userAgent = userAgent,
+        failureMessage = failureMessage,
+        limitMessage = limitMessage,
+        accept = accept,
+        requestHeaders = requestHeaders,
+        handoffEtag = handoffEtag,
+        validateResponseEtag = validateResponseEtag,
+        acceptOcEtag = true,
+        onNetworkFailure = onNetworkFailure,
+    )
+    return AndroidDetachedDownload(result.byteCount, result.mimeType, result.etag)
 }

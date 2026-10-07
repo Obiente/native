@@ -17,14 +17,14 @@ internal fun Context.cloudMutationGate(): () -> Boolean = {
     !isReadOnlyTestMode()
 }
 
-internal fun Context.isAllowedTestRequest(method: String, url: String): Boolean {
+internal fun Context.isAllowedTestRequest(method: String, url: String, destination: String? = null): Boolean {
     if (!isReadOnlyTestMode() || method.isReadOnlyTestRequestMethod()) return true
     if (!BuildConfig.DEBUG) return false
     val preferences = getSharedPreferences(TEST_PREFERENCES_NAME, Context.MODE_PRIVATE)
     val serverUrl = preferences.getString(KEY_TEST_WRITE_SCOPE_SERVER, null) ?: return false
     val apiPathPrefix = preferences.getString(KEY_TEST_WRITE_SCOPE_PATH, null) ?: return false
     return ScopedTestWriteAuthorization.create(serverUrl, apiPathPrefix)
-        ?.allows(method, url) == true
+        ?.allows(method, url, destination) == true
 }
 
 internal class ScopedTestWriteAuthorization private constructor(
@@ -32,10 +32,21 @@ internal class ScopedTestWriteAuthorization private constructor(
     private val host: String,
     private val port: Int,
     private val absolutePathPrefix: String,
-    private val allowExactTarget: Boolean,
+    private val scopeKind: ScopedTestPathKind,
 ) {
-    fun allows(method: String, url: String): Boolean {
-        if (method.uppercase(Locale.ROOT) !in SCOPED_TEST_MUTATION_METHODS) return false
+    fun allows(method: String, url: String, destination: String? = null): Boolean {
+        val normalizedMethod = method.uppercase(Locale.ROOT)
+        val allowedMethods = if (scopeKind == ScopedTestPathKind.FilesFolder) {
+            SCOPED_TEST_FILES_MUTATION_METHODS
+        } else {
+            SCOPED_TEST_MUTATION_METHODS
+        }
+        if (normalizedMethod !in allowedMethods || !containsTarget(url)) return false
+        return normalizedMethod !in setOf("MOVE", "COPY") ||
+            (destination != null && containsTarget(destination))
+    }
+
+    private fun containsTarget(url: String): Boolean {
         val target = runCatching { URI(url) }.getOrNull() ?: return false
         if (
             target.scheme?.lowercase(Locale.ROOT) != scheme ||
@@ -47,9 +58,21 @@ internal class ScopedTestWriteAuthorization private constructor(
             return false
         }
         val path = target.rawPath ?: return false
-        if (path.contains('%') || path.contains('\\') || path.contains("//")) return false
-        return (allowExactTarget && path == absolutePathPrefix) ||
-            path.startsWith("$absolutePathPrefix/")
+        val checkedPath = if (scopeKind == ScopedTestPathKind.FilesFolder) {
+            if (target.rawQuery != null) return false
+            path.replace("%20", " ")
+        } else {
+            path
+        }
+        if (checkedPath.contains('%') || checkedPath.contains('\\') || checkedPath.contains("//")) return false
+        if (checkedPath.split('/').any { it == "." || it == ".." }) return false
+        if (scopeKind == ScopedTestPathKind.FilesFolder &&
+            !checkedPath.split('/').filter(String::isNotEmpty).all { segment ->
+                segment.all { it.isLetterOrDigit() || it in " ._~-" }
+            }
+        ) return false
+        return (scopeKind == ScopedTestPathKind.AppApi && path == absolutePathPrefix) ||
+            (path.startsWith("$absolutePathPrefix/") && path.removePrefix("$absolutePathPrefix/").isNotEmpty())
     }
 
     companion object {
@@ -75,7 +98,7 @@ internal class ScopedTestWriteAuthorization private constructor(
                 host = host,
                 port = server.effectivePort(),
                 absolutePathPrefix = "$serverPath$normalizedPathPrefix",
-                allowExactTarget = scopeKind == ScopedTestPathKind.AppApi,
+                scopeKind = scopeKind,
             )
         }
     }
@@ -92,6 +115,13 @@ private fun String.safeScopedTestPathKind(): ScopedTestPathKind? {
         return null
     }
     val segments = split('/').filter(String::isNotEmpty)
+    if (segments.size == 5 && segments.take(3) == listOf("remote.php", "dav", "files") &&
+        segments.take(4).all(String::isSafeScopedTestPathSegment) &&
+        segments.last().replace("%20", " ").let { folder ->
+            folder.isNotBlank() && folder !in setOf(".", "..") &&
+                folder.all { it.isLetterOrDigit() || it in " ._~-" }
+        }
+    ) return ScopedTestPathKind.FilesFolder
     if (segments.isSafeScopedTestDavCollection()) {
         return ScopedTestPathKind.DavCollection
     }
@@ -135,6 +165,7 @@ private fun String.isSafeScopedTestPathSegment(): Boolean =
 private enum class ScopedTestPathKind {
     AppApi,
     DavCollection,
+    FilesFolder,
 }
 
 private fun String.isApiVersionSegment(): Boolean =
@@ -159,3 +190,4 @@ private fun URI.effectivePort(): Int = when {
 }
 
 private val SCOPED_TEST_MUTATION_METHODS = setOf("POST", "PUT", "PATCH", "DELETE")
+private val SCOPED_TEST_FILES_MUTATION_METHODS = setOf("PUT", "DELETE", "MKCOL", "MOVE", "COPY")

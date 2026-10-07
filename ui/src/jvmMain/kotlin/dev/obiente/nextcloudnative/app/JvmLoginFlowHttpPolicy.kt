@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.net.URI
+import java.net.URISyntaxException
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -194,7 +195,11 @@ fun normalizeServerUrl(
     transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
 ): String {
     val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
-    val uri = URI(candidate)
+    val uri = try {
+        URI(candidate)
+    } catch (failure: URISyntaxException) {
+        throw IllegalArgumentException("Enter a valid server address, such as https://cloud.example.com.", failure)
+    }
     val scheme = uri.scheme?.lowercase()
     require(
         (scheme == "https" ||

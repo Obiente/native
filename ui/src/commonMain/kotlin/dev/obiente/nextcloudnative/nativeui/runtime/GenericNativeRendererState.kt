@@ -546,7 +546,7 @@ data class NativeFormattedField(
 
 fun formatNativeField(field: FieldSpec, rawValue: String): NativeFormattedField {
     val trimmed = rawValue.trim()
-    val formatted = trimmed.takeIf { field.hasDurationSemantics() }?.formatIsoDuration() ?: when (field.kind) {
+    val formatted = field.formatDeclaredEpochSeconds(trimmed) ?: trimmed.takeIf { field.hasDurationSemantics() }?.formatIsoDuration() ?: when (field.kind) {
         FieldKind.boolean -> when (trimmed.lowercase()) {
             "true", "1", "yes", "on" -> "Yes"
             "false", "0", "no", "off" -> "No"

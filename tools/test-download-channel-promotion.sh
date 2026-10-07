@@ -125,4 +125,22 @@ grep -Fxq old-android "$temporary/release-assets/nextcloud-native-android.apk"
 grep -Fxq old-deb "$temporary/release-assets/nextcloud-native-linux-amd64.deb"
 grep -Fxq old-msi "$temporary/release-assets/nextcloud-native-windows-x86_64.msi"
 
+# A valid Android manifest must not hide a malformed desktop manifest when
+# collecting candidate codes. CR in a JSON string is data, never an integer.
+for invalid in '{"versionCode":"4\r"}' '{"versionCode":-1}' '{invalid'; do
+    printf '%s\n' "$invalid" > "$temporary/assets/desktop-update-manifest.json"
+    : > "$temporary/invalid-uploaded"
+    if PATH="$temporary/bin:$PATH" \
+        FAKE_RELEASE_ASSETS="$temporary/release-assets" \
+        FAKE_FAILURE_MARKER="$temporary/upload-failed" \
+        FAKE_UPLOADED="$temporary/invalid-uploaded" \
+        "$project_root/tools/promote-download-channel.sh" \
+        Obiente/native channel-nightly nightly-20260815-0800-run3-fedcba98 \
+        "$temporary/assets" >/dev/null 2>&1; then
+        printf 'An invalid candidate manifest unexpectedly published.\n' >&2
+        exit 1
+    fi
+    test ! -s "$temporary/invalid-uploaded"
+done
+
 printf 'Nightly download promotion is monotonic, retains missing platforms, and rolls back failed uploads.\n'

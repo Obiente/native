@@ -18,34 +18,21 @@ internal suspend fun downloadDesktopDetachedFile(
     validateResponseEtag: (String?) -> Unit = {},
     onNetworkFailure: (Long, JvmNetworkRequestAttempt, Throwable) -> Unit,
 ): DesktopDetachedDownload {
-    require(maximumBytes > 0L)
-    val started = System.nanoTime()
-    val attempt = JvmNetworkRequestAttempt()
-    val request = NextcloudAuthenticatedRequestPolicy(session, userAgent)
-        .requestBuilder(url)
-        .get()
-        .tag(JvmNetworkRequestAttempt::class.java, attempt)
-        .header("Accept", accept)
-        .apply { requestHeaders.forEach { (name, value) -> header(name, value) } }
-        .build()
-    return executeCancellableNextcloudAuthenticatedRequest(
+    val result = downloadJvmDetachedFile(
         client = client,
-        initialRequest = request,
-        onNetworkFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-    ) { response, shouldContinue ->
-        check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
-        val body = response.body
-        val contentLength = body.contentLength()
-        check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
-        val copied = body.byteStream().copyBoundedNetworkResponseTo(
-            output = output,
-            maxBytes = maximumBytes,
-            onLimitExceeded = { error(limitMessage) },
-            onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-            shouldContinue = shouldContinue,
-        )
-        val responseEtag = response.header("ETag")
-        validateResponseEtag(responseEtag)
-        DesktopDetachedDownload(copied, handoffEtag ?: responseEtag)
-    }
+        session = session,
+        url = url,
+        output = output,
+        maximumBytes = maximumBytes,
+        userAgent = userAgent,
+        failureMessage = failureMessage,
+        limitMessage = limitMessage,
+        accept = accept,
+        requestHeaders = requestHeaders,
+        handoffEtag = handoffEtag,
+        validateResponseEtag = validateResponseEtag,
+        acceptOcEtag = false,
+        onNetworkFailure = onNetworkFailure,
+    )
+    return DesktopDetachedDownload(result.byteCount, result.etag)
 }

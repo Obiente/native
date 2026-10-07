@@ -83,9 +83,18 @@ mapfile -d '' kotlin_files < <(
         -type f -name '*.kt' -print0 2>/dev/null
 )
 
+# Count all files with one wc process; per-file subprocesses are slow on Windows.
+declare -A line_counts=()
+if [[ "${#kotlin_files[@]}" -gt 0 ]]; then
+    while read -r count path; do
+        [[ "$path" == total ]] && continue
+        line_counts["$path"]="$count"
+    done < <(printf '%s\0' "${kotlin_files[@]}" | xargs -0 wc -l)
+fi
+
 for file in "${kotlin_files[@]}"; do
     relative_path="${file#"$project_root/"}"
-    line_count="$(wc -l < "$file")"
+    line_count="${line_counts[$file]}"
     if is_test_source "$relative_path"; then
         default_limit="$test_limit"
     else
@@ -106,15 +115,22 @@ for path in "${!size_baseline[@]}"; do
     fi
 done
 
-while IFS= read -r android_file; do
+# Shared JVM implementations need not use expect/actual filename suffixes.
+# Check same-name files too; compare content exactly so platform-specific imports
+# and implementations remain valid and require semantic review, not regex lint.
+while IFS= read -r -d '' android_file; do
     relative_path="${android_file#"$project_root/ui/src/androidMain/"}"
-    desktop_file="$project_root/ui/src/desktopMain/${relative_path%.android.kt}.desktop.kt"
+    desktop_relative="$relative_path"
+    if [[ "$relative_path" == *.android.kt ]]; then
+        desktop_relative="${relative_path%.android.kt}.desktop.kt"
+    fi
+    desktop_file="$project_root/ui/src/desktopMain/$desktop_relative"
     if [[ -f "$desktop_file" ]] && cmp -s "$android_file" "$desktop_file"; then
         printf 'Move byte-identical platform files to jvmMain: %s and %s\n' \
             "${android_file#"$project_root/"}" "${desktop_file#"$project_root/"}" >&2
         failed=true
     fi
-done < <(find "$project_root/ui/src/androidMain" -type f -name '*.android.kt' 2>/dev/null | sort)
+done < <(find "$project_root/ui/src/androidMain" -type f -name '*.kt' -print0 2>/dev/null)
 
 common_main="$project_root/ui/src/commonMain"
 if [[ -d "$common_main" ]]; then
@@ -127,6 +143,16 @@ if [[ -d "$common_main" ]]; then
         failed=true
     fi
 fi
+
+# JVM libraries consumed by Android also run on ICU, not the desktop regex engine.
+# Numeric quantifiers remain valid; literal brace templates need a deterministic parser.
+for portable_source in "$project_root/ui/src/commonMain" "$project_root/ui/src/jvmMain" "$project_root/contractAcquisition/src/main"; do
+    [[ -d "$portable_source" ]] || continue
+    if search_kotlin_lines '(Regex\(|\.toRegex\().*\\[{}]|\\[{}].*\.toRegex\(' "$portable_source"; then
+        printf 'Parse brace templates without Regex in Android-consumed shared code.\n' >&2
+        failed=true
+    fi
+done
 
 while IFS= read -r generic_file; do
     printf 'Rename generic Kotlin container by its actual owner: %s\n' \

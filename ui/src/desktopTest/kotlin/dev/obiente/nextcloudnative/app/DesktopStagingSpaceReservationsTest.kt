@@ -27,6 +27,27 @@ class DesktopStagingSpaceReservationsTest {
     }
 
     @Test
+    fun `shared desktop reservations and shared JVM staging use one ledger`() {
+        val root = Files.createTempDirectory("nextcloud-stage-shared-ledger-").toFile()
+        try {
+            // An unknown-size claim takes every safe byte, so any other claim on the same
+            // filesystem must fail if both shared entry points account against one ledger.
+            sharedDesktopStagingSpaceReservations.reserve(root, declaredByteCount = null, reserveBytes = 0L).use {
+                assertFailsWith<IllegalStateException> {
+                    sharedJvmStagingSpaceReservations.reserve(
+                        storageKey = jvmStagingStorageKey(root),
+                        usableBytes = root.usableSpace,
+                        declaredByteCount = 1L,
+                        reserveBytes = 0L,
+                    )
+                }
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `concurrent reservations cannot claim the same staging bytes`() {
         val root = Files.createTempDirectory("nextcloud-stage-reservations-").toFile()
         try {

@@ -30,6 +30,12 @@ internal class NativeSceneTestDriver(val scene: ImageComposeScene) {
         repeat(10) { scene.render(System.nanoTime()).close(); delay(16) }
     }
 
+    /** Renders until [condition] holds, for state written after a debounce or background work. */
+    suspend fun settleUntil(timeoutMillis: Long = 2_000L, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+        while (!condition() && System.nanoTime() < deadline) settle()
+    }
+
     fun nodes(): List<SemanticsNode> = buildList {
         fun visit(node: SemanticsNode) {
             add(node)

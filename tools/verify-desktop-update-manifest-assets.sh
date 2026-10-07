@@ -12,7 +12,7 @@ package_version="${8:?Desktop package version is required.}"
 
 source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ -f "$manifest" && -d "$asset_directory" ]]
-jq -e \
+release_jq -e \
     --arg channel "$channel" \
     --arg version "$version" \
     --argjson version_code "$version_code" \
@@ -42,6 +42,6 @@ while IFS=$'\t' read -r url size digest; do
     [[ -f "$asset" ]]
     [[ "$(stat --format='%s' "$asset")" == "$size" ]]
     [[ "$(sha256sum "$asset" | awk '{print $1}')" == "$digest" ]]
-done < <(jq -er '.assets[] | [.url, (.size|tostring), .sha256] | @tsv' "$manifest")
+done < <(release_jq -er '.assets[] | [.url, (.size|tostring), .sha256] | @tsv' "$manifest")
 
 printf 'Desktop update manifest matches immutable release assets.\n'

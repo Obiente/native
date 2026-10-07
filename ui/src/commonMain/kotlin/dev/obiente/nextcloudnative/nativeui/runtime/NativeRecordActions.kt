@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
+import dev.obiente.nextcloudnative.nativeui.model.hasVerifiedChoresCompletionContract
+
 import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
@@ -577,7 +580,7 @@ internal fun nativeChoresRosterMemberRemovalPlan(
     authorityContext: NativeRecordAuthorityContext?,
 ): NativeRecordDeleteActionPlan? {
     if (
-        schema.app.id != "chores" || schema.app.version != "0.1.0" ||
+        !schema.app.isSupportedChoresVersion() ||
         !teamRecord.actionSafeIdentity || !teamRecord.actionBindingProvenanceValid ||
         person.owner || !person.userId.isSafeRecordPathValue()
     ) {
@@ -837,20 +840,9 @@ private fun ActionSpec.verifiedChoresCompletionCommandPlan(
     valueSource: NativeRecordCompletionValueSource,
 ): NativeRecordCommandActionPlan? {
     if (
-        schema.app.id != "chores" || schema.app.version != "0.1.0" ||
+        !schema.app.isSupportedChoresVersion() ||
         resource.id.sameDynamicResourceAs("chores").not() ||
-        binding.method != HttpMethod.POST ||
-        binding.path.substringBefore('?').trimEnd('/') != CHORES_COMPLETION_PATH ||
-        binding.pathParameterNames != listOf("teamId") ||
-        binding.requiredPathParameterNames != listOf("teamId") ||
-        binding.queryParameterNames.isNotEmpty() ||
-        binding.requiredQueryParameterNames.isNotEmpty() ||
-        binding.bodyFieldNames != listOf("work") ||
-        binding.requiredBodyFieldNames != listOf("work") ||
-        binding.bodyContentType?.substringBefore(';')?.trim()?.lowercase() != "application/json" ||
-        binding.allowsObservedBodyFields ||
-        intent != ActionIntent.execute || risk != ActionRisk.mutating ||
-        evidence.none { entry -> entry.source == EvidenceSource.verifiedAppPackage }
+        !hasVerifiedChoresCompletionContract()
     ) {
         return null
     }
@@ -1849,7 +1841,7 @@ private fun NativeAppSchema.auditedParentAuthorityActionIds(
                 action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
         }.mapTo(linkedSetOf(), ActionSpec::id)
 
-    app.id == "chores" && app.version == "0.1.0" &&
+    app.isSupportedChoresVersion() &&
         parentResource.id.sameDynamicResourceAs("team") && actorUserId != null -> buildSet {
         val roster = nativeRosterPresentation(parentRecord)
         if (parentRecord.hasChoresTeamMember(actorUserId)) {

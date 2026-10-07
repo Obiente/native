@@ -364,7 +364,7 @@ private fun TrayActivityRow(activity: DesktopFileSyncTrayActivity, onOpenApp: ()
                 color = activity.phase.contentColor(),
             )
             Text(
-                activity.detail ?: activity.sizeBytes?.let(::formatTrayBytes).orEmpty(),
+                activity.detail ?: activity.sizeBytes?.let(::formatByteSize).orEmpty(),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -441,13 +441,6 @@ private fun DesktopFileSyncTrayActivityPhase.label(): String = when (this) {
     DesktopFileSyncTrayActivityPhase.Conflict -> "Conflict"
     DesktopFileSyncTrayActivityPhase.Failed -> "Failed"
     DesktopFileSyncTrayActivityPhase.Completed -> "Synced"
-}
-
-private fun formatTrayBytes(bytes: Long): String = when {
-    bytes >= 1_073_741_824L -> "%.1f GB".format(bytes / 1_073_741_824.0)
-    bytes >= 1_048_576L -> "%.1f MB".format(bytes / 1_048_576.0)
-    bytes >= 1_024L -> "%.1f KB".format(bytes / 1_024.0)
-    else -> "$bytes B"
 }
 
 private fun formatTrayTime(epochMillis: Long): String = DateTimeFormatter.ofPattern("HH:mm")

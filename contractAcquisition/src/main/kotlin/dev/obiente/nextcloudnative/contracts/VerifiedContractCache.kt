@@ -88,7 +88,7 @@ class FileVerifiedContractCache(
 
     private companion object {
         val lock = Any()
-        const val CACHE_FORMAT_VERSION = "3"
+        const val CACHE_FORMAT_VERSION = "4"
         const val MAX_CONTRACT_CACHE_BYTES = 32L * 1024L * 1024L
         const val MAX_CACHE_AGE_MILLIS = 7L * 24L * 60L * 60L * 1_000L
     }

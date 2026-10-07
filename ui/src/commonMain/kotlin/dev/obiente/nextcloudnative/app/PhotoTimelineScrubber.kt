@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +36,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -43,6 +46,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -386,10 +390,89 @@ internal fun PhotoTimelineDateScrubber(
         }
     }
 
+    val viewConfiguration = LocalViewConfiguration.current
+    val narrowRailConfiguration = remember(viewConfiguration) {
+        object : ViewConfiguration by viewConfiguration {
+            override val minimumTouchTargetSize = DpSize.Zero
+        }
+    }
     BoxWithConstraints(
-        modifier = modifier
-            .width(PhotoTimelineScrubberTouchLaneWidth)
-            .fillMaxHeight()
+        modifier = modifier.width(PhotoTimelineScrubberTouchLaneWidth).fillMaxHeight(),
+        contentAlignment = Alignment.TopEnd,
+    ) {
+        val railHeight = constraints.maxHeight
+        val availablePixels = (railHeight - scrubberThumbPixels).coerceAtLeast(0)
+        val thumbOffsetPixels = (availablePixels * displayedFraction).roundToInt()
+        val touchPixels = with(density) { PhotoTimelineScrubberTouchLaneWidth.toPx().roundToInt() }
+        val touchOffset = (thumbOffsetPixels - (touchPixels - scrubberThumbPixels) / 2)
+            .coerceIn(0, (railHeight - touchPixels).coerceAtLeast(0))
+        val currentTouchOffset by rememberUpdatedState(touchOffset)
+        val currentThumbCenter by rememberUpdatedState(thumbOffsetPixels + scrubberThumbPixels / 2f)
+        fun Modifier.railPointer(offsetY: () -> Int = { 0 }, thumbCenter: (() -> Float)? = null): Modifier = this
+            .pointerInput(dateIndex.sections, completeGeometry, scrubberThumbPixels, railHeight) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val grabOffset = thumbCenter?.invoke()?.let { center ->
+                        down.position.y + offsetY() - center
+                    } ?: 0f
+                    pointerInteracting = true
+                    if (thumbCenter == null) jumpFromRailPointer(down.position, railHeight)
+                    down.consume()
+                    var gestureCompleted = false
+                    try {
+                        var pointerPressed = true
+                        while (pointerPressed) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) {
+                                pointerPressed = false
+                            } else {
+                                pointerPressed = change.pressed
+                                if (pointerPressed) {
+                                    jumpFromRailPointer(
+                                        Offset(change.position.x, change.position.y + offsetY() - grabOffset),
+                                        railHeight,
+                                    )
+                                    change.consume()
+                                }
+                            }
+                        }
+                        gestureCompleted = true
+                    } finally {
+                        if (completeGeometry != null && gestureCompleted) {
+                            memoriesTimelineDayIdForScrubberRelease(
+                                geometry = completeGeometry,
+                                interactionFraction = interactionFraction,
+                                interactionDayId = interactionDayId,
+                            )
+                                ?.let { targetDayId ->
+                                    jumpJob?.cancel()
+                                    jumpJob = scope.launch {
+                                        currentOnJumpToAdvertisedDay?.invoke(targetDayId)
+                                    }
+                                }
+                        } else {
+                            interactionGridItemIndex
+                                ?.let { target ->
+                                    lightlySnappedPhotoTimelineGridItem(dateIndex, target)
+                                }
+                                ?.takeIf { target -> target != interactionGridItemIndex }
+                                ?.let { target ->
+                                    jumpJob?.cancel()
+                                    jumpJob = scope.launch {
+                                        currentOnJumpToGridItem(target)
+                                    }
+                                }
+                        }
+                        pointerInteracting = false
+                        interactionGridItemIndex = null
+                        interactionFraction = null
+                        interactionDayId = null
+                    }
+                }
+            }
+
+        val accessibleThumb = Modifier
             .semantics {
                 contentDescription = "Photo timeline date scrubber"
                 stateDescription = displayedMonth.label
@@ -435,75 +518,15 @@ internal fun PhotoTimelineDateScrubber(
                 }
             }
             .onFocusChanged { focused = it.isFocused }
-            .pointerInput(dateIndex.sections, completeGeometry, scrubberThumbPixels) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    pointerInteracting = true
-                    jumpFromRailPointer(down.position, size.height)
-                    down.consume()
-                    var gestureCompleted = false
-                    try {
-                        var pointerPressed = true
-                        while (pointerPressed) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null) {
-                                pointerPressed = false
-                            } else {
-                                pointerPressed = change.pressed
-                                if (pointerPressed) {
-                                    jumpFromRailPointer(change.position, size.height)
-                                    change.consume()
-                                }
-                            }
-                        }
-                        gestureCompleted = true
-                    } finally {
-                        if (completeGeometry != null && gestureCompleted) {
-                            memoriesTimelineDayIdForScrubberRelease(
-                                geometry = completeGeometry,
-                                interactionFraction = interactionFraction,
-                                interactionDayId = interactionDayId,
-                            )
-                                ?.let { targetDayId ->
-                                    jumpJob?.cancel()
-                                    jumpJob = scope.launch {
-                                        currentOnJumpToAdvertisedDay?.invoke(targetDayId)
-                                    }
-                                }
-                        } else {
-                            interactionGridItemIndex
-                                ?.let { target ->
-                                    lightlySnappedPhotoTimelineGridItem(dateIndex, target)
-                                }
-                                ?.takeIf { target -> target != interactionGridItemIndex }
-                                ?.let { target ->
-                                    jumpJob?.cancel()
-                                    jumpJob = scope.launch {
-                                        currentOnJumpToGridItem(target)
-                                    }
-                                }
-                        }
-                        pointerInteracting = false
-                        interactionGridItemIndex = null
-                        interactionFraction = null
-                        interactionDayId = null
-                    }
-                }
-            }
-            .focusable(),
-        contentAlignment = Alignment.TopEnd,
-    ) {
-        Box(
-            modifier = Modifier
-                .width(PhotoTimelineScrubberTrackWidth)
-                .fillMaxHeight()
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.outlineVariant),
-        )
-        val availablePixels = constraints.maxHeight - scrubberThumbPixels
-        val thumbOffsetPixels =
-            (availablePixels.coerceAtLeast(0) * displayedFraction).roundToInt()
+            .focusable()
+        // The narrow rail retains jump-to-date taps without claiming the transparent lane.
+        CompositionLocalProvider(LocalViewConfiguration provides narrowRailConfiguration) {
+            Box(
+                Modifier.width(PhotoTimelineScrubberTrackWidth).fillMaxHeight()
+                    .railPointer().clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.outlineVariant),
+            )
+        }
         if (pointerInteracting || focused) {
             val labelOffsetPixels = (
                 thumbOffsetPixels +
@@ -542,18 +565,26 @@ internal fun PhotoTimelineDateScrubber(
             }
         }
         Box(
-            modifier = Modifier
-                .offset { IntOffset(x = 0, y = thumbOffsetPixels) }
-                .width(
-                    if (pointerInteracting || focused) {
-                        PhotoTimelineScrubberActiveThumbWidth
-                    } else {
-                        PhotoTimelineScrubberThumbWidth
-                    },
-                )
-                .height(PhotoTimelineScrubberThumbHeight)
-                .clip(RoundedCornerShape(NextcloudRadii.Pill))
-                .background(MaterialTheme.colorScheme.primary),
-        )
+            Modifier.offset { IntOffset(0, touchOffset) }
+                .width(PhotoTimelineScrubberTouchLaneWidth).height(PhotoTimelineScrubberTouchLaneWidth)
+                .then(accessibleThumb)
+                .railPointer({ currentTouchOffset }, { currentThumbCenter }),
+            contentAlignment = Alignment.TopEnd,
+        ) {
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(x = 0, y = thumbOffsetPixels - touchOffset) }
+                    .width(
+                        if (pointerInteracting || focused) {
+                            PhotoTimelineScrubberActiveThumbWidth
+                        } else {
+                            PhotoTimelineScrubberThumbWidth
+                        },
+                    )
+                    .height(PhotoTimelineScrubberThumbHeight)
+                    .clip(RoundedCornerShape(NextcloudRadii.Pill))
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
     }
 }

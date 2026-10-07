@@ -9,21 +9,21 @@ internal suspend fun pollLoginUntilApproved(
     poll: suspend () -> LoginPollResult,
     waitBeforeNextPoll: suspend (delayMillis: Long, awaitNetwork: Boolean) -> Unit,
     hasTimedOut: () -> Boolean,
-    onStatus: (String) -> Unit = {},
+    onStatus: (LoginAttemptPhase) -> Unit = {},
 ): NextcloudSession {
     var transientFailures = 0
     while (!hasTimedOut()) {
         when (val result = poll()) {
             LoginPollResult.Pending -> {
                 transientFailures = 0
-                onStatus("Finish signing in in your browser, then return here.")
+                onStatus(LoginAttemptPhase.AwaitingApproval)
                 waitBeforeNextPoll(LOGIN_POLL_PENDING_DELAY_MILLIS, false)
             }
             is LoginPollResult.Approved -> return result.session
             is LoginPollResult.RetryablePreExchangeFailure -> {
                 transientFailures += 1
                 val delayMillis = loginPollRetryDelayMillis(transientFailures)
-                onStatus("The server name is temporarily unavailable. Waiting for the network and retrying...")
+                onStatus(LoginAttemptPhase.WaitingForNetwork)
                 waitBeforeNextPoll(delayMillis, true)
             }
             is LoginPollResult.FatalFailure -> error(result.message)

@@ -1,7 +1,7 @@
 # Prerelease policy
 
 **Last reviewed: 2026-09-27.** The active version and release policy may have
-changed. The `ncVersion*` values in [`gradle.properties`](../gradle.properties),
+changed. The version values in [`gradle.properties`](../gradle.properties),
 the [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
 [latest releases](https://github.com/obiente/native/releases) are the current
 sources of truth.
@@ -98,7 +98,9 @@ version. Emulator reports remain runner-local and are not release assets.
 
 ## Creating a prerelease
 
-1. Update the three `ncVersion*` development defaults in `gradle.properties`.
+1. Update `ncVersionName`, `ncVersionCode` and `ncDesktopPackageVersion` in
+   `gradle.properties`. `tools/verify-prerelease-version.sh` checks that the
+   code and desktop version match the version name.
 2. Prepare the release-note draft from the validated unreleased fragments:
 
    ```bash
