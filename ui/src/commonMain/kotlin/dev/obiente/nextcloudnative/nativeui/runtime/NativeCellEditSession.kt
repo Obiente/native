@@ -45,7 +45,7 @@ internal class NativeCellEditSession {
     fun savedValue(recordId: String, fieldId: String): String? =
         savedValues[NativeCellAddress(recordId, fieldId)]
 
-    /** Drops optimistic overrides; refreshed records are the authoritative values. */
+    /** Drops optimistic overrides when a new authoritative load arrives. */
     fun acceptAuthoritativeRecords() {
         savedValues.clear()
     }

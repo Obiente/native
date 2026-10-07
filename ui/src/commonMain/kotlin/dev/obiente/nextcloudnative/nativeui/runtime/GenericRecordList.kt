@@ -260,6 +260,7 @@ internal fun GenericEditableTableRecordList(
     loadingMore: Boolean,
     loadMoreError: String?,
     modifier: Modifier = Modifier,
+    recordsGeneration: Long = 0L,
 ) {
     val fields = remember(projection) {
         if (projection.composite) {
@@ -270,7 +271,8 @@ internal fun GenericEditableTableRecordList(
         }
     }.distinctBy(FieldSpec::id)
     val cellEdits = remember(schema, projection) { NativeCellEditSession() }
-    LaunchedEffect(cellEdits, records) { cellEdits.acceptAuthoritativeRecords() }
+    // Every authoritative load has a new generation, even when its records equal the old ones.
+    LaunchedEffect(cellEdits, recordsGeneration) { cellEdits.acceptAuthoritativeRecords() }
     val listState = rememberLazyListState()
     NativeCollectionAutoPager(
         listState = listState,

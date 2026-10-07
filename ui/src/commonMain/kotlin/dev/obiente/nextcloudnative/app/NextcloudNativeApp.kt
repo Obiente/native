@@ -2790,7 +2790,7 @@ private fun DynamicDiscoveredAppScreen(
                 } else {
                     val updatedRecords = recordsByResourceId + (view.resourceId to records)
                     recordsByResourceId = updatedRecords
-                    viewState = NativeScreenState.Ready(records)
+                    viewState = NativeScreenState.Ready.authoritative(records)
                     mutationReconciliationGeneration += 1
                     sharedDynamicNativeMemoryCache.storeScreen(
                         cacheKey,
@@ -2818,7 +2818,7 @@ private fun DynamicDiscoveredAppScreen(
                 incomingRecords = freshSnapshot.relatedRecords,
                 preservedResourceId = retainedMailPagination?.resourceId,
             )
-            viewState = NativeScreenState.Ready(freshSnapshot.records)
+            viewState = NativeScreenState.Ready.authoritative(freshSnapshot.records)
             if (retainedMailPagination == null) {
                 paginationState = freshSnapshot.pagination?.let { checkpoint ->
                     descriptor.resolvedDynamicPaginationSpec(
@@ -2883,7 +2883,7 @@ private fun DynamicDiscoveredAppScreen(
                 val updatedRecords = recordsByResourceId + loadedRecords
                 val rows = loadedRecords.getValue(composite.rowResourceId)
                 recordsByResourceId = updatedRecords
-                viewState = NativeScreenState.Ready(rows)
+                viewState = NativeScreenState.Ready.authoritative(rows)
                 dynamicRefreshError = partialFailure
                 mutationReconciliationGeneration += 1
                 if (partialFailure == null) {
@@ -2953,7 +2953,7 @@ private fun DynamicDiscoveredAppScreen(
                 null
             }
             recordsByResourceId = updatedRecords
-            viewState = NativeScreenState.Ready(presentedRecords)
+            viewState = NativeScreenState.Ready.authoritative(presentedRecords)
             dynamicRefreshError = displayFailure ?: outcome.relatedFailureMessage
             mutationReconciliationGeneration += 1
             records.firstOrNull()
@@ -4040,7 +4040,7 @@ private fun DynamicDiscoveredAppScreen(
                         val mergedRecords = existingRecords + novelRecords
                         val updatedRecords = recordsByResourceId + (pagingView.resourceId to mergedRecords)
                         if (selectedViewId == pagingView.id) {
-                            viewState = NativeScreenState.Ready(mergedRecords)
+                            viewState = NativeScreenState.Ready.authoritative(mergedRecords)
                         }
                         val nextPagination = pagination.spec.toDynamicPaginationState(
                             viewId = pagingView.id,

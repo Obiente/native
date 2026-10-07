@@ -4,6 +4,9 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlinx.serialization.Serializable
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.incrementAndFetch
 
 @Serializable
 data class NativeRecord(
@@ -200,7 +203,18 @@ sealed interface NativeScreenState {
 
     data class Ready(
         val records: List<NativeRecord>,
-    ) : NativeScreenState
+        /**
+         * A new value for every authoritative server load, from [nextNativeLoadGeneration].
+         * Cached, stale, and locally derived records keep 0. Surfaces use it to drop optimistic
+         * values even when the refreshed records equal the previous ones.
+         */
+        val generation: Long = 0L,
+    ) : NativeScreenState {
+        companion object {
+            /** Records just returned by the server, stamped with a new load generation. */
+            fun authoritative(records: List<NativeRecord>): Ready = Ready(records, nextNativeLoadGeneration())
+        }
+    }
 
     data class Error(
         val message: String,
@@ -222,3 +236,10 @@ sealed interface NativeActionRequest {
         val confirmed: Boolean,
     ) : NativeActionRequest
 }
+
+@OptIn(ExperimentalAtomicApi::class)
+private val nativeLoadGenerations = AtomicLong(0L)
+
+/** Returns a process-unique generation for a completed authoritative load. */
+@OptIn(ExperimentalAtomicApi::class)
+internal fun nextNativeLoadGeneration(): Long = nativeLoadGenerations.incrementAndFetch()

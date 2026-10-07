@@ -63,6 +63,7 @@ internal fun GenericTableCollection(
     loadingMore: Boolean,
     loadMoreError: String?,
     searchQuery: String,
+    recordsGeneration: Long = 0L,
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -155,6 +156,7 @@ internal fun GenericTableCollection(
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     modifier = Modifier.weight(1f),
+                    recordsGeneration = recordsGeneration,
                 )
             } else {
                 GenericRecordTable(
@@ -170,6 +172,7 @@ internal fun GenericTableCollection(
                     loadingMore,
                     loadMoreError,
                     Modifier.weight(1f),
+                    recordsGeneration,
                 )
             }
         }

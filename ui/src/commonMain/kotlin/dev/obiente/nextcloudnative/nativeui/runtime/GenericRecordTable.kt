@@ -57,6 +57,7 @@ internal fun GenericRecordTable(
     loadingMore: Boolean,
     loadMoreError: String?,
     modifier: Modifier = Modifier,
+    recordsGeneration: Long = 0L,
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -79,7 +80,8 @@ internal fun GenericRecordTable(
         return
     }
     val cellEdits = remember(schema, projection) { NativeCellEditSession() }
-    LaunchedEffect(cellEdits, records) { cellEdits.acceptAuthoritativeRecords() }
+    // Every authoritative load has a new generation, even when its records equal the old ones.
+    LaunchedEffect(cellEdits, recordsGeneration) { cellEdits.acceptAuthoritativeRecords() }
     val actionWidth = if (onSelectRecord == null) 0.dp else 48.dp
     val frozenField = fields.firstOrNull { it.id == projection.frozenFieldId }
     val scrollingFields = fields.filterNot { it.id == frozenField?.id }

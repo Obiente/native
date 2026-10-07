@@ -1071,6 +1071,7 @@ fun GenericNativeAppScreen(
                     loadingMore,
                     loadMoreError,
                     collectionQuery,
+                    state.generation,
                 )
                 GenericNativeSurface.Detail -> GenericRecordDetail(
                     schema = schema,
@@ -4120,33 +4121,6 @@ private fun GenericRecordDetail(
         }
     }
 }
-
-internal fun nativeDedicatedCollectionState(
-    state: NativeScreenState,
-    presentedRecords: List<NativeRecord>,
-    visiblePresentedRecords: List<NativeRecord>,
-    searchableCollection: Boolean,
-): NativeScreenState = when (state) {
-    is NativeScreenState.Ready -> NativeScreenState.Ready(
-        if (searchableCollection) visiblePresentedRecords else presentedRecords,
-    )
-    else -> state
-}
-
-internal fun genericCollectionSearchAvailable(
-    state: NativeScreenState,
-    recordCount: Int,
-    surface: GenericNativeSurface,
-    nativeMailWorkspaceEligible: Boolean,
-): Boolean = state is NativeScreenState.Ready &&
-    recordCount > 0 &&
-    !nativeMailWorkspaceEligible &&
-    surface in setOf(
-        GenericNativeSurface.List,
-        GenericNativeSurface.Grid,
-        GenericNativeSurface.Table,
-        GenericNativeSurface.Mailbox,
-    )
 
 private const val MAX_NATIVE_COLLECTION_BATCH_RELATIONS = 16
 private const val MAX_NATIVE_COLLECTION_BATCH_RELATION_BINDINGS = 32
