@@ -1,6 +1,6 @@
 # Sign-in recovery and login diagnostics
 
-**Last reviewed: 2026-09-28.** This describes repository implementation, which may
+**Last reviewed: 2026-10-08.** This describes repository implementation, which may
 have changed. Check the [current source](https://github.com/obiente/native/blob/main/ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/LoginAttemptState.kt)
 and the release notes for the installed build before assuming a released version
 includes these controls.
@@ -24,12 +24,19 @@ the URL parser's error text.
 ## Connection problems
 
 A name-resolution message means a DNS lookup failed before any request reached
-the server. It does not prove the server is down, or that the failure is still
-happening. Check the address and the device's network or VPN connection.
+the server. A "could not be reached" message means the app could not open a
+connection to the server, so no sign-in request was sent. Neither proves the
+server is down, or that the failure is still happening. Check the address and
+the device's network or VPN connection.
 
-The app retries this kind of failure after a bounded delay. When the server
+The app retries both kinds of failure after a bounded delay. When the server
 answers again, the browser-approval status returns. You can also cancel, change
 the address or connection, and start a fresh attempt.
+
+Each approval check opens a new connection and closes it after the response.
+Leaving the app for the browser can suspend it or end its network connections.
+Because no connection is kept between checks, returning to the app does not
+reuse one that ended while the app was in the background.
 
 ## Time limit and uncertain results
 
@@ -37,7 +44,8 @@ Each attempt has a five-minute deadline, including network waits.
 
 If the result became uncertain after the one-time approval exchange, start a
 new sign-in. Do not try to replay that exchange. The app does not retry this
-case automatically.
+case automatically. A request is uncertain only when the connection failed
+after the app had started sending it.
 
 ## Save a login report
 
@@ -85,8 +93,11 @@ Account publication failures retain the existing credential rollback policy.
 
 Synthetic regression tests in `LoginPollingTest` and `LoginAttemptStateTest`
 exercise retry phases, timeout, cancellation, browser-handoff failure, and late
-completion after a replacement attempt. They do not establish connectivity to
-any particular server or device network.
+completion after a replacement attempt. `JvmLoginPollConnectionTest` runs
+approval checks against a local mock server while simulating connections that
+end during a suspension. These tests run on the desktop JVM. They do not
+establish connectivity to any particular server or device network, and they do
+not reproduce Android process freezing.
 
 ## Evidence and release status
 

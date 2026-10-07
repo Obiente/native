@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
 
 data class LoginPollHttpResponse(
     val status: Int,
@@ -20,6 +23,22 @@ data class LoginPollHttpExecution(
     val responseUsedFallback: Boolean,
     val selectedFallbackReason: LoginPollFallbackReason? = null,
 )
+
+/**
+ * Derives the client used for one-time Login Flow v2 polls from the platform's base client.
+ *
+ * The HTTP stack must never replay a poll after its request may have reached the server, so
+ * connection-failure recovery stays disabled. Without that recovery, a pooled connection that
+ * died while the app was suspended or in the background, or that a proxy closed after its
+ * keep-alive window, fails only after the request has started and is indistinguishable from a
+ * lost one-time approval response. Each poll therefore opens a new connection and closes it
+ * after the response, so no connection outlives the wait between polls. Failures while that
+ * connection is being established remain provably pre-exchange.
+ */
+fun OkHttpClient.newLoginPollHttpClient(): OkHttpClient = newBuilder()
+    .retryOnConnectionFailure(false)
+    .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+    .build()
 
 suspend fun executeLoginPollHttp(
     challenge: LoginChallenge,

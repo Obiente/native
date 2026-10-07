@@ -31,6 +31,7 @@ import dev.obiente.nextcloudnative.app.LoginTransportSecurity
 import dev.obiente.nextcloudnative.app.LOGIN_FLOW_RESPONSE_MAX_BYTES
 import dev.obiente.nextcloudnative.app.LoginPollHttpResponse
 import dev.obiente.nextcloudnative.app.executeLoginPollHttp
+import dev.obiente.nextcloudnative.app.newLoginPollHttpClient
 import dev.obiente.nextcloudnative.app.interpretLoginChallengeHttpResponse
 import dev.obiente.nextcloudnative.app.loginPollEndpointFallbackDiagnostic
 import dev.obiente.nextcloudnative.app.normalizeServerUrl
@@ -347,7 +348,7 @@ internal class AndroidNextcloudServices(
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
         .build()
-    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
+    private val loginPollHttpClient = httpClient.newLoginPollHttpClient()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val noRedirectHttpClient = httpClient.newBuilder()
@@ -3729,9 +3730,6 @@ internal class AndroidNextcloudServices(
         } else {
             LoginTransportSecurity.Tls
         }
-
-    private val LoginTransportSecurity.diagnosticValue: String
-        get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

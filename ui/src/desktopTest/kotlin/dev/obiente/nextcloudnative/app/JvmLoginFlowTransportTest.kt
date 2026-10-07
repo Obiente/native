@@ -212,6 +212,35 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
+    fun `compatibility probe that cannot connect leaves the pending advertised route active`() = runBlocking {
+        var diagnostic: JvmNetworkFailureDiagnostic? = null
+        val execution = executeLoginPollHttp(
+            challenge = challenge(
+                pollEndpoint = "https://cloud.example.test/login/v2/poll",
+                fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+            ),
+            fallbackAlreadySelected = false,
+            poll = { endpoint ->
+                diagnostic = null
+                if ("/index.php/" in endpoint) {
+                    diagnostic = dnsFailure().copy(
+                        code = "NETWORK_CONNECT_FAILED",
+                        phase = JvmNetworkFailurePhase.Connect,
+                    )
+                    throw IOException("synthetic connect failure")
+                }
+                LoginPollHttpResponse(status = 404, body = "[]")
+            },
+            networkFailure = { diagnostic },
+        )
+
+        assertEquals(LoginPollResult.Pending, execution.interpretation.result)
+        assertNull(execution.selectedFallbackReason)
+        assertEquals(false, execution.usedFallback)
+        assertEquals(false, execution.responseUsedFallback)
+    }
+
+    @Test
     fun `failure after compatibility exchange is ambiguous`() = runBlocking {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
         val execution = executeLoginPollHttp(

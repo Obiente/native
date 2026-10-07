@@ -708,7 +708,7 @@ class DesktopNextcloudServices(
         environment = desktopSupportDiagnosticsEnvironment(),
         client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
     )
-    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
+    private val loginPollHttpClient = httpClient.newLoginPollHttpClient()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
