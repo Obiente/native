@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class PreviewMemoryCacheTest {
@@ -33,9 +34,21 @@ class PreviewMemoryCacheTest {
         }
         assertContentEquals(byteArrayOf(9), current)
         release.complete(Unit)
-        assertContentEquals(byteArrayOf(1), old.await())
-        assertContentEquals(byteArrayOf(2), waiter.await())
+        // Loads owned by the retired incarnation never return private bytes.
+        assertFailsWith<RetiredAccountPreviewException> { old.await() }
+        assertFailsWith<RetiredAccountPreviewException> { waiter.await() }
         assertContentEquals(byteArrayOf(9), cache.get(key))
+    }
+
+    @Test
+    fun `retired account does not start a preview fetch`() = runBlocking {
+        val cache = PreviewMemoryCache()
+        val key = key("retired-account", 1L)
+        cache.retireAccount(key.account)
+        assertFailsWith<RetiredAccountPreviewException> {
+            loadPreviewMemoryCached(key, cache) { error("A retired account must not fetch") }
+        }
+        Unit
     }
 
     @Test
@@ -157,7 +170,7 @@ class PreviewMemoryCacheTest {
             AccountPrivateMemoryLifecycle.activateAccount(accountKey)
             allowLoadToFinish.complete(Unit)
 
-            assertContentEquals(byteArrayOf(4), pending.await())
+            assertFailsWith<RetiredAccountPreviewException> { pending.await() }
             assertNull(sharedPreviewMemoryCache.get(key))
 
             assertContentEquals(byteArrayOf(5), loadPreviewMemoryCached(key) { byteArrayOf(5) })
@@ -183,7 +196,11 @@ class PreviewMemoryCacheTest {
                                 val key = PreviewCacheKey(
                                     accountKey, "core", publisher.toLong(), "etag-$revision", 64, 64,
                                 )
-                                loadPreviewMemoryCached(key) { byteArrayOf(revision.toByte()) }
+                                try {
+                                    loadPreviewMemoryCached(key) { byteArrayOf(revision.toByte()) }
+                                } catch (_: RetiredAccountPreviewException) {
+                                    // A load that crosses retirement is abandoned; that is the expected outcome.
+                                }
                                 sharedPreviewMemoryCache.get(key)
                             }
                         }
@@ -258,7 +275,7 @@ class PreviewMemoryCacheTest {
         cache.activateAccount(key.account)
         release.complete(Unit)
 
-        assertContentEquals(byteArrayOf(3), staleLoad.await())
+        assertFailsWith<RetiredAccountPreviewException> { staleLoad.await() }
         val current = loadPreviewMemoryCached(key, cache) {
             loads += 1
             byteArrayOf(4)

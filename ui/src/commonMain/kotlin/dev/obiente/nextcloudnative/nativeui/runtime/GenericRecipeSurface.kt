@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,9 +61,11 @@ internal fun GenericRecipeCollection(
     loadMoreError: String? = null,
 ) {
     val gridState = rememberLazyGridState()
-    NativeCollectionGridAutoPager(gridState, onLoadMore, loadingMore, loadMoreError)
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
+    // Filters only see loaded pages, so a narrow search must not page through the whole server.
+    val localFiltersActive = query.isNotBlank() || category != null
+    NativeCollectionGridAutoPager(gridState, onLoadMore.takeUnless { localFiltersActive }, loadingMore, loadMoreError)
     val categories = remember(rows) { nativeRecipeCategories(rows) }
     val filteredRows = remember(rows, query, category) {
         filterNativeRecipeCollection(rows, query, category)
@@ -172,6 +175,17 @@ internal fun GenericRecipeCollection(
             if (loadingMore || loadMoreError != null) {
                 item(key = "recipe-paging", span = { GridItemSpan(maxLineSpan) }) {
                     NativeCollectionPagingStatus(loadingMore, loadMoreError, onLoadMore)
+                }
+            } else if (localFiltersActive && onLoadMore != null) {
+                item(key = "recipe-filtered-load-more", span = { GridItemSpan(maxLineSpan) }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                        Text(
+                            "Search and filters only cover the ${rows.size} recipes loaded so far.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = onLoadMore) { Text("Load more recipes") }
+                    }
                 }
             }
         }

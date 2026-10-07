@@ -20,17 +20,28 @@ internal class PreviewMemoryCache(
     private class PendingPreview(val mutex: Mutex = Mutex(), var users: Int = 0, var result: ByteArray? = null)
 
     suspend fun load(key: PreviewCacheKey, fetch: suspend () -> ByteArray): ByteArray {
-        val producer = producer(key) ?: return fetch()
+        // A retired account must not start authenticated work or publish a late result.
+        val producer = producer(key) ?: throw RetiredAccountPreviewException()
         val requestKey = key to producer.incarnation
         val request = gate.withLock {
             pending.getOrPut(requestKey) { PendingPreview() }.also { it.users += 1 }
         }
         try {
             return request.mutex.withLock {
-                gate.read(producer, null) { request.result ?: get(key) } ?: fetch().also {
-                    request.result = it
-                    put(key, it, producer)
+                // One locked read, so retirement cannot be mistaken for a cache miss that fetches.
+                val cached = gate.read(producer, PreviewLookup.Retired) {
+                    (request.result ?: get(key))?.let(PreviewLookup::Hit) ?: PreviewLookup.Miss
                 }
+                when (cached) {
+                    PreviewLookup.Retired -> throw RetiredAccountPreviewException()
+                    is PreviewLookup.Hit -> return@withLock cached.bytes
+                    PreviewLookup.Miss -> Unit
+                }
+                val fetched = fetch()
+                gate.read(producer, null) { fetched } ?: throw RetiredAccountPreviewException()
+                request.result = fetched
+                put(key, fetched, producer)
+                fetched
             }
         } finally {
             gate.withLock {
@@ -260,3 +271,12 @@ internal fun accountPersistenceScopeDigests(session: NextcloudSession): AccountP
 internal expect fun legacyPreviewCacheDigest(session: NextcloudSession): String
 
 private const val MAX_PREVIEW_MEMORY_CACHE_BYTES = 24 * 1024 * 1024
+
+private sealed interface PreviewLookup {
+    data object Retired : PreviewLookup
+    data object Miss : PreviewLookup
+    class Hit(val bytes: ByteArray) : PreviewLookup
+}
+
+/** The account that owns a preview was retired; the load ends like a cancelled request. */
+internal class RetiredAccountPreviewException : CancellationException("The account for this preview is no longer active.")
