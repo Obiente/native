@@ -68,7 +68,23 @@ fun FileWebDavMutationSpec.conflictConditionHeaders(): Map<String, String> =
 data class NextcloudFileMutationResult(
     val destinationPath: String?,
     val etag: String?,
+    /** Local cache and virtual-file bookkeeping after the server confirmed the change. */
+    val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
 )
+
+/**
+ * The server result is authoritative. Local bookkeeping is reported separately so a slow or
+ * failed local update never hides or delays a change the server already applied.
+ */
+enum class FileMutationLocalFollowUp {
+    Completed,
+
+    /** Still running in the background after the bounded wait. */
+    StillRunning,
+
+    /** Finished without updating every local cache or virtual-file record. */
+    Failed,
+}
 
 enum class NextcloudFileOperationError {
     AuthenticationRequired,
