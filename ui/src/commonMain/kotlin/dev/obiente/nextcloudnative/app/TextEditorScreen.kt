@@ -38,6 +38,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -59,6 +60,7 @@ internal fun TextEditorScreen(
             store = services.textEditorDraftStore(session, file.path),
             download = { services.downloadFile(session, userId, file.path, maxBytes = MAX_EDITABLE_TEXT_BYTES) },
             upload = { text, revision -> services.saveTextFile(session, userId, file.path, text, revision) },
+            listingEtag = file.etag,
         )
     }
     val originalText = editor.originalText
@@ -91,6 +93,8 @@ internal fun TextEditorScreen(
 
     LaunchedEffect(editor) { editor.open() }
     LaunchedEffect(editor, draft) {
+        // Coalesce typing into one durable recovery write; Save flushes the latest draft first.
+        delay(TEXT_DRAFT_PERSIST_DEBOUNCE_MILLIS)
         if (editor.originalText != null) editor.persistEdits()
     }
 
@@ -297,3 +301,5 @@ private enum class MarkdownFileViewMode {
     Preview,
     Edit,
 }
+
+private const val TEXT_DRAFT_PERSIST_DEBOUNCE_MILLIS = 300L

@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class MediaThumbnailCacheTest {
@@ -54,6 +55,29 @@ class MediaThumbnailCacheTest {
         assertEquals(1, reloads)
         assertEquals(8, first.width)
         first.readPixels(IntArray(64))
+    }
+
+    @Test
+    fun `retired account does not start a thumbnail fetch`() = runBlocking {
+        val gate = AccountPrivateMemoryGate()
+        val cache = MediaThumbnailCache(gate)
+        val key = key()
+        gate.retireAccount(key.preview.account) { cache.purgeRetiredAccount(key.preview.account) }
+        assertNull(cache.load(key) { error("A retired account must not fetch") })
+    }
+
+    @Test
+    fun `thumbnail finished after retirement is not returned`() = runBlocking {
+        val gate = AccountPrivateMemoryGate()
+        val cache = MediaThumbnailCache(gate)
+        val key = key()
+        val release = CompletableDeferred<Unit>()
+        val inFlight = async(start = CoroutineStart.UNDISPATCHED) {
+            cache.load(key) { release.await(); ImageBitmap(8, 8) }
+        }
+        gate.retireAccount(key.preview.account) { cache.purgeRetiredAccount(key.preview.account) }
+        release.complete(Unit)
+        assertNull(inFlight.await())
     }
 
     @Test

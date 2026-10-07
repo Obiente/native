@@ -25,6 +25,8 @@ class TextEditorScreenInteractionTest {
                 if (width > height) assertTrue(field.boundsInRoot.height > height / 2f)
                 assertTrue(assertNotNull(node("Save")).boundsInRoot.bottom < field.boundsInRoot.top)
                 replaceText("", "Synthetic unsaved draft")
+                // The recovery copy is written after a short typing debounce.
+                settleUntil { fixture.stored?.text == "Synthetic unsaved draft" }
                 assertEquals("Synthetic unsaved draft", fixture.stored?.text)
                 click("Save")
                 assertTrue(has("Save changes to Nextcloud?"))

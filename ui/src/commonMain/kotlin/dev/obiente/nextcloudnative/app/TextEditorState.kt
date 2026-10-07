@@ -34,6 +34,8 @@ internal class TextEditorState(
     private val store: TextEditorDraftStore?,
     private val download: suspend () -> NextcloudFileContent,
     private val upload: suspend (String, String) -> SavedTextFile,
+    // The Files listing revision is a conflict-safe fallback when the download omits its ETag.
+    private val listingEtag: String? = null,
 ) {
     var originalText by mutableStateOf<String?>(null)
         private set
@@ -72,7 +74,7 @@ internal class TextEditorState(
                 val text = remote.bytes.decodeToString(throwOnInvalidSequence = true)
                 originalText = text
                 draft = text
-                etag = remote.etag
+                etag = remote.etag?.takeIf(String::isNotBlank) ?: listingEtag?.takeIf(String::isNotBlank)
             }
         }.onFailure { loadingError = "Could not open this text file safely." }
     }
@@ -118,10 +120,21 @@ internal class TextEditorState(
         val expected = requireNotNull(etag)
         saving = true
         saveError = null
+        // A crash after this checkpoint must verify the server before another write.
+        verificationRequired = true
         try {
-            // A crash after this checkpoint must verify the server before another write.
-            verificationRequired = true
             persist()
+        } catch (cancelled: CancellationException) {
+            saving = false
+            throw cancelled
+        } catch (_: Exception) {
+            // Nothing was sent, so the known revision stays usable once local storage recovers.
+            verificationRequired = false
+            saveError = "Could not keep a recovery copy, so nothing was saved. Your edits are kept."
+            saving = false
+            return
+        }
+        try {
             val saved = upload(submitted, expected)
             originalText = submitted
             etag = saved.etag?.takeIf(String::isNotBlank)

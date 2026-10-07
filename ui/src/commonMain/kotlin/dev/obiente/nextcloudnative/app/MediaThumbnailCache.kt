@@ -22,16 +22,18 @@ internal class MediaThumbnailCache(
 
     suspend fun load(key: MediaThumbnailKey, fetch: suspend () -> ImageBitmap?): ImageBitmap? {
         val account = key.preview.account
-        val producer = gate.producer(account) ?: return fetch()
+        // A retired account must not start authenticated work or publish a late result.
+        val producer = gate.producer(account) ?: return null
         val requestKey = key to producer.incarnation
         val request = gate.withLock {
             pending.getOrPut(requestKey) { Pending() }.also { it.users += 1 }
         }
         try {
             return request.mutex.withLock {
+                if (!gate.read(producer, false) { true }) return@withLock null
                 gate.read(producer, null) {
                     request.result ?: entries.remove(key)?.also { entries[key] = it }
-                } ?: fetch()?.also { image ->
+                } ?: fetch()?.let { image -> gate.read(producer, null) { image } }?.also { image ->
                     request.result = image
                     val weight = image.weight()
                     if (weight <= maximumBytes) gate.mutate(account, producer) {

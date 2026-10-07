@@ -211,6 +211,27 @@ class TextEditorStateTest {
         editor.save()
         assertEquals(0, writes)
         assertEquals("new", editor.draft)
+        // Nothing reached the server, so this is a local storage failure, not an ambiguous save.
+        assertEquals("v1", editor.etag)
+        assertTrue(editor.canSave)
+        assertEquals("Could not keep a recovery copy, so nothing was saved. Your edits are kept.", editor.saveError)
+    }
+
+    @Test
+    fun `listing revision is used when the download has no ETag`() = runBlocking {
+        val revisions = mutableListOf<String>()
+        val editor = TextEditorState(
+            MemoryStore(),
+            { content("old", null) },
+            { _, revision -> revisions += revision; SavedTextFile("v2", false) },
+            listingEtag = "v1",
+        )
+        editor.open()
+        assertEquals("v1", editor.etag)
+        editor.edit("new")
+        assertTrue(editor.canSave)
+        editor.save()
+        assertEquals(listOf("v1"), revisions)
     }
 
     private fun content(text: String, etag: String?) = NextcloudFileContent(text.encodeToByteArray(), "text/plain", etag)
