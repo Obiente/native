@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -27,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
@@ -48,13 +51,40 @@ internal data class FileShareRecipientPickerUiState(
     val visibleResults: List<FileShareRecipient>
         get() = results.take(MAX_VISIBLE_FILE_SHARE_RECIPIENTS)
 
-    fun supportingMessage(target: FileShareTarget): String? = when {
-        selectedRecipient.isNotBlank() -> "Selected: $selectedRecipient"
-        query.trim().length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
-            "Search your Nextcloud server and select a result."
-        !loading && error == null && results.isEmpty() -> target.presentation().emptyMessage
-        !loading && error == null -> "Select a result to continue."
-        else -> null
+    /**
+     * The complete email address the person typed, offered as a choice when the server has not
+     * already returned the same address. An email share needs only the address itself, so the
+     * choice stays available while the search runs, after it finds nothing, or when it fails.
+     */
+    fun typedRecipient(target: FileShareTarget): FileShareRecipient? {
+        if (target != FileShareTarget.Email || selectedRecipient.isNotBlank()) return null
+        val typed = typedFileShareEmailRecipient(query) ?: return null
+        return typed.takeIf { results.none { it.target == target && it.id.equals(typed.id, ignoreCase = true) } }
+    }
+
+    fun visibleChoices(target: FileShareTarget): List<FileShareRecipient> =
+        listOfNotNull(typedRecipient(target)) + visibleResults
+
+    fun supportingMessage(target: FileShareTarget): String? {
+        val normalized = query.trim()
+        val email = target == FileShareTarget.Email
+        return when {
+            selectedRecipient.isNotBlank() -> "Selected: $selectedRecipient"
+            email && typedRecipient(target) != null -> "Press Enter or select the address to use it."
+            email && '@' in normalized -> when (val validation = validateFileShareEmailAddress(normalized)) {
+                is FileShareEmailAddressValidation.Invalid -> validation.reason
+                is FileShareEmailAddressValidation.Valid -> if (loading) null else "Select a result to continue."
+            }
+            normalized.length < MIN_FILE_SHARE_RECIPIENT_QUERY_LENGTH ->
+                if (email) {
+                    "Enter an email address, or search and select a result."
+                } else {
+                    "Search your Nextcloud server and select a result."
+                }
+            !loading && error == null && results.isEmpty() -> target.presentation().emptyMessage
+            !loading && error == null -> "Select a result to continue."
+            else -> null
+        }
     }
 }
 
@@ -176,11 +206,14 @@ internal fun FileShareRecipientPickerContent(
 ) {
     require(target.requiresRecipient)
     val presentation = target.presentation()
+    val typedRecipient = state.typedRecipient(target)
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
         OutlinedTextField(
             value = state.query,
             enabled = enabled,
             onValueChange = onQueryChanged,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (enabled) typedRecipient?.let(onSelected) }),
             label = { Text(presentation.searchLabel) },
             placeholder = { Text("Enter at least two characters") },
             trailingIcon = {
@@ -194,7 +227,7 @@ internal fun FileShareRecipientPickerContent(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        state.visibleResults.forEach { recipient ->
+        state.visibleChoices(target).forEach { recipient ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -218,9 +251,9 @@ internal fun FileShareRecipientPickerContent(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (recipient.id != recipient.displayName) {
+                    if (recipient == typedRecipient || recipient.id != recipient.displayName) {
                         Text(
-                            recipient.id,
+                            if (recipient == typedRecipient) "Typed address" else recipient.id,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,

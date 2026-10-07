@@ -271,11 +271,21 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
         FileShareTarget.Group,
         FileShareTarget.Email,
         FileShareTarget.Remote,
-        -> require(recipient != null) { "Choose a recipient from the search results." }
+        -> require(recipient != null) {
+            if (target == FileShareTarget.Email) {
+                "Enter an email address or choose one from the search results."
+            } else {
+                "Choose a recipient from the search results."
+            }
+        }
     }
     require(recipient == null || recipient.length <= MAX_FILE_SHARE_RECIPIENT_LENGTH &&
         recipient.none(Char::isISOControl)
     ) { "The share recipient is invalid or too long." }
+    if (target == FileShareTarget.Email && recipient != null) {
+        val validation = validateFileShareEmailAddress(recipient)
+        if (validation is FileShareEmailAddressValidation.Invalid) throw IllegalArgumentException(validation.reason)
+    }
     require(permissions.mask != 0) { "At least one share permission is required." }
     val password = details.password
     require(password.length <= MAX_FILE_SHARE_PASSWORD_LENGTH && password.none(Char::isISOControl)) {

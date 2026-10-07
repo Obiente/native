@@ -450,7 +450,7 @@ private fun MediaShareDialog(
                 ?: FileShareTarget.PublicLink,
         )
     }
-    var recipient by remember(file.path) { mutableStateOf("") }
+    var recipient by remember(file.path) { mutableStateOf<FileShareRecipient?>(null) }
     var allowEditing by remember(file.path) { mutableStateOf(false) }
     var details by remember(file.path) { mutableStateOf(FileShareCreationDetails()) }
     var running by remember(file.path) { mutableStateOf(false) }
@@ -482,7 +482,7 @@ private fun MediaShareDialog(
         onDismiss = onDismiss,
         onTargetChanged = { choice ->
             target = choice
-            recipient = ""
+            recipient = null
             details = details.copy(
                 password = "",
                 expiration = FileShareExpiration.ServerDefault,
@@ -507,7 +507,7 @@ private fun MediaShareDialog(
                         notice = if (copied) "Share created and link copied" else "Share created"
                         shares = runCatching { services.listFileShares(session, file.path) }
                             .getOrElse { shares.orEmpty() + created }
-                        recipient = ""
+                        recipient = null
                     }
                     .onFailure { error = it.message ?: "Could not create this share." }
                 running = false
@@ -519,10 +519,10 @@ private fun MediaShareDialog(
                 services = services,
                 target = selectedTarget,
                 file = file,
-                selectedRecipient = recipient,
+                selectedRecipient = recipient?.id.orEmpty(),
                 enabled = !running,
                 onSelected = {
-                    recipient = it?.id.orEmpty()
+                    recipient = it
                     error = null
                 },
                 onResultsObserved = { recipients ->

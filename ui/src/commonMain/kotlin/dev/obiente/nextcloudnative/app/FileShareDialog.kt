@@ -34,7 +34,8 @@ internal data class FileShareDialogUiState(
     val capabilities: NextcloudFileSharingCapabilities,
     val existingShares: List<NextcloudFileShare>?,
     val target: FileShareTarget,
-    val recipient: String = "",
+    /** The chosen recipient; only a recipient chosen for [target] can become the share target. */
+    val recipient: FileShareRecipient? = null,
     val allowEditing: Boolean = false,
     val details: FileShareCreationDetails = FileShareCreationDetails(),
     val running: Boolean = false,
@@ -48,7 +49,7 @@ internal data class FileShareDialogUiState(
         get() = planFileShareCreation(
             file = file,
             target = target,
-            recipient = recipient.takeIf { target.requiresRecipient },
+            recipient = recipient?.takeIf { target.requiresRecipient && it.target == target }?.id,
             permissions = (
                 if (allowEditing) FileSharePermissionPreset.Edit else FileSharePermissionPreset.View
                 ).toPermissions(file.isDirectory),

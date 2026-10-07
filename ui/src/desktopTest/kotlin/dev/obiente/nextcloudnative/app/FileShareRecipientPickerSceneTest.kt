@@ -11,6 +11,8 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class FileShareRecipientPickerSceneTest {
     @Test
@@ -39,6 +41,69 @@ class FileShareRecipientPickerSceneTest {
             settle()
 
             assertEquals("", selected)
+        }
+    }
+
+    @Test
+    fun typedEmailAddressIsConfirmedWithEnterWhenTheServerReturnsNoMatch() {
+        val fixture = PickerFixture()
+        var selected by mutableStateOf<FileShareRecipient?>(null)
+        nativeSceneTest(800, 600, content = {
+            FileShareRecipientPicker(
+                session = session,
+                services = fixture.services,
+                target = FileShareTarget.Email,
+                file = file,
+                selectedRecipient = selected?.id.orEmpty(),
+                enabled = true,
+                onSelected = { selected = it },
+            )
+        }) {
+            replaceText("", "reader@example")
+            assertTrue(has("Enter a complete domain after the @, such as example.com."))
+            performImeAction("reader@example")
+            assertNull(selected, "An incomplete address must not become a recipient")
+
+            replaceText("reader@example", NEW_ADDRESS)
+            settleUntil { fixture.currentSearches > 0 }
+            settle()
+            assertTrue(has("Typed address"))
+            assertTrue(has("Press Enter or select the address to use it."))
+            assertNull(selected, "A typed address needs confirmation unless the server confirms it")
+
+            performImeAction(NEW_ADDRESS)
+            assertEquals(FileShareRecipient(NEW_ADDRESS, NEW_ADDRESS, FileShareTarget.Email, exact = true), selected)
+            assertTrue(has("Selected: $NEW_ADDRESS"))
+        }
+    }
+
+    @Test
+    fun typedEmailAddressCanBeChosenWhileTheSearchIsStillRunning() {
+        val fixture = PickerFixture()
+        var selected by mutableStateOf<FileShareRecipient?>(null)
+        nativeSceneTest(800, 600, content = {
+            FileShareRecipientPicker(
+                session = session,
+                services = fixture.services,
+                target = FileShareTarget.Email,
+                file = file,
+                selectedRecipient = selected?.id.orEmpty(),
+                enabled = true,
+                onSelected = { selected = it },
+            )
+        }) {
+            replaceText("", OLD_ADDRESS)
+            settleUntil { fixture.staleSearch != null }
+            val pendingSearch = assertNotNull(fixture.staleSearch, "The search did not start")
+
+            click("Typed address")
+            assertEquals(OLD_ADDRESS, selected?.id)
+            assertEquals(FileShareTarget.Email, selected?.target)
+
+            // A late result for the same address must not replace or clear the confirmed choice.
+            pendingSearch.resume(exactEmailResponse(OLD_ADDRESS))
+            settle()
+            assertEquals(OLD_ADDRESS, selected?.id)
         }
     }
 
