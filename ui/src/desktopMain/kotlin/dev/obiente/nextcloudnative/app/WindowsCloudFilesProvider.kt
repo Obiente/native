@@ -210,6 +210,7 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
             )
         }
     }
+    fun localChildren(directory: Path): List<Path> = Files.list(directory).use { it.toList() }
     fun allocatedBytes(path: Path): Long
     fun lastAccessedAtEpochMillis(path: Path): Long
     fun isPinned(path: Path): Boolean
@@ -1957,10 +1958,10 @@ internal class WindowsCloudFilesProvider(
 
     private fun startLocalWatcher() {
         val watcher = root.fileSystem.newWatchService()
-        Files.walk(root).use { paths ->
+        watchService = watcher
+        api.localTree(root).let { paths ->
             paths.filter(Files::isDirectory).forEach { directory -> directory.registerForWindowsCloudChanges(watcher) }
         }
-        watchService = watcher
         watcherThread = Thread({
             while (!Thread.currentThread().isInterrupted) {
                 val key = try {
@@ -1981,7 +1982,7 @@ internal class WindowsCloudFilesProvider(
                             !Files.isSymbolicLink(child)
                         ) {
                             runCatching {
-                                Files.walk(child).use { descendants ->
+                                api.localTree(child).let { descendants ->
                                     descendants.filter { path -> Files.isDirectory(path) && !Files.isSymbolicLink(path) }
                                         .forEach { descendant -> descendant.registerForWindowsCloudChanges(watcher) }
                                 }
@@ -2018,29 +2019,17 @@ internal class WindowsCloudFilesProvider(
 
     private fun recoverLocalChanges() {
         recoverLocalPlaceholders()
-        val pendingDirectories = ArrayDeque<String>()
-        pendingDirectories += ""
-        var discovered = 0
-        while (pendingDirectories.isNotEmpty() && discovered < MAX_RECOVERY_IDENTITIES) {
-            val directory = pendingDirectories.removeFirst()
-            val children = runCatching { backend.list(directory) }.getOrElse { emptyList() }
-            children.forEach { identity ->
-                knownIdentities[identity.path] = identity
-                discovered += 1
-                if (identity.directory) pendingDirectories += identity.path
-            }
-        }
         recoverUnmanagedLocalEntries()
     }
 
     private fun recoverUnmanagedLocalEntries(failClosed: Boolean = false) {
         val recover = {
-            val unmanaged = Files.walk(root).use { paths ->
+            val unmanaged = api.localTree(root).let { paths ->
                 paths.filter { path -> path != root && Files.exists(path) }
                     .filter { path ->
                         inspectPlaceholderForRecovery(path).state == WindowsCloudPlaceholderEntryState.Local
                     }
-                    .sorted(compareBy<Path> { it.nameCount })
+                    .sortedBy { it.nameCount }
                     .toList()
             }
             unmanaged.forEach { path ->
@@ -2091,7 +2080,7 @@ internal class WindowsCloudFilesProvider(
         allowWhilePaused: Boolean = false,
     ) {
         val recover = {
-            Files.walk(root).use { paths ->
+            api.localTree(root).let { paths ->
                 paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
                     val inspection = inspectPlaceholderForRecovery(local)
                     val state = inspection.placeholderState

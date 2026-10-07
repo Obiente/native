@@ -172,7 +172,7 @@ internal fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services, supportDrafts)
+                    LoginDiagnosticsView(services, supportDrafts)
                 }
             },
             confirmButton = {

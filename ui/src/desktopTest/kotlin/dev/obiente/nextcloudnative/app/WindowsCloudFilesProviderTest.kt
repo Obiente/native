@@ -2220,7 +2220,11 @@ class WindowsCloudFilesProviderTest {
         val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
         val preserved = root.resolveSibling("preserved-migration-delayed-corruption")
         val backend = FakeBackend(ByteArray(0), listed = listOf(identity))
+        val updateAttempts = AtomicInteger()
         val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
+            beforeUpdatePlaceholder = {
+                if (updateAttempts.incrementAndGet() > 1) check(migrationEntered.await(15, TimeUnit.SECONDS))
+            }
             seed(local, WindowsCloudPlaceholderState.InSync, identity)
             scriptUpdatePlaceholderFailures(local, ordinaryFailure, corruptFailure)
         }
@@ -2247,11 +2251,6 @@ class WindowsCloudFilesProviderTest {
 
         try {
             provider.start()
-            val initialRecoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (backend.listedPaths.size < 2 && System.nanoTime() < initialRecoveryDeadline) {
-                Thread.yield()
-            }
-            assertTrue(backend.listedPaths.size >= 2)
             backend.beforeList = {
                 if (Thread.currentThread() === migration) {
                     migrationEntered.countDown()

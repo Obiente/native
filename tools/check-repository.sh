@@ -65,6 +65,7 @@ if [[ -n "$credential_matches" ]]; then
 fi
 
 bash tools/test-apksigner-certificate-parser.sh
+bash tools/test-android-emulator.sh
 bash tools/test-build-jvm-criteria.sh
 node tools/changelog-fragments.mjs validate
 node tools/check-markdown-links.mjs

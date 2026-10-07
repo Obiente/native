@@ -39,6 +39,8 @@ import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 internal fun VirtualFileStorageCard(
     snapshot: VirtualFileStorageSnapshot?,
     loading: Boolean,
+    statusMessage: String? = null,
+    onReload: () -> Unit = {},
     busy: Boolean,
     onManage: () -> Unit,
     onFreeUp: () -> Unit,
@@ -52,6 +54,7 @@ internal fun VirtualFileStorageCard(
     onRetryFolder: (String) -> Unit,
 ) {
     var managementExpanded by remember { mutableStateOf(false) }
+    val actionsEnabled = !busy && !loading && statusMessage == null
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
@@ -80,7 +83,7 @@ internal fun VirtualFileStorageCard(
                                 "Browse everything in File Explorer. Files download when opened and local edits sync back."
                             VirtualFilePlatformIntegration.AppleFileProvider ->
                                 "Files download through the system File Provider."
-                            null -> "Loading on-demand storage status..."
+                            null -> if (loading) "Loading on-demand storage status..." else "Storage status is unavailable."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -94,13 +97,18 @@ internal fun VirtualFileStorageCard(
                         shape = RoundedCornerShape(999.dp),
                     ) {
                         Text(
-                            snapshot?.virtualStorageStatusLabel() ?: "Checking",
+                            if (statusMessage != null) "Status unavailable" else snapshot?.virtualStorageStatusLabel() ?: "Unavailable",
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                         )
                     }
                 }
+            }
+
+            statusMessage?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodyMedium)
+                if (!loading) TextButton(onClick = onReload) { Text("Check again") }
             }
 
             if (snapshot != null) {
@@ -179,7 +187,7 @@ internal fun VirtualFileStorageCard(
                         )
                     }
                     OutlinedButton(
-                        enabled = !busy && !snapshot.providerActive,
+                        enabled = actionsEnabled && !snapshot.providerActive,
                         onClick = onChangeCacheTiers,
                     ) {
                         Text("Change cache drives")
@@ -219,7 +227,7 @@ internal fun VirtualFileStorageCard(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error,
                                 )
-                                TextButton(enabled = !busy, onClick = onAcknowledgeRecovery) {
+                                TextButton(enabled = actionsEnabled, onClick = onAcknowledgeRecovery) {
                                     Text("I've reviewed the preserved folder")
                                 }
                             }
@@ -243,14 +251,14 @@ internal fun VirtualFileStorageCard(
                                 )
                             }
                             if (snapshot.providerLocationCanChange) {
-                                TextButton(enabled = !busy, onClick = onChangeLocation) {
+                                TextButton(enabled = actionsEnabled, onClick = onChangeLocation) {
                                     Text("Change drive or folder")
                                 }
                             }
                         }
                     }
                     if (!snapshot.providerActive) {
-                        Button(enabled = !busy, onClick = onActivateProvider) {
+                        Button(enabled = actionsEnabled, onClick = onActivateProvider) {
                             Text("Connect to file manager")
                         }
                     }
@@ -289,7 +297,7 @@ internal fun VirtualFileStorageCard(
                                             add(
                                                 NextcloudCardAction(
                                                     label = "Retry",
-                                                    enabled = !busy,
+                                                    enabled = actionsEnabled,
                                                     onClick = { onRetryFolder(rule.relativePath) },
                                                 ),
                                             )
@@ -298,7 +306,7 @@ internal fun VirtualFileStorageCard(
                                             NextcloudCardAction(
                                                 label = "Make online-only",
                                                 destructive = true,
-                                                enabled = !busy,
+                                                enabled = actionsEnabled,
                                                 onClick = { onReleaseFolder(rule.relativePath) },
                                             ),
                                         )
@@ -353,7 +361,7 @@ internal fun VirtualFileStorageCard(
                                 }
                             }
                         }
-                        OutlinedButton(enabled = !busy, onClick = onChoosePinnedFolder) {
+                        OutlinedButton(enabled = actionsEnabled, onClick = onChoosePinnedFolder) {
                             Text("Keep a folder on this device")
                         }
                     }
@@ -362,17 +370,17 @@ internal fun VirtualFileStorageCard(
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(enabled = !busy, onClick = onManage) { Text("Manage storage") }
+                    Button(enabled = actionsEnabled, onClick = onManage) { Text("Manage storage") }
                     if (snapshot.providerActive) {
                         NextcloudCardOverflow(
                             itemLabel = "file-manager connection",
-                            actions = listOf(NextcloudCardAction(label = "Disconnect from file manager", destructive = true, enabled = !busy, onClick = onDeactivateProvider)),
+                            actions = listOf(NextcloudCardAction(label = "Disconnect from file manager", destructive = true, enabled = actionsEnabled, onClick = onDeactivateProvider)),
                             expanded = managementExpanded,
                             onExpandedChange = { managementExpanded = it },
                         )
                     }
                     OutlinedButton(
-                        enabled = !busy && snapshot.reclaimableBytes > 0L,
+                        enabled = actionsEnabled && snapshot.reclaimableBytes > 0L,
                         onClick = onFreeUp,
                     ) {
                         Text(

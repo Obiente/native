@@ -382,7 +382,10 @@ Intel macOS native library.
 
 - `DesktopSqliteRuntimeTest` checks the native resources for each packaged
   desktop architecture and opens an in-memory database on the test host.
-- An Intel macOS CI job validates relevant dependency and packaging changes.
+- An Intel macOS CI job validates relevant dependency, credential-storage, and
+  packaging changes. It includes a synthetic first-account save and restore
+  through the native Keychain. This does not replace a live browser login
+  test.
 - Nightly and prerelease macOS packages run their launcher with
   `--verify-sqlite-runtime` before creating application services. This check
   does not read accounts or modify user databases.

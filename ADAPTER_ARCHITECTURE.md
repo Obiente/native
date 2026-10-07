@@ -456,6 +456,44 @@ menus use the verified resource label, or "Selected item" when none exists. A
 parent's name is not recovered from a child's response; it returns when the
 parent is loaded again.
 
+### Dashboard response links
+
+Dashboard widget metadata and both item API versions use the account-scoped
+[DashboardLinkPolicy](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardLinkPolicy.kt).
+Absolute links default to HTTPS. An account explicitly approved for HTTP may
+also receive HTTP links with the same scheme, host, and effective port as its
+server URL. Relative links retain their traversal and scheme-relative guards.
+Invalid actionable links reject the response; invalid optional widget, item,
+and overlay icons are omitted. This policy does not change transport consent
+or authorize requests to another HTTP origin.
+
+### Administration visibility
+
+`AdministrationAccessRepository` owns session-scoped, in-memory permission
+evidence from the existing read-only administrator catalog contract. It reuses
+that catalog for the Server apps screen and caches both allowed and denied
+results for five minutes using a monotonic clock. Opening Settings checks the
+cache; while the root Settings screen or Server apps is visible, expired evidence
+is refreshed. Opening a child screen from Settings stops automatic polling.
+Polling also stops when Android leaves the started lifecycle or the desktop
+window is hidden or minimized. Returning to a visible screen reuses fresh
+evidence or revalidates expired evidence. Settings retains the requested section
+while Administration is hidden during a check, without rendering its controls.
+No permission result survives logout, account replacement, or process restart.
+Both catalog request paths use `ForceNetwork` so revalidation cannot renew access
+from the transport's persisted response cache.
+
+Administration, its installed-workspace summary, and the Server apps catalog
+require fresh successful evidence. Unknown, expired, denied, malformed, and
+unavailable results hide those surfaces, including restored navigation. The
+Server apps route keeps a loading or typed failure view with retry and Back
+instead of navigating away silently when permission revalidation fails. An
+explicit refresh removes old access before requesting new evidence. Concurrent
+checks share the cached result, and cancellation cannot publish a late success.
+The ordinary Apps workspace remains available to regular users. Cached visibility
+never authorizes a mutation; strict operations still use authenticated browser
+handoff and server-side authorization.
+
 ## Account removal and recovery
 
 These contracts protect credentials, local edits, and granted access while an
@@ -489,6 +527,11 @@ in [PLATFORMS.md](PLATFORMS.md#desktop-account-recovery).
 - Desktop legacy credential migration propagates cancellation without
   returning an active session or reporting a credential-store failure. The
   legacy secret stays available for a later migration.
+- On macOS, a freshly authenticated account with no registered credential may
+  save to Keychain when Keychain confirms absence and the legacy executable is
+  missing. Existing account credentials and encrypted data retain their
+  migration gates; locked storage and cancellation must not be treated as
+  absence.
 - Credential-free legacy cleanup uses the recorded document identity to match
   that account's legacy and full discovery-cache digests. A missing full digest
   is never a wildcard for other accounts' contracts.

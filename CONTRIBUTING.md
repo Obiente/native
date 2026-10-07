@@ -214,6 +214,11 @@ directory, ADB port and visible emulator window. It finds the SDK through
 uses host GPU acceleration by default. Headless CI hosts can select a
 supported software backend with `NC_NATIVE_EMULATOR_GPU`.
 
+To create emulators, the helper uses the `avdmanager` on your `PATH`. If there
+is none, it falls back to `cmdline-tools/latest/bin/avdmanager` in the SDK it
+found. If that tool fails, the helper reports the error and does not try
+another version. Keep the tool and the system image in the same SDK.
+
 Install the API 36 AOSP x86_64 system image
 (`system-images;android-36;default;x86_64`). Then give each concurrent test
 its own slot (0 to 63):

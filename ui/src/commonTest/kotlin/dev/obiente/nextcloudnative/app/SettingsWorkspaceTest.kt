@@ -8,6 +8,22 @@ import kotlin.test.assertTrue
 
 class SettingsWorkspaceTest {
     @Test
+    fun administrationRequiresPermissionOnBothLayouts() {
+        for (desktop in listOf(false, true)) {
+            val regular = visibleSettingsSections(isDesktop = desktop, hasDeviceSettings = true)
+            assertFalse(SettingsWorkspaceSection.Administration in regular)
+            val admin = visibleSettingsSections(
+                isDesktop = desktop, hasDeviceSettings = true, canAdminister = true,
+            )
+            assertTrue(SettingsWorkspaceSection.Administration in admin)
+            assertEquals(
+                SettingsWorkspaceSection.Account,
+                resolveSettingsWorkspaceSection("Administration", regular),
+            )
+        }
+    }
+
+    @Test
     fun `width below 600 uses compact category and detail flow`() {
         val compact = resolveSettingsWorkspaceLayout(599)
 

@@ -17,7 +17,6 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
-internal const val MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS = 16
 private const val ERROR_FILE_NOT_FOUND = 2
 private const val ERROR_PATH_NOT_FOUND = 3
 internal const val WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
@@ -26,23 +25,6 @@ private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
 private const val CF_PLACEHOLDER_STATE_INVALID = -1
 private const val CF_OPEN_FILE_FLAG_EXCLUSIVE = 0x1
 private const val CF_OPEN_FILE_FLAG_WRITE_ACCESS = 0x2
-
-internal fun windowsCloudPlaceholderDiagnosticSampleSize(availableCount: Int): Int {
-    require(availableCount >= 0)
-    return minOf(availableCount, MAX_WINDOWS_CLOUD_PLACEHOLDER_DIAGNOSTIC_RESULTS)
-}
-
-internal fun windowsCloudFailedPlaceholderIndex(
-    firstFailedEntryIndex: Int?,
-    processedCount: Int,
-    placeholderCount: Int,
-): Int? {
-    require(processedCount in 0..placeholderCount)
-    require(firstFailedEntryIndex == null || firstFailedEntryIndex in 0 until placeholderCount)
-    return firstFailedEntryIndex
-        ?: processedCount.takeIf { it in 0 until placeholderCount }
-        ?: (processedCount - 1).takeIf { it in 0 until placeholderCount }
-}
 
 internal fun windowsCloudOpenFileFlags(write: Boolean, exclusive: Boolean): Int =
     (if (write) CF_OPEN_FILE_FLAG_WRITE_ACCESS else 0) or
@@ -431,6 +413,8 @@ internal class JnaWindowsCloudFilesApi(
             Kernel32.INSTANCE.FindClose(handle)
         }
     }
+
+    override fun localChildren(directory: Path): List<Path> = windowsCloudLocalChildren(directory)
 
     override fun allocatedBytes(path: Path): Long {
         if (!Files.isRegularFile(path)) return 0L

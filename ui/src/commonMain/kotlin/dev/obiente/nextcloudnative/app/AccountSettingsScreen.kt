@@ -27,6 +27,7 @@ internal fun SettingsScreen(
     themePreference: ThemePreference,
     platformCapabilityRefreshRequest: Long,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
+    canAdminister: Boolean,
     onAdminApps: () -> Unit,
     onOfflineCenter: () -> Unit,
     onTransfers: () -> Unit,
@@ -35,9 +36,8 @@ internal fun SettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val isDesktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
-    var selectedSectionName by rememberSaveable(session.serverUrl, session.loginName) {
-        mutableStateOf<String?>(null)
-    }
+    val selection = rememberSettingsSectionSelection(session.serverUrl, session.loginName)
+    var selectedSectionName by selection
     val supportDrafts = rememberAccountSupportSettingsDraftState(session)
     val detailStateHolder = rememberSaveableStateHolder()
     var loggingOut by remember { mutableStateOf(false) }
@@ -61,6 +61,7 @@ internal fun SettingsScreen(
         isDesktop = isDesktop,
         hasDeviceSettings = platformCapabilities.isNotEmpty(),
         hasDesktopAppSettings = hasDesktopAppSettings,
+        canAdminister = canAdminister,
     )
     val selectedSection = selectedSectionName?.let { restoredName ->
         resolveSettingsWorkspaceSection(restoredName, visibleSections)
@@ -263,11 +264,7 @@ internal fun SettingsScreen(
     BoxWithConstraints {
         val expanded = useExpandedSettingsWorkspace(maxWidth.value.toInt())
         val displayedSection = if (expanded) expandedSettingsSection(selectedSection, visibleSections) else selectedSection
-        LaunchedEffect(expanded, displayedSection) {
-            if (expanded && displayedSection != null && selectedSectionName != displayedSection.name) {
-                selectedSectionName = displayedSection.name
-            }
-        }
+        InitializeSettingsSectionSelection(selection, expanded, displayedSection)
         if (expanded) {
         DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
@@ -315,3 +312,21 @@ internal fun expandedSettingsSection(
     selectedSection: SettingsWorkspaceSection?,
     visibleSections: List<SettingsWorkspaceSection>,
 ): SettingsWorkspaceSection? = selectedSection ?: visibleSections.firstOrNull()
+
+@Composable
+internal fun rememberSettingsSectionSelection(serverUrl: String, loginName: String) =
+    rememberSaveable(serverUrl, loginName) { mutableStateOf<String?>(null) }
+
+@Composable
+internal fun InitializeSettingsSectionSelection(
+    selection: androidx.compose.runtime.MutableState<String?>,
+    expanded: Boolean,
+    displayedSection: SettingsWorkspaceSection?,
+) {
+    LaunchedEffect(expanded, displayedSection, selection.value) {
+        // A hidden section is a display fallback, not a new user selection.
+        if (expanded && displayedSection != null && selection.value == null) {
+            selection.value = displayedSection.name
+        }
+    }
+}

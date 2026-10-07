@@ -90,6 +90,11 @@ previous published package:
 - Login Flow credentials survive relaunch in Windows Credential Manager and
   account removal clears them;
 - the Cloud Files sync root appears in Explorer;
+- startup scans only resident entries, without populating unopened cloud folders
+  or recursively listing the remote account; a large remote-only tree must not
+  make local recovery time out;
+- the Virtual files page explains a slow status check, retains the previous
+  snapshot while refreshing, and offers a retry after a status-read failure;
 - directory enumeration, placeholder hydration, pinning, dehydration, rename,
   delete, and guarded writeback work against disposable synthetic data;
 - process termination during hydration and writeback recovers without silent
@@ -147,6 +152,23 @@ The opt-in native tests use the packaged registrar, disposable roots, and an
 in-memory backend that rejects server mutations. Without the launcher variable,
 these integration tests are skipped. The legacy-corruption case also skips on
 Windows versions where the old encoding no longer reproduces the failure.
+
+### Startup enumeration contract
+
+Local watcher registration and recovery use
+[`WindowsCloudLocalTraversal`](../ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudLocalTraversal.kt).
+Its native enumeration uses `FindFirstFileExW` with
+[`FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfileexw)
+so inspecting a local directory does not request remote directory population.
+The initial remote root listing remains necessary to publish its placeholders.
+Ordinary startup recovers identities and dirty edits from resident placeholders;
+it does not prefetch the complete remote namespace. Explicit corrupt-root repair
+and legacy migration retain their separate reconciliation gates.
+
+`WindowsCloudFilesStartupTest` covers remote-list scope, resident traversal,
+and native enumeration on Windows. `WindowsCloudFilesProviderTest` covers the
+existing recovery and writeback behavior. These tests do not replace the
+Explorer and published-MSI acceptance checks above.
 
 ## WinGet delivery
 

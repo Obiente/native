@@ -531,7 +531,7 @@ fun NextcloudNativeApp(
             if (sessionLoad == null) {
                 LoadingMessage("Loading account")
             } else if (sessionLoad !is NextcloudSessionLoadState.Loaded) {
-                SessionLoadingRecoveryScreen(sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
+                SessionRecoveryDiagnosticsView(services, sessionLoad, { sessionLoadAttempt += 1 }, signInAgain)
             } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
@@ -637,6 +637,10 @@ private fun AuthenticatedApp(
         session.loginName,
         stateSaver = enumSaver<NextcloudDestination>(),
     ) { mutableStateOf(NextcloudDestination.Home) }
+    val administration = rememberAdministrationAccess(
+        session, platformCapabilityRefreshRequest,
+        active = administrationAccessPollingActive(screen, destination),
+    ) { services.executeNextcloudApi(session, it) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
     val appPinsStorage = rememberAccountHomeWorkspaceStorage(session)
@@ -1569,7 +1573,8 @@ private fun AuthenticatedApp(
                     themePreference = themePreference,
                     platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
                     onThemePreferenceChanged = onThemePreferenceChanged,
-                    onAdminApps = { screen = Screen.AdminApps },
+                    canAdminister = administration.canAdminister,
+                    onAdminApps = { if (administration.canAdminister) screen = Screen.AdminApps },
                     onOfflineCenter = {
                         if (presentation == NextcloudPresentation.Desktop) {
                             screen = Screen.Root
@@ -1735,8 +1740,10 @@ private fun AuthenticatedApp(
             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         )
         Screen.AdminApps -> AdminAppsScreen(
-            services = services,
-            session = session,
+            access = administration,
+            onContinueInBrowser = {
+                services.openExternalUrl(session.serverUrl.trimEnd('/') + "/index.php/settings/apps")
+            },
             serverInfo = serverInfo,
             onOpenApp = { openApp(it, NextcloudDestination.Settings) },
             onBack = ::navigateBack,
@@ -2092,126 +2099,6 @@ private fun AppsScreen(
         onSearch = onSearch,
         onOpenApp = onOpenApp,
     )
-}
-
-@Composable
-private fun AdminAppsScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    serverInfo: NextcloudServerInfo?,
-    onOpenApp: (NextcloudAppEntry) -> Unit,
-    onBack: () -> Unit,
-) {
-    var search by remember { mutableStateOf("") }
-    var catalogFilter by remember { mutableStateOf(NativeAppCatalogFilter.All) }
-    var catalogResult by remember(session) { mutableStateOf<NativeAppCatalogResult?>(null) }
-    var catalogAttempt by remember(session) { mutableStateOf(0) }
-    var catalogRefreshing by remember(session) { mutableStateOf(false) }
-    var catalogRefreshError by remember(session) { mutableStateOf<String?>(null) }
-    var pendingLifecycleAction by remember {
-        mutableStateOf<Pair<NativeManagedApp, NativeAppLifecycleAction>?>(null)
-    }
-    LaunchedEffect(session, catalogAttempt) {
-        val retained = catalogResult
-        catalogRefreshing = retained != null
-        catalogRefreshError = null
-        val loaded = runCatching {
-            loadNativeAppCatalog { request -> services.executeNextcloudApi(session, request) }
-        }.getOrElse {
-            NativeAppCatalogResult.InvalidResponse("The administrator app catalog could not be loaded.")
-        }
-        if (retained is NativeAppCatalogResult.Available && loaded !is NativeAppCatalogResult.Available) {
-            catalogRefreshError = when (loaded) {
-                NativeAppCatalogResult.Forbidden -> "This account no longer has permission to refresh server apps."
-                NativeAppCatalogResult.Unavailable -> "Administrator app management is currently unavailable."
-                is NativeAppCatalogResult.InvalidResponse -> loaded.reason
-                is NativeAppCatalogResult.Available -> error("Handled above")
-            }
-        } else {
-            catalogResult = loaded
-        }
-        catalogRefreshing = false
-    }
-
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(
-            title = "Server apps",
-            subtitle = "Administrator app management",
-            onBack = onBack,
-        )
-        if (catalogRefreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        catalogRefreshError?.let { message ->
-            RetainedRefreshError(message = message, onRetry = { catalogAttempt += 1 })
-        }
-        when (val result = catalogResult) {
-            null -> LoadingMessage("Loading administrator app catalog...")
-            is NativeAppCatalogResult.Available -> NativeAppCatalogSurface(
-                catalog = result.catalog,
-                query = search,
-                filter = catalogFilter,
-                onQueryChanged = { search = it },
-                onFilterChanged = { catalogFilter = it },
-                onOpenInstalledApp = { managed ->
-                    serverInfo?.apps?.firstOrNull { app -> app.id == managed.id }?.let(onOpenApp)
-                },
-                onLifecycleAction = { app, action -> pendingLifecycleAction = app to action },
-            )
-            NativeAppCatalogResult.Forbidden -> ErrorMessage(
-                "This account does not have permission to manage server apps.",
-                onRetry = { catalogAttempt += 1 },
-            )
-            NativeAppCatalogResult.Unavailable -> ErrorMessage(
-                "Administrator app management is unavailable on this server.",
-                onRetry = { catalogAttempt += 1 },
-            )
-            is NativeAppCatalogResult.InvalidResponse -> ErrorMessage(
-                result.reason,
-                onRetry = { catalogAttempt += 1 },
-            )
-        }
-    }
-
-    pendingLifecycleAction?.let { (app, action) ->
-        AlertDialog(
-            onDismissRequest = { pendingLifecycleAction = null },
-            title = { Text("${action.uiLabel()} ${app.name}?") },
-            text = {
-                Text(
-                    when (action) {
-                        NativeAppLifecycleAction.InstallAndEnable ->
-                            "This downloads server-side code and enables the app for users."
-                        NativeAppLifecycleAction.Enable ->
-                            "This activates the app and may add navigation, jobs, and integrations for users."
-                        NativeAppLifecycleAction.Disable ->
-                            "This makes the app and its integrations unavailable until an administrator enables it again."
-                        NativeAppLifecycleAction.Update ->
-                            "The server may enter maintenance mode while the app package is updated. Do not interrupt it."
-                        NativeAppLifecycleAction.Uninstall ->
-                            "This removes the app package. App data retention depends on the app and is not guaranteed."
-                    } + "\n\nNextcloud requires administrator password confirmation. Continue in the authenticated server administration page.",
-                )
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingLifecycleAction = null }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        pendingLifecycleAction = null
-                        services.openExternalUrl(session.serverUrl.trimEnd('/') + "/index.php/settings/apps")
-                        catalogAttempt += 1
-                    },
-                    colors = if (action == NativeAppLifecycleAction.Uninstall) {
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    } else {
-                        ButtonDefaults.buttonColors()
-                    },
-                ) {
-                    Text("Continue in browser")
-                }
-            },
-        )
-    }
 }
 
 @Composable
