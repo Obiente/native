@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioFileReference
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeAudioTrack
+import kotlin.random.Random
 
 internal fun fileAudioPlaybackSource(session: NextcloudSession, userId: String, file: NextcloudFile): NativeAudioPlaybackSource? {
     val mime = file.mimeType?.substringBefore(';')?.trim()?.lowercase() ?: return null
@@ -25,7 +26,11 @@ internal fun fileAudioPlaybackSource(session: NextcloudSession, userId: String, 
         userId.isBlank() || file.size?.let { it <= 0 } == true || mime !in FILE_AUDIO_MIME_TYPES) return null
     return try {
         requireSafeFilePath(file.path, allowRoot = false)
-        val revision = file.etag ?: file.lastModified.orEmpty()
+        // Without a version, a unique identity always starts a fresh stream instead of resuming
+        // an older version that may still be playing under the same path.
+        val revision = file.etag?.takeIf(String::isNotBlank)
+            ?: file.lastModified?.takeIf(String::isNotBlank)
+            ?: "unversioned:" + Random.nextLong()
         NativeAudioPlaybackSource(
             id = "file-audio:" + session.accountId.storageKey + ":" +
                 publicContentSha256((file.path + "\u0000" + revision).encodeToByteArray()),

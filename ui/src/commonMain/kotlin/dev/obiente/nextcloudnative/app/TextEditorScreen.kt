@@ -97,6 +97,13 @@ internal fun TextEditorScreen(
         delay(TEXT_DRAFT_PERSIST_DEBOUNCE_MILLIS)
         if (editor.originalText != null) editor.persistEdits()
     }
+    val windowVisibility = LocalAppWindowVisibility.current
+    LaunchedEffect(editor, windowVisibility) {
+        // Leaving the screen (Android stop, desktop window hidden) skips the debounce window.
+        windowVisibility.collect { visible ->
+            if (!visible && editor.originalText != null) editor.persistEdits()
+        }
+    }
 
     fun requestBack() {
         if (saving || navigationCommitInProgress) return

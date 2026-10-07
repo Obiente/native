@@ -87,12 +87,14 @@ internal fun LoginScreen(
     }
     LaunchedEffect(attempt.failure) {
         val failure = attempt.failure ?: return@LaunchedEffect
+        val inspectedServerUrl = attemptedServerUrl
         val reviewResult = if (certificateJustApproved == null) {
-            filesRequest { services.inspectServerCertificateFailure(attemptedServerUrl, failure) }
+            filesRequest { services.inspectServerCertificateFailure(inspectedServerUrl, failure) }
         } else {
             Result.success(null)
         }
-        if (attempt.failure !== failure) return@LaunchedEffect
+        // A review for an address the person has since edited must never approve the new one.
+        if (attempt.failure !== failure || serverUrl != inspectedServerUrl) return@LaunchedEffect
         val review = reviewResult.getOrNull()
         if (review != null) {
             certificateReview = review
@@ -204,6 +206,7 @@ internal fun LoginScreen(
             OutlinedTextField(
                 value = serverUrl,
                 onValueChange = { value ->
+                    if (value != serverUrl) certificateReview = null
                     serverUrl = value
                     trustedCertificate = services.trustedServerCertificate(value)
                 },

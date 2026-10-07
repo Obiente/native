@@ -1,9 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.AnnotatedString
 import java.lang.reflect.Proxy
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -60,6 +65,28 @@ class TextEditorScreenInteractionTest {
             assertEquals("Restored synthetic draft", fixture.stored?.text)
             assertEquals(0, fixture.downloads)
             assertEquals(0, fixture.uploads)
+        }
+    }
+
+    @Test
+    fun hidingTheAppFlushesTheDraftBeforeTheTypingDebounce() {
+        val fixture = EditorFixture()
+        val visibility = MutableStateFlow(true)
+        nativeSceneTest(800, 360, content = {
+            CompositionLocalProvider(LocalAppWindowVisibility provides visibility) {
+                TextEditorScreen(fixture.services, session, "synthetic-user", file, {})
+            }
+        }) {
+            val field = assertNotNull(nodes().lastOrNull {
+                it.config.getOrNull(SemanticsProperties.EditableText) != null &&
+                    it.config.getOrNull(SemanticsActions.SetText)?.action != null
+            })
+            assertTrue(field.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Unsaved line")))
+            // Stay well inside the 300 ms typing debounce so only the visibility flush can save.
+            repeat(2) { scene.render(System.nanoTime()).close(); delay(10) }
+            visibility.value = false
+            repeat(3) { scene.render(System.nanoTime()).close(); delay(10) }
+            assertEquals("Unsaved line", fixture.stored?.text)
         }
     }
 

@@ -15,6 +15,12 @@ class FileAudioPlaybackTest {
         assertEquals("https://fixture.invalid/nextcloud" + source.relativePath, nativeAudioPlaybackUrl(account, source))
         assertNotEquals(source.id, fileAudioPlaybackSource(account.copy(loginName = "other-user"), "other-user", file)?.id)
         assertNotEquals(source.id, fileAudioPlaybackSource(account, "synthetic-user", file.copy(etag = "revision-two"))?.id)
+        // Without any version, each source is distinct so a replacement never resumes an old stream.
+        val unversioned = file.copy(etag = null, lastModified = null)
+        assertNotEquals(
+            fileAudioPlaybackSource(account, "synthetic-user", unversioned)?.id,
+            fileAudioPlaybackSource(account, "synthetic-user", unversioned)?.id,
+        )
         assertNotNull(fileAudioPlaybackSource(account, "synthetic-user", file.copy(size = null)))
         assertEquals(512, fileAudioPlaybackSource(account, "synthetic-user", file.copy(name = "x".repeat(600)))?.title?.length)
     }
