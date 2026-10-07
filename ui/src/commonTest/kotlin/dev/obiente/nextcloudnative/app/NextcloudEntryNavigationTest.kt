@@ -42,6 +42,19 @@ class NextcloudEntryNavigationTest {
         assertEquals("Old folder", activity(null).activityOpenAction(installed, origin)?.filesParentPath)
         assertEquals(UnifiedSearchOpenTarget.App("files"), selection(null, path = "/unsafe\\path/report.txt").openTarget(origin, installed))
     }
+    @Test fun providerOpensItsExactAppBeforeAnyPrefixMatch() {
+        val apps = linkedSetOf("news", "newsletter")
+        fun provider(id: String, appId: String) = UnifiedSearchSelection(
+            UnifiedSearchProvider(id, appId, "Synthetic provider", null, 0, false, emptyList(), emptyList(), false),
+            UnifiedSearchEntry(null, "Issue", null, null, null, false, emptyMap()),
+        )
+        assertEquals(UnifiedSearchOpenTarget.App("newsletter"), provider("newsletter-search", "newsletter").openTarget(origin, apps))
+        // Without an exact app ID, only a whole segment matches, and the longest installed ID wins.
+        assertEquals(UnifiedSearchOpenTarget.App("newsletter"), provider("newsletter-search", "unknown").openTarget(origin, apps))
+        assertEquals(UnifiedSearchOpenTarget.App("news"), provider("news_feed", "unknown").openTarget(origin, apps))
+        assertNull(provider("newsroom", "unknown").openTarget(origin, apps))
+    }
+
     @Test fun appRootLinksUseVerifiedUrlBeforeUnrelatedProviderHint() {
         val target = assertIs<UnifiedSearchOpenTarget.Link>(selection("/apps/notes/", app = "deck", path = null).openTarget(origin, installed))
         assertEquals("notes", assertIs<NextcloudLinkDestination.App>(nextcloudLinkDestination(origin, target.url)).appId)

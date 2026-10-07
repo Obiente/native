@@ -22,8 +22,7 @@ internal sealed interface UnifiedSearchOpenTarget {
 internal fun UnifiedSearchSelection.openTarget(serverUrl: String, installedAppIds: Set<String>): UnifiedSearchOpenTarget? {
     preferredNativeEntryLink(serverUrl, entry.resourceUrl, installedAppIds)?.let { return UnifiedSearchOpenTarget.Link(it) }
     nativeFileParentPathOrNull()?.let { return UnifiedSearchOpenTarget.FilesPath(it) }
-    installedAppIds.firstOrNull { it == provider.appId || provider.id.startsWith(it) }
-        ?.let { return UnifiedSearchOpenTarget.App(it) }
+    provider.installedAppId(installedAppIds)?.let { return UnifiedSearchOpenTarget.App(it) }
     return entry.resourceUrl?.let { url ->
         when (val target = nextcloudLinkDestination(serverUrl, url)) {
             is NextcloudLinkDestination.Rejected -> null
@@ -31,6 +30,20 @@ internal fun UnifiedSearchSelection.openTarget(serverUrl: String, installedAppId
         }
     }
 }
+
+/**
+ * The provider's own app ID wins. Otherwise only a whole provider-ID segment may match, and the
+ * longest installed ID is chosen, so `newsletter-search` never opens an installed `news` app.
+ */
+private fun UnifiedSearchProvider.installedAppId(installedAppIds: Set<String>): String? =
+    installedAppIds.firstOrNull { it == appId }
+        ?: installedAppIds
+            .filter { installed ->
+                id == installed || (id.startsWith(installed) && id[installed.length] in PROVIDER_ID_DELIMITERS)
+            }
+            .maxByOrNull(String::length)
+
+private val PROVIDER_ID_DELIMITERS = setOf('-', '_', '.')
 
 private fun UnifiedSearchSelection.nativeFileParentPathOrNull(): String? {
     if (provider.appId != "files" && !provider.id.startsWith("files")) return null

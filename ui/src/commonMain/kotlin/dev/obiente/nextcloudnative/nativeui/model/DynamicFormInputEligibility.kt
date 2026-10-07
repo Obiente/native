@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.model
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /** A visible form must be able to collect every required body value. */
@@ -24,7 +25,11 @@ internal fun DynamicAction.hasMaterializableRequiredFormInputs(form: DynamicForm
     }
     if (required.distinct().size != required.size || required.any { it !in properties }) return false
     val fields = form.fields.associateBy(FormField::fieldId)
-    return required.all { id ->
+    // OpenAPI applies "required" to a readOnly property only in responses, never in request bodies.
+    val writableRequired = required.filterNot { id ->
+        ((properties[id] as? JsonObject)?.get("readOnly") as? JsonPrimitive)?.booleanOrNull == true
+    }
+    return writableRequired.all { id ->
         val field = fields[id] ?: return@all false
         field.repeatableObjectInput != null || field.format in setOf(
             DYNAMIC_INTEGER_ARRAY_FORMAT, DYNAMIC_STRING_ARRAY_FORMAT, DYNAMIC_STRING_LIST_FORMAT,

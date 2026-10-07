@@ -38,5 +38,12 @@ class DynamicFormInputEligibilityTest {
         assertTrue(action.copy(binding = action.binding.copy(body = scalarBody)).hasMaterializableRequiredFormInputs(
             form.copy(fields = listOf(FormField("title", "Title", FieldKind.string, true)))))
         assertTrue(action.copy(binding = action.binding.copy(body = null)).hasMaterializableRequiredFormInputs(form.copy(fields = emptyList())))
+        // A server-assigned readOnly identifier is required only in responses, so a create form stays usable.
+        val readOnlyIdBody = action.binding.body!!.copy(schema = Json.parseToJsonElement(
+            """{"type":"object","required":["id","title"],"properties":{"id":{"type":"string","readOnly":true},"title":{"type":"string"}}}"""))
+        assertTrue(action.copy(binding = action.binding.copy(body = readOnlyIdBody)).hasMaterializableRequiredFormInputs(
+            form.copy(fields = listOf(FormField("title", "Title", FieldKind.string, true)))))
+        assertFalse(action.copy(binding = action.binding.copy(body = readOnlyIdBody)).hasMaterializableRequiredFormInputs(
+            form.copy(fields = emptyList())))
     }
 }

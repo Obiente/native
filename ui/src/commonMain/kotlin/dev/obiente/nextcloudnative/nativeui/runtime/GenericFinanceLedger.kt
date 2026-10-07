@@ -59,12 +59,17 @@ internal fun GenericFinanceCollection(
     var accountFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
     var filtersExpanded by rememberSaveable(resource.id) { mutableStateOf(false) }
     val presentations = remember(rows) { rows.mapNotNull { (_, transaction) -> transaction } }
-    val categories = remember(presentations) {
-        presentations.mapNotNull(NativeFinancePresentation::category).distinct().sorted().take(12)
+    // A selected facet keeps its chip even when refresh or paging drops it, so it stays removable.
+    val categories = remember(presentations, categoryFilter) {
+        (presentations.mapNotNull(NativeFinancePresentation::category).distinct().sorted().take(12) +
+            listOfNotNull(categoryFilter)).distinct()
     }
-    val accounts = remember(presentations) {
-        presentations.mapNotNull(NativeFinancePresentation::paymentMethod).distinct().sorted().take(12)
+    val accounts = remember(presentations, accountFilter) {
+        (presentations.mapNotNull(NativeFinancePresentation::paymentMethod).distinct().sorted().take(12) +
+            listOfNotNull(accountFilter)).distinct()
     }
+    val facetFiltersAvailable = categories.size > 1 || accounts.size > 1 ||
+        categoryFilter != null || accountFilter != null
     val presentedRows = remember(rows, filter, categoryFilter, accountFilter) {
         rows.filter { (_, transaction) ->
             val directionMatches = when (filter) {
@@ -134,14 +139,14 @@ internal fun GenericFinanceCollection(
                                 label = { Text(option.label) },
                             )
                         }
-                        if (categories.size > 1 || accounts.size > 1) {
+                        if (facetFiltersAvailable) {
                             TextButton(onClick = { filtersExpanded = !filtersExpanded }) {
                                 val activeCount = listOfNotNull(categoryFilter, accountFilter).size
                                 Text(if (activeCount == 0) "Filters" else "Filters ($activeCount)")
                             }
                         }
                     }
-                    if (filtersExpanded && (categories.size > 1 || accounts.size > 1)) {
+                    if (filtersExpanded && facetFiltersAvailable) {
                         Row(
                             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -273,6 +278,22 @@ internal fun GenericFinanceCollection(
                     }
                 }
                 NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+                // Filters only see loaded pages; offer one explicit page at a time instead of auto-paging.
+                if (localFiltersActive && onLoadMore != null && !loadingMore && loadMoreError == null) {
+                    item(key = "finance-filtered-load-more") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = NextcloudSpacing.Small),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                        ) {
+                            Text(
+                                "Filters only cover the ${presentations.size} transactions loaded so far.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = onLoadMore) { Text("Load more transactions") }
+                        }
+                    }
+                }
             }
         }
     }

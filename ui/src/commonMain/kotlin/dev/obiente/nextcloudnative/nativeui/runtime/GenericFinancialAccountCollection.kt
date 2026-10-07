@@ -41,6 +41,22 @@ import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 
+/**
+ * The balance counted in summary totals, or null when it would need a currency conversion.
+ * Without one shared currency, raw balances in different currencies are never added together.
+ */
+internal fun nativeFinancialSummaryBalance(
+    account: NativeFinancialAccountPresentation,
+    summaryCurrency: String?,
+    accounts: List<NativeFinancialAccountPresentation>,
+): Double? {
+    account.convertedBalance?.let { return it }
+    val noCommonCurrency = summaryCurrency == null && accounts.any { it.currency != null }
+    return account.balance.takeIf {
+        !noCommonCurrency && (account.currency == null || account.currency == summaryCurrency)
+    }
+}
+
 @Composable
 internal fun GenericFinancialAccountCollection(
     schema: NativeAppSchema,
@@ -65,10 +81,7 @@ internal fun GenericFinancialAccountCollection(
             ?: contextualCurrency
     }
     fun convertedBalance(account: NativeFinancialAccountPresentation): Double? =
-        account.convertedBalance
-            ?: account.balance.takeIf {
-                currency == null || account.currency == null || account.currency == currency
-            }
+        nativeFinancialSummaryBalance(account, currency, accounts)
     val assets = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Asset } }
     val liabilities = remember(rows) {
         rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Liability }
