@@ -134,13 +134,14 @@ internal class TextEditorState(
             saving = false
             return
         }
+        var confirmed = false
         try {
             val saved = upload(submitted, expected)
+            confirmed = true
             originalText = submitted
             etag = saved.etag?.takeIf(String::isNotBlank)
             verificationRequired = etag == null
             savedMessage = if (verificationRequired) "Saved. Verify the server version before saving again." else "Saved to Nextcloud"
-            persist()
         } catch (cancelled: CancellationException) {
             etag = null
             throw cancelled
@@ -154,6 +155,11 @@ internal class TextEditorState(
             saveError = "The save could not be confirmed. Verify the server version before saving again."
         } finally {
             saving = false
+        }
+        if (!confirmed) return
+        // The server result is known here; a recovery-copy failure is only a local storage problem.
+        filesRequest { persist() }.onFailure {
+            saveError = "Saved, but the local recovery copy could not be updated."
         }
     }
 

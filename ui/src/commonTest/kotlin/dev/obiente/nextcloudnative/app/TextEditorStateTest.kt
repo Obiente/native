@@ -218,6 +218,27 @@ class TextEditorStateTest {
     }
 
     @Test
+    fun `recovery copy failure after a confirmed upload keeps the new revision`() = runBlocking {
+        var saves = 0
+        val store = object : TextEditorDraftStore {
+            override suspend fun load(): TextEditorDraft? = null
+            // The pre-upload checkpoint succeeds; the post-upload cleanup fails.
+            override suspend fun save(draft: TextEditorDraft) { if (++saves > 1) error("disk full") }
+            override suspend fun remove() { error("disk full") }
+        }
+        val editor = TextEditorState(store, { content("old", "v1") }, { _, _ -> SavedTextFile("v2", false) })
+        editor.open()
+        editor.edit("new")
+        editor.save()
+        assertEquals("v2", editor.etag)
+        assertEquals("new", editor.originalText)
+        assertFalse(editor.dirty)
+        assertEquals("Saved, but the local recovery copy could not be updated.", editor.saveError)
+        editor.edit("newer")
+        assertTrue(editor.canSave)
+    }
+
+    @Test
     fun `listing revision is used when the download has no ETag`() = runBlocking {
         val revisions = mutableListOf<String>()
         val editor = TextEditorState(

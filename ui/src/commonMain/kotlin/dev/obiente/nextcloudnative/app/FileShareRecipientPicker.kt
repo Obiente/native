@@ -33,7 +33,9 @@ import androidx.compose.ui.semantics.Role
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 
 @Immutable
 internal data class FileShareRecipientPickerUiState(
@@ -117,6 +119,9 @@ internal fun FileShareRecipientPicker(
         state = state.copy(loading = true, selectedRecipient = "", error = null)
         try {
             val results = services.searchFileShareRecipients(session, normalized, target, file)
+            // A superseded search must not publish results or select a recipient for a new query.
+            currentCoroutineContext().ensureActive()
+            if (state.query.trim() != normalized) return@LaunchedEffect
             state = state.copy(results = results, loading = false)
             currentOnResultsObserved(results)
             automaticFileShareRecipient(target, normalized, results)?.let { recipient ->

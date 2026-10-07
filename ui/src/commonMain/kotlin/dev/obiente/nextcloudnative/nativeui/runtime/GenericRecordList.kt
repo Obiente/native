@@ -270,6 +270,7 @@ internal fun GenericEditableTableRecordList(
         }
     }.distinctBy(FieldSpec::id)
     val cellEdits = remember(schema, projection) { NativeCellEditSession() }
+    LaunchedEffect(cellEdits, records) { cellEdits.acceptAuthoritativeRecords() }
     val listState = rememberLazyListState()
     NativeCollectionAutoPager(
         listState = listState,

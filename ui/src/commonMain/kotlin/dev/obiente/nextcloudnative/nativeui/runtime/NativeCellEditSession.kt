@@ -26,7 +26,8 @@ internal data class NativeCellAddress(val recordId: String, val fieldId: String)
  * Inline cell editing shared by the table grid and the compact record list.
  *
  * Confirmed values are kept per cell so the collection shows the saved value until the next
- * refresh replaces the records. Hold one session per schema and projection.
+ * authoritative records arrive. Hold one session per schema and projection, and call
+ * [acceptAuthoritativeRecords] when new records load so the server value replaces the override.
  */
 @Stable
 internal class NativeCellEditSession {
@@ -43,6 +44,11 @@ internal class NativeCellEditSession {
 
     fun savedValue(recordId: String, fieldId: String): String? =
         savedValues[NativeCellAddress(recordId, fieldId)]
+
+    /** Drops optimistic overrides; refreshed records are the authoritative values. */
+    fun acceptAuthoritativeRecords() {
+        savedValues.clear()
+    }
 
     fun begin(plan: NativeCellEditPlan) {
         val current = savedValue(plan.recordId, plan.field.id) ?: plan.originalValue
@@ -68,7 +74,8 @@ internal class NativeCellEditSession {
             error = message
             return null
         }
-        val value = draft.trim()
+        // Text keeps leading and trailing whitespace exactly as typed; scalar values are normalized.
+        val value = if (plan.field.kind in VERBATIM_CELL_KINDS) draft else draft.trim()
         saving = true
         try {
             return when (val result = executor.execute(plan.request(value))) {
@@ -87,6 +94,8 @@ internal class NativeCellEditSession {
         }
     }
 }
+
+private val VERBATIM_CELL_KINDS = setOf(FieldKind.string, FieldKind.longText)
 
 @Composable
 internal fun NativeCellEditDialog(

@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -78,6 +79,7 @@ internal fun GenericRecordTable(
         return
     }
     val cellEdits = remember(schema, projection) { NativeCellEditSession() }
+    LaunchedEffect(cellEdits, records) { cellEdits.acceptAuthoritativeRecords() }
     val actionWidth = if (onSelectRecord == null) 0.dp else 48.dp
     val frozenField = fields.firstOrNull { it.id == projection.frozenFieldId }
     val scrollingFields = fields.filterNot { it.id == frozenField?.id }

@@ -30,10 +30,17 @@ internal class MediaThumbnailCache(
         }
         try {
             return request.mutex.withLock {
-                if (!gate.read(producer, false) { true }) return@withLock null
-                gate.read(producer, null) {
-                    request.result ?: entries.remove(key)?.also { entries[key] = it }
-                } ?: fetch()?.let { image -> gate.read(producer, null) { image } }?.also { image ->
+                // One locked read, so retirement cannot be mistaken for a cache miss that fetches.
+                val cached = gate.read(producer, ThumbnailLookup.Retired) {
+                    (request.result ?: entries.remove(key)?.also { entries[key] = it })
+                        ?.let(ThumbnailLookup::Hit) ?: ThumbnailLookup.Miss
+                }
+                when (cached) {
+                    ThumbnailLookup.Retired -> return@withLock null
+                    is ThumbnailLookup.Hit -> return@withLock cached.image
+                    ThumbnailLookup.Miss -> Unit
+                }
+                fetch()?.let { image -> gate.read(producer, null) { image } }?.also { image ->
                     request.result = image
                     val weight = image.weight()
                     if (weight <= maximumBytes) gate.mutate(account, producer) {
@@ -62,6 +69,12 @@ internal class MediaThumbnailCache(
 
     // Budget for up to eight bytes per pixel, including wide-color native storage.
     private fun ImageBitmap.weight(): Long = width.toLong() * height.toLong() * 8L
+}
+
+private sealed interface ThumbnailLookup {
+    data object Retired : ThumbnailLookup
+    data object Miss : ThumbnailLookup
+    data class Hit(val image: ImageBitmap) : ThumbnailLookup
 }
 
 internal data class MediaThumbnailKey(val preview: PreviewCacheKey, val source: NextcloudFile)

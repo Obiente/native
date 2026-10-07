@@ -96,7 +96,37 @@ class NativeCellEditSessionTest {
         assertEquals("13", session.savedValue("row-1", "amount"))
     }
 
-    private fun plan(originalValue: String) = NativeCellEditPlan(
+    @Test
+    fun longTextEditKeepsLeadingAndTrailingWhitespace() = runBlocking {
+        val session = NativeCellEditSession()
+        var submitted: NativeActionRequest? = null
+        session.begin(plan(originalValue = "", kind = FieldKind.longText))
+        val text = "    indented code\nline  "
+        session.updateDraft(text)
+
+        session.save(NativeActionExecutor { request ->
+            submitted = request
+            NativeActionExecutionResult.Success()
+        })
+
+        assertEquals(text, (submitted as NativeActionRequest.Submit).values["value"])
+        assertEquals(text, session.savedValue("row-1", "amount"))
+    }
+
+    @Test
+    fun authoritativeRecordsReplaceTheOptimisticCellValue() = runBlocking {
+        val session = NativeCellEditSession()
+        session.begin(plan(originalValue = "12"))
+        session.updateDraft("15")
+        session.save(NativeActionExecutor { NativeActionExecutionResult.Success() })
+        assertEquals("15", session.savedValue("row-1", "amount"))
+
+        session.acceptAuthoritativeRecords()
+
+        assertNull(session.savedValue("row-1", "amount"))
+    }
+
+    private fun plan(originalValue: String, kind: FieldKind = FieldKind.integer) = NativeCellEditPlan(
         action = ActionSpec(
             id = "update-cell",
             label = "Update cell",
@@ -107,7 +137,7 @@ class NativeCellEditSessionTest {
             requiresConfirmation = false,
             confidence = Confidence.verified,
         ),
-        field = FieldSpec(id = "amount", label = "Amount", kind = FieldKind.integer, required = true, readOnly = false),
+        field = FieldSpec(id = "amount", label = "Amount", kind = kind, required = true, readOnly = false),
         recordId = "row-1",
         originalValue = originalValue,
         valueFieldName = "value",
