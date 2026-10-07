@@ -342,6 +342,28 @@ published installer.
   retained-data and support guidance, without a reset or an update claim. A
   valid legacy session can still repair malformed registry data.
 
+### Desktop TLS trust
+
+**Last reviewed: 2026-10-08.** These are source and deterministic-test
+guarantees, not claims about a published installer; the code may have changed.
+
+- Desktop clients that contact the Nextcloud server use one process-wide trust
+  manager from `DesktopTlsTrust.kt`. It accepts a chain when either the bundled
+  Java runtime roots or the operating-system anchors validate it completely.
+  OkHttp hostname verification is unchanged, and no trust-all path exists.
+- `DesktopSystemTrustAnchors.kt` reads the first complete Linux system CA
+  bundle or the Windows `Windows-ROOT` store through SunMSCAPI. Windows
+  packages add the `jdk.crypto.mscapi` runtime module for this. macOS reads no
+  system anchors yet.
+- An unreadable, oversized, truncated, or malformed bundle contributes no
+  anchors. Update checks and project news keep the bundled roots only.
+- `DesktopTlsTrustTest` and `DesktopSystemTrustAnchorsTest` cover synthetic CAs,
+  untrusted and expired chains, hostname mismatch, and malformed or missing
+  bundles. A Windows test host also loads its real ROOT store. No test
+  establishes behavior inside a Flatpak or other sandbox.
+- User-facing guidance is in
+  [sign-in diagnostics](docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities).
+
 ## Platform delivery rule
 
 Shared code is valuable only when it preserves correct native behavior. Move a

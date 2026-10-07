@@ -230,6 +230,7 @@ kotlin {
         val desktopTest by getting
         desktopTest.dependencies {
             implementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+            implementation("com.squareup.okhttp3:okhttp-tls:5.4.0")
         }
     }
 }
@@ -256,6 +257,9 @@ compose.desktop {
 
         nativeDistributions {
             modules("jdk.security.auth")
+            // SunMSCAPI exposes the Windows ROOT store so OS-trusted CAs are honored for TLS.
+            // The module exists only in Windows JDKs, and jpackage builds each OS natively.
+            if (System.getProperty("os.name").startsWith("Windows")) modules("jdk.crypto.mscapi")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             // Preserve Windows/Linux launcher paths used by existing integrations.
             packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
