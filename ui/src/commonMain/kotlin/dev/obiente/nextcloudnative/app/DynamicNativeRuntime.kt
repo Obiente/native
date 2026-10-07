@@ -70,6 +70,7 @@ data class DynamicDescriptorDiscovery(
     val acquisition: DynamicDescriptorAcquisition,
     val diagnostics: List<String> = emptyList(),
     val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
+    val fallbackReason: DynamicContractFallbackReason? = null,
 )
 
 @Serializable
@@ -131,11 +132,10 @@ suspend fun discoverDynamicAppDescriptor(
         onProgress = onProgress,
     )
     if (sameOrigin.acquisition != DynamicDescriptorAcquisition.MetadataFallback) return sameOrigin
-    val coreVersion = serverVersion?.coreVersionOrNull()
-        ?: return sameOrigin.copy(
-            diagnostics = sameOrigin.diagnostics +
-                "The server version is unavailable, so an App Store release could not be selected safely.",
-        )
+    val coreVersion = serverVersion?.coreVersionOrNull() ?: return sameOrigin.withFallback(
+        DynamicContractFallbackReason.VersionUnavailable,
+        "The server version is unavailable, so an App Store release could not be selected safely.",
+    )
     val contractAppId = app.canonicalAppStoreId()
     onProgress(
         DynamicDescriptorDiscoveryProgress(
@@ -159,21 +159,21 @@ suspend fun discoverDynamicAppDescriptor(
     val acquired = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic) {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
-        return sameOrigin.copy(
-            diagnostics = sameOrigin.diagnostics +
-                "App Store contract acquisition failed: ${failure.message ?: "verification failed"}.",
-        )
-    } ?: return sameOrigin.copy(
-        diagnostics = sameOrigin.diagnostics +
-            "No exact or patch-compatible App Store source yielded a usable API contract or " +
+        // Only the typed kind enters diagnostics and copy; exception text and class names stay local.
+        val kind = failure.appStoreContractFailureKind()
+        return sameOrigin.withFallback(kind.fallbackReason(), "App Store contract acquisition failed: ${kind.name}.")
+    } ?: return sameOrigin.withFallback(
+        DynamicContractFallbackReason.NoVerifiedContract,
+        "No exact or patch-compatible App Store source yielded a usable API contract or " +
             "verified static read routes for $contractAppId on Nextcloud $coreVersion. " +
             "Only app metadata is available.",
     )
     val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = observeDynamicDiscoveryStage(DynamicDiscoveryStage.ContractParsing, services::recordSupportDiagnostic) {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
-    }.getOrNull() ?: return sameOrigin.copy(
-        diagnostics = sameOrigin.diagnostics + "The acquired App Store contract contained invalid JSON.",
+    }.getOrNull() ?: return sameOrigin.withFallback(
+        DynamicContractFallbackReason.UnsupportedContract,
+        "The acquired App Store contract contained invalid JSON.",
     )
     val verifiedReadRouteCount = (document["x-nextcloud-native-verified-read-route-count"] as? JsonPrimitive)
         ?.contentOrNull
@@ -218,11 +218,10 @@ suspend fun discoverDynamicAppDescriptor(
                 ),
             ),
         ).requireValid()
-    }.getOrElse { failure ->
-        return sameOrigin.copy(
-            diagnostics = sameOrigin.diagnostics +
-                "The acquired App Store contract could not be compiled into a native read surface: " +
-                "${failure.message ?: "unsupported contract"}.",
+    }.getOrElse {
+        return sameOrigin.withFallback(
+            DynamicContractFallbackReason.UnsupportedContract,
+            "The acquired App Store contract could not be compiled into a native read surface.",
         )
     }
     return DynamicDescriptorDiscovery(

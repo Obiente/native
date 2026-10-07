@@ -177,6 +177,31 @@ or request URL. Cancellation propagates without a failure event, and a recorder
 failure never discards a usable contract. An unverified app version keeps
 writes disabled without showing a permanent refresh spinner.
 
+## Metadata fallback reasons
+
+When no same-origin or App Store source yields a verified contract, discovery
+keeps the metadata-only descriptor and records a typed reason in
+[`DynamicContractFallback.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractFallback.kt).
+The fallback card derives its title, explanation, and action from that reason:
+
+- no verified contract exists for the installed version;
+- the server or app version could not be confirmed;
+- the App Store could not be reached, or did not provide the release;
+- the package or its source failed verification;
+- the verified contract cannot be shown natively yet;
+- the client could not complete the check.
+
+[`ContractAcquisitionFailure.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionFailure.kt)
+classifies the module's own failures: HTTP status responses, verification and
+origin rejections, malformed request values, network failures, and runtime
+linkage errors.
+[`JvmAppStoreContractAcquisition.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmAppStoreContractAcquisition.kt)
+translates them once for both JVM targets. It also catches `LinkageError`. If
+acquisition code cannot initialize on a runtime, for example because the
+Android ICU engine rejects a regular expression, the result is a client-fault
+fallback, not an exception class name. Diagnostics and product copy never
+contain exception text, and a fallback reason is never persisted.
+
 ## Read failures
 
 [`DynamicReadFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReadFailure.kt)
@@ -213,10 +238,11 @@ bodies, invalid text, and deeply nested JSON.
   non-default ports, IPv6, explicit mismatches, and untrusted templates.
 - Acquisition rejects concrete package-server authorities because it cannot
   prove the connected account owns them.
-- Host placeholders are parsed without a brace regular expression (the `ui`
-  build checks `commonMain` for this). The contract module's ownership boundary
-  is also exercised by an Android instrumented test, to verify class
-  initialization and host rejection on the Android runtime.
+- Host placeholders are parsed without a brace regular expression. The `ui`
+  build checks `commonMain`, and `tools/check-kotlin-architecture.sh` checks
+  every source set that runs on Android. An Android instrumented test
+  initializes every top-level contract-module class and exercises host
+  rejection on the Android runtime.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are rejected,
   not ignored. An absent override inherits the base; an explicit empty array

@@ -2218,7 +2218,7 @@ private fun AppInfoScreen(
                 }
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
                 discoveryError = if (retainedDiscovery == null) {
-                    failure.message ?: "Could not discover this app's native API."
+                    DYNAMIC_DISCOVERY_FAILURE_MESSAGE
                 } else {
                     "Could not verify the current server and app versions. " +
                         "The last verified contract remains available in read-only mode."
@@ -4651,13 +4651,11 @@ private fun DynamicDiscoveredAppScreen(
                     modifier = Modifier.padding(NextcloudSpacing.Medium),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                 ) {
-                    Text("App unavailable", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "This app's content could not be loaded. Try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    val notice = discovery.fallbackReason.fallbackNotice()
+                    Text(notice.title, style = MaterialTheme.typography.titleSmall)
+                    Text(notice.message, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = onRetryDiscovery) {
-                        Text("Try again")
+                        Text(notice.actionLabel)
                     }
                 }
             }

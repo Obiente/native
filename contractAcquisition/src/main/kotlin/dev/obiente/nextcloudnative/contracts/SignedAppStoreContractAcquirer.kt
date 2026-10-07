@@ -143,10 +143,10 @@ class SignedAppStoreContractAcquirer(
     }
 
     private fun acquireUncoalesced(request: ContractAcquisitionRequest): VerifiedOpenApiContract? {
-        require(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
+        requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
         request.installedAppVersion?.let { version ->
-            require(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
+            requireValidRequest(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
         }
         verifiedContracts[request]?.let { return it }
         verifiedContractCache.load(request)?.let { cached ->
@@ -181,34 +181,34 @@ class SignedAppStoreContractAcquirer(
             val archive = archiveResponse.use { response ->
                 requireSecureResponse(response)
                 if (response.code in setOf(404, 410) && verifiedRouteFallbacks.isNotEmpty()) return@use null
-                check(response.isSuccessful) {
+                requireSuccessfulSource(response) {
                     "Downloading the signed ${request.appId} package failed (HTTP ${response.code})."
                 }
                 response.readBodyLimited(MAX_ARCHIVE_BYTES)
             } ?: continue
-            try {
-                val verified = trustVerifier.verifyAndExtract(release, archive)
-                if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
-                    acquireGitHubTagContract(
-                        release = release,
-                        installedAppVersion = request.installedAppVersion,
-                        exact = release.version == request.installedAppVersion,
-                    )?.let { linkedContract ->
-                        return cacheContract(
-                            request,
-                            linkedContract.mergeVerifiedPackageRoutes(verified),
-                        )
-                    }
-                    verifiedRouteFallbacks += release to verified
-                    continue
-                }
-                return cacheContract(
-                    request,
-                    verified.asPackageContract(request, release),
-                )
+            val verified = try {
+                trustVerifier.verifyAndExtract(release, archive)
             } catch (_: OpenApiContractMissingException) {
                 missingPackageContracts += release
+                continue
+            } catch (failure: Exception) {
+                throw failure.asSourceVerificationFailure(request.appId)
             }
+            if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
+                acquireGitHubTagContract(
+                    release = release,
+                    installedAppVersion = request.installedAppVersion,
+                    exact = release.version == request.installedAppVersion,
+                )?.let { linkedContract ->
+                    return cacheContract(
+                        request,
+                        linkedContract.mergeVerifiedPackageRoutes(verified),
+                    )
+                }
+                verifiedRouteFallbacks += release to verified
+                continue
+            }
+            return cacheContract(request, verified.asPackageContract(request, release))
         }
 
         for (release in missingPackageContracts) {
@@ -471,7 +471,7 @@ class SignedAppStoreContractAcquirer(
         val response = execute(Request.Builder().url(url).header("Accept", accept).get().build())
         return response.use { githubResponse ->
             if (githubResponse.code == 404 || githubResponse.code in recoverableStatusCodes) return@use null
-            check(githubResponse.isSuccessful) {
+            requireSuccessfulSource(githubResponse) {
                 "Loading an exact-tag GitHub contract resource failed (HTTP ${githubResponse.code})."
             }
             requireSecureResponse(githubResponse)
@@ -495,7 +495,7 @@ class SignedAppStoreContractAcquirer(
         }
         val response = execute(Request.Builder().url(catalogUrl).get().build())
         val bytes = response.use { catalogResponse ->
-            check(catalogResponse.isSuccessful) {
+            requireSuccessfulSource(catalogResponse) {
                 "Loading the Nextcloud App Store catalog failed (HTTP ${catalogResponse.code})."
             }
             requireSecureResponse(catalogResponse)
@@ -513,17 +513,17 @@ class SignedAppStoreContractAcquirer(
     private fun execute(request: Request): Response = httpClient.newCall(request).execute()
 
     private fun requireSecureUrl(url: String) {
-        if (requireHttps) require(url.startsWith("https://")) { "Contract sources must use HTTPS." }
+        if (requireHttps) requireVerifiedSource(url.startsWith("https://")) { "Contract sources must use HTTPS." }
     }
 
     private fun requireSecureResponse(response: Response) {
-        if (requireHttps) require(response.request.url.isHttps) { "A contract request was redirected away from HTTPS." }
+        if (requireHttps) requireVerifiedSource(response.request.url.isHttps) { "A contract request left HTTPS." }
     }
 
     private fun requireExpectedOrigin(response: Response, expectedBaseUrl: String) {
         val expected = URI(expectedBaseUrl)
         val actual = response.request.url
-        check(
+        requireVerifiedSource(
             actual.scheme.equals(expected.scheme, ignoreCase = true) &&
                 actual.host.equals(expected.host, ignoreCase = true) &&
                 actual.port == expected.effectivePort()
@@ -644,10 +644,10 @@ private data class ParsedVersion(
 
 private fun normalizeServerVersion(version: String): String {
     val parsed = parseVersion(version)
-    require(parsed != null && parsed.numeric.size >= 3) {
+    requireValidRequest(parsed != null && parsed.numeric.size >= 3) {
         "The server version must contain at least three numeric components."
     }
-    return parsed.numeric.take(3).joinToString(".")
+    return requireNotNull(parsed).numeric.take(3).joinToString(".")
 }
 
 private fun parseVersion(version: String): ParsedVersion? {

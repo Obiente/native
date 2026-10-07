@@ -70,6 +70,12 @@ private val code = Regex("[A-Za-z]{2}")
 EOF
 "$checker" "$fixture" >/dev/null
 rm "$fixture/contractAcquisition/src/main/kotlin/example/PortableHost.kt"
+cat > "$fixture/androidApp/src/main/kotlin/example/AndroidHost.kt" <<'EOF'
+package example
+private val host = "\\{[A-Za-z]+}".toRegex()
+EOF
+expect_failure 'an ICU-incompatible brace regex in Android application code' "$checker" "$fixture"
+rm "$fixture/androidApp/src/main/kotlin/example/AndroidHost.kt"
 
 cat > "$fixture/ui/src/commonMain/kotlin/example/PlatformImport.kt" <<'EOF'
 package example

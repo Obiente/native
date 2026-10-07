@@ -33,11 +33,11 @@ modules (`settings.gradle.kts`); the Rust crate is built separately.
 | Location | What it owns |
 | --- | --- |
 | `ui/src/commonMain` | Platform-neutral models, policies, repositories, the dynamic descriptor compiler (`nativeui/model`), the native renderer (`nativeui/runtime`), and Compose screens. The `NextcloudPlatformServices` interface is declared here. |
-| `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
+| `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, the App Store contract acquisition boundary, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
 | `ui/src/androidMain` | Android `actual` implementations used by the shared UI, such as audio and video playback services, image decoding, back handling, the embedded Office editor, and server certificate trust. |
 | `ui/src/desktopMain` | The complete desktop platform: `DesktopNextcloudServices`, secret stores, the desktop sync engine and its SQLite stores, Linux FUSE virtual files, Windows Cloud Files, tray integration, and packaging resources. |
 | `androidApp/src/main` | The Android application: `MainActivity`, `AndroidNextcloudServices`, Keystore-backed credentials, WorkManager workers, `NextcloudDocumentsProvider`, folder sync, media backup, and share-target activities. |
-| `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. Both `androidApp` and the desktop target depend on it; `commonMain` does not. |
+| `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. `androidApp` and both `ui` JVM targets depend on it, so shared `jvmMain` code can translate its results; `commonMain` does not. |
 | `src/` (Rust crate) | The reference schema and descriptor compiler, plus the Windows Explorer shell registrar binary that the desktop Windows package bundles. The Rust compiler is not linked into the app. |
 
 `jvmMain` is not a separate Kotlin Multiplatform source set. The `ui` build adds
@@ -72,9 +72,10 @@ figures came from comparing function bodies after removing the `Android` and
 conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
 policy, and the `NextcloudPlatformServices` interface live in `commonMain`.
 Both service containers implement that interface. `jvmMain` shares login and
-authenticated request policy, application read sessions, detached downloads,
-the resumable chunk-upload state machine, staging-space reservations, support
-diagnostics and intake, text-draft encryption, and WebDAV href decoding.
+authenticated request policy, application read sessions, App Store contract
+acquisition results and failures, detached downloads, the resumable
+chunk-upload state machine, staging-space reservations, support diagnostics and
+intake, text-draft encryption, and WebDAV href decoding.
 
 **Still duplicated.** The gap is below the shared interface: each platform has
 its own HTTP request code, protocol adapters, XML parsers, and sync executor.
