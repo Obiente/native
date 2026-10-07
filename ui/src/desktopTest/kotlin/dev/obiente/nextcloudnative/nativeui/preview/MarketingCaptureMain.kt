@@ -22,6 +22,7 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -186,6 +187,9 @@ private suspend fun capture(
         repeat(warmUpFrames) {
             scene.render().close()
         }
+        awaitIsolatedMediaReadiness(scene) {
+            rawMediaCapture?.isSettled() ?: nativeTiffCapture?.isSettled() ?: true
+        }
         settleShellSwitcherCapture(scenario, scene)
         val rendered = scene.render()
         try {
@@ -207,6 +211,19 @@ private suspend fun capture(
 
 private const val CAPTURE_WARM_UP_FRAMES = 3
 private const val ISOLATED_MEDIA_WARM_UP_FRAMES = 8
+private const val ISOLATED_MEDIA_SETTLE_TIMEOUT_NANOS = 10_000_000_000L
+
+/**
+ * Media decodes on a background dispatcher, so a fixed frame count can finish first on a slow
+ * host. Keep rendering until the capture reports its expected state; verification reports a miss.
+ */
+private suspend fun awaitIsolatedMediaReadiness(scene: ImageComposeScene, isSettled: () -> Boolean) {
+    val deadline = System.nanoTime() + ISOLATED_MEDIA_SETTLE_TIMEOUT_NANOS
+    while (!isSettled() && System.nanoTime() < deadline) {
+        delay(16)
+        scene.render().close()
+    }
+}
 private const val CAPTURE_FONT_SCALE = 1f
 
 internal fun deterministicCaptureTypography(repositoryRoot: Path): Typography {

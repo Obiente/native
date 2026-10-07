@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import org.jetbrains.skia.Image
 
@@ -33,7 +34,8 @@ internal class RawMediaMarketingCapture private constructor(
 ) {
     private val requests = mutableListOf<NextcloudApiRequest>()
     private val nativePreviewBounds = mutableListOf<Int>()
-    private val observations = mutableListOf<MediaViewerStateObservation>()
+    // Decoded media reports readiness from a background decoder, not the capture thread.
+    private val observations = CopyOnWriteArrayList<MediaViewerStateObservation>()
     private val rejectedCalls = mutableListOf<String>()
     private val services: NextcloudPlatformServices = networkInertServices()
     private val session = NextcloudSession(
@@ -78,6 +80,13 @@ internal class RawMediaMarketingCapture private constructor(
                 )
             }
         }
+    }
+
+    /** True once the viewer reports the readiness this capture mode must publish. */
+    fun isSettled(): Boolean = observations.lastOrNull()?.readiness == when (mode) {
+        RawCaptureMode.Loading -> MediaViewerReadiness.Loading
+        RawCaptureMode.Error -> MediaViewerReadiness.RenderUnavailable
+        RawCaptureMode.Ready, RawCaptureMode.HighDetail -> MediaViewerReadiness.HighDetailReady
     }
 
     fun verify() {

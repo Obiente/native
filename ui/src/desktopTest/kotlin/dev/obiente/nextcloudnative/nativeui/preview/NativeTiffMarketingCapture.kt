@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.util.concurrent.CopyOnWriteArrayList
 
 internal class NativeTiffMarketingCapture private constructor(
     private val renderedPreview: ByteArray,
@@ -31,7 +32,8 @@ internal class NativeTiffMarketingCapture private constructor(
     private val previewRequests = mutableListOf<Int>()
     private val memoriesRequests = mutableListOf<NextcloudApiRequest>()
     private val davDownloadBounds = mutableListOf<Long>()
-    private val observations = mutableListOf<MediaViewerStateObservation>()
+    // Decoded media reports readiness from a background decoder, not the capture thread.
+    private val observations = CopyOnWriteArrayList<MediaViewerStateObservation>()
     private val rejectedCalls = mutableListOf<String>()
     private val services = networkInertServices()
     private val fixtureSession = NextcloudSession(
@@ -64,6 +66,9 @@ internal class NativeTiffMarketingCapture private constructor(
             }
         }
     }
+
+    /** True once the viewer reports the high-detail state this capture must publish. */
+    fun isSettled(): Boolean = observations.lastOrNull()?.readiness == MediaViewerReadiness.HighDetailReady
 
     fun verify() {
         check(rejectedCalls.isEmpty()) {
