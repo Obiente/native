@@ -46,7 +46,7 @@ ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeColl
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActionsTest.kt|3161
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopAppUpdates.kt|925
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileReadCache.kt|1536
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncEngine.kt|884
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncEngine.kt|876
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncRemoteTree.kt|857
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6169
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCache.kt|2759
