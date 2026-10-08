@@ -6,19 +6,10 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
-import java.security.KeyStore
-import java.security.KeyStoreException
-import java.security.NoSuchAlgorithmException
 import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
-
-/** Operating-system trust source used in addition to the bundled JVM roots. */
-internal enum class DesktopSystemTrustSource {
-    LinuxCaBundle,
-    WindowsRootStore,
-}
 
 /** Bounded, non-secret reason why no operating-system anchors were added. */
 internal enum class DesktopSystemTrustUnavailableReason {
@@ -31,11 +22,9 @@ internal enum class DesktopSystemTrustUnavailableReason {
     StoreUnavailable,
 }
 
+/** Trust anchors read from a Linux system CA bundle. */
 internal sealed interface DesktopSystemTrustAnchors {
-    data class Loaded(
-        val source: DesktopSystemTrustSource,
-        val certificates: List<X509Certificate>,
-    ) : DesktopSystemTrustAnchors {
+    data class Loaded(val certificates: List<X509Certificate>) : DesktopSystemTrustAnchors {
         init {
             require(certificates.isNotEmpty())
         }
@@ -61,17 +50,6 @@ internal val LINUX_SYSTEM_CA_BUNDLE_PATHS: List<Path> = listOf(
     // Alpine and other musl-based distributions.
     "/etc/ssl/cert.pem",
 ).map { Path.of(it) }
-
-internal fun loadDesktopSystemTrustAnchors(
-    osName: String = System.getProperty("os.name").orEmpty(),
-): DesktopSystemTrustAnchors {
-    val normalized = osName.lowercase()
-    return when {
-        normalized.startsWith("windows") -> loadWindowsRootTrustAnchors()
-        normalized.contains("linux") -> loadLinuxSystemCaBundle()
-        else -> DesktopSystemTrustAnchors.Unavailable(DesktopSystemTrustUnavailableReason.UnsupportedPlatform)
-    }
-}
 
 /**
  * Uses the first candidate bundle that parses completely. A bundle that is unreadable, oversized,
@@ -161,7 +139,7 @@ internal fun parsePemTrustBundle(text: String): DesktopSystemTrustAnchors {
     }
     if (block != null || skippedLabel != null) return unavailable(DesktopSystemTrustUnavailableReason.Malformed)
     if (certificates.isEmpty()) return unavailable(DesktopSystemTrustUnavailableReason.Empty)
-    return DesktopSystemTrustAnchors.Loaded(DesktopSystemTrustSource.LinuxCaBundle, certificates.values.toList())
+    return DesktopSystemTrustAnchors.Loaded(certificates.values.toList())
 }
 
 private fun decodeCertificate(factory: CertificateFactory, base64: String): X509Certificate? {
@@ -180,50 +158,10 @@ private fun decodeCertificate(factory: CertificateFactory, base64: String): X509
     return certificate.takeIf { it.encoded.contentEquals(encoded) }
 }
 
-/**
- * Reads the Windows ROOT store through SunMSCAPI. This is the current user's logical view, which
- * normally includes machine-wide roots and roots the user installed. Windows certificate
- * properties such as purpose restrictions are not visible here; JSSE still requires a
- * server-authentication leaf.
- */
-internal fun loadWindowsRootTrustAnchors(
-    openStore: () -> KeyStore = { KeyStore.getInstance(WINDOWS_ROOT_STORE_TYPE).apply { load(null, null) } },
-): DesktopSystemTrustAnchors {
-    val store = try {
-        openStore()
-    } catch (_: KeyStoreException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
-    } catch (_: NoSuchAlgorithmException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
-    } catch (_: CertificateException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.Unreadable)
-    } catch (_: IOException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.Unreadable)
-    }
-    val certificates = LinkedHashMap<String, X509Certificate>()
-    try {
-        for (alias in store.aliases().asSequence()) {
-            if (!store.isCertificateEntry(alias)) continue
-            val certificate = store.getCertificate(alias) as? X509Certificate ?: continue
-            certificates.putIfAbsent(Base64.getEncoder().encodeToString(certificate.encoded), certificate)
-            if (certificates.size > MAX_SYSTEM_TRUST_ANCHORS) {
-                return unavailable(DesktopSystemTrustUnavailableReason.TooLarge)
-            }
-        }
-    } catch (_: KeyStoreException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.Unreadable)
-    } catch (_: CertificateException) {
-        return unavailable(DesktopSystemTrustUnavailableReason.Unreadable)
-    }
-    if (certificates.isEmpty()) return unavailable(DesktopSystemTrustUnavailableReason.Empty)
-    return DesktopSystemTrustAnchors.Loaded(DesktopSystemTrustSource.WindowsRootStore, certificates.values.toList())
-}
-
 private fun unavailable(reason: DesktopSystemTrustUnavailableReason) =
     DesktopSystemTrustAnchors.Unavailable(reason)
 
 private const val PEM_CERTIFICATE_BEGIN = "-----BEGIN CERTIFICATE-----"
 private const val PEM_CERTIFICATE_END = "-----END CERTIFICATE-----"
-private const val WINDOWS_ROOT_STORE_TYPE = "Windows-ROOT"
 internal const val MAX_SYSTEM_TRUST_BUNDLE_BYTES = 4L * 1024L * 1024L
 internal const val MAX_SYSTEM_TRUST_ANCHORS = 2_048

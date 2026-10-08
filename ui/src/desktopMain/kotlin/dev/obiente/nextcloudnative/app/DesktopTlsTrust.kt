@@ -17,15 +17,38 @@ import javax.net.ssl.X509TrustManager
 import okhttp3.OkHttpClient
 
 /**
- * Desktop TLS trust for Nextcloud server traffic: the bundled JVM roots, plus the anchors the
- * operating system trusts. A server chain must still validate completely to one anchor set, and
+ * Desktop TLS trust for Nextcloud server traffic: the bundled JVM roots, plus the operating
+ * system's trust decision. A server chain must still validate completely through one of them, and
  * OkHttp's hostname verification is unchanged.
  */
 internal class DesktopTlsTrust(
     val trustManager: X509TrustManager,
     val sslSocketFactory: SSLSocketFactory,
-    val systemAnchors: DesktopSystemTrustAnchors,
+    val systemTrust: DesktopSystemTrustStatus,
 )
+
+/** Where the operating-system trust decision comes from. */
+internal enum class DesktopSystemTrustSource {
+    LinuxCaBundle,
+    WindowsChainEngine,
+}
+
+/** Bounded, non-secret summary of whether operating-system trust is active. */
+internal sealed interface DesktopSystemTrustStatus {
+    data class Active(val source: DesktopSystemTrustSource) : DesktopSystemTrustStatus
+
+    data class Unavailable(val reason: DesktopSystemTrustUnavailableReason) : DesktopSystemTrustStatus
+}
+
+/** Operating-system trust consulted only after the bundled roots reject a server chain. */
+internal sealed interface DesktopSystemTrust {
+    data class Available(
+        val source: DesktopSystemTrustSource,
+        val trustManager: X509ExtendedTrustManager,
+    ) : DesktopSystemTrust
+
+    data class Unavailable(val reason: DesktopSystemTrustUnavailableReason) : DesktopSystemTrust
+}
 
 /** Applies the process-wide desktop trust. Never use it to relax validation for one request. */
 internal fun OkHttpClient.Builder.useDesktopSystemTrust(): OkHttpClient.Builder {
@@ -34,30 +57,50 @@ internal fun OkHttpClient.Builder.useDesktopSystemTrust(): OkHttpClient.Builder 
 }
 
 private val sharedDesktopTlsTrust: DesktopTlsTrust by lazy {
-    desktopTlsTrust(loadDesktopSystemTrustAnchors())
+    desktopTlsTrust(loadDesktopSystemTrust())
+}
+
+internal fun loadDesktopSystemTrust(
+    osName: String = System.getProperty("os.name").orEmpty(),
+): DesktopSystemTrust {
+    val normalized = osName.lowercase()
+    return when {
+        normalized.startsWith("windows") -> windowsChainEngineTrust()
+        normalized.contains("linux") -> linuxBundleTrust(loadLinuxSystemCaBundle())
+        else -> DesktopSystemTrust.Unavailable(DesktopSystemTrustUnavailableReason.UnsupportedPlatform)
+    }
+}
+
+/** Turns Linux bundle anchors into a full JSSE PKIX trust manager limited to those anchors. */
+internal fun linuxBundleTrust(anchors: DesktopSystemTrustAnchors): DesktopSystemTrust = when (anchors) {
+    is DesktopSystemTrustAnchors.Unavailable -> DesktopSystemTrust.Unavailable(anchors.reason)
+    is DesktopSystemTrustAnchors.Loaded -> anchorTrustManager(anchors)
+        ?.let { DesktopSystemTrust.Available(DesktopSystemTrustSource.LinuxCaBundle, it) }
+        ?: DesktopSystemTrust.Unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
 }
 
 internal fun desktopTlsTrust(
-    systemAnchors: DesktopSystemTrustAnchors,
+    systemTrust: DesktopSystemTrust,
     bundled: X509TrustManager = bundledJvmTrustManager(),
 ): DesktopTlsTrust {
-    val system = (systemAnchors as? DesktopSystemTrustAnchors.Loaded)?.let(::anchorTrustManager)
     val extendedBundled = bundled as? X509ExtendedTrustManager
-    val effective: X509TrustManager = if (system != null && extendedBundled != null) {
-        DesktopCompositeTrustManager(extendedBundled, system)
-    } else {
-        bundled
+    val (effective, status) = when {
+        systemTrust is DesktopSystemTrust.Unavailable ->
+            bundled to DesktopSystemTrustStatus.Unavailable(systemTrust.reason)
+        // Without the extended bundled manager, handshake context could not be preserved.
+        extendedBundled == null ->
+            bundled to DesktopSystemTrustStatus.Unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
+        else -> {
+            systemTrust as DesktopSystemTrust.Available
+            DesktopCompositeTrustManager(extendedBundled, systemTrust.trustManager) to
+                DesktopSystemTrustStatus.Active(systemTrust.source)
+        }
     }
     val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf(effective), null) }
     return DesktopTlsTrust(
         trustManager = effective,
         sslSocketFactory = context.socketFactory,
-        systemAnchors = when {
-            effective !== bundled -> systemAnchors
-            systemAnchors is DesktopSystemTrustAnchors.Unavailable -> systemAnchors
-            // Anchors were read but could not be composed safely, so only the bundled roots apply.
-            else -> DesktopSystemTrustAnchors.Unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
-        },
+        systemTrust = status,
     )
 }
 
@@ -96,10 +139,10 @@ private fun trustManagerFor(store: KeyStore?): X509TrustManager? {
 }
 
 /**
- * Accepts a server chain when the bundled roots or the operating-system anchors validate it. Both
- * delegates are full JSSE PKIX trust managers, so algorithm constraints, validity, key usage, and
- * the JDK CA distrust policies still apply. When both reject the chain, the bundled failure is
- * rethrown with the system failure suppressed.
+ * Accepts a server chain when the bundled roots or the operating-system trust validate it. The
+ * bundled delegate is a full JSSE PKIX trust manager. The system delegate is either a PKIX manager
+ * limited to Linux bundle anchors or the Windows chain engine with its own store policy. When both
+ * reject the chain, the bundled failure is rethrown with the system failure suppressed.
  */
 internal class DesktopCompositeTrustManager(
     private val bundled: X509ExtendedTrustManager,

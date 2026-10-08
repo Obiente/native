@@ -1,16 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
-import java.io.File
 import java.nio.file.Files
-import java.nio.file.Path
-import java.security.KeyStore
-import java.security.KeyStoreException
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
-import okhttp3.tls.HeldCertificate
 import okhttp3.tls.certificatePem
 
 class DesktopSystemTrustAnchorsTest {
@@ -27,7 +21,6 @@ class DesktopSystemTrustAnchorsTest {
             append(firstAuthority.certificate.certificatePem())
         }
         val loaded = assertIs<DesktopSystemTrustAnchors.Loaded>(parsePemTrustBundle(bundle))
-        assertEquals(DesktopSystemTrustSource.LinuxCaBundle, loaded.source)
         assertEquals(
             listOf(firstAuthority.certificate, secondAuthority.certificate),
             loaded.certificates,
@@ -133,72 +126,11 @@ class DesktopSystemTrustAnchorsTest {
         )
     }
 
-    @Test
-    fun unsupportedPlatformsAddNoAnchors() {
-        assertEquals(
-            DesktopSystemTrustAnchors.Unavailable(DesktopSystemTrustUnavailableReason.UnsupportedPlatform),
-            loadDesktopSystemTrustAnchors(osName = "Mac OS X"),
-        )
-    }
-
-    @Test
-    fun windowsRootStoreFailuresAddNoAnchors() {
-        assertEquals(
-            DesktopSystemTrustAnchors.Unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable),
-            loadWindowsRootTrustAnchors { throw KeyStoreException("Windows-ROOT not found") },
-        )
-        assertEquals(
-            DesktopSystemTrustAnchors.Unavailable(DesktopSystemTrustUnavailableReason.Empty),
-            loadWindowsRootTrustAnchors { emptyKeyStore() },
-        )
-    }
-
-    @Test
-    fun windowsRootStoreCertificateEntriesBecomeAnchors() {
-        val store = emptyKeyStore().apply {
-            setCertificateEntry("one", firstAuthority.certificate)
-            setCertificateEntry("duplicate", firstAuthority.certificate)
-            setCertificateEntry("two", secondAuthority.certificate)
-        }
-        val loaded = assertIs<DesktopSystemTrustAnchors.Loaded>(loadWindowsRootTrustAnchors { store })
-        assertEquals(DesktopSystemTrustSource.WindowsRootStore, loaded.source)
-        assertEquals(
-            setOf(firstAuthority.certificate, secondAuthority.certificate),
-            loaded.certificates.toSet(),
-        )
-        assertEquals(2, loaded.certificates.size)
-    }
-
-    /** Supplementary host check: the test JDK on Windows exposes the real ROOT store. */
-    @Test
-    fun windowsHostRootStoreLoadsThroughSunMscapi() {
-        if (!System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) return
-        val loaded = assertIs<DesktopSystemTrustAnchors.Loaded>(loadDesktopSystemTrustAnchors())
-        assertEquals(DesktopSystemTrustSource.WindowsRootStore, loaded.source)
-        assertTrue(loaded.certificates.isNotEmpty())
-    }
-
     /** Supplementary host check: a Linux host with a standard bundle parses it completely. */
     @Test
     fun linuxHostStandardBundleParsesCompletely() {
         if (!System.getProperty("os.name").orEmpty().contains("Linux", ignoreCase = true)) return
         if (LINUX_SYSTEM_CA_BUNDLE_PATHS.none(Files::isRegularFile)) return
-        assertIs<DesktopSystemTrustAnchors.Loaded>(loadDesktopSystemTrustAnchors())
-    }
-}
-
-internal fun syntheticTrustAuthority(name: String): HeldCertificate = HeldCertificate.Builder()
-    .commonName(name)
-    .certificateAuthority(0)
-    .build()
-
-private fun emptyKeyStore(): KeyStore = KeyStore.getInstance("PKCS12").apply { load(null, null) }
-
-internal fun withTrustTestDirectory(block: (Path) -> Unit) {
-    val directory = Files.createTempDirectory("desktop-system-trust-test")
-    try {
-        block(directory)
-    } finally {
-        File(directory.toString()).deleteRecursively()
+        assertIs<DesktopSystemTrustAnchors.Loaded>(loadLinuxSystemCaBundle())
     }
 }

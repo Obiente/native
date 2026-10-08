@@ -348,19 +348,30 @@ published installer.
 guarantees, not claims about a published installer; the code may have changed.
 
 - Desktop clients that contact the Nextcloud server use one process-wide trust
-  manager from `DesktopTlsTrust.kt`. It accepts a chain when either the bundled
-  Java runtime roots or the operating-system anchors validate it completely.
-  OkHttp hostname verification is unchanged, and no trust-all path exists.
-- `DesktopSystemTrustAnchors.kt` reads the first complete Linux system CA
-  bundle or the Windows `Windows-ROOT` store through SunMSCAPI. Windows
-  packages add the `jdk.crypto.mscapi` runtime module for this. macOS reads no
-  system anchors yet.
-- An unreadable, oversized, truncated, or malformed bundle contributes no
-  anchors. Update checks and project news keep the bundled roots only.
+  manager from `DesktopTlsTrust.kt`. It accepts a chain when the bundled Java
+  runtime roots validate it, or, after they reject it, when the operating
+  system's trust decision accepts it. OkHttp hostname verification is
+  unchanged, and no trust-all path exists.
+- Linux: `DesktopSystemTrustAnchors.kt` reads the first complete system CA
+  bundle into a PKIX trust manager limited to those anchors. An unreadable,
+  oversized, truncated, or malformed bundle contributes no anchors.
+- Windows: `WindowsChainEngineTrust.kt` passes the presented chain to the
+  current user's Windows chain engine (`CertGetCertificateChain` with the
+  server-authentication usage, then the SSL policy) through JNA. Windows
+  roots are not copied into Java, so Windows store policy such as the
+  Disallowed store and certificate purpose restrictions stays in force. Chain
+  building uses cached data only and does not fetch AIA or root updates.
+- macOS reads no system trust yet. Update checks and project news keep the
+  bundled roots only.
 - `DesktopTlsTrustTest` and `DesktopSystemTrustAnchorsTest` cover synthetic CAs,
-  untrusted and expired chains, hostname mismatch, and malformed or missing
-  bundles. A Windows test host also loads its real ROOT store. No test
-  establishes behavior inside a Flatpak or other sandbox.
+  untrusted and expired chains, hostname mismatch, malformed or missing
+  bundles, and the Windows verdict mapping through an injected verifier.
+  `WindowsChainEngineTrustTest` runs only on Windows hosts and drives the real
+  chain engine with an in-memory exclusive root: a trusted root, an unrelated
+  root, an expired leaf, and a root whose stored purpose excludes server
+  authentication. No test modifies a Windows certificate store, so Disallowed
+  handling relies on documented Windows engine behavior. No test establishes
+  behavior inside a Flatpak or other sandbox.
 - User-facing guidance is in
   [sign-in diagnostics](docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities).
 

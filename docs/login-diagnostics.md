@@ -44,8 +44,8 @@ certificate must chain to a trusted certificate authority (CA) and match the
 server name.
 
 On Linux and Windows desktop, connections to the Nextcloud server trust the
-CAs bundled with the app's Java runtime and, in addition, the CAs the operating
-system trusts:
+CAs bundled with the app's Java runtime and, when those reject a certificate,
+the operating system's trust decision:
 
 - **Linux** reads the first complete system CA bundle among
   `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
@@ -54,13 +54,17 @@ system trusts:
   as `update-ca-certificates` (Debian and Ubuntu), `trust anchor` (Arch Linux),
   or `update-ca-trust` (Fedora), then restart nati.ve. If `curl` verifies the
   server without extra options, the bundle normally contains the CA.
-- **Windows** reads the current user's view of the Trusted Root Certification
-  Authorities store, which normally includes machine-wide roots and roots the
-  user installed. Restart nati.ve after adding a root.
+- **Windows** asks the Windows certificate chain engine for the current user
+  to validate the chain. It honors roots installed for the user or the whole
+  machine, certificates in the Untrusted Certificates (Disallowed) store, and
+  purpose restrictions set on stored certificates. Chain building uses only
+  locally available data: it does not download missing intermediate
+  certificates or root updates, so the server must send its intermediates.
+  Restart nati.ve after adding a root.
 - **macOS** desktop does not yet read the Keychain; it uses only the bundled
   Java roots.
 
-The system CAs are read once when the app starts. An unreadable, oversized,
+The Linux bundle is read once when the app starts. An unreadable, oversized,
 truncated, or malformed bundle adds no CAs; the bundled roots still apply.
 Inside a sandbox such as Flatpak, the app sees only the CA bundle that the
 sandbox exposes at those paths, which might not include CAs added on the host.

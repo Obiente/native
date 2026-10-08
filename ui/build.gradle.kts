@@ -257,9 +257,6 @@ compose.desktop {
 
         nativeDistributions {
             modules("jdk.security.auth")
-            // SunMSCAPI exposes the Windows ROOT store so OS-trusted CAs are honored for TLS.
-            // The module exists only in Windows JDKs, and jpackage builds each OS natively.
-            if (System.getProperty("os.name").startsWith("Windows")) modules("jdk.crypto.mscapi")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             // Preserve Windows/Linux launcher paths used by existing integrations.
             packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
