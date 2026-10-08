@@ -102,6 +102,7 @@ class FileOperationsTest {
         assertEquals(NextcloudFileOperationError.Conflict, fileOperationException(412).error)
         assertEquals(NextcloudFileOperationError.Locked, fileOperationException(423).error)
         assertEquals(NextcloudFileOperationError.InsufficientStorage, fileOperationException(507).error)
+        assertEquals(NextcloudFileOperationError.Throttled, fileOperationException(429).error)
         assertEquals(NextcloudFileOperationError.ServerFailure, fileOperationException(500).error)
     }
 

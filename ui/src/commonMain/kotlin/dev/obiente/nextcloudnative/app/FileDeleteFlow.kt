@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
@@ -24,8 +25,17 @@ internal sealed interface FileDeleteOutcome {
     /** The item is verified to be unchanged on the server, so trying again is safe. */
     data class NotDeleted(val message: String) : FileDeleteOutcome
 
-    /** The outcome is unknown or the item changed. The folder must be refreshed before another try. */
+    /**
+     * The outcome is unknown, or the item changed so its version precondition is stale. The folder
+     * must be refreshed before another try.
+     */
     data class RefreshRequired(val message: String) : FileDeleteOutcome
+
+    /**
+     * The server rate-limited the request without changing anything. File mutations do not expose
+     * Retry-After, so no delay is invented: writes stay blocked and no extra read is started.
+     */
+    data class Throttled(val message: String) : FileDeleteOutcome
 }
 
 /**
@@ -50,9 +60,15 @@ internal suspend fun deleteFileWithVerifiedOutcome(
         when (failure.error) {
             NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.AlreadyGone
             NextcloudFileOperationError.ServerFailure -> Unit
+            // Resending the same ETag precondition cannot succeed.
+            NextcloudFileOperationError.Conflict -> return FileDeleteOutcome.RefreshRequired(
+                failure.message ?: "${target.name} changed on the server. Refresh the folder before deleting it.",
+            )
+            NextcloudFileOperationError.Throttled -> return FileDeleteOutcome.Throttled(
+                failure.message ?: "The server is limiting requests. Wait a while, then try again.",
+            )
             NextcloudFileOperationError.AuthenticationRequired,
             NextcloudFileOperationError.PermissionDenied,
-            NextcloudFileOperationError.Conflict,
             NextcloudFileOperationError.Locked,
             NextcloudFileOperationError.InsufficientStorage,
             -> return FileDeleteOutcome.NotDeleted(failure.message ?: "Could not delete ${target.name}.")
@@ -88,8 +104,33 @@ private suspend fun verifyFileDeletePostcondition(
     }
 }
 
+/** One remote resource in one account. Deletes for the same key never overlap. */
+internal data class FileDeleteResourceKey(val account: NextcloudAccountId, val path: String)
+
+/**
+ * Account-scoped Files deletes that have not reached a verified outcome. It outlives any dialog,
+ * so closing and reopening Delete cannot send a second request while the first is unresolved.
+ */
+internal class FileDeleteInFlight {
+    private val pending = mutableStateMapOf<FileDeleteResourceKey, Long>()
+    private var nextToken = 0L
+
+    operator fun contains(key: FileDeleteResourceKey): Boolean = key in pending
+
+    fun claim(key: FileDeleteResourceKey): Long? {
+        if (key in pending) return null
+        return (++nextToken).also { pending[key] = it }
+    }
+
+    fun release(key: FileDeleteResourceKey, token: Long) {
+        if (pending[key] == token) pending.remove(key)
+    }
+}
+
 internal data class FileDeleteRequest(
     val generation: Long,
+    val key: FileDeleteResourceKey,
+    val token: Long,
     val file: NextcloudFile,
     val expectedEtag: String,
 ) {
@@ -101,12 +142,14 @@ internal data class FileDeleteScreenEffect(val notice: String?, val reloadFolder
 
 /**
  * Main-thread owner of the Files delete dialog. Closing or replacing the dialog invalidates its
- * pending completion, which can then only report a screen notice and refresh the folder.
+ * pending completion, which then only reports a screen notice and refreshes the folder, unless a
+ * reopened dialog shows the same version of the same item.
  */
-internal class FileDeleteDialogState {
+internal class FileDeleteDialogState(
+    private val account: NextcloudAccountId,
+    private val inFlight: FileDeleteInFlight,
+) {
     var target by mutableStateOf<NextcloudFile?>(null)
-        private set
-    var running by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
         private set
@@ -114,9 +157,13 @@ internal class FileDeleteDialogState {
         private set
     private var generation = 0L
 
+    /** True while any delete of the shown item is unresolved, including one from a closed dialog. */
+    val running: Boolean
+        get() = target?.let { key(it) in inFlight } == true
+
     fun open(file: NextcloudFile) = reset(file)
 
-    /** The delete continues if it is running; its completion no longer changes this dialog. */
+    /** The delete continues if it is running; it still blocks another delete of the same item. */
     fun dismiss() = reset(null)
 
     fun begin(): FileDeleteRequest? {
@@ -126,36 +173,40 @@ internal class FileDeleteDialogState {
             error = "Refresh the folder before deleting this item."
             return null
         }
-        running = true
+        val key = key(file)
+        val token = inFlight.claim(key) ?: return null
         error = null
-        return FileDeleteRequest(generation, file, etag)
+        return FileDeleteRequest(generation, key, token, file, etag)
     }
 
     fun complete(request: FileDeleteRequest, outcome: FileDeleteOutcome): FileDeleteScreenEffect {
-        val current = request.generation == generation
+        val shown = target
+        val current = request.generation == generation ||
+            (shown != null && key(shown) == request.key && shown.etag == request.expectedEtag)
         if (current) {
-            running = false
             when (outcome) {
                 is FileDeleteOutcome.Deleted, FileDeleteOutcome.AlreadyGone -> reset(null)
                 is FileDeleteOutcome.NotDeleted -> error = outcome.message
-                is FileDeleteOutcome.RefreshRequired -> {
-                    error = outcome.message
-                    retryBlocked = true
-                }
+                is FileDeleteOutcome.RefreshRequired -> blockRetry(outcome.message)
+                is FileDeleteOutcome.Throttled -> blockRetry(outcome.message)
             }
         }
         return outcome.screenEffect(request.file.name, dialogShowsResult = current)
     }
 
-    /** Releases a request that ended without an outcome, such as a cancelled screen scope. */
-    fun abandon(request: FileDeleteRequest) {
-        if (request.generation == generation) running = false
+    /** Releases the resource once the request ended, with or without an outcome. */
+    fun release(request: FileDeleteRequest) = inFlight.release(request.key, request.token)
+
+    private fun key(file: NextcloudFile) = FileDeleteResourceKey(account, file.path)
+
+    private fun blockRetry(message: String) {
+        error = message
+        retryBlocked = true
     }
 
     private fun reset(file: NextcloudFile?) {
         generation += 1
         target = file
-        running = false
         error = null
         retryBlocked = false
     }
@@ -163,7 +214,7 @@ internal class FileDeleteDialogState {
 
 /**
  * Runs one delete for [request]. Cancellation propagates without changing the dialog beyond
- * releasing its running state.
+ * releasing the resource.
  */
 internal suspend fun FileDeleteDialogState.runDelete(
     request: FileDeleteRequest,
@@ -185,7 +236,7 @@ internal suspend fun FileDeleteDialogState.runDelete(
     currentCoroutineContext().ensureActive()
     complete(request, outcome)
 } finally {
-    abandon(request)
+    release(request)
 }
 
 private fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boolean): FileDeleteScreenEffect =
@@ -209,5 +260,10 @@ private fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Bool
         is FileDeleteOutcome.RefreshRequired -> FileDeleteScreenEffect(
             notice = if (dialogShowsResult) null else message,
             reloadFolder = true,
+        )
+        // A folder reload is another request; leave it to the user after the rate limit.
+        is FileDeleteOutcome.Throttled -> FileDeleteScreenEffect(
+            notice = if (dialogShowsResult) null else "$name was not deleted. $message",
+            reloadFolder = false,
         )
     }

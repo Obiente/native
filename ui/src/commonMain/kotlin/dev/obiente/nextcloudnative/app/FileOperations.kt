@@ -93,6 +93,9 @@ enum class NextcloudFileOperationError {
     Conflict,
     Locked,
     InsufficientStorage,
+
+    /** The server rejected the request under its rate limit; nothing was changed. */
+    Throttled,
     ServerFailure,
 }
 
@@ -144,6 +147,7 @@ fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): Nex
         404 -> NextcloudFileOperationError.NotFound
         405, 409, 412 -> NextcloudFileOperationError.Conflict
         423 -> NextcloudFileOperationError.Locked
+        429 -> NextcloudFileOperationError.Throttled
         507 -> NextcloudFileOperationError.InsufficientStorage
         else -> NextcloudFileOperationError.ServerFailure
     }
@@ -157,6 +161,7 @@ fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): Nex
         } else "The file or destination changed. Refresh and try again."
         NextcloudFileOperationError.Locked -> "The file is locked by another operation."
         NextcloudFileOperationError.InsufficientStorage -> "The server does not have enough free storage."
+        NextcloudFileOperationError.Throttled -> "The server is limiting requests. Wait a while, then refresh and try again."
         NextcloudFileOperationError.ServerFailure -> "The file operation failed (HTTP $status)."
     }
     return NextcloudFileOperationException(error, status, message)

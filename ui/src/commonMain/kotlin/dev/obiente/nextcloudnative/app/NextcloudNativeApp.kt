@@ -6491,7 +6491,8 @@ internal fun FilesScreen(
     var renameTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
     var renameValue by remember(session, path, userId) { mutableStateOf("") }
     var transferTarget by remember(session, path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
-    val deleteDialog = remember(session, path, userId) { FileDeleteDialogState() }
+    val deletesInFlight = remember(session, userId) { FileDeleteInFlight() }
+    val deleteDialog = remember(session, path, userId) { FileDeleteDialogState(session.accountId, deletesInFlight) }
     var creationKind by remember(session, path, userId) { mutableStateOf<FileCreationKind?>(null) }
     var creationName by remember(session, path, userId) { mutableStateOf("") }
     var creationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
@@ -7348,10 +7349,7 @@ internal fun FilesScreen(
                         readFolder = { folder -> services.listFilesWithSource(session, currentUserId, folder) },
                     )
                     effect.notice?.let { mutationNotice = it }
-                    if (effect.reloadFolder) {
-                        files = null
-                        loadAttempt += 1
-                    }
+                    if (effect.reloadFolder) { files = null; loadAttempt += 1 }
                 }
             },
         )
