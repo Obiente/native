@@ -133,6 +133,8 @@ internal fun parsePemTrustBundle(text: String): DesktopSystemTrustAnchors {
                 else -> block.append(line)
             }
             line == PEM_CERTIFICATE_BEGIN -> block = StringBuilder()
+            // A terminator without its header means the bundle was cut or spliced.
+            line == PEM_CERTIFICATE_END -> return unavailable(DesktopSystemTrustUnavailableReason.Malformed)
             line.startsWith("-----BEGIN ") && line.endsWith("-----") ->
                 skippedLabel = line.removePrefix("-----BEGIN ").removeSuffix("-----")
         }

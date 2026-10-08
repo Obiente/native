@@ -48,6 +48,8 @@ class DesktopSystemTrustAnchorsTest {
             "nested header" to "-----BEGIN CERTIFICATE-----\n$body\n-----BEGIN CERTIFICATE-----\n",
             "trailing DER bytes" to "-----BEGIN CERTIFICATE-----\n$trailingBytes\n-----END CERTIFICATE-----\n",
             "unterminated other label" to "$valid-----BEGIN TRUSTED CERTIFICATE-----\n$body\n",
+            "orphan terminator after a valid block" to "$valid-----END CERTIFICATE-----\n",
+            "orphan terminator before a valid block" to "$body\n-----END CERTIFICATE-----\n$valid",
         )
         for ((name, bundle) in malformedBundles) {
             assertEquals(
