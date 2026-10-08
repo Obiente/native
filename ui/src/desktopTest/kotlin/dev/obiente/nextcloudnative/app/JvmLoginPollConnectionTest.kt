@@ -92,7 +92,6 @@ class JvmLoginPollConnectionTest {
 
         assertFalse(pollClient.retryOnConnectionFailure)
         assertNotSame(base.connectionPool, pollClient.connectionPool)
-        assertNotSame(base.dispatcher, pollClient.dispatcher)
         assertNotSame(pollClient.connectionPool, base.newLoginPollHttpClient().connectionPool)
         assertEquals(0, pollClient.connectionPool.idleConnectionCount())
         assertEquals(base.eventListenerFactory, pollClient.eventListenerFactory)

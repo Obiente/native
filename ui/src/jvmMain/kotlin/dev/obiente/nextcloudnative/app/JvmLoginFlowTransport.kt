@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -9,9 +10,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
 
 data class LoginPollHttpResponse(
     val status: Int,
@@ -43,41 +46,78 @@ data class LoginPollHttpExecution(
  * after the response, so no connection outlives the wait between polls. Failures while that
  * connection is being established remain provably pre-exchange.
  *
- * The pool and dispatcher belong to this client alone. Another client's in-flight poll, such as
- * one from a cancelled or replaced sign-in attempt, can therefore never share its HTTP/2
- * connection, and cancelling this client's calls cannot affect unrelated requests. A dispatcher
- * that only runs synchronous calls starts no threads.
+ * The pool belongs to this client alone. Another client's in-flight poll, such as one from a
+ * cancelled or replaced sign-in attempt, can therefore never share its HTTP/2 connection.
  */
-fun OkHttpClient.newLoginPollHttpClient(): OkHttpClient = newBuilder()
+fun OkHttpClient.newLoginPollHttpClient(): OkHttpClient = loginPollHttpClientBuilder().build()
+
+private fun OkHttpClient.loginPollHttpClientBuilder(): OkHttpClient.Builder = newBuilder()
     .retryOnConnectionFailure(false)
     .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-    .dispatcher(Dispatcher())
-    .build()
 
 /**
  * Runs one poll with a new [newLoginPollHttpClient] derived from [baseClient].
  *
- * OkHttp's blocking calls do not observe coroutine cancellation, so the client's calls are
- * cancelled as soon as the calling coroutine is cancelled. A cancelled or replaced sign-in attempt
- * therefore cannot leave a poll running against the server.
+ * OkHttp's blocking calls do not observe coroutine cancellation. Every call made through the
+ * client is therefore registered with a [LoginPollCallCancellation] that the calling coroutine's
+ * cancellation triggers, so a cancelled or replaced sign-in attempt cannot send a poll or leave
+ * one running against the server.
  */
 suspend fun <T> withLoginPollHttpClient(
     baseClient: OkHttpClient,
     block: suspend (OkHttpClient) -> T,
 ): T = coroutineScope {
-    val client = baseClient.newLoginPollHttpClient()
+    val calls = LoginPollCallCancellation()
+    val client = baseClient.loginPollHttpClientBuilder()
+        .apply { interceptors().add(0, calls) }
+        .build()
     // Runs on its own dispatcher so cancellation is delivered while [block] blocks a thread.
     val cancellation = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
         try {
             awaitCancellation()
         } finally {
-            client.dispatcher.cancelAll()
+            calls.cancel()
         }
     }
     try {
         block(client)
     } finally {
         cancellation.cancel()
+    }
+}
+
+/**
+ * Cancels every call of one poll, including calls that start after cancellation was requested.
+ *
+ * As the first application interceptor it sees each concrete [Call] before any network work.
+ * Registration and cancellation share one lock: a call registered before [cancel] is cancelled by
+ * it, and a call that arrives afterwards is cancelled before its request can be sent. Calls stay
+ * registered for the poll's lifetime so cancellation also stops a response body still being read.
+ */
+internal class LoginPollCallCancellation : Interceptor {
+    private val lock = Any()
+    private var cancelled = false
+    private val calls = mutableListOf<Call>()
+
+    fun cancel() {
+        val registered = synchronized(lock) {
+            cancelled = true
+            calls.toList()
+        }
+        registered.forEach(Call::cancel)
+    }
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val call = chain.call()
+        val alreadyCancelled = synchronized(lock) {
+            if (!cancelled) calls += call
+            cancelled
+        }
+        if (alreadyCancelled) {
+            call.cancel()
+            throw IOException("Canceled")
+        }
+        return chain.proceed(chain.request())
     }
 }
 

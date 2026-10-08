@@ -1,18 +1,22 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
@@ -90,6 +94,77 @@ class JvmLoginPollIsolationTest {
         }
     }
 
+    @Test
+    fun `a call that starts after cancellation is never sent`() = runBlocking {
+        withHeldFirstPoll { server, gate, base ->
+            val calls = LoginPollCallCancellation()
+            val client = base.newBuilder().addInterceptor(calls).build()
+            calls.cancel()
+
+            val attempt = JvmNetworkRequestAttempt()
+            assertFailsWith<IOException> {
+                client.newCall(pollRequest(server.challenge().pollEndpoint, attempt)).execute()
+            }
+
+            assertTrue(attempt.cancelled)
+            assertFalse(attempt.exchangeStarted)
+            assertTrue(gate.connectionIndexes.isEmpty())
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `a call registered before cancellation is cancelled while blocked`() = runBlocking {
+        withHeldFirstPoll { server, gate, base ->
+            val calls = LoginPollCallCancellation()
+            val client = base.newBuilder().addInterceptor(calls).build()
+            val attempt = JvmNetworkRequestAttempt()
+            val blocked = async(Dispatchers.IO) {
+                runCatching {
+                    client.newCall(pollRequest(server.challenge().pollEndpoint, attempt)).execute().close()
+                }
+            }
+            assertTrue(gate.firstArrived.await(10, TimeUnit.SECONDS))
+
+            calls.cancel()
+            val outcome = withTimeout(5_000) { blocked.await() }
+
+            assertIs<IOException>(outcome.exceptionOrNull())
+            assertTrue(attempt.cancelled)
+        }
+    }
+
+    @Test
+    fun `cancellation just before a poll is sent stops it in either order`() = runBlocking {
+        withHeldFirstPoll { server, gate, base ->
+            val attempt = AtomicReference<JvmNetworkRequestAttempt?>(null)
+            var completed = false
+            val job = launch(Dispatchers.IO) {
+                val attemptJob = coroutineContext.job
+                withLoginPollHttpClient(base) { client ->
+                    // The cancellation sweep races the call's registration from here on.
+                    attemptJob.cancel()
+                    poll(client, server.challenge(), onAttempt = attempt::set)
+                }
+                completed = true
+            }
+
+            // The server would hold a sent poll far longer than this.
+            withTimeout(5_000) { job.join() }
+
+            assertTrue(job.isCancelled)
+            assertFalse(completed)
+            val sent = gate.connectionIndexes.isNotEmpty()
+            assertTrue(!sent || requireNotNull(attempt.get()).cancelled)
+        }
+    }
+
+    private fun pollRequest(endpoint: String, attempt: JvmNetworkRequestAttempt): Request = Request.Builder()
+        .url(endpoint)
+        .post("token=synthetic-one-time-token".toRequestBody(FORM))
+        .tag(JvmNetworkRequestAttempt::class.java, attempt)
+        .build()
+
     private suspend fun withHeldFirstPoll(
         test: suspend (MockWebServer, HeldFirstPoll, OkHttpClient) -> Unit,
     ) {
@@ -119,12 +194,7 @@ class JvmLoginPollIsolationTest {
         fallbackAlreadySelected = false,
         poll = { endpoint ->
             val attempt = JvmNetworkRequestAttempt().also(onAttempt)
-            val request = Request.Builder()
-                .url(endpoint)
-                .post("token=synthetic-one-time-token".toRequestBody(FORM))
-                .tag(JvmNetworkRequestAttempt::class.java, attempt)
-                .build()
-            client.newCall(request).execute().use { response ->
+            client.newCall(pollRequest(endpoint, attempt)).execute().use { response ->
                 LoginPollHttpResponse(response.code, response.body.string())
             }
         },
