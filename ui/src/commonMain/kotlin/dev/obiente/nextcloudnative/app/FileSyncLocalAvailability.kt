@@ -63,6 +63,20 @@ fun withholdUnavailableFileSyncPaths(
 }
 
 /**
+ * Narrows a scan predicate so remote traversal never descends into unavailable local subtrees.
+ *
+ * Their server content cannot take part in planning, so listing it would only add network work
+ * and listing failures. [withholdUnavailableFileSyncPaths] still applies as the second layer.
+ */
+fun ((relativePath: String, kind: SyncEntryKind) -> Boolean).excludingUnavailableFileSyncPaths(
+    unavailable: List<FileSyncUnavailableLocalItem>,
+): (relativePath: String, kind: SyncEntryKind) -> Boolean {
+    if (unavailable.isEmpty()) return this
+    val withheldPaths = unavailable.mapTo(HashSet(), FileSyncUnavailableLocalItem::relativePath)
+    return { path, kind -> path.syncPathAndAncestors().none { it in withheldPaths } && this(path, kind) }
+}
+
+/**
  * Records each unavailable local item as visible skipped work after planning.
  *
  * At most [maximumReports] items become work items; the run summary reports the complete count.

@@ -33,10 +33,10 @@ internal fun verifyDesktopFileSyncContentSlice(
         throw cancellation
     } catch (_: IOException) {
         return null // Vanished or locked after the scan, for example a rewritten Git index.
-    } catch (_: IllegalArgumentException) {
-        return null // The local revision changed after the scan.
+    } catch (_: DesktopFileSyncLocalRevisionChangedException) {
+        return null // The local revision changed after the scan; unsafe parents still propagate.
     } catch (_: IllegalStateException) {
-        return null // The local file was truncated while its range was read.
+        return null // The file was truncated while read, or is no longer a regular file or folder.
     }
     val remoteHash = remote.contentRangeHash(
         candidate.relativePath,

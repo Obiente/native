@@ -144,6 +144,58 @@ class DesktopFileSyncGitRepositoryTest {
         assertFalse("DELETE" in fixture.dav.requestMethods())
     }
 
+    @Test
+    fun `a special item replacing a selected folder never propagates a deletion`() = withRepository(
+        configuration = FileSyncConfiguration(
+            deviceLabel = "Workstation",
+            deletionPolicy = FileSyncDeletionPolicy.Propagate,
+            selectedPaths = listOf(".git/refs/heads/main"),
+        ),
+    ) { fixture ->
+        assertIs<FileSyncCenterActionResult.Completed>(fixture.run())
+        assertTrue("Repo/.git/refs/heads/main" in fixture.dav.files())
+        val refs = fixture.local.resolve(".git/refs")
+        refs.deleteRecursively()
+        val socket = runCatching {
+            ServerSocketChannel.open(StandardProtocolFamily.UNIX).bind(UnixDomainSocketAddress.of(refs.toPath()))
+        }.getOrNull() ?: return@withRepository // The platform cannot create a socket file.
+        socket.use {
+            if (Files.isRegularFile(refs.toPath())) return@withRepository
+
+            val result = fixture.run()
+
+            assertIs<FileSyncCenterActionResult.Completed>(result, result.toString())
+            val skipped = fixture.workItems().single()
+            assertEquals(".git/refs", skipped.relativePath)
+            assertTrue((skipped.operation as FileSyncOperation.Skipped).reason.contains("not a regular file"))
+            assertFalse("DELETE" in fixture.dav.requestMethods())
+            assertTrue("Repo/.git/refs/heads/main" in fixture.dav.files())
+        }
+        Files.deleteIfExists(refs.toPath())
+    }
+
+    @Test
+    fun `an unlistable server folder below an unreadable local folder is not traversed`() = withRepository(
+        configuration = FileSyncConfiguration(
+            deviceLabel = "Workstation",
+            deletionPolicy = FileSyncDeletionPolicy.Propagate,
+        ),
+    ) { fixture ->
+        assertIs<FileSyncCenterActionResult.Completed>(fixture.run())
+        val refs = fixture.local.resolve(".git/refs").toPath()
+        val restore = denyDesktopTestDirectoryListing(refs) ?: return@withRepository
+        fixture.dav.failingListings += "Repo/.git/refs"
+        try {
+            val result = fixture.run()
+
+            assertIs<FileSyncCenterActionResult.Completed>(result, result.toString())
+            assertEquals(".git/refs", fixture.workItems().single().relativePath)
+            assertFalse("DELETE" in fixture.dav.requestMethods())
+        } finally {
+            restore()
+        }
+    }
+
     private class Fixture(
         val dav: DesktopFileSyncFakeDav,
         val local: File,

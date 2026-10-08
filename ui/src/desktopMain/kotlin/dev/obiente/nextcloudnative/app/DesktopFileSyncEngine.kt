@@ -363,7 +363,7 @@ internal class DesktopFileSyncEngine(
         // Unreadable local subtrees are withheld from both sides and reported as skipped work.
         val observed = withholdUnavailableFileSyncPaths(
             localScan.documents.map(DesktopLocalSyncDocument::entry),
-            remote.scan(includes).map(DesktopRemoteSyncDocument::entry),
+            remote.scan(includes.excludingUnavailableFileSyncPaths(localScan.unavailable)).map { it.entry },
             localScan.unavailable,
         )
         val scannedLocalEntries = observed.localEntries

@@ -54,7 +54,11 @@ internal class DesktopFileSyncFakeDav(
         }
     }
 
+    /** Paths whose PROPFIND answers HTTP 503, simulating a temporarily unlistable server folder. */
+    val failingListings: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     private fun propfind(path: String, depth: String): MockResponse {
+        if (path in failingListings) return status(503)
         val node = nodes[path] ?: return status(404)
         val children = if (node.directory && depth != "0") {
             nodes.keys.filter { it.substringBeforeLast('/', "") == path && it != path }.sorted()

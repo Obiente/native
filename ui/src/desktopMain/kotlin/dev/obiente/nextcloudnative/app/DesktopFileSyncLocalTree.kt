@@ -94,10 +94,10 @@ internal class DesktopFileSyncLocalTree(
                         "Folder sync stopped because ${relative(file)} is a symbolic link."
                     }
                     requireWithinDepthLimit(file, attrs, includes)
-                    if (!includes(relative(file), SyncEntryKind.File)) return FileVisitResult.CONTINUE
                     if (attrs.isRegularFile) {
-                        add(file, attrs, SyncEntryKind.File)
-                    } else {
+                        if (includes(relative(file), SyncEntryKind.File)) add(file, attrs, SyncEntryKind.File)
+                    } else if (includesAnyKind(file, includes)) {
+                        // A special item may replace a selected folder; withhold it instead of losing it.
                         report(file, FileSyncLocalUnavailableReason.Unsupported)
                     }
                     return FileVisitResult.CONTINUE
@@ -106,10 +106,7 @@ internal class DesktopFileSyncLocalTree(
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
                     requireRecoverableWalkFailure(file, exc)
                     if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
-                    val relative = relative(file)
-                    if (includes(relative, SyncEntryKind.File) || includes(relative, SyncEntryKind.Directory)) {
-                        report(file, exc.unavailableReason())
-                    }
+                    if (includesAnyKind(file, includes)) report(file, exc.unavailableReason())
                     return FileVisitResult.CONTINUE
                 }
 
@@ -208,6 +205,10 @@ internal class DesktopFileSyncLocalTree(
         )
     }
 
+    /** True when [path] syncs as a file or as a folder, including a folder above a selected path. */
+    private fun includesAnyKind(path: Path, includes: SyncPathFilter): Boolean =
+        relative(path).let { includes(it, SyncEntryKind.File) || includes(it, SyncEntryKind.Directory) }
+
     /** walkFileTree passes folders at its depth limit to visitFile; they stop the folder, never vanish. */
     private fun requireWithinDepthLimit(path: Path, attrs: BasicFileAttributes, includes: SyncPathFilter) {
         require(!attrs.isDirectory || !includes(relative(path), SyncEntryKind.Directory)) {
@@ -249,8 +250,10 @@ internal class DesktopFileSyncLocalTree(
                     }
                     requireWithinDepthLimit(file, attrs, includes)
                     // Unsupported items are reported per item by the scan; they count toward its bound.
-                    if (includes(relative(file), SyncEntryKind.File)) {
-                        accept(fileBytes = attrs.size().takeIf { attrs.isRegularFile })
+                    if (attrs.isRegularFile && includes(relative(file), SyncEntryKind.File)) {
+                        accept(fileBytes = attrs.size())
+                    } else if (!attrs.isRegularFile && includesAnyKind(file, includes)) {
+                        accept(fileBytes = null)
                     }
                     return FileVisitResult.CONTINUE
                 }
@@ -357,19 +360,24 @@ internal class DesktopFileSyncLocalTree(
         shouldContinue: () -> Boolean,
     ): String {
         require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
-        val before = requireNotNull(resolve(relativePath)) { "The local file no longer exists." }
-        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
-        require(before.entry.size == expectedBytes)
+        // Unsafe parents still throw IllegalArgumentException; only a changed generation is distinct.
+        val before = requireLocalRevision(resolve(relativePath), expectedLocalRevision, expectedBytes)
         val hash = FileChannel.open(before.path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
             channel.position(offset)
             hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length, shouldContinue)
         }
-        val after = requireNotNull(resolve(relativePath)) { "The local file disappeared during verification." }
-        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
-            "The local file changed during content verification."
-        }
+        requireLocalRevision(resolve(relativePath), expectedLocalRevision, expectedBytes)
         return hash
     }
+
+    private fun requireLocalRevision(
+        current: DesktopLocalSyncDocument?,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+    ): DesktopLocalSyncDocument = current?.takeIf {
+        it.entry.kind == SyncEntryKind.File && it.entry.revision == expectedLocalRevision &&
+            it.entry.size == expectedBytes
+    } ?: throw DesktopFileSyncLocalRevisionChangedException()
 
     fun createDirectory(relativePath: String, expectedLocalRevision: String?) {
         val current = resolve(relativePath)
@@ -426,10 +434,10 @@ internal class DesktopFileSyncLocalTree(
         require(current.entry.kind == SyncEntryKind.File) {
             "The local item type changed after the sync scan."
         }
-        val parent = requireNotNull(destination.parent)
+        requireNotNull(destination.parent)
         requireSafeAncestors(destination, includeLeaf = false, allowMissingTail = false)
         val token = UUID.randomUUID().toString()
-        val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
+        val backup = destination.desktopLocalRecoverySibling(DesktopLocalRecoveryKind.Backup, token)
         var protected = false
         try {
             requireSafeAncestors(destination, includeLeaf = true, allowMissingTail = false)
@@ -454,12 +462,12 @@ internal class DesktopFileSyncLocalTree(
         current: DesktopLocalSyncDocument?,
         source: File,
     ): LocalSyncEntry {
-        val parent = requireNotNull(destination.parent)
+        requireNotNull(destination.parent)
         requireSafeAncestors(destination, includeLeaf = false, allowMissingTail = false)
         val expectedContentHash = "sha256:${contentDigester(source.toPath()) { true }}"
         val token = UUID.randomUUID().toString()
-        val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
-        val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
+        val staged = destination.desktopLocalRecoverySibling(DesktopLocalRecoveryKind.Download, token)
+        val backup = destination.desktopLocalRecoverySibling(DesktopLocalRecoveryKind.Backup, token)
         Files.copy(source.toPath(), staged, StandardCopyOption.REPLACE_EXISTING)
         requireSafeAncestors(staged, includeLeaf = true, allowMissingTail = false)
         FileChannel.open(staged, setOf(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)).use { it.force(true) }
@@ -511,7 +519,7 @@ internal class DesktopFileSyncLocalTree(
             object : SimpleFileVisitor<Path>() {
                 override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                     val owned = ownedRecoveryPath(dir)
-                    if (dir == root || owned?.kind != OwnedRecoveryKind.Backup) {
+                    if (dir == root || owned?.kind != DesktopLocalRecoveryKind.Backup) {
                         return FileVisitResult.CONTINUE
                     }
                     reconcileOwnedBackup(dir)
@@ -524,8 +532,8 @@ internal class DesktopFileSyncLocalTree(
 
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                     when (ownedRecoveryPath(file)?.kind) {
-                        OwnedRecoveryKind.Download -> Files.deleteIfExists(file)
-                        OwnedRecoveryKind.Backup -> reconcileOwnedBackup(file)
+                        DesktopLocalRecoveryKind.Download -> Files.deleteIfExists(file)
+                        DesktopLocalRecoveryKind.Backup -> reconcileOwnedBackup(file)
                         null -> Unit
                     }
                     return FileVisitResult.CONTINUE
@@ -546,12 +554,12 @@ internal class DesktopFileSyncLocalTree(
     }
 
     private fun reconcileOwnedBackup(backup: Path) {
-        val owned = ownedRecoveryPath(backup)?.takeIf { it.kind == OwnedRecoveryKind.Backup } ?: return
+        val owned = ownedRecoveryPath(backup)?.takeIf { it.kind == DesktopLocalRecoveryKind.Backup } ?: return
         val finalPath = requireNotNull(backup.parent).resolve(owned.destinationName)
         if (Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) {
             requireSafeAncestors(finalPath, includeLeaf = true, allowMissingTail = false)
             val incompleteDownload = backup.parent.resolve(
-                ".${owned.destinationName}$DOWNLOAD_MARKER${owned.token}",
+                desktopLocalRecoveryName(DesktopLocalRecoveryKind.Download, owned.destinationName, owned.token),
             )
             if (!Files.exists(incompleteDownload, LinkOption.NOFOLLOW_LINKS)) deleteOwnedPath(backup)
         } else {
@@ -559,27 +567,13 @@ internal class DesktopFileSyncLocalTree(
         }
     }
 
-    private fun ownedRecoveryPath(path: Path): OwnedRecoveryPath? {
-        val name = path.fileName.toString()
-        if (!name.startsWith('.')) return null
-        val candidates = listOf(
-            OwnedRecoveryKind.Download to DOWNLOAD_MARKER,
-            OwnedRecoveryKind.Backup to BACKUP_MARKER,
-        )
-        return candidates.firstNotNullOfOrNull { (kind, marker) ->
-            val markerIndex = name.lastIndexOf(marker)
-            if (markerIndex <= 1) return@firstNotNullOfOrNull null
-            val token = name.substring(markerIndex + marker.length)
-            if (runCatching { UUID.fromString(token) }.isFailure) return@firstNotNullOfOrNull null
-            val destinationName = name.substring(1, markerIndex)
-            destinationName.takeIf(String::isNotBlank)?.let { OwnedRecoveryPath(kind, it, token) }
-        }
-    }
+    private fun ownedRecoveryPath(path: Path): DesktopLocalRecoveryName? =
+        parseDesktopLocalRecoveryName(path.fileName.toString())
 
     private fun isOwnedRecoveryPath(path: Path): Boolean = ownedRecoveryPath(path) != null
 
     private fun deleteOwnedPath(path: Path) {
-        require(path.startsWith(root) && ownedRecoveryPath(path)?.kind == OwnedRecoveryKind.Backup)
+        require(path.startsWith(root) && ownedRecoveryPath(path)?.kind == DesktopLocalRecoveryKind.Backup)
         requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
         Files.walkFileTree(
             path,
@@ -747,8 +741,6 @@ internal class DesktopFileSyncLocalTree(
         const val MAX_ENTRIES = MAX_FILE_SYNC_ENTRIES
         const val MAX_DEPTH = 64
         const val BUFFER_BYTES = 64 * 1024
-        const val DOWNLOAD_MARKER = ".nextcloud-native-download-"
-        const val BACKUP_MARKER = ".nextcloud-native-backup-"
     }
 }
 
@@ -789,11 +781,3 @@ private fun desktopSha256File(path: Path, shouldContinue: () -> Boolean): String
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
-
-private enum class OwnedRecoveryKind { Download, Backup }
-
-private data class OwnedRecoveryPath(
-    val kind: OwnedRecoveryKind,
-    val destinationName: String,
-    val token: String,
-)
