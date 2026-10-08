@@ -194,7 +194,8 @@ The fallback card derives its title, explanation, and action from that reason:
 [`ContractAcquisitionFailure.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionFailure.kt)
 classifies the module's own failures: HTTP status responses, verification and
 origin rejections, malformed request values, network failures, and runtime
-linkage errors.
+linkage errors. Writing a downloaded catalog to the local cache is best effort,
+so a local storage failure is never reported as an unreachable App Store.
 [`JvmAppStoreContractAcquisition.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmAppStoreContractAcquisition.kt)
 translates them once for both JVM targets. It also catches `LinkageError`. If
 acquisition code cannot initialize on a runtime, for example because the
@@ -239,8 +240,9 @@ bodies, invalid text, and deeply nested JSON.
 - Acquisition rejects concrete package-server authorities because it cannot
   prove the connected account owns them.
 - Host placeholders are parsed without a brace regular expression. The `ui`
-  build checks `commonMain`, and `tools/check-kotlin-architecture.sh` checks
-  every source set that runs on Android. An Android instrumented test
+  build checks `commonMain`. `tools/check-kotlin-architecture.sh` checks the
+  shared `ui` source sets compiled for Android, the contract module, and every
+  `androidApp` source set except JVM unit tests. An Android instrumented test
   initializes every top-level contract-module class and exercises host
   rejection on the Android runtime.
 - Path and operation server overrides must pass the same origin checks and

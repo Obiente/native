@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.util.concurrent.CancellationException
 import okhttp3.Response
 
 /**
@@ -69,7 +70,12 @@ internal inline fun requireSuccessfulSource(response: Response, message: () -> S
     if (!response.isSuccessful) throw ContractSourceHttpException(response.code, message())
 }
 
-/** Package and identity checks throw several exception types; the acquisition boundary is one kind. */
-internal fun Exception.asSourceVerificationFailure(appId: String): ContractSourceVerificationException =
-    this as? ContractSourceVerificationException
-        ?: ContractSourceVerificationException("The signed $appId package was rejected.", this)
+/**
+ * Package and identity checks throw several exception types; the acquisition boundary is one kind.
+ * Cancellation is control flow, never a verification result, so it is returned unchanged.
+ */
+internal fun Exception.asSourceVerificationFailure(appId: String): RuntimeException = when (this) {
+    is CancellationException -> this
+    is ContractSourceVerificationException -> this
+    else -> ContractSourceVerificationException("The signed $appId package was rejected.", this)
+}

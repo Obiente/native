@@ -501,7 +501,7 @@ class SignedAppStoreContractAcquirer(
             requireSecureResponse(catalogResponse)
             catalogResponse.readBodyLimited(MAX_CATALOG_BYTES)
         }
-        catalogCache.store(catalogUrl, bytes)
+        catalogCache.storeBestEffort(catalogUrl, bytes)
         return parseReleases(
             bytes.decodeToString(),
             appId,

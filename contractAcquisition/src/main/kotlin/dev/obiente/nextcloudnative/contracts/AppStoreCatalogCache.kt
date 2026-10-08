@@ -2,11 +2,29 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 interface AppStoreCatalogCache {
     fun load(url: String): ByteArray?
     fun store(url: String, bytes: ByteArray)
+}
+
+/**
+ * Publishes a downloaded catalog without letting local storage decide the acquisition result.
+ *
+ * The catalog bytes are already in memory, so a read-only cache directory or a full disk only
+ * costs a later re-download. Like verified-contract caching, publication is best effort; a local
+ * write failure must never be reported as an unreachable App Store.
+ */
+internal fun AppStoreCatalogCache.storeBestEffort(url: String, bytes: ByteArray) {
+    try {
+        store(url, bytes)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The next acquisition downloads the catalog again.
+    }
 }
 
 class MemoryAppStoreCatalogCache : AppStoreCatalogCache {

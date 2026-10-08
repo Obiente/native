@@ -1,14 +1,18 @@
 package dev.obiente.nextcloudnative.contracts
 
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.SignatureException
+import java.nio.file.Files
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -96,6 +100,62 @@ class ContractAcquisitionFailureTest {
     }
 
     @Test
+    fun `cancellation during package verification propagates unchanged`() {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse(body = catalog(server)))
+            server.enqueue(MockResponse(body = "package"))
+            val cancelled = CancellationException("stop")
+            val failure = assertFailsWith<CancellationException> {
+                acquirer(server) { throw cancelled }.acquire(request())
+            }
+            assertSame(cancelled, failure)
+        }
+    }
+
+    @Test
+    fun `a local catalog cache write failure does not fail a downloaded acquisition`() {
+        val diskFull = object : AppStoreCatalogCache {
+            override fun load(url: String): ByteArray? = null
+            override fun store(url: String, bytes: ByteArray) = throw IOException("No space left on device")
+        }
+        val blocker = Files.createTempFile("catalog-cache-blocker", ".tmp").toFile()
+        try {
+            // A regular file where the cache directory belongs makes real cache publication fail.
+            for (cache in listOf(diskFull, FileAppStoreCatalogCache(File(blocker, "cache")))) {
+                MockWebServer().use { server ->
+                    server.start()
+                    server.enqueue(MockResponse(body = catalog(server)))
+                    server.enqueue(MockResponse(body = "package"))
+                    val contract = assertNotNull(acquirer(server, catalogCache = cache) { release ->
+                        VerifiedPackageContract(release.appId, release.version, "openapi.json", "{}")
+                    }.acquire(request()))
+                    assertEquals(OpenApiContractSourceKind.SignedAppPackage, contract.sourceKind)
+                    assertEquals(2, server.requestCount)
+                }
+            }
+        } finally {
+            blocker.delete()
+        }
+    }
+
+    @Test
+    fun `cancellation while publishing the catalog cache is not swallowed`() {
+        val cancelled = CancellationException("stop")
+        val cache = object : AppStoreCatalogCache {
+            override fun load(url: String): ByteArray? = null
+            override fun store(url: String, bytes: ByteArray) = throw cancelled
+        }
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse(body = catalog(server)))
+            assertSame(cancelled, assertFailsWith<CancellationException> {
+                acquirer(server, catalogCache = cache).acquire(request())
+            })
+        }
+    }
+
+    @Test
     fun `an initializer failure inside package extraction escapes unwrapped for runtime classification`() {
         MockWebServer().use { server ->
             server.start()
@@ -150,6 +210,7 @@ class ContractAcquisitionFailureTest {
 
     private fun acquirer(
         server: MockWebServer,
+        catalogCache: AppStoreCatalogCache = MemoryAppStoreCatalogCache(),
         verify: (AppStoreRelease) -> VerifiedPackageContract = { error("The verifier must not run.") },
     ) = SignedAppStoreContractAcquirer(
         httpClient = OkHttpClient(),
@@ -158,5 +219,6 @@ class ContractAcquisitionFailureTest {
         trustVerifier = object : AppPackageTrustVerifier {
             override fun verifyAndExtract(release: AppStoreRelease, archive: ByteArray) = verify(release)
         },
+        catalogCache = catalogCache,
     )
 }
