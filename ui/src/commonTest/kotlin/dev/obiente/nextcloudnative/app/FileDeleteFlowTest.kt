@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -118,6 +119,131 @@ class FileDeleteFlowTest {
         assertNull(state.begin())
         assertEquals(1, fake.deletes.size)
         assertTrue(fake.reads.isEmpty(), "Throttling must not start ambiguity verification reads.")
+    }
+
+    @Test
+    fun `rejected credentials or permission block retry without another request`(): Unit = runBlocking {
+        for (status in listOf(401, 403)) {
+            val deletes = coordinator()
+            val state = FileDeleteDialogState(deletes).apply { open(report) }
+            val fake = FakeDeleteBoundary(deleteResult = { throw fileOperationException(status) })
+
+            assertEquals(FileDeleteScreenEffect(null, reloadFolder = false), deletes.finish(state, fake))
+            assertEquals(fileOperationException(status).message, state.error)
+            assertTrue(state.retryBlocked, "HTTP $status cannot succeed until the user changes something.")
+            state.dismiss()
+            state.open(report)
+            assertTrue(state.retryBlocked, "Reopening the dialog must not lift the block.")
+            assertNull(state.begin())
+            assertEquals(1, fake.deletes.size)
+            assertTrue(fake.reads.isEmpty())
+        }
+    }
+
+    @Test
+    fun `locked and storage-limited deletes deliberately allow a retry`(): Unit = runBlocking {
+        for (status in listOf(423, 507)) {
+            val deletes = coordinator()
+            val state = FileDeleteDialogState(deletes).apply { open(report) }
+            val fake = FakeDeleteBoundary(deleteResult = { throw fileOperationException(status) })
+
+            deletes.finish(state, fake)
+
+            assertFalse(state.retryBlocked, "HTTP $status can clear without changing this item.")
+            assertNotNull(state.begin())
+        }
+    }
+
+    @Test
+    fun `throttling survives reopening until a server listing started afterwards`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val earlierReadStarted = CompletableDeferred<Unit>()
+        val releaseEarlierRead = CompletableDeferred<Unit>()
+        val earlierRead = async {
+            deletes.readFolder("Documents") {
+                earlierReadStarted.complete(Unit)
+                releaseEarlierRead.await()
+                NextcloudFileListing(listOf(report), NextcloudFileListingSource.Network)
+            }
+        }
+        earlierReadStarted.await()
+        deletes.finish(state, FakeDeleteBoundary(deleteResult = { throw fileOperationException(429) }))
+
+        state.dismiss()
+        state.open(report)
+        assertTrue(state.retryBlocked)
+        assertNull(state.begin(), "A throttled delete must not be resent by reopening the dialog.")
+        releaseEarlierRead.complete(Unit)
+        earlierRead.await()
+        assertTrue(state.retryBlocked, "A listing that started before the throttling does not lift it.")
+        deletes.readFolder("Documents") { NextcloudFileListing(listOf(report), NextcloudFileListingSource.Cache) }
+        assertTrue(state.retryBlocked, "A cached listing is not a server answer.")
+        deletes.readFolder("Music") { NextcloudFileListing(emptyList(), NextcloudFileListingSource.Network) }
+        assertTrue(state.retryBlocked, "Another folder's listing does not lift it.")
+
+        deletes.readFolder("Documents") { NextcloudFileListing(listOf(report), NextcloudFileListingSource.Network) }
+
+        assertFalse(state.retryBlocked)
+        assertNull(state.error)
+        assertNotNull(state.begin())
+    }
+
+    @Test
+    fun `a refreshed version is deletable while the stale dialog stays blocked`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        deletes.finish(state, FakeDeleteBoundary(deleteResult = { throw fileOperationException(412) }))
+
+        deletes.readFolder("Documents") { NextcloudFileListing(listOf(report.copy(etag = "v2")), NextcloudFileListingSource.Network) }
+
+        assertTrue(state.retryBlocked, "The shown version still has the stale precondition.")
+        state.open(report.copy(etag = "v2"))
+        assertFalse(state.retryBlocked)
+        assertNotNull(state.begin())
+    }
+
+    @Test
+    fun `creating or moving into a folder being deleted waits for verification`(): Unit = runBlocking {
+        val folder = file("Documents", etag = "f1", directory = true)
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(folder) }
+        val release = CompletableDeferred<Unit>()
+        deletes.start(
+            assertNotNull(state.begin()),
+            FakeDeleteBoundary(deleteResult = {
+                release.await()
+                NextcloudFileMutationResult(null, null)
+            })::delete,
+        ) { error("not read") }
+
+        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/New folder"))
+        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/Sub/notes.md"))
+        assertNull(deletes.writeBlockedMessage("New folder"))
+        assertNull(deletes.writeBlockedMessage("Documents2/notes.md"))
+
+        release.complete(Unit)
+        deletes.awaitCompletion(state)
+        assertNull(deletes.writeBlockedMessage("Documents/New folder"))
+    }
+
+    @Test
+    fun `deleting one child does not block creating its siblings`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val release = CompletableDeferred<Unit>()
+        deletes.start(
+            assertNotNull(state.begin()),
+            FakeDeleteBoundary(deleteResult = {
+                release.await()
+                NextcloudFileMutationResult(null, null)
+            })::delete,
+        ) { error("not read") }
+
+        assertNull(deletes.writeBlockedMessage("Documents/new.txt"))
+        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/report.txt"))
+        release.complete(Unit)
+        deletes.awaitCompletion(state)
     }
 
     @Test

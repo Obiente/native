@@ -27,6 +27,20 @@ internal sealed interface FileDeleteOutcome {
      * Retry-After, so no delay is invented: writes stay blocked and no extra read is started.
      */
     data class Throttled(val message: String) : FileDeleteOutcome
+
+    /**
+     * The server rejected the account's credentials or permission. Repeating the request cannot
+     * succeed until the user signs in again or the item's permissions change.
+     */
+    data class NotPermitted(val message: String) : FileDeleteOutcome
+}
+
+/** Why another delete of the same item must wait for a fresh folder listing, or null. */
+internal fun FileDeleteOutcome.retryBlockMessage(): String? = when (this) {
+    is FileDeleteOutcome.RefreshRequired -> message
+    is FileDeleteOutcome.Throttled -> message
+    is FileDeleteOutcome.NotPermitted -> message
+    is FileDeleteOutcome.Deleted, is FileDeleteOutcome.NoLongerAtLocation, is FileDeleteOutcome.NotDeleted -> null
 }
 
 /**
@@ -59,6 +73,8 @@ internal suspend fun deleteFileWithVerifiedOutcome(
             )
             NextcloudFileOperationError.AuthenticationRequired,
             NextcloudFileOperationError.PermissionDenied,
+            -> return FileDeleteOutcome.NotPermitted(failure.message ?: "You cannot delete ${target.name}.")
+            // A lock is released and storage can be freed without changing this item: retry is safe.
             NextcloudFileOperationError.Locked,
             NextcloudFileOperationError.InsufficientStorage,
             -> return FileDeleteOutcome.NotDeleted(failure.message ?: "Could not delete ${target.name}.")
@@ -134,9 +150,9 @@ internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boo
             notice = if (dialogShowsResult) null else message,
             reloadFolder = true,
         )
-        // A folder reload is another request; leave it to the user after the rate limit.
-        is FileDeleteOutcome.Throttled -> FileDeleteScreenEffect(
-            notice = if (dialogShowsResult) null else "$name was not deleted. $message",
+        // A folder reload is another request; leave it to the user after the rate limit or sign-in.
+        is FileDeleteOutcome.Throttled, is FileDeleteOutcome.NotPermitted -> FileDeleteScreenEffect(
+            notice = if (dialogShowsResult) null else "$name was not deleted. ${retryBlockMessage()}",
             reloadFolder = false,
         )
     }

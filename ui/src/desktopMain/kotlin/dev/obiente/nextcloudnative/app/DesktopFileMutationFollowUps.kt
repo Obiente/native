@@ -1,13 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -33,10 +30,18 @@ internal class DesktopFileMutationFollowUps(
 ) {
     private data class Key(val accountId: String, val path: String)
 
-    private class Pending(
-        var refresh: () -> Throwable?,
-        val waiters: MutableList<CompletableDeferred<FileMutationLocalFollowUp>> = mutableListOf(),
-    )
+    /** One caller's view of one path. The first result wins and stays readable after a timeout. */
+    private class Waiter {
+        private val value = AtomicReference<FileMutationLocalFollowUp?>(null)
+        val done = CompletableDeferred<Unit>()
+        val result: FileMutationLocalFollowUp? get() = value.get()
+
+        fun finish(result: FileMutationLocalFollowUp) {
+            if (value.compareAndSet(null, result)) done.complete(Unit)
+        }
+    }
+
+    private class Pending(var refresh: () -> Throwable?, val waiters: MutableList<Waiter> = mutableListOf())
 
     private val lock = Any()
     private val pending = LinkedHashMap<Key, Pending>()
@@ -60,21 +65,21 @@ internal class DesktopFileMutationFollowUps(
         refresh: (path: String) -> Throwable?,
     ): FileMutationLocalFollowUp {
         val waiters = paths.distinct().map { path ->
-            val waiter = CompletableDeferred<FileMutationLocalFollowUp>()
-            if (!submit(Key(accountId, path), { refresh(path) }, waiter)) {
-                waiter.complete(FileMutationLocalFollowUp.Failed)
+            Waiter().also { waiter ->
+                if (!submit(Key(accountId, path), { refresh(path) }, waiter)) waiter.finish(FileMutationLocalFollowUp.Failed)
             }
-            waiter
         }
-        val followUp = try {
-            withTimeoutOrNull(completionWaitMillis) { waiters.awaitAll() }
-                ?.let { results -> results.firstOrNull { it != FileMutationLocalFollowUp.Completed } }
-                ?: if (waiters.all { it.isCompleted }) FileMutationLocalFollowUp.Completed else FileMutationLocalFollowUp.StillRunning
-        } catch (cancelled: CancellationException) {
-            currentCoroutineContext().ensureActive()
-            FileMutationLocalFollowUp.Failed
+        try {
+            withTimeoutOrNull(completionWaitMillis) { waiters.forEach { it.done.await() } }
         } finally {
             synchronized(lock) { pending.values.forEach { entry -> entry.waiters.removeAll(waiters) } }
+        }
+        // A failed or dropped path is known now; it must not be hidden behind one still running.
+        val results = waiters.map(Waiter::result)
+        val followUp = when {
+            FileMutationLocalFollowUp.Failed in results -> FileMutationLocalFollowUp.Failed
+            results.all { it == FileMutationLocalFollowUp.Completed } -> FileMutationLocalFollowUp.Completed
+            else -> FileMutationLocalFollowUp.StillRunning
         }
         if (followUp == FileMutationLocalFollowUp.StillRunning) {
             recordOutcome(accountId, "still-running", "FILE_MUTATION_LOCAL_FOLLOW_UP_DELAYED")
@@ -90,7 +95,7 @@ internal class DesktopFileMutationFollowUps(
     private fun submit(
         key: Key,
         refresh: () -> Throwable?,
-        waiter: CompletableDeferred<FileMutationLocalFollowUp>?,
+        waiter: Waiter?,
     ): Boolean {
         val accepted = synchronized(lock) {
             if (!scope.isActive) return@synchronized false
@@ -112,19 +117,24 @@ internal class DesktopFileMutationFollowUps(
     }
 
     private fun startDrain() {
-        scope.launch(dispatcher) { drain() }.invokeOnCompletion { cause ->
-            if (cause == null) return@invokeOnCompletion
-            // The service scope closed; nothing queued can run any more.
-            val abandoned = synchronized(lock) {
-                draining = false
-                pending.values.flatMap { it.waiters }.also { pending.clear() }
-            }
-            abandoned.forEach { it.complete(FileMutationLocalFollowUp.Failed) }
+        scope.launch(dispatcher) { drain { isActive } }.invokeOnCompletion { cause ->
+            if (cause != null) abandonQueue()
         }
     }
 
-    private fun drain() {
+    /** The service scope closed; nothing queued may run any more. */
+    private fun abandonQueue() {
+        val abandoned = synchronized(lock) {
+            draining = false
+            pending.values.flatMap { it.waiters }.also { pending.clear() }
+        }
+        abandoned.forEach { it.finish(FileMutationLocalFollowUp.Failed) }
+    }
+
+    private fun drain(active: () -> Boolean) {
         while (true) {
+            // A refresh cannot observe cancellation while it blocks, so check before each one.
+            if (!active()) return abandonQueue()
             val (key, entry) = synchronized(lock) {
                 val next = pending.entries.firstOrNull()
                 if (next == null) {
@@ -147,7 +157,7 @@ internal class DesktopFileMutationFollowUps(
                 recordOutcome(key.accountId, "failed", "FILE_MUTATION_LOCAL_FOLLOW_UP_FAILED", failure)
                 FileMutationLocalFollowUp.Failed
             }
-            synchronized(lock) { entry.waiters.toList() }.forEach { it.complete(result) }
+            synchronized(lock) { entry.waiters.toList() }.forEach { it.finish(result) }
         }
     }
 

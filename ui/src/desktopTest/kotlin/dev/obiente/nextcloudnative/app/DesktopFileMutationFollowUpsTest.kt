@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -138,6 +139,62 @@ class DesktopFileMutationFollowUpsTest {
             assertEquals(List(6) { FileMutationLocalFollowUp.Failed }, results.drop(4))
             assertEquals(6, diagnostics.count { it.second.outcome == "dropped" })
         }
+
+    @Test
+    fun `a dropped path is reported as failed even while another path is still running`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 20L, maximumPending = 1)
+        val release = latch()
+        val started = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("stalled")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+
+        val followUp = followUps.afterConfirmedMutation("account", listOf("source", "destination")) { null }
+
+        assertEquals(FileMutationLocalFollowUp.Failed, followUp, "The dropped destination will never refresh.")
+        assertEquals(1, followUps.pendingCount)
+    }
+
+    @Test
+    fun `service teardown abandons queued refreshes once the blocked one returns`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 60_000L)
+        val release = latch()
+        val started = CountDownLatch(1)
+        val stalledReturned = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("stalled")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            stalledReturned.countDown()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val runs = Collections.synchronizedList(mutableListOf<String>())
+        (0 until 3).forEach { index ->
+            followUps.afterUnknownResult("account", listOf("queued/$index")) {
+                runs += "queued/$index"
+                null
+            }
+        }
+        val caller = async(Dispatchers.Default) {
+            followUps.afterConfirmedMutation("account", listOf("confirmed")) {
+                runs += "confirmed"
+                null
+            }
+        }
+        withTimeout(5_000L) { while (followUps.pendingCount < 4) delay(10L) }
+
+        scope.cancel()
+        release.countDown()
+
+        assertTrue(stalledReturned.await(5, TimeUnit.SECONDS))
+        assertEquals(FileMutationLocalFollowUp.Failed, withTimeout(5_000L) { caller.await() })
+        withTimeout(5_000L) { while (followUps.pendingCount > 0) delay(10L) }
+        delay(100L)
+        assertTrue(runs.isEmpty(), "No queued refresh may run after teardown: $runs")
+    }
 
     @Test
     fun `caller cancellation propagates promptly while bookkeeping completes`(): Unit = runBlocking {

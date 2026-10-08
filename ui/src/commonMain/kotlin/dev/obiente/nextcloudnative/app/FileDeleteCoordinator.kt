@@ -17,6 +17,8 @@ import kotlinx.coroutines.launch
 
 /** One remote resource in one account. */
 internal data class FileDeleteResourceKey(val account: NextcloudAccountId, val path: String) {
+    val parentPath: String get() = path.substringBeforeLast('/', missingDelimiterValue = "")
+
     fun overlaps(other: FileDeleteResourceKey): Boolean = account == other.account && (
         path == other.path || path.startsWith("${other.path}/") || other.path.startsWith("$path/")
         )
@@ -58,19 +60,47 @@ internal data class FileDeleteCompletion(val request: FileDeleteRequest, val out
  * the Files screen, so leaving either never cancels the request or releases the resource without
  * an outcome. Finished outcomes wait until a Files screen consumes them. Only [close], at account
  * session teardown, cancels unfinished work.
+ *
+ * An outcome that must not be retried as-is (stale version, throttling, rejected credentials or
+ * permission) stays recorded per resource until a server listing of its folder starts after it.
  */
 internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: CoroutineScope) {
+    private class RetryBlock(val message: String, val recordedAt: Long)
+
     val inFlight = FileDeleteInFlight()
     private val job = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + job)
     private val completions = mutableStateListOf<FileDeleteCompletion>()
+    private val retryBlocks = mutableStateMapOf<FileDeleteResourceKey, RetryBlock>()
+    private var sequence = 0L
 
     val nextCompletion: FileDeleteCompletion? get() = completions.firstOrNull()
 
     /** Other writes to [file] must wait while a delete of it, a parent, or a child is unverified. */
     fun blocksWrites(file: NextcloudFile): Boolean = inFlight.blocks(keyFor(file))
 
+    /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
+    fun writeBlockedMessage(path: String): String? =
+        WRITE_BLOCKED_BY_DELETE.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) }
+
+    /** Why another delete of [file] must wait for a fresh folder listing, or null. */
+    fun retryBlockFor(file: NextcloudFile): String? = retryBlocks[keyFor(file)]?.message
+
     fun keyFor(file: NextcloudFile) = FileDeleteResourceKey(account, file.path)
+
+    /**
+     * Reads the folder at [path]. A server listing lifts the retry blocks of its items that were
+     * recorded before the read started, never ones recorded while it ran.
+     */
+    suspend fun readFolder(path: String, read: suspend () -> NextcloudFileListing): NextcloudFileListing {
+        val startedAfter = sequence
+        val listing = read()
+        if (listing.source == NextcloudFileListingSource.Network) {
+            retryBlocks.filter { (key, block) -> key.parentPath == path && block.recordedAt <= startedAfter }
+                .keys.forEach(retryBlocks::remove)
+        }
+        return listing
+    }
 
     fun start(
         request: FileDeleteRequest,
@@ -91,6 +121,10 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
             )
             // Reject even a non-cooperative service's completion after session teardown.
             ensureActive()
+            when (val message = outcome.retryBlockMessage()) {
+                null -> retryBlocks.remove(request.key)
+                else -> retryBlocks[request.key] = RetryBlock(message, ++sequence)
+            }
             completions += FileDeleteCompletion(request, outcome)
         } finally {
             inFlight.release(request.key, request.token)
@@ -102,6 +136,8 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
 
     fun close() = job.cancel()
 }
+
+internal const val WRITE_BLOCKED_BY_DELETE = "Wait until the delete of this item or its folder finishes."
 
 @Composable
 internal fun rememberFileDeleteCoordinator(session: NextcloudSession): FileDeleteCoordinator {
@@ -118,11 +154,14 @@ internal fun rememberFileDeleteCoordinator(session: NextcloudSession): FileDelet
 internal class FileDeleteDialogState(private val deletes: FileDeleteCoordinator) {
     var target by mutableStateOf<NextcloudFile?>(null)
         private set
-    var error by mutableStateOf<String?>(null)
-        private set
-    var retryBlocked by mutableStateOf(false)
-        private set
+    private var localError by mutableStateOf<String?>(null)
+    private var shownVersionBlocked by mutableStateOf(false)
     private var attachedToken: Long? = null
+
+    val error: String? get() = localError ?: target?.let(deletes::retryBlockFor)
+
+    /** A retry block survives reopening the dialog; a refresh lifts it for the item's new version. */
+    val retryBlocked: Boolean get() = shownVersionBlocked || target?.let(deletes::retryBlockFor) != null
 
     /** True while a delete of the shown item is unverified, including one from a closed dialog. */
     val running: Boolean
@@ -137,15 +176,15 @@ internal class FileDeleteDialogState(private val deletes: FileDeleteCoordinator)
         val file = target ?: return null
         if (running || retryBlocked) return null
         val etag = file.etag?.takeIf(String::isNotBlank) ?: run {
-            error = "Refresh the folder before deleting this item."
+            localError = "Refresh the folder before deleting this item."
             return null
         }
         val key = deletes.keyFor(file)
         val token = deletes.inFlight.claim(key) ?: run {
-            error = "Another delete in this location is still finishing. Try again when it completes."
+            localError = "Another delete in this location is still finishing. Try again when it completes."
             return null
         }
-        error = null
+        localError = null
         attachedToken = token
         return FileDeleteRequest(key, token, file, etag)
     }
@@ -158,23 +197,21 @@ internal class FileDeleteDialogState(private val deletes: FileDeleteCoordinator)
         if (current) {
             when (outcome) {
                 is FileDeleteOutcome.Deleted, is FileDeleteOutcome.NoLongerAtLocation -> reset(null)
-                is FileDeleteOutcome.NotDeleted -> error = outcome.message
-                is FileDeleteOutcome.RefreshRequired -> blockRetry(outcome.message)
-                is FileDeleteOutcome.Throttled -> blockRetry(outcome.message)
+                is FileDeleteOutcome.NotDeleted -> localError = outcome.message
+                else -> {
+                    // The shown version stays blocked even after a refresh lifts the resource block.
+                    localError = outcome.retryBlockMessage()
+                    shownVersionBlocked = true
+                }
             }
         }
         return outcome.screenEffect(request.file.name, dialogShowsResult = current)
     }
 
-    private fun blockRetry(message: String) {
-        error = message
-        retryBlocked = true
-    }
-
     private fun reset(file: NextcloudFile?) {
         attachedToken = null
         target = file
-        error = null
-        retryBlocked = false
+        localError = null
+        shownVersionBlocked = false
     }
 }

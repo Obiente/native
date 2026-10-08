@@ -6563,7 +6563,7 @@ internal fun FilesScreen(
         }
         val hasRetainedFiles = cached != null || retainedFiles != null
         refreshing = hasRetainedFiles
-        filesRequest { services.listFilesWithSource(session, userId, path) }
+        filesRequest { fileDeletes.readFolder(path) { services.listFilesWithSource(session, userId, path) } }
             .onSuccess { listing ->
                 files = favorites.refreshed(listing.files, readRevision)
                 listingSource = listing.source
@@ -6686,10 +6686,7 @@ internal fun FilesScreen(
         action: FileMenuAction,
         loadedFiles: List<NextcloudFile>,
     ) {
-        if (action.changesRemoteItem() && fileDeletes.blocksWrites(file)) {
-            mutationError = "Wait until the delete of ${file.name} or its folder finishes."
-            return
-        }
+        if (action.changesRemoteItem()) fileDeletes.writeBlockedMessage(file.path)?.let { mutationError = it; return }
         when (action) {
             FileMenuAction.Rename -> {
                 renameTarget = file
@@ -7124,6 +7121,7 @@ internal fun FilesScreen(
                     enabled = creationPlan != null && !creationRunning && userId != null,
                     onClick = {
                         val plan = creationPlan ?: return@Button
+                        fileDeletes.writeBlockedMessage(plan.path)?.let { creationError = it; return@Button }
                         val loadedFiles = files.orEmpty()
                         creationRunning = true
                         creationError = null
@@ -7294,6 +7292,7 @@ internal fun FilesScreen(
             onEdited = { mutationError = null },
             onDismiss = { transferTarget = null; mutationError = null },
             onConfirm = confirm@{ destination ->
+                fileDeletes.writeBlockedMessage(destination.path)?.let { mutationError = it; return@confirm }
                 val etag = target.etag?.takeIf(String::isNotBlank)
                 if (etag == null) {
                     mutationError = "Refresh the folder before changing this item."
