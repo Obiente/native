@@ -56,6 +56,35 @@ internal fun requireDesktopFileSyncBaselineCapacity(
     }
 }
 
+internal fun normalizeDesktopFileSyncRemoteRoot(path: String): String {
+    val normalized = path.trim().trim('/')
+    if (normalized.isEmpty()) return ""
+    require(normalized.length <= MAX_FILE_SYNC_PATH_LENGTH)
+    normalized.split('/').forEach { segment ->
+        require(segment.isNotBlank() && segment !in setOf(".", "..") && segment.none(Char::isISOControl))
+    }
+    return normalized
+}
+
+/** Run summary; skipped local items are counted separately from failed operations. */
+internal fun desktopFileSyncRunMessage(
+    completed: Int,
+    conflicts: Int,
+    failures: Int,
+    unavailableLocalItems: Int,
+): String = buildString {
+    append(completed).append(" sync operation")
+    if (completed != 1) append('s')
+    append(" completed.")
+    if (conflicts > 0) append(' ').append(conflicts).append(" conflicts need review.")
+    if (failures > 0) append(' ').append(failures).append(" operations failed.")
+    if (unavailableLocalItems > 0) {
+        append(' ').append(unavailableLocalItems)
+        append(if (unavailableLocalItems == 1) " local item was" else " local items were")
+        append(" skipped because they could not be read or are not regular files.")
+    }
+}
+
 internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
     val relative = relativePath.trim('/')
     requireValidSyncPath(relative)

@@ -4,6 +4,7 @@ import kotlin.math.min
 
 internal const val LOGIN_POLL_PENDING_DELAY_MILLIS = 2_000L
 internal const val LOGIN_POLL_MAX_RETRY_DELAY_MILLIS = 15_000L
+private const val LOGIN_POLL_DNS_UNRESOLVED_CODE = "NETWORK_DNS_UNRESOLVED"
 
 internal suspend fun pollLoginUntilApproved(
     poll: suspend () -> LoginPollResult,
@@ -23,7 +24,13 @@ internal suspend fun pollLoginUntilApproved(
             is LoginPollResult.RetryablePreExchangeFailure -> {
                 transientFailures += 1
                 val delayMillis = loginPollRetryDelayMillis(transientFailures)
-                onStatus(LoginAttemptPhase.WaitingForNetwork)
+                onStatus(
+                    if (result.code == LOGIN_POLL_DNS_UNRESOLVED_CODE) {
+                        LoginAttemptPhase.WaitingForNetwork
+                    } else {
+                        LoginAttemptPhase.ReconnectingToServer
+                    },
+                )
                 waitBeforeNextPoll(delayMillis, true)
             }
             is LoginPollResult.FatalFailure -> error(result.message)
