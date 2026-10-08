@@ -3,9 +3,10 @@ package dev.obiente.nextcloudnative.app
 /**
  * Result of checking a person-entered address for an email share (OCS share type 4).
  *
- * The Nextcloud Share API validates the address again when it creates the share; this check
- * only keeps an obviously incomplete or malformed address from becoming a share recipient and
- * explains what is wrong while the person types.
+ * The check applies only to an address a person types. The Nextcloud Share API validates every
+ * email share when it creates it; this check keeps an obviously incomplete or malformed typed
+ * address from becoming a recipient and explains what is wrong while the person types. Sharee
+ * search results are sent as the server returned them.
  */
 sealed interface FileShareEmailAddressValidation {
     data class Valid(val address: String) : FileShareEmailAddressValidation
@@ -61,6 +62,7 @@ fun typedFileShareEmailRecipient(input: String): FileShareRecipient? =
             displayName = validation.address,
             target = FileShareTarget.Email,
             exact = true,
+            origin = FileShareRecipientOrigin.Typed,
         )
         is FileShareEmailAddressValidation.Invalid -> null
     }

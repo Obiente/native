@@ -59,11 +59,23 @@ internal data class FileShareRecipientPickerUiState(
     fun typedRecipient(target: FileShareTarget): FileShareRecipient? {
         if (target != FileShareTarget.Email || selectedRecipient.isNotBlank()) return null
         val typed = typedFileShareEmailRecipient(query) ?: return null
-        return typed.takeIf { results.none { it.target == target && it.id.equals(typed.id, ignoreCase = true) } }
+        return typed.takeIf { matchingResult(target, typed) == null }
     }
 
-    fun visibleChoices(target: FileShareTarget): List<FileShareRecipient> =
-        listOfNotNull(typedRecipient(target)) + visibleResults
+    /**
+     * The rows to render. The typed address, or the server result for that same address, always
+     * leads, even when the server listed it after the visible result limit, so the address the
+     * person typed has exactly one choice.
+     */
+    fun visibleChoices(target: FileShareTarget): List<FileShareRecipient> {
+        val typed = if (target == FileShareTarget.Email) typedFileShareEmailRecipient(query) else null
+        val leading = typedRecipient(target) ?: typed?.let { matchingResult(target, it) }
+            ?: return visibleResults
+        return (listOf(leading) + results.filterNot { it == leading }).take(MAX_VISIBLE_FILE_SHARE_RECIPIENTS)
+    }
+
+    private fun matchingResult(target: FileShareTarget, typed: FileShareRecipient): FileShareRecipient? =
+        results.firstOrNull { it.target == target && it.id.equals(typed.id, ignoreCase = true) }
 
     fun supportingMessage(target: FileShareTarget): String? {
         val normalized = query.trim()

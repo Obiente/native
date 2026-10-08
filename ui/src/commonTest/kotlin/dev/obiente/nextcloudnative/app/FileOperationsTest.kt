@@ -225,12 +225,12 @@ class FileOperationsTest {
                 CreateFileShareRequest("a.txt", FileShareTarget.Email, shareWith = " ").toNextcloudApiRequest()
             }.message,
         )
-        assertEquals(
-            "Enter a complete domain after the @, such as example.com.",
-            assertFailsWith<IllegalArgumentException> {
-                CreateFileShareRequest("a.txt", FileShareTarget.Email, shareWith = "reader@example").toNextcloudApiRequest()
-            }.message,
-        )
+        // Sharee results are the server's own identities; only the Share API validates them.
+        listOf("reader@localhost", "\"quoted name\"@example.test", "reader@[192.0.2.1]").forEach { address ->
+            val body = CreateFileShareRequest("a.txt", FileShareTarget.Email, shareWith = address)
+                .toNextcloudApiRequest().body!!.decodeToString()
+            assertTrue(body.startsWith("path=%2Fa.txt&shareType=4&permissions=1&shareWith="), address)
+        }
         assertEquals(
             "Choose a recipient from the search results.",
             assertFailsWith<IllegalArgumentException> {

@@ -72,7 +72,8 @@ class FileShareRecipientPickerSceneTest {
             assertNull(selected, "A typed address needs confirmation unless the server confirms it")
 
             performImeAction(NEW_ADDRESS)
-            assertEquals(FileShareRecipient(NEW_ADDRESS, NEW_ADDRESS, FileShareTarget.Email, exact = true), selected)
+            assertEquals(typedFileShareEmailRecipient(NEW_ADDRESS), selected)
+            assertEquals(FileShareRecipientOrigin.Typed, selected?.origin)
             assertTrue(has("Selected: $NEW_ADDRESS"))
         }
     }
@@ -108,7 +109,36 @@ class FileShareRecipientPickerSceneTest {
     }
 
     /** Holds the first search open without honoring cancellation; later searches find nothing. */
-    private class PickerFixture {
+    @Test
+    fun aMatchingResultListedAfterTheVisibleLimitCanStillBeChosen() {
+        val others = (1..8).map { """{"label":"Reader $it","value":{"shareType":4,"shareWith":"reader.$it@example.test"}}""" }
+        val match = """{"label":"Reader Contact","value":{"shareType":4,"shareWith":"$NEW_ADDRESS"}}"""
+        val fixture = PickerFixture(laterResponse = { emailResponse(regular = others + match) })
+        var selected by mutableStateOf<FileShareRecipient?>(null)
+        nativeSceneTest(800, 900, content = {
+            FileShareRecipientPicker(
+                session = session,
+                services = fixture.services,
+                target = FileShareTarget.Email,
+                file = file,
+                selectedRecipient = selected?.id.orEmpty(),
+                enabled = true,
+                onSelected = { selected = it },
+            )
+        }) {
+            replaceText("", NEW_ADDRESS)
+            settleUntil { fixture.currentSearches > 0 && has("Reader Contact") }
+            assertTrue(has("Reader Contact"), "The matching server result must stay visible")
+            assertTrue(!has("Typed address"), "The same address must not be offered twice")
+            assertNull(selected)
+
+            click("Reader Contact")
+            assertEquals(NEW_ADDRESS, selected?.id)
+            assertEquals(FileShareRecipientOrigin.Server, selected?.origin)
+        }
+    }
+
+    private class PickerFixture(val laterResponse: () -> NextcloudApiResponse = { exactEmailResponse(null) }) {
         var staleSearch: Continuation<NextcloudApiResponse>? = null
         var currentSearches = 0
 
@@ -128,7 +158,7 @@ class FileShareRecipientPickerSceneTest {
                             suspendCoroutine<NextcloudApiResponse> { staleSearch = it }
                         } else {
                             currentSearches++
-                            exactEmailResponse(null)
+                            laterResponse()
                         }
                     }
                     operation.startCoroutineUninterceptedOrReturn(arguments.last() as Continuation<Any?>)
@@ -144,17 +174,18 @@ class FileShareRecipientPickerSceneTest {
         val session = NextcloudSession("https://fixture.invalid", "synthetic-user", "synthetic-password")
         val file = NextcloudFile("report.md", "report.md", false, "text/markdown", 0L, null, null, false)
 
-        fun exactEmailResponse(address: String?): NextcloudApiResponse {
-            val exact = address?.let { """{"label":"Synthetic person","value":{"shareType":4,"shareWith":"$it"}}""" }.orEmpty()
-            return NextcloudApiResponse(
-                status = 200,
-                body = """
-                    {"ocs":{"meta":{"status":"ok","statuscode":200},
-                    "data":{"exact":{"emails":[$exact]},"emails":[]}}}
-                """.trimIndent().encodeToByteArray(),
-                contentType = "application/json",
-                etag = null,
-            )
-        }
+        fun exactEmailResponse(address: String?): NextcloudApiResponse = emailResponse(
+            exact = listOfNotNull(address?.let { """{"label":"Synthetic person","value":{"shareType":4,"shareWith":"$it"}}""" }),
+        )
+
+        fun emailResponse(exact: List<String> = emptyList(), regular: List<String> = emptyList()) = NextcloudApiResponse(
+            status = 200,
+            body = """
+                {"ocs":{"meta":{"status":"ok","statuscode":200},
+                "data":{"exact":{"emails":[${exact.joinToString(",")}]},"emails":[${regular.joinToString(",")}]}}}
+            """.trimIndent().encodeToByteArray(),
+            contentType = "application/json",
+            etag = null,
+        )
     }
 }

@@ -49,7 +49,13 @@ class FileShareRecipientSelectionTest {
     @Test
     fun aCompleteTypedEmailAddressIsOfferedUntilTheServerReturnsTheSameAddress() {
         val typing = FileShareRecipientPickerUiState(query = " Reader@Example.test ", loading = true)
-        val typed = FileShareRecipient("Reader@Example.test", "Reader@Example.test", FileShareTarget.Email, exact = true)
+        val typed = FileShareRecipient(
+            "Reader@Example.test",
+            "Reader@Example.test",
+            FileShareTarget.Email,
+            exact = true,
+            origin = FileShareRecipientOrigin.Typed,
+        )
 
         assertEquals(typed, typing.typedRecipient(FileShareTarget.Email))
         assertEquals(listOf(typed), typing.visibleChoices(FileShareTarget.Email))
@@ -134,11 +140,61 @@ class FileShareRecipientSelectionTest {
             FileShareCreationPlan.Blocked("Enter an email address or choose one from the search results."),
             dialog(recipient = user, capabilities = emailCapabilities.copy(userShares = true)).creationPlan,
         )
-        val malformed = FileShareRecipient("reader@example", "reader@example", FileShareTarget.Email)
+    }
+
+    @Test
+    fun onlyATypedAddressIsHeldToTheLocalEmailGrammar() {
+        val typed = FileShareRecipient(
+            "reader@example",
+            "reader@example",
+            FileShareTarget.Email,
+            exact = true,
+            origin = FileShareRecipientOrigin.Typed,
+        )
         assertEquals(
             FileShareCreationPlan.Blocked("Enter a complete domain after the @, such as example.com."),
-            dialog(recipient = malformed, capabilities = emailCapabilities).creationPlan,
+            dialog(recipient = typed, capabilities = emailCapabilities).creationPlan,
         )
+        val queryOnly = emailCapabilities.copy(emailProviderAdvertised = false)
+        assertEquals(
+            FileShareCreationPlan.Blocked("Sharing by email is unavailable on this server."),
+            dialog(recipient = typed, capabilities = queryOnly).creationPlan,
+        )
+
+        listOf("reader@localhost", "\"quoted name\"@example.test", "reader@[192.0.2.1]").forEach { address ->
+            val returned = FileShareRecipient(address, "Synthetic contact", FileShareTarget.Email)
+            assertEquals(FileShareRecipientOrigin.Server, returned.origin)
+            val ready = assertIs<FileShareCreationPlan.Ready>(
+                dialog(recipient = returned, capabilities = emailCapabilities).creationPlan,
+                address,
+            )
+            assertEquals(address, ready.request.shareWith)
+            assertEquals(
+                FileShareCreationPlan.Blocked("Sharing by email is unavailable on this server."),
+                dialog(recipient = returned, capabilities = queryOnly).creationPlan,
+            )
+        }
+    }
+
+    @Test
+    fun aMatchingServerResultBeyondTheVisibleLimitIsPromotedAsTheOnlyChoiceForTheAddress() {
+        val others = (1..8).map {
+            FileShareRecipient("reader.$it@example.test", "Reader $it", FileShareTarget.Email)
+        }
+        val match = FileShareRecipient("reader@example.test", "Reader Contact", FileShareTarget.Email)
+        val state = FileShareRecipientPickerUiState(query = "Reader@example.test", results = others + match)
+
+        assertNull(state.typedRecipient(FileShareTarget.Email))
+        val choices = state.visibleChoices(FileShareTarget.Email)
+        assertEquals(match, choices.first())
+        assertEquals(8, choices.size)
+        assertEquals(1, choices.count { it.id.equals("reader@example.test", ignoreCase = true) })
+        assertEquals(others.take(7), choices.drop(1))
+        assertEquals("Select a result to continue.", state.supportingMessage(FileShareTarget.Email))
+
+        val withinLimit = state.copy(results = listOf(others[0], match))
+        assertEquals(listOf(match, others[0]), withinLimit.visibleChoices(FileShareTarget.Email))
+        assertEquals(others, state.copy(query = "Reader").visibleChoices(FileShareTarget.Email))
     }
 
     @Test

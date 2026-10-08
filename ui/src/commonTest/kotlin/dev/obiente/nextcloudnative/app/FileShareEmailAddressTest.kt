@@ -78,7 +78,13 @@ class FileShareEmailAddressTest {
     @Test
     fun typedRecipientUsesTheAddressAsTheEmailShareIdentity() {
         assertEquals(
-            FileShareRecipient("reader@example.test", "reader@example.test", FileShareTarget.Email, exact = true),
+            FileShareRecipient(
+                "reader@example.test",
+                "reader@example.test",
+                FileShareTarget.Email,
+                exact = true,
+                origin = FileShareRecipientOrigin.Typed,
+            ),
             typedFileShareEmailRecipient(" reader@example.test "),
         )
         assertNull(typedFileShareEmailRecipient("reader@example"))
