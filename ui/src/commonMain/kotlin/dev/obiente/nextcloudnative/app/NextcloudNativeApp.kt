@@ -684,6 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    val fileDeletes = rememberFileDeleteCoordinator(session)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1612,6 +1613,7 @@ private fun AuthenticatedApp(
         is Screen.Files -> FilesScreen(
             services = services,
             session = session,
+            fileDeletes = fileDeletes,
             userId = serverInfo?.userId,
             fileSharing = serverInfo?.fileSharing ?: NextcloudFileSharingCapabilities.Unavailable,
             path = current.path,
@@ -6470,6 +6472,7 @@ private fun readableAppName(value: String): String = value
 internal fun FilesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    fileDeletes: FileDeleteCoordinator,
     userId: String?,
     fileSharing: NextcloudFileSharingCapabilities,
     path: String,
@@ -6491,7 +6494,7 @@ internal fun FilesScreen(
     var renameTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
     var renameValue by remember(session, path, userId) { mutableStateOf("") }
     var transferTarget by remember(session, path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
-    var deleteTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
+    val deleteDialog = remember(fileDeletes, path, userId) { FileDeleteDialogState(fileDeletes) }
     var creationKind by remember(session, path, userId) { mutableStateOf<FileCreationKind?>(null) }
     var creationName by remember(session, path, userId) { mutableStateOf("") }
     var creationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
@@ -6683,6 +6686,10 @@ internal fun FilesScreen(
         action: FileMenuAction,
         loadedFiles: List<NextcloudFile>,
     ) {
+        if (action.changesRemoteItem() && fileDeletes.blocksWrites(file)) {
+            mutationError = "Wait until the delete of ${file.name} or its folder finishes."
+            return
+        }
         when (action) {
             FileMenuAction.Rename -> {
                 renameTarget = file
@@ -6717,7 +6724,7 @@ internal fun FilesScreen(
                 }
             }
             FileMenuAction.Delete -> {
-                deleteTarget = file
+                deleteDialog.open(file)
                 mutationError = null
             }
             FileMenuAction.Move, FileMenuAction.Copy -> {
@@ -6936,7 +6943,7 @@ internal fun FilesScreen(
                 )
             }
         }
-        if (renameTarget == null && transferTarget == null && deleteTarget == null) {
+        if (renameTarget == null && transferTarget == null && deleteDialog.target == null) {
             mutationError?.let { message ->
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -7018,6 +7025,7 @@ internal fun FilesScreen(
                     onLayoutChanged = onLayoutChanged,
                     offlineAvailability = offlineAvailability,
                     offlineStorageSupported = services.supportsFileOfflineStorage,
+                    writesBlocked = fileDeletes::blocksWrites,
                     fileSharing = fileSharing,
                     externalHandoffCapability = externalHandoffCapability,
                     services = services,
@@ -7331,84 +7339,15 @@ internal fun FilesScreen(
         )
     }
 
-    deleteTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!mutationRunning) {
-                    deleteTarget = null
-                    mutationError = null
-                }
-            },
-            title = { Text("Delete ${target.name}?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
-                    Text(
-                        if (target.isDirectory) {
-                            "This removes the folder and everything inside it from Nextcloud. This cannot be undone here."
-                        } else {
-                            "This removes the file from Nextcloud. This cannot be undone here."
-                        },
-                    )
-                    Text(
-                        "The delete is ETag-protected and will stop if the item changed since this folder was loaded.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !mutationRunning,
-                    onClick = {
-                        deleteTarget = null
-                        mutationError = null
-                    },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !mutationRunning,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        val etag = target.etag?.takeIf(String::isNotBlank)
-                        if (etag == null) {
-                            mutationError = "Refresh the folder before deleting this item."
-                            return@Button
-                        }
-                        mutationRunning = true
-                        mutationError = null
-                        scope.launch {
-                            filesRequest {
-                                services.executeFileMutation(
-                                    session,
-                                    requireNotNull(userId),
-                                    NextcloudFileMutation.Delete(
-                                        target.path,
-                                        etag,
-                                        sourceIsDirectory = target.isDirectory,
-                                    ),
-                                )
-                            }.onSuccess {
-                                deleteTarget = null
-                                mutationNotice = "Deleted ${target.name}"
-                                files = null
-                                loadAttempt += 1
-                            }.onFailure {
-                                mutationError = it.message ?: "Could not delete this item."
-                            }
-                            mutationRunning = false
-                        }
-                    },
-                ) {
-                    if (mutationRunning) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (mutationRunning) "Deleting..." else "Delete")
-                }
-            },
-        )
+    userId?.let { uid ->
+        FileDeleteHost(
+            deleteDialog, fileDeletes,
+            delete = { mutation -> services.executeFileMutation(session, uid, mutation) },
+            readFolder = { folder -> services.listFilesWithSource(session, uid, folder) },
+        ) { effect ->
+            effect.notice?.let { mutationNotice = it }
+            if (effect.reloadFolder) { files = null; loadAttempt += 1 }
+        }
     }
 
     shareTarget?.let { target ->

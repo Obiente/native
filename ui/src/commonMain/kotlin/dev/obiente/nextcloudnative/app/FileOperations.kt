@@ -68,7 +68,23 @@ fun FileWebDavMutationSpec.conflictConditionHeaders(): Map<String, String> =
 data class NextcloudFileMutationResult(
     val destinationPath: String?,
     val etag: String?,
+    /** Local cache and virtual-file bookkeeping after the server confirmed the change. */
+    val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
 )
+
+/**
+ * The server result is authoritative. Local bookkeeping is reported separately so a slow or
+ * failed local update never hides or delays a change the server already applied.
+ */
+enum class FileMutationLocalFollowUp {
+    Completed,
+
+    /** Still running in the background after the bounded wait. */
+    StillRunning,
+
+    /** Finished without updating every local cache or virtual-file record. */
+    Failed,
+}
 
 enum class NextcloudFileOperationError {
     AuthenticationRequired,
@@ -77,6 +93,9 @@ enum class NextcloudFileOperationError {
     Conflict,
     Locked,
     InsufficientStorage,
+
+    /** The server rejected the request under its rate limit; nothing was changed. */
+    Throttled,
     ServerFailure,
 }
 
@@ -128,6 +147,7 @@ fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): Nex
         404 -> NextcloudFileOperationError.NotFound
         405, 409, 412 -> NextcloudFileOperationError.Conflict
         423 -> NextcloudFileOperationError.Locked
+        429 -> NextcloudFileOperationError.Throttled
         507 -> NextcloudFileOperationError.InsufficientStorage
         else -> NextcloudFileOperationError.ServerFailure
     }
@@ -141,6 +161,7 @@ fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): Nex
         } else "The file or destination changed. Refresh and try again."
         NextcloudFileOperationError.Locked -> "The file is locked by another operation."
         NextcloudFileOperationError.InsufficientStorage -> "The server does not have enough free storage."
+        NextcloudFileOperationError.Throttled -> "The server is limiting requests. Wait a while, then refresh and try again."
         NextcloudFileOperationError.ServerFailure -> "The file operation failed (HTTP $status)."
     }
     return NextcloudFileOperationException(error, status, message)

@@ -87,6 +87,7 @@ fun NextcloudNativeMarketingCapture(
                             FilesScreen(
                                 services = assets.services,
                                 session = marketingHomepageSession,
+                                fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession),
                                 userId = marketingHomepageTalkUserId,
                                 fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
                                 path = "",
@@ -103,6 +104,7 @@ fun NextcloudNativeMarketingCapture(
                         FilesScreen(
                             services = assets.services,
                             session = marketingHomepageSession,
+                            fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession),
                             userId = marketingHomepageTalkUserId,
                             fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
                             path = "",
