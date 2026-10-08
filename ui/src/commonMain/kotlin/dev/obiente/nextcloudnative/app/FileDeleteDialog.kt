@@ -12,9 +12,41 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+
+/**
+ * Shows the delete dialog of one Files screen and applies finished deletes, including ones
+ * started before this screen was shown. The requests themselves belong to [deletes].
+ */
+@Composable
+internal fun FileDeleteHost(
+    dialog: FileDeleteDialogState,
+    deletes: FileDeleteCoordinator,
+    delete: suspend (NextcloudFileMutation.Delete) -> NextcloudFileMutationResult,
+    readFolder: suspend (String) -> NextcloudFileListing,
+    onEffect: (FileDeleteScreenEffect) -> Unit,
+) {
+    val currentOnEffect by rememberUpdatedState(onEffect)
+    val completion = deletes.nextCompletion
+    LaunchedEffect(deletes, completion) {
+        if (completion != null && deletes.consume(completion)) currentOnEffect(dialog.complete(completion))
+    }
+    dialog.target?.let { target ->
+        FileDeleteDialog(
+            target = target,
+            running = dialog.running,
+            error = dialog.error,
+            retryBlocked = dialog.retryBlocked,
+            onConfirm = { dialog.begin()?.let { request -> deletes.start(request, delete, readFolder) } },
+            onDismiss = dialog::dismiss,
+        )
+    }
+}
 
 /** Confirms one Files delete. Closing it while the delete runs never cancels the request. */
 @Composable

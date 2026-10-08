@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -28,10 +29,17 @@ class DesktopFileMutationFollowUpsTest {
     }
 
     @Test
-    fun `completed local bookkeeping is reported as completed`(): Unit = runBlocking {
+    fun `completed local bookkeeping refreshes every affected path`(): Unit = runBlocking {
         val followUps = followUps()
+        val refreshed = Collections.synchronizedList(mutableListOf<String>())
 
-        assertEquals(FileMutationLocalFollowUp.Completed, followUps.afterConfirmedMutation("account") { null })
+        val followUp = followUps.afterConfirmedMutation("account", listOf("a.txt", "b/a.txt")) { path ->
+            refreshed += path
+            null
+        }
+
+        assertEquals(FileMutationLocalFollowUp.Completed, followUp)
+        assertEquals(listOf("a.txt", "b/a.txt"), refreshed.toList())
         assertTrue(diagnostics.isEmpty())
     }
 
@@ -39,8 +47,8 @@ class DesktopFileMutationFollowUpsTest {
     fun `recovered or thrown local failure is reported separately from the server result`(): Unit = runBlocking {
         val followUps = followUps()
 
-        val recovered = followUps.afterConfirmedMutation("account") { IllegalStateException("cache unavailable") }
-        val thrown = followUps.afterConfirmedMutation("account") { throw IllegalStateException("index locked") }
+        val recovered = followUps.afterConfirmedMutation("account", listOf("a")) { IllegalStateException("cache") }
+        val thrown = followUps.afterConfirmedMutation("account", listOf("a")) { throw IllegalStateException("index") }
 
         assertEquals(FileMutationLocalFollowUp.Failed, recovered)
         assertEquals(FileMutationLocalFollowUp.Failed, thrown)
@@ -55,7 +63,7 @@ class DesktopFileMutationFollowUpsTest {
         val finished = CountDownLatch(1)
 
         val followUp = withTimeout(5_000L) {
-            followUps.afterConfirmedMutation("account") {
+            followUps.afterConfirmedMutation("account", listOf("a")) {
                 // Stands in for a monitor wait that neither cancellation nor interruption can end.
                 release.awaitUninterruptibly()
                 finished.countDown()
@@ -70,30 +78,66 @@ class DesktopFileMutationFollowUpsTest {
     }
 
     @Test
-    fun `work stays ordered behind a stalled update and unknown results never wait`(): Unit = runBlocking {
-        val followUps = followUps(waitMillis = 50L)
+    fun `many mutations behind a stall stay coalesced and run once the stall clears`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 20L)
         val release = latch()
-        val order = Collections.synchronizedList(mutableListOf<String>())
-        val laterRan = CountDownLatch(1)
-
-        followUps.afterConfirmedMutation("account") {
+        val started = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("stalled")) {
+            started.countDown()
             release.awaitUninterruptibly()
-            order += "first"
             null
         }
-        withTimeout(1_000L) {
-            followUps.afterUnknownResult("account") {
-                order += "second"
-                laterRan.countDown()
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val runs = Collections.synchronizedList(mutableListOf<String>())
+
+        repeat(1_000) { mutation ->
+            val path = "folder/${mutation % 10}"
+            followUps.afterUnknownResult("account", listOf(path)) {
+                runs += "$path#$mutation"
                 null
             }
         }
+        repeat(20) { mutation ->
+            val followUp = followUps.afterConfirmedMutation("account", listOf("folder/${mutation % 10}")) { path ->
+                runs += "$path#confirmed$mutation"
+                null
+            }
+            assertEquals(FileMutationLocalFollowUp.StillRunning, followUp)
+        }
 
-        assertTrue(order.isEmpty(), "Later invalidations must not overtake an earlier one.")
+        assertEquals(10, followUps.pendingCount, "Repeated paths must not grow the queue.")
+        assertTrue(runs.isEmpty(), "Nothing may overtake the stalled refresh.")
         release.countDown()
-        assertTrue(laterRan.await(5, TimeUnit.SECONDS))
-        assertEquals(listOf("first", "second"), order.toList())
+        withTimeout(5_000L) { while (followUps.pendingCount > 0 || runs.size < 10) delay(10L) }
+        assertEquals(
+            (0 until 10).map { index -> "folder/$index#confirmed${10 + index}" },
+            runs.toList(),
+            "Each path refreshes once, with its newest refresh.",
+        )
     }
+
+    @Test
+    fun `pending paths behind a stall are bounded and overflow is reported as a local failure`(): Unit =
+        runBlocking {
+            val followUps = followUps(waitMillis = 20L, maximumPending = 4)
+            val release = latch()
+            val started = CountDownLatch(1)
+            followUps.afterUnknownResult("account", listOf("stalled")) {
+                started.countDown()
+                release.awaitUninterruptibly()
+                null
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+
+            val results = (0 until 10).map { index ->
+                followUps.afterConfirmedMutation("account", listOf("path/$index")) { null }
+            }
+
+            assertEquals(4, followUps.pendingCount)
+            assertEquals(List(4) { FileMutationLocalFollowUp.StillRunning }, results.take(4))
+            assertEquals(List(6) { FileMutationLocalFollowUp.Failed }, results.drop(4))
+            assertEquals(6, diagnostics.count { it.second.outcome == "dropped" })
+        }
 
     @Test
     fun `caller cancellation propagates promptly while bookkeeping completes`(): Unit = runBlocking {
@@ -103,7 +147,7 @@ class DesktopFileMutationFollowUpsTest {
         val finished = CountDownLatch(1)
 
         val caller = launch(Dispatchers.Default) {
-            followUps.afterConfirmedMutation("account") {
+            followUps.afterConfirmedMutation("account", listOf("a")) {
                 started.countDown()
                 release.awaitUninterruptibly()
                 finished.countDown()
@@ -124,14 +168,19 @@ class DesktopFileMutationFollowUpsTest {
             val followUps = followUps()
             scope.cancel()
 
-            assertEquals(FileMutationLocalFollowUp.Failed, followUps.afterConfirmedMutation("account") { null })
+            assertEquals(
+                FileMutationLocalFollowUp.Failed,
+                followUps.afterConfirmedMutation("account", listOf("a")) { null },
+            )
         }
 
-    private fun followUps(waitMillis: Long = 5_000L) = DesktopFileMutationFollowUps(
-        scope = scope,
-        completionWaitMillis = waitMillis,
-        recordDiagnostic = { account, event -> diagnostics += account to event },
-    )
+    private fun followUps(waitMillis: Long = 5_000L, maximumPending: Int = MAX_PENDING_FILE_MUTATION_FOLLOW_UPS) =
+        DesktopFileMutationFollowUps(
+            scope = scope,
+            completionWaitMillis = waitMillis,
+            maximumPending = maximumPending,
+            recordDiagnostic = { account, event -> diagnostics += account to event },
+        )
 
     private fun latch() = CountDownLatch(1).also(releases::add)
 

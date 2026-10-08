@@ -684,6 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    val fileDeletes = rememberFileDeleteCoordinator(session)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1612,6 +1613,7 @@ private fun AuthenticatedApp(
         is Screen.Files -> FilesScreen(
             services = services,
             session = session,
+            fileDeletes = fileDeletes,
             userId = serverInfo?.userId,
             fileSharing = serverInfo?.fileSharing ?: NextcloudFileSharingCapabilities.Unavailable,
             path = current.path,
@@ -6470,6 +6472,7 @@ private fun readableAppName(value: String): String = value
 internal fun FilesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    fileDeletes: FileDeleteCoordinator,
     userId: String?,
     fileSharing: NextcloudFileSharingCapabilities,
     path: String,
@@ -6491,8 +6494,7 @@ internal fun FilesScreen(
     var renameTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
     var renameValue by remember(session, path, userId) { mutableStateOf("") }
     var transferTarget by remember(session, path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
-    val deletesInFlight = remember(session, userId) { FileDeleteInFlight() }
-    val deleteDialog = remember(session, path, userId) { FileDeleteDialogState(session.accountId, deletesInFlight) }
+    val deleteDialog = remember(fileDeletes, path, userId) { FileDeleteDialogState(fileDeletes) }
     var creationKind by remember(session, path, userId) { mutableStateOf<FileCreationKind?>(null) }
     var creationName by remember(session, path, userId) { mutableStateOf("") }
     var creationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
@@ -6684,6 +6686,10 @@ internal fun FilesScreen(
         action: FileMenuAction,
         loadedFiles: List<NextcloudFile>,
     ) {
+        if (action.changesRemoteItem() && fileDeletes.blocksWrites(file)) {
+            mutationError = "Wait until the delete of ${file.name} or its folder finishes."
+            return
+        }
         when (action) {
             FileMenuAction.Rename -> {
                 renameTarget = file
@@ -7019,6 +7025,7 @@ internal fun FilesScreen(
                     onLayoutChanged = onLayoutChanged,
                     offlineAvailability = offlineAvailability,
                     offlineStorageSupported = services.supportsFileOfflineStorage,
+                    writesBlocked = fileDeletes::blocksWrites,
                     fileSharing = fileSharing,
                     externalHandoffCapability = externalHandoffCapability,
                     services = services,
@@ -7332,27 +7339,15 @@ internal fun FilesScreen(
         )
     }
 
-    deleteDialog.target?.let { target ->
-        FileDeleteDialog(
-            target = target,
-            running = deleteDialog.running,
-            error = deleteDialog.error,
-            retryBlocked = deleteDialog.retryBlocked,
-            onDismiss = deleteDialog::dismiss,
-            onConfirm = confirm@{
-                val currentUserId = userId ?: return@confirm
-                val request = deleteDialog.begin() ?: return@confirm
-                scope.launch {
-                    val effect = deleteDialog.runDelete(
-                        request,
-                        delete = { mutation -> services.executeFileMutation(session, currentUserId, mutation) },
-                        readFolder = { folder -> services.listFilesWithSource(session, currentUserId, folder) },
-                    )
-                    effect.notice?.let { mutationNotice = it }
-                    if (effect.reloadFolder) { files = null; loadAttempt += 1 }
-                }
-            },
-        )
+    userId?.let { uid ->
+        FileDeleteHost(
+            deleteDialog, fileDeletes,
+            delete = { mutation -> services.executeFileMutation(session, uid, mutation) },
+            readFolder = { folder -> services.listFilesWithSource(session, uid, folder) },
+        ) { effect ->
+            effect.notice?.let { mutationNotice = it }
+            if (effect.reloadFolder) { files = null; loadAttempt += 1 }
+        }
     }
 
     shareTarget?.let { target ->

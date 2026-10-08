@@ -1,26 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 
 /** The verified result of one ETag-guarded Files delete. */
 internal sealed interface FileDeleteOutcome {
-    /**
-     * The server confirmed the delete, or a fresh server listing showed the item is gone after
-     * an unknown result. [localFollowUp] is null when the local update was not reported.
-     */
-    data class Deleted(
-        val confirmedByRead: Boolean,
-        val localFollowUp: FileMutationLocalFollowUp?,
-    ) : FileDeleteOutcome
+    /** The server confirmed the delete. [localFollowUp] reports the local bookkeeping separately. */
+    data class Deleted(val localFollowUp: FileMutationLocalFollowUp) : FileDeleteOutcome
 
-    /** The server reported that the item no longer exists. */
-    data object AlreadyGone : FileDeleteOutcome
+    /**
+     * The item is no longer at its path. That is not proof of deletion: after an unknown result
+     * ([afterUnknownResult]) another client may have moved or renamed it instead.
+     */
+    data class NoLongerAtLocation(val afterUnknownResult: Boolean) : FileDeleteOutcome
 
     /** The item is verified to be unchanged on the server, so trying again is safe. */
     data class NotDeleted(val message: String) : FileDeleteOutcome
@@ -49,8 +40,7 @@ internal suspend fun deleteFileWithVerifiedOutcome(
     readParent: suspend () -> NextcloudFileListing,
 ): FileDeleteOutcome {
     val failure = try {
-        val result = delete()
-        return FileDeleteOutcome.Deleted(confirmedByRead = false, localFollowUp = result.localFollowUp)
+        return FileDeleteOutcome.Deleted(delete().localFollowUp)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {
@@ -58,7 +48,7 @@ internal suspend fun deleteFileWithVerifiedOutcome(
     }
     if (failure is NextcloudFileOperationException) {
         when (failure.error) {
-            NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.AlreadyGone
+            NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = false)
             NextcloudFileOperationError.ServerFailure -> Unit
             // Resending the same ETag precondition cannot succeed.
             NextcloudFileOperationError.Conflict -> return FileDeleteOutcome.RefreshRequired(
@@ -94,7 +84,15 @@ private suspend fun verifyFileDeletePostcondition(
     }
     if (listing.source != NextcloudFileListingSource.Network) return unconfirmed
     val current = listing.files.firstOrNull { it.path == target.path }
-        ?: return FileDeleteOutcome.Deleted(confirmedByRead = true, localFollowUp = null)
+    if (current == null) {
+        // The stable file ID can only be reconciled within the listing already read.
+        val renamedInPlace = target.fileId != null && listing.files.any { it.fileId == target.fileId }
+        return if (renamedInPlace) {
+            FileDeleteOutcome.RefreshRequired("${target.name} was renamed on the server. Refresh the folder.")
+        } else {
+            FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true)
+        }
+    }
     return if (current.isDirectory == target.isDirectory && current.etag == expectedEtag) {
         FileDeleteOutcome.NotDeleted("The delete did not finish. ${target.name} is still on the server.")
     } else {
@@ -104,155 +102,30 @@ private suspend fun verifyFileDeletePostcondition(
     }
 }
 
-/** One remote resource in one account. Deletes for the same key never overlap. */
-internal data class FileDeleteResourceKey(val account: NextcloudAccountId, val path: String)
-
-/**
- * Account-scoped Files deletes that have not reached a verified outcome. It outlives any dialog,
- * so closing and reopening Delete cannot send a second request while the first is unresolved.
- */
-internal class FileDeleteInFlight {
-    private val pending = mutableStateMapOf<FileDeleteResourceKey, Long>()
-    private var nextToken = 0L
-
-    operator fun contains(key: FileDeleteResourceKey): Boolean = key in pending
-
-    fun claim(key: FileDeleteResourceKey): Long? {
-        if (key in pending) return null
-        return (++nextToken).also { pending[key] = it }
-    }
-
-    fun release(key: FileDeleteResourceKey, token: Long) {
-        if (pending[key] == token) pending.remove(key)
-    }
-}
-
-internal data class FileDeleteRequest(
-    val generation: Long,
-    val key: FileDeleteResourceKey,
-    val token: Long,
-    val file: NextcloudFile,
-    val expectedEtag: String,
-) {
-    val parentPath: String get() = file.path.substringBeforeLast('/', missingDelimiterValue = "")
-}
-
 /** Screen effects of a finished delete. They apply even after its dialog was closed. */
 internal data class FileDeleteScreenEffect(val notice: String?, val reloadFolder: Boolean)
 
-/**
- * Main-thread owner of the Files delete dialog. Closing or replacing the dialog invalidates its
- * pending completion, which then only reports a screen notice and refreshes the folder, unless a
- * reopened dialog shows the same version of the same item.
- */
-internal class FileDeleteDialogState(
-    private val account: NextcloudAccountId,
-    private val inFlight: FileDeleteInFlight,
-) {
-    var target by mutableStateOf<NextcloudFile?>(null)
-        private set
-    var error by mutableStateOf<String?>(null)
-        private set
-    var retryBlocked by mutableStateOf(false)
-        private set
-    private var generation = 0L
-
-    /** True while any delete of the shown item is unresolved, including one from a closed dialog. */
-    val running: Boolean
-        get() = target?.let { key(it) in inFlight } == true
-
-    fun open(file: NextcloudFile) = reset(file)
-
-    /** The delete continues if it is running; it still blocks another delete of the same item. */
-    fun dismiss() = reset(null)
-
-    fun begin(): FileDeleteRequest? {
-        val file = target ?: return null
-        if (running || retryBlocked) return null
-        val etag = file.etag?.takeIf(String::isNotBlank) ?: run {
-            error = "Refresh the folder before deleting this item."
-            return null
-        }
-        val key = key(file)
-        val token = inFlight.claim(key) ?: return null
-        error = null
-        return FileDeleteRequest(generation, key, token, file, etag)
-    }
-
-    fun complete(request: FileDeleteRequest, outcome: FileDeleteOutcome): FileDeleteScreenEffect {
-        val shown = target
-        val current = request.generation == generation ||
-            (shown != null && key(shown) == request.key && shown.etag == request.expectedEtag)
-        if (current) {
-            when (outcome) {
-                is FileDeleteOutcome.Deleted, FileDeleteOutcome.AlreadyGone -> reset(null)
-                is FileDeleteOutcome.NotDeleted -> error = outcome.message
-                is FileDeleteOutcome.RefreshRequired -> blockRetry(outcome.message)
-                is FileDeleteOutcome.Throttled -> blockRetry(outcome.message)
-            }
-        }
-        return outcome.screenEffect(request.file.name, dialogShowsResult = current)
-    }
-
-    /** Releases the resource once the request ended, with or without an outcome. */
-    fun release(request: FileDeleteRequest) = inFlight.release(request.key, request.token)
-
-    private fun key(file: NextcloudFile) = FileDeleteResourceKey(account, file.path)
-
-    private fun blockRetry(message: String) {
-        error = message
-        retryBlocked = true
-    }
-
-    private fun reset(file: NextcloudFile?) {
-        generation += 1
-        target = file
-        error = null
-        retryBlocked = false
-    }
-}
-
-/**
- * Runs one delete for [request]. Cancellation propagates without changing the dialog beyond
- * releasing the resource.
- */
-internal suspend fun FileDeleteDialogState.runDelete(
-    request: FileDeleteRequest,
-    delete: suspend (NextcloudFileMutation.Delete) -> NextcloudFileMutationResult,
-    readFolder: suspend (String) -> NextcloudFileListing,
-): FileDeleteScreenEffect = try {
-    val mutation = NextcloudFileMutation.Delete(
-        request.file.path,
-        request.expectedEtag,
-        sourceIsDirectory = request.file.isDirectory,
-    )
-    val outcome = deleteFileWithVerifiedOutcome(
-        target = request.file,
-        expectedEtag = request.expectedEtag,
-        delete = { delete(mutation) },
-        readParent = { readFolder(request.parentPath) },
-    )
-    // Reject even a non-cooperative service's completion after the caller is cancelled.
-    currentCoroutineContext().ensureActive()
-    complete(request, outcome)
-} finally {
-    release(request)
-}
-
-private fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boolean): FileDeleteScreenEffect =
+internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boolean): FileDeleteScreenEffect =
     when (this) {
         is FileDeleteOutcome.Deleted -> FileDeleteScreenEffect(
-            notice = when {
-                confirmedByRead -> "Deleted $name. The server response was interrupted, so the folder was checked."
-                localFollowUp == FileMutationLocalFollowUp.StillRunning ->
+            notice = when (localFollowUp) {
+                FileMutationLocalFollowUp.StillRunning ->
                     "Deleted $name. Local file status is still updating in the background."
-                localFollowUp == FileMutationLocalFollowUp.Failed ->
+                FileMutationLocalFollowUp.Failed ->
                     "Deleted $name. Local file status could not be updated; refresh if it still appears."
-                else -> "Deleted $name"
+                FileMutationLocalFollowUp.Completed -> "Deleted $name"
             },
             reloadFolder = true,
         )
-        FileDeleteOutcome.AlreadyGone -> FileDeleteScreenEffect("$name is no longer on the server.", true)
+        is FileDeleteOutcome.NoLongerAtLocation -> FileDeleteScreenEffect(
+            notice = if (afterUnknownResult) {
+                "$name is no longer in this folder. The delete response was interrupted, so it may " +
+                    "have been deleted, moved, or renamed."
+            } else {
+                "$name is no longer in this folder."
+            },
+            reloadFolder = true,
+        )
         is FileDeleteOutcome.NotDeleted -> FileDeleteScreenEffect(
             notice = if (dialogShowsResult) null else "$name was not deleted. $message",
             reloadFolder = false,

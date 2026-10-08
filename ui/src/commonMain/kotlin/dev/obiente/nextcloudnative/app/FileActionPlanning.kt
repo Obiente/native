@@ -213,11 +213,14 @@ fun planFilesScreenActions(
     file: NextcloudFile,
     support: FileActionSupport = FileActionSupport(),
     offlineState: FileOfflineState = FileOfflineState.NotStored,
+    writesBlocked: Boolean = false,
 ): FileLongPressActionPlan {
     val plan = planFileActions(file, support, offlineState)
     return FileLongPressActionPlan(
         plan.actions.map { action ->
-            if (!action.enabled || action.action in filesScreenImplementedActions) {
+            if (writesBlocked && action.enabled && action.action in fileWriteActions) {
+                action.copy(enabled = false, disabledReason = "Wait until the delete of this item or its folder finishes.")
+            } else if (!action.enabled || action.action in filesScreenImplementedActions) {
                 action
             } else {
                 action.copy(
@@ -417,6 +420,23 @@ private fun action(
     requiresConfirmation = requiresConfirmation,
     tone = tone,
 )
+
+/** Actions that change the remote item or open a workflow that can change it. */
+private val fileWriteActions = setOf(
+    FileMenuAction.EditText,
+    FileMenuAction.EditWith,
+    FileMenuAction.AddFavorite,
+    FileMenuAction.RemoveFavorite,
+    FileMenuAction.VersionHistory,
+    FileMenuAction.Rename,
+    FileMenuAction.Move,
+    FileMenuAction.Copy,
+    FileMenuAction.Share,
+    FileMenuAction.Delete,
+)
+
+/** True when [action] can change the remote item, so it must wait for an unverified delete. */
+internal fun FileMenuAction.changesRemoteItem(): Boolean = this in fileWriteActions
 
 private val filesScreenImplementedActions = setOf(
     FileMenuAction.Open,

@@ -4833,12 +4833,8 @@ class DesktopNextcloudServices(
             }
         }
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun refreshAffectedLocalState(): Throwable? {
-            val sourceFailure = refreshRetainedFoldersAfterMutation(session, userId, accountId, spec.sourcePath, cacheProducer)
-            return spec.destinationPath?.let { destination ->
-                refreshRetainedFoldersAfterMutation(session, userId, accountId, destination, cacheProducer)
-            }.let { destinationFailure -> sourceFailure ?: destinationFailure }
-        }
+        val affectedPaths = listOfNotNull(spec.sourcePath, spec.destinationPath)
+        fun refreshLocalState(path: String) = refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
         val response = request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
@@ -4846,10 +4842,10 @@ class DesktopNextcloudServices(
             headers = headers,
             maxResponseBytes = 64 * 1024,
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = { fileMutationFollowUps.afterUnknownResult(accountId, ::refreshAffectedLocalState) },
+            onAmbiguousMutationResult = { fileMutationFollowUps.afterUnknownResult(accountId, affectedPaths, ::refreshLocalState) },
         )
         if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
-        val localFollowUp = fileMutationFollowUps.afterConfirmedMutation(accountId, ::refreshAffectedLocalState)
+        val localFollowUp = fileMutationFollowUps.afterConfirmedMutation(accountId, affectedPaths, ::refreshLocalState)
         NextcloudFileMutationResult(spec.destinationPath, response.etag, localFollowUp)
     }
 
