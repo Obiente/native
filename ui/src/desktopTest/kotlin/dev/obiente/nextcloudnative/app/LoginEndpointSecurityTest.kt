@@ -137,7 +137,7 @@ class LoginEndpointSecurityTest {
     }
 
     @Test
-    fun onlyPreExchangeDnsFailureIsSafeToRetry() {
+    fun onlyTransientConnectionSetupFailuresAreSafeToRetry() {
         val dns = JvmNetworkFailureDiagnostic(
             code = "NETWORK_DNS_UNRESOLVED",
             phase = JvmNetworkFailurePhase.Dns,
@@ -146,10 +146,40 @@ class LoginEndpointSecurityTest {
             exchangeStarted = false,
             protocol = null,
         )
-        val afterExchange = dns.copy(exchangeStarted = true)
-
-        assertIs<LoginPollResult.RetryablePreExchangeFailure>(classifyLoginPollNetworkFailure(dns))
-        assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(classifyLoginPollNetworkFailure(afterExchange))
+        val connectionSetupFailures = listOf(
+            dns,
+            dns.copy(code = "NETWORK_CONNECT_FAILED", phase = JvmNetworkFailurePhase.Connect),
+            dns.copy(code = "NETWORK_CONNECT_TIMEOUT", phase = JvmNetworkFailurePhase.Connect),
+            dns.copy(code = "NETWORK_UNREACHABLE", phase = JvmNetworkFailurePhase.Connect),
+            dns.copy(code = "NETWORK_TLS_TIMEOUT", phase = JvmNetworkFailurePhase.Tls),
+            dns.copy(code = "NETWORK_SOCKET_FAILED", phase = JvmNetworkFailurePhase.Connect),
+            dns.copy(code = "NETWORK_CONNECTION_RESET", phase = JvmNetworkFailurePhase.Connect),
+        )
+        connectionSetupFailures.forEach { failure ->
+            val result = assertIs<LoginPollResult.RetryablePreExchangeFailure>(
+                classifyLoginPollNetworkFailure(failure),
+            )
+            assertEquals(failure.code, result.code)
+            // A request that may have reached the server is never retried, whatever its cause.
+            val afterExchange = failure.copy(
+                exchangeStarted = true,
+                phase = JvmNetworkFailurePhase.ResponseHeaders,
+            )
+            val ambiguous = assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(
+                classifyLoginPollNetworkFailure(afterExchange),
+            )
+            assertEquals(failure.code, ambiguous.code)
+        }
+        listOf(
+            dns.copy(code = "NETWORK_CERTIFICATE_REJECTED", phase = JvmNetworkFailurePhase.Tls),
+            dns.copy(code = "NETWORK_TLS_HANDSHAKE", phase = JvmNetworkFailurePhase.Tls),
+            dns.copy(code = "NETWORK_PROTOCOL_FAILED", phase = JvmNetworkFailurePhase.Connect),
+            dns.copy(code = "NETWORK_UNKNOWN_FAILED", phase = JvmNetworkFailurePhase.Unknown),
+            dns.copy(code = "NETWORK_SOCKET_FAILED", phase = JvmNetworkFailurePhase.Tls),
+        ).forEach { failure ->
+            assertIs<LoginPollResult.FatalFailure>(classifyLoginPollNetworkFailure(failure))
+        }
+        assertIs<LoginPollResult.FatalFailure>(classifyLoginPollNetworkFailure(null))
         assertEquals(
             false,
             loginResultOriginMatchesEntered("https://cloud.example.com", "https://other.example.com"),

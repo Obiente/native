@@ -6,6 +6,10 @@ import java.nio.file.FileSystemException
 
 internal class DesktopFileSyncScanStoppedException : RuntimeException()
 
+/** The scanned local file generation is gone; distinct from unsafe-path failures, which stop the folder. */
+internal class DesktopFileSyncLocalRevisionChangedException :
+    IllegalArgumentException("The local file changed during content verification.")
+
 internal class DesktopFileSyncHttpStatusException(
     val statusCode: Int,
     operation: String,
