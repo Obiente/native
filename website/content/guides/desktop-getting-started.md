@@ -33,7 +33,13 @@ Download the exact package attached to a GitHub prerelease: DEB or RPM for the m
 
 Open nati.ve, enter the complete `https://` server address, and finish sign-in on the server's Login Flow page. The app stores the generated app password in Linux Secret Service or Windows Credential Manager. Home should then show the account status. A macOS package must not be used for an account until supported Keychain login is implemented.
 
-If the server uses a private certificate authority, never work around a certificate warning. In builds containing operating-system certificate trust, add the authority to the Linux system CA bundle with your distribution's tool or to the Windows Trusted Root Certification Authorities store, then restart nati.ve. Check the [release notes](https://github.com/Obiente/native/releases) for the behavior included in your build, and see [sign-in diagnostics](https://github.com/obiente/native/blob/main/docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities) for the exact bundle locations.
+### Servers that use a private certificate authority
+
+**Last reviewed: 2026-10-08.** The following behavior is implemented in source;
+availability in installed builds may change. Check the
+[release notes](https://github.com/Obiente/native/releases) for your version.
+
+Never work around a certificate warning. In builds containing operating-system certificate trust, add the authority to the Linux system CA bundle with your distribution's tool, or to the Windows Trusted Root Certification Authorities store, then restart nati.ve. Windows also applies its own distrust and certificate-purpose settings. See [sign-in diagnostics](https://github.com/obiente/native/blob/main/docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities) for the exact Linux bundle locations and limits.
 
 ## 2. Use desktop navigation and installed app workspaces
 
