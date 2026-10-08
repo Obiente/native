@@ -24,6 +24,7 @@ internal class DesktopFileSyncFakeDav(
     private val nodes = ConcurrentHashMap<String, Node>()
     private val etags = AtomicLong()
     private val prefix = listOf("remote.php", "dav", "files", userId)
+    private val methods = java.util.Collections.synchronizedList(ArrayList<String>())
 
     init {
         rootDirectories.forEach { nodes[it] = Node(true, ByteArray(0), nextEtag()) }
@@ -34,7 +35,11 @@ internal class DesktopFileSyncFakeDav(
 
     fun directories(): Set<String> = nodes.filterValues(Node::directory).keys
 
+    /** Every received HTTP method, in arrival order; unsupported verbs such as DELETE answer 405. */
+    fun requestMethods(): List<String> = synchronized(methods) { methods.toList() }
+
     override fun dispatch(request: RecordedRequest): MockResponse {
+        methods += request.method.toString()
         val segments = request.url.pathSegments.filter(String::isNotEmpty)
         if (segments.size < prefix.size || segments.take(prefix.size) != prefix) return status(404)
         val path = segments.drop(prefix.size).joinToString("/")

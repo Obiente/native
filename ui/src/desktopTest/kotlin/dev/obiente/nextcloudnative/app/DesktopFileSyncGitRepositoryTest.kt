@@ -113,6 +113,37 @@ class DesktopFileSyncGitRepositoryTest {
         }
     }
 
+    @Test
+    fun `an unreadable interrupted replacement backup never propagates a deletion`() = withRepository(
+        configuration = FileSyncConfiguration(
+            deviceLabel = "Workstation",
+            deletionPolicy = FileSyncDeletionPolicy.Propagate,
+        ),
+    ) { fixture ->
+        assertIs<FileSyncCenterActionResult.Completed>(fixture.run())
+        // A crash during a folder replacement leaves the only local original in an owned backup.
+        val refs = fixture.local.resolve(".git/refs").toPath()
+        val backup = refs.resolveSibling(".refs.nextcloud-native-backup-4d6f8828-7d52-4f2d-945b-f46aa4c97b41")
+        Files.move(refs, backup)
+        val restore = denyDesktopTestDirectoryListing(backup) ?: return@withRepository
+        try {
+            val blocked = runCatching { fixture.run() }.exceptionOrNull()
+
+            assertIs<IllegalStateException>(blocked, blocked.toString())
+            assertFalse("DELETE" in fixture.dav.requestMethods())
+            assertTrue("Repo/.git/refs/heads/main" in fixture.dav.files())
+        } finally {
+            restore()
+        }
+
+        val recovered = fixture.run()
+
+        assertIs<FileSyncCenterActionResult.Completed>(recovered, recovered.toString())
+        assertEquals("0 sync operations completed.", recovered.message)
+        assertTrue(fixture.local.resolve(".git/refs/heads/main").isFile)
+        assertFalse("DELETE" in fixture.dav.requestMethods())
+    }
+
     private class Fixture(
         val dav: DesktopFileSyncFakeDav,
         val local: File,
@@ -126,7 +157,11 @@ class DesktopFileSyncGitRepositoryTest {
         fun workItems(): List<FileSyncWorkItem> = store.loadPair(PAIR_ID).coordinator.pairs.single().workItems
     }
 
-    private fun withRepository(onPut: (String) -> Unit = {}, block: (Fixture) -> Unit) {
+    private fun withRepository(
+        onPut: (String) -> Unit = {},
+        configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        block: (Fixture) -> Unit,
+    ) {
         val directory = Files.createTempDirectory("desktop-sync-git-").toFile()
         val dav = DesktopFileSyncFakeDav("alice", listOf("Repo"), onPut)
         try {
@@ -158,7 +193,7 @@ class DesktopFileSyncGitRepositoryTest {
                                     accountId = desktopFileCacheAccountId(session),
                                     localRootId = "root",
                                     remoteRootPath = "Repo",
-                                    configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                                    configuration = configuration,
                                 ),
                             ),
                         ),

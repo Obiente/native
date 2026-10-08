@@ -7,13 +7,17 @@ import java.nio.channels.ServerSocketChannel
 import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.FileTime
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
+
+private typealias SyncPathFilterForTest = (relativePath: String, kind: SyncEntryKind) -> Boolean
 
 /** Local scans keep folder sync running when individual Git working-tree items cannot be read. */
 class DesktopFileSyncLocalAvailabilityTest {
@@ -124,13 +128,8 @@ class DesktopFileSyncLocalAvailabilityTest {
         writeGitTree(root)
         val objects = root.resolve(".git/objects").createDirectories()
         objects.resolve("pack").createDirectories()
-        val restricted = runCatching {
-            Files.setPosixFilePermissions(objects, PosixFilePermissions.fromString("---------"))
-        }.isSuccess
+        val restore = denyDesktopTestDirectoryListing(objects) ?: return@withTree
         try {
-            // Unsupported on Windows; a privileged user can still list the folder.
-            if (!restricted || Files.isReadable(objects)) return@withTree
-
             val scan = DesktopFileSyncLocalTree(root.toFile()).scan()
 
             assertEquals(
@@ -139,21 +138,127 @@ class DesktopFileSyncLocalAvailabilityTest {
             )
             assertTrue(scan.documents.none { it.entry.relativePath.startsWith(".git/objects") })
         } finally {
-            if (restricted) Files.setPosixFilePermissions(objects, PosixFilePermissions.fromString("rwx------"))
+            restore()
         }
     }
 
     @Test
     fun `an unreadable sync root still stops the scan`() = withTree { root ->
-        val restricted = runCatching {
-            Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("---------"))
-        }.isSuccess
+        writeGitTree(root)
+        val restore = denyDesktopTestDirectoryListing(root) ?: return@withTree
         try {
-            if (!restricted || Files.isReadable(root)) return@withTree
-
             assertFailsWith<Exception> { DesktopFileSyncLocalTree(root.toFile()).scan() }
         } finally {
-            if (restricted) Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx------"))
+            restore()
+        }
+    }
+
+    @Test
+    fun `an unreadable interrupted replacement backup stops the scan until it is recoverable`() = withTree { root ->
+        val backup = root.resolve("Notes/.today.nextcloud-native-backup-4d6f8828-7d52-4f2d-945b-f46aa4c97b41")
+        backup.createDirectories()
+        backup.resolve("page.md").writeText("only original")
+        val restore = denyDesktopTestDirectoryListing(backup) ?: return@withTree
+        try {
+            val failure = assertFailsWith<IllegalStateException> { DesktopFileSyncLocalTree(root.toFile()).scan() }
+            assertTrue(failure.message.orEmpty().contains("interrupted-replacement item Notes/.today."))
+            assertTrue(Files.isDirectory(backup))
+        } finally {
+            restore()
+        }
+
+        val recovered = DesktopFileSyncLocalTree(root.toFile()).scan()
+
+        assertEquals(emptyList(), recovered.unavailable)
+        assertTrue(recovered.documents.any { it.entry.relativePath == "Notes/today/page.md" })
+        assertEquals("only original", root.resolve("Notes/today/page.md").toFile().readText())
+    }
+
+    @Test
+    fun `a folder at the walk depth limit stops the scan unless it is ignored`() = withTree { root ->
+        val levels = List(64) { "d" }
+        val deepest = root.resolve(levels.joinToString("/")).createDirectories()
+        deepest.resolve("x.txt").writeText("deep")
+        root.resolve("keep.txt").writeText("keep")
+        val selected = FileSyncConfiguration(
+            deviceLabel = "Desktop",
+            selectedPaths = listOf((levels + "x.txt").joinToString("/")),
+        )
+        val ignored = FileSyncConfiguration(deviceLabel = "Desktop", ignoredPatterns = listOf("d/d/d"))
+
+        listOf<SyncPathFilterForTest>({ _, _ -> true }, selected::includesSyncPath).forEach { includes ->
+            val failure = assertFailsWith<IllegalArgumentException> {
+                DesktopFileSyncLocalTree(root.toFile()).scan(includes = includes)
+            }
+            assertTrue(failure.message.orEmpty().contains("nested more than 64 folders deep"))
+        }
+        val scan = DesktopFileSyncLocalTree(root.toFile()).scan(includes = ignored::includesSyncPath)
+        assertEquals(listOf("d", "d/d", "keep.txt"), scan.documents.map { it.entry.relativePath })
+        assertEquals(emptyList(), scan.unavailable)
+    }
+
+    @Test
+    fun `a leaf that vanishes during ancestor validation is reported as unavailable`() = withTree { root ->
+        writeGitTree(root)
+        val lock = root.resolve(".git/index.lock").apply { writeText("transient") }
+        val tree = DesktopFileSyncLocalTree(root.toFile(), changeTokenProvider = { path ->
+            if (path == lock) Files.deleteIfExists(path) // Runs after listing, before leaf validation.
+            null
+        })
+
+        val scan = tree.scan()
+
+        assertEquals(
+            listOf(FileSyncUnavailableLocalItem(".git/index.lock", FileSyncLocalUnavailableReason.Vanished)),
+            scan.unavailable,
+        )
+        assertTrue(scan.documents.any { it.entry.relativePath == ".git/HEAD" })
+    }
+
+    @Test
+    fun `a parent replaced during leaf validation still stops the scan`() = withTree { root ->
+        writeGitTree(root)
+        val heads = root.resolve(".git/refs/heads")
+        val leaf = heads.resolve("main")
+        val tree = DesktopFileSyncLocalTree(root.toFile(), changeTokenProvider = { path ->
+            if (path == leaf && Files.exists(heads.resolveSibling("heads-original")).not()) {
+                Files.move(heads, heads.resolveSibling("heads-original"))
+                heads.createDirectories()
+                Files.getFileAttributeView(heads, BasicFileAttributeView::class.java)
+                    .setTimes(null, null, FileTime.fromMillis(1_000_000_000_000L))
+                leaf.writeText("replacement")
+            }
+            null
+        })
+
+        val failure = assertFailsWith<IllegalArgumentException> { tree.scan() }
+
+        assertTrue(failure.message.orEmpty().contains("replaced after it was scanned"))
+    }
+
+    @Test
+    fun `a leaf replaced by a symbolic link during validation still stops the scan`() = withTree { root ->
+        writeGitTree(root)
+        val outside = Files.createTempDirectory("desktop-sync-outside-")
+        try {
+            val target = outside.resolve("secret.txt").apply { writeText("outside") }
+            val leaf = root.resolve(".git/ORIG_HEAD")
+            var linked = false
+            val tree = DesktopFileSyncLocalTree(root.toFile(), changeTokenProvider = { path ->
+                if (path == leaf && !linked) {
+                    Files.delete(leaf)
+                    linked = runCatching { Files.createSymbolicLink(leaf, target) }.isSuccess
+                }
+                null
+            })
+
+            val result = runCatching { tree.scan() }
+
+            if (!linked) return@withTree // Symbolic links need extra privileges on this platform.
+            val failure = assertIs<IllegalArgumentException>(result.exceptionOrNull())
+            assertTrue(failure.message.orEmpty().contains(".git/ORIG_HEAD is a symbolic link"))
+        } finally {
+            outside.toFile().deleteRecursively()
         }
     }
 

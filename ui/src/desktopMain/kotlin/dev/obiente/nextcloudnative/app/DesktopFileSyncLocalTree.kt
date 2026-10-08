@@ -93,6 +93,7 @@ internal class DesktopFileSyncLocalTree(
                     require(!Files.isSymbolicLink(file)) {
                         "Folder sync stopped because ${relative(file)} is a symbolic link."
                     }
+                    requireWithinDepthLimit(file, attrs, includes)
                     if (!includes(relative(file), SyncEntryKind.File)) return FileVisitResult.CONTINUE
                     if (attrs.isRegularFile) {
                         add(file, attrs, SyncEntryKind.File)
@@ -103,10 +104,10 @@ internal class DesktopFileSyncLocalTree(
                 }
 
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                    if (file == root) throw exc
+                    requireRecoverableWalkFailure(file, exc)
                     if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
                     val relative = relative(file)
-                    if (!isOwnedRecoveryPath(file) && includesAnyKind(relative, includes)) {
+                    if (includes(relative, SyncEntryKind.File) || includes(relative, SyncEntryKind.Directory)) {
                         report(file, exc.unavailableReason())
                     }
                     return FileVisitResult.CONTINUE
@@ -114,7 +115,7 @@ internal class DesktopFileSyncLocalTree(
 
                 override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
                     if (exc == null) return FileVisitResult.CONTINUE
-                    if (dir == root) throw exc
+                    requireRecoverableWalkFailure(dir, exc)
                     // A partially listed folder must not make its unlisted children look deleted.
                     report(dir, FileSyncLocalUnavailableReason.Unreadable)
                     return FileVisitResult.CONTINUE
@@ -180,14 +181,15 @@ internal class DesktopFileSyncLocalTree(
 
     /** Hashes one listed file, isolating a file that vanishes or stays locked after listing. */
     private fun scannedContentDigest(path: Path, shouldContinue: () -> Boolean): ScannedContentDigest {
-        try {
-            requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
-        } catch (failure: IllegalArgumentException) {
-            // An unsafe ancestor or a symbolic link still stops the folder; a vanished leaf does not.
-            requireSafeAncestors(path, includeLeaf = false, allowMissingTail = false)
-            if (Files.isSymbolicLink(path)) throw failure
-            return ScannedContentDigest.Unavailable(FileSyncLocalUnavailableReason.Vanished)
+        // Replaced or linked parent folders still stop the folder; only the leaf itself is isolated.
+        requireSafeAncestors(path, includeLeaf = false, allowMissingTail = false)
+        val leaf = try {
+            Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (failure: IOException) {
+            return ScannedContentDigest.Unavailable(failure.unavailableReason())
         }
+        require(!leaf.isSymbolicLink) { "Folder sync stopped because ${relative(path)} is a symbolic link." }
+        if (!leaf.isRegularFile) return ScannedContentDigest.Unavailable(FileSyncLocalUnavailableReason.Vanished)
         return try {
             ScannedContentDigest.Read(contentDigester(path, shouldContinue))
         } catch (failure: IOException) {
@@ -195,10 +197,23 @@ internal class DesktopFileSyncLocalTree(
         }
     }
 
-    private fun includesAnyKind(
-        relativePath: String,
-        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
-    ): Boolean = includes(relativePath, SyncEntryKind.File) || includes(relativePath, SyncEntryKind.Directory)
+    /** An unreadable root, or recovery artifact that may hold the only original, stops the folder. */
+    private fun requireRecoverableWalkFailure(path: Path, failure: IOException) {
+        if (path == root) throw failure
+        val ancestors = generateSequence(path) { it.parent }.takeWhile { it != root && it.startsWith(root) }
+        if (ancestors.any(::isOwnedRecoveryPath)) throw IllegalStateException(
+            "Folder sync stopped because the interrupted-replacement item ${relative(path)} could not be read. " +
+                "Restore access to it, then sync again.",
+            failure,
+        )
+    }
+
+    /** walkFileTree passes folders at its depth limit to visitFile; they stop the folder, never vanish. */
+    private fun requireWithinDepthLimit(path: Path, attrs: BasicFileAttributes, includes: SyncPathFilter) {
+        require(!attrs.isDirectory || !includes(relative(path), SyncEntryKind.Directory)) {
+            "Folder sync stopped because ${relative(path)} is nested more than $MAX_DEPTH folders deep."
+        }
+    }
 
     /** Counts the selected tree before any file content is hashed. */
     private fun preflight(
@@ -232,6 +247,7 @@ internal class DesktopFileSyncLocalTree(
                     require(!Files.isSymbolicLink(file)) {
                         "Folder sync stopped because ${relative(file)} is a symbolic link."
                     }
+                    requireWithinDepthLimit(file, attrs, includes)
                     // Unsupported items are reported per item by the scan; they count toward its bound.
                     if (includes(relative(file), SyncEntryKind.File)) {
                         accept(fileBytes = attrs.size().takeIf { attrs.isRegularFile })
@@ -240,12 +256,12 @@ internal class DesktopFileSyncLocalTree(
                 }
 
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                    if (file == root) throw exc
+                    requireRecoverableWalkFailure(file, exc)
                     return FileVisitResult.CONTINUE
                 }
 
                 override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
-                    if (exc != null && dir == root) throw exc
+                    exc?.let { requireRecoverableWalkFailure(dir, it) }
                     return FileVisitResult.CONTINUE
                 }
 
@@ -515,14 +531,14 @@ internal class DesktopFileSyncLocalTree(
                     return FileVisitResult.CONTINUE
                 }
 
-                // Unreadable items are reported by the scan; recovery retries them on a later scan.
+                // Ordinary unreadable items are reported by the scan; owned recovery items fail closed.
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                    if (file == root) throw exc
+                    requireRecoverableWalkFailure(file, exc)
                     return FileVisitResult.CONTINUE
                 }
 
                 override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
-                    if (exc != null && dir == root) throw exc
+                    exc?.let { requireRecoverableWalkFailure(dir, it) }
                     return FileVisitResult.CONTINUE
                 }
             },
@@ -737,6 +753,8 @@ internal class DesktopFileSyncLocalTree(
 }
 
 private data class LocalMetadataDigest(val value: String, val reusable: Boolean)
+
+private typealias SyncPathFilter = (relativePath: String, kind: SyncEntryKind) -> Boolean
 
 private sealed interface ScannedContentDigest {
     data class Read(val value: String) : ScannedContentDigest
