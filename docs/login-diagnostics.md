@@ -44,8 +44,11 @@ Each attempt has a five-minute deadline, including network waits.
 
 If the result became uncertain after the one-time approval exchange, start a
 new sign-in. Do not try to replay that exchange. The app does not retry this
-case automatically. A request is uncertain only when the connection failed
-after the app had started sending it.
+case automatically. The result is uncertain when the connection failed after
+the app had started sending a request, or when the server reported an approval
+but its one-time response was malformed, incomplete, or contained invalid
+account values. A connection failure before the request was sent is retried
+instead.
 
 ## Save a login report
 
