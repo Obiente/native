@@ -52,6 +52,33 @@ class LoginPollingTest {
     }
 
     @Test
+    fun connectionFailuresBeforeTheExchangeRetryWithoutClaimingDnsFailure() = runBlocking {
+        val session = NextcloudSession("https://cloud.example.com", "person", "secret")
+        val results = ArrayDeque<LoginPollResult>().apply {
+            add(LoginPollResult.Pending)
+            add(LoginPollResult.RetryablePreExchangeFailure("NETWORK_CONNECT_FAILED"))
+            add(LoginPollResult.Approved(session))
+        }
+        val waits = mutableListOf<Pair<Long, Boolean>>()
+        val statuses = mutableListOf<LoginAttemptPhase>()
+
+        val approved = pollLoginUntilApproved(
+            poll = { results.removeFirst() },
+            waitBeforeNextPoll = { delay, awaitNetwork -> waits += delay to awaitNetwork },
+            hasTimedOut = { false },
+            onStatus = statuses::add,
+        )
+
+        assertEquals(session, approved)
+        assertEquals(listOf(2_000L to false, 2_000L to true), waits)
+        assertEquals(
+            listOf(LoginAttemptPhase.AwaitingApproval, LoginAttemptPhase.ReconnectingToServer),
+            statuses,
+        )
+        assertTrue("resolved" !in LoginAttemptPhase.ReconnectingToServer.message)
+    }
+
+    @Test
     fun anAmbiguousPostExchangeFailureIsNeverRetried() = runBlocking {
         var polls = 0
 
