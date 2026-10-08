@@ -5,11 +5,11 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.ConnectionPool
 import okhttp3.Interceptor
@@ -62,6 +62,10 @@ private fun OkHttpClient.loginPollHttpClientBuilder(): OkHttpClient.Builder = ne
  * client is therefore registered with a [LoginPollCallCancellation] that the calling coroutine's
  * cancellation triggers, so a cancelled or replaced sign-in attempt cannot send a poll or leave
  * one running against the server.
+ *
+ * The calls are cancelled synchronously by the thread that cancels the coroutine. Cancellation
+ * never waits for a dispatcher thread, so it still works while blocking work saturates
+ * [kotlinx.coroutines.Dispatchers.IO].
  */
 suspend fun <T> withLoginPollHttpClient(
     baseClient: OkHttpClient,
@@ -71,12 +75,9 @@ suspend fun <T> withLoginPollHttpClient(
     val client = baseClient.loginPollHttpClientBuilder()
         .apply { interceptors().add(0, calls) }
         .build()
-    // Runs on its own dispatcher so cancellation is delivered while [block] blocks a thread.
-    val cancellation = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
-        try {
-            awaitCancellation()
-        } finally {
-            calls.cancel()
+    val cancellation = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+        suspendCancellableCoroutine<Nothing> { continuation ->
+            continuation.invokeOnCancellation { calls.cancel() }
         }
     }
     try {

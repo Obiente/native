@@ -101,9 +101,13 @@ exercise retry phases, timeout, cancellation, browser-handoff failure, and late
 completion after a replacement attempt. `JvmLoginPollConnectionTest` runs
 approval checks against a local mock server while simulating connections that
 end during a suspension. `JvmLoginPollIsolationTest` holds a check open on an
-HTTP/2 mock server to cover cancellation and a replacement check. These tests run on the desktop JVM. They do not
-establish connectivity to any particular server or device network, and they do
-not reproduce Android process freezing.
+HTTP/2 mock server to cover cancellation and a replacement check. These tests
+run on the desktop JVM. `AndroidLoginPollTransportInstrumentedTest` repeats the
+new-connection, cancellation and refused-connection checks against a local TLS
+mock server on the Android runtime. It runs only through the instrumented
+emulator workflow in [CONTRIBUTING.md](../CONTRIBUTING.md), not in pull request
+CI. None of these tests establish connectivity to any particular server or
+device network, and they do not reproduce Android process freezing.
 
 ## Evidence and release status
 

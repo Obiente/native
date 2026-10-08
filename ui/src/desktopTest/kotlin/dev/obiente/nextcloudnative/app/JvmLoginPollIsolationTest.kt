@@ -85,6 +85,8 @@ class JvmLoginPollIsolationTest {
             assertTrue(gate.firstArrived.await(10, TimeUnit.SECONDS))
 
             job.cancel()
+            // The cancelling thread cancels the call itself, without waiting for a dispatcher thread.
+            assertTrue(requireNotNull(attempt.get()).cancelled)
             // The server holds the response far longer than this, so only a cancelled call ends early.
             withTimeout(5_000) { job.join() }
 

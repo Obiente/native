@@ -294,9 +294,18 @@ retrying a connection, and completing sign-in.
 - Cancellation releases challenge bookkeeping and rejects late results before
   they can persist credentials. The existing authenticated-session transition
   still owns the final credential commit.
-- Only a classified DNS failure before an HTTP exchange may retry
-  automatically. An ambiguous response after the one-time exchange requires a
-  new sign-in attempt.
+- Only a classified failure while the connection is being established, before
+  an HTTP exchange starts, may retry automatically: unresolved DNS, a refused
+  or timed-out connection, an unreachable network, a TLS timeout, or a socket
+  failure during DNS lookup or connect. Certificate, TLS handshake, protocol,
+  and unclassified failures end the attempt.
+- A failure after the one-time exchange starts, or an invalid one-time approval
+  response, is ambiguous. It is never retried and requires a new sign-in
+  attempt.
+- Each poll uses its own HTTP client with OkHttp connection-failure retry
+  disabled and a connection pool that keeps no idle connection, so a poll never
+  reuses a connection from an earlier poll or attempt. Cancelling the attempt
+  cancels the poll's calls, including one that has not been sent yet.
 - Retry copy describes the last observed failure. It cannot report the current
   health of DNS, the server, or a VPN.
 
