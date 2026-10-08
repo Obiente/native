@@ -13,8 +13,9 @@ setup.
 
 While the app waits for browser approval or retries the connection,
 **Cancel sign-in** stops the attempt and lets you edit the server address
-again. On Android, the system Back action does the same. Cancelling does not
-revoke credentials the server has already issued.
+again. On Android, the system Back action does the same. Cancelling also stops
+an approval check that is still waiting for the server. It does not revoke
+credentials the server has already issued.
 
 The form scrolls when a short window, landscape layout or larger text makes it
 taller than the screen. In landscape it keeps a bounded width. If the server
@@ -36,7 +37,8 @@ the address or connection, and start a fresh attempt.
 Each approval check opens a new connection and closes it after the response.
 Leaving the app for the browser can suspend it or end its network connections.
 Because no connection is kept between checks, returning to the app does not
-reuse one that ended while the app was in the background.
+reuse one that ended while the app was in the background. A new sign-in attempt
+also never shares a connection with a check from an earlier attempt.
 
 ## Time limit and uncertain results
 
@@ -98,7 +100,8 @@ Synthetic regression tests in `LoginPollingTest` and `LoginAttemptStateTest`
 exercise retry phases, timeout, cancellation, browser-handoff failure, and late
 completion after a replacement attempt. `JvmLoginPollConnectionTest` runs
 approval checks against a local mock server while simulating connections that
-end during a suspension. These tests run on the desktop JVM. They do not
+end during a suspension. `JvmLoginPollIsolationTest` holds a check open on an
+HTTP/2 mock server to cover cancellation and a replacement check. These tests run on the desktop JVM. They do not
 establish connectivity to any particular server or device network, and they do
 not reproduce Android process freezing.
 

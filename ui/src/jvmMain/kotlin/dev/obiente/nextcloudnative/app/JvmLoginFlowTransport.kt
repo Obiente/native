@@ -2,7 +2,15 @@ package dev.obiente.nextcloudnative.app
 
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 
 data class LoginPollHttpResponse(
@@ -34,11 +42,44 @@ data class LoginPollHttpExecution(
  * lost one-time approval response. Each poll therefore opens a new connection and closes it
  * after the response, so no connection outlives the wait between polls. Failures while that
  * connection is being established remain provably pre-exchange.
+ *
+ * The pool and dispatcher belong to this client alone. Another client's in-flight poll, such as
+ * one from a cancelled or replaced sign-in attempt, can therefore never share its HTTP/2
+ * connection, and cancelling this client's calls cannot affect unrelated requests. A dispatcher
+ * that only runs synchronous calls starts no threads.
  */
 fun OkHttpClient.newLoginPollHttpClient(): OkHttpClient = newBuilder()
     .retryOnConnectionFailure(false)
     .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+    .dispatcher(Dispatcher())
     .build()
+
+/**
+ * Runs one poll with a new [newLoginPollHttpClient] derived from [baseClient].
+ *
+ * OkHttp's blocking calls do not observe coroutine cancellation, so the client's calls are
+ * cancelled as soon as the calling coroutine is cancelled. A cancelled or replaced sign-in attempt
+ * therefore cannot leave a poll running against the server.
+ */
+suspend fun <T> withLoginPollHttpClient(
+    baseClient: OkHttpClient,
+    block: suspend (OkHttpClient) -> T,
+): T = coroutineScope {
+    val client = baseClient.newLoginPollHttpClient()
+    // Runs on its own dispatcher so cancellation is delivered while [block] blocks a thread.
+    val cancellation = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            client.dispatcher.cancelAll()
+        }
+    }
+    try {
+        block(client)
+    } finally {
+        cancellation.cancel()
+    }
+}
 
 suspend fun executeLoginPollHttp(
     challenge: LoginChallenge,
@@ -62,6 +103,8 @@ suspend fun executeLoginPollHttp(
         poll(endpoint)
     } catch (failure: Throwable) {
         if (failure is CancellationException) throw failure
+        // A call cancelled with its coroutine fails as an I/O error; it is not a network outcome.
+        currentCoroutineContext().ensureActive()
         throw LoginPollRequestFailure(classifyLoginPollNetworkFailure(networkFailure()), failure)
     }
 

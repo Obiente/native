@@ -2,10 +2,14 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
@@ -305,6 +309,32 @@ class JvmLoginFlowTransportTest {
             )
         }
         Unit
+    }
+
+    @Test
+    fun `a call failing because its poll was cancelled is not classified as a network result`() = runBlocking {
+        var classified = false
+        val execution = async {
+            executeLoginPollHttp(
+                challenge = challenge(
+                    pollEndpoint = "https://cloud.example.test/login/v2/poll",
+                    fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+                ),
+                fallbackAlreadySelected = false,
+                poll = {
+                    // OkHttp reports a call cancelled with its coroutine as an I/O failure.
+                    currentCoroutineContext().job.cancel()
+                    throw IOException("Canceled")
+                },
+                networkFailure = {
+                    classified = true
+                    null
+                },
+            )
+        }
+
+        assertFailsWith<CancellationException> { execution.await() }
+        assertFalse(classified)
     }
 
     private fun challenge(pollEndpoint: String, fallbackEndpoint: String?) = LoginChallenge(

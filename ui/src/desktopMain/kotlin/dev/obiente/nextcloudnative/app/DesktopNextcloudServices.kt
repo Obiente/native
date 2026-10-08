@@ -708,7 +708,6 @@ class DesktopNextcloudServices(
         environment = desktopSupportDiagnosticsEnvironment(),
         client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
     )
-    private val loginPollHttpClient = httpClient.newLoginPollHttpClient()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
@@ -4004,7 +4003,7 @@ class DesktopNextcloudServices(
 
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         var networkFailure: JvmNetworkFailureDiagnostic? = null
-        val execution = executeLoginPollHttp(
+        val execution = withLoginPollHttpClient(httpClient) { loginPollHttpClient -> executeLoginPollHttp(
             challenge = challenge,
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
@@ -4021,7 +4020,7 @@ class DesktopNextcloudServices(
                 ).let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
-        )
+        ) }
         execution.selectedFallbackReason?.let { reason ->
             loginPollFallbackTokens += challenge.token
             runCatching {

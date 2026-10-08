@@ -68,16 +68,16 @@ class JvmLoginPollConnectionTest {
             server.enqueue(server.approvedResponse())
             val sockets = SuspendableSocketFactory()
             val base = baseClient(sockets)
-            val pollClient = base.newLoginPollHttpClient()
             val challenge = challenge(server.url("/login/v2/poll").toString())
+            suspend fun pollOnce() = withLoginPollHttpClient(base) { client -> poll(client, challenge) }
 
             beginLogin(base, server.url("/index.php/login/v2").toString())
             sockets.suspendAll()
-            assertEquals(LoginPollResult.Pending, poll(pollClient, challenge))
+            assertEquals(LoginPollResult.Pending, pollOnce())
             sockets.suspendAll()
-            assertEquals(LoginPollResult.Pending, poll(pollClient, challenge))
+            assertEquals(LoginPollResult.Pending, pollOnce())
             sockets.suspendAll()
-            val approved = assertIs<LoginPollResult.Approved>(poll(pollClient, challenge))
+            val approved = assertIs<LoginPollResult.Approved>(pollOnce())
 
             assertEquals("person", approved.session.loginName)
             assertEquals(4, sockets.created.size)
@@ -92,6 +92,8 @@ class JvmLoginPollConnectionTest {
 
         assertFalse(pollClient.retryOnConnectionFailure)
         assertNotSame(base.connectionPool, pollClient.connectionPool)
+        assertNotSame(base.dispatcher, pollClient.dispatcher)
+        assertNotSame(pollClient.connectionPool, base.newLoginPollHttpClient().connectionPool)
         assertEquals(0, pollClient.connectionPool.idleConnectionCount())
         assertEquals(base.eventListenerFactory, pollClient.eventListenerFactory)
         assertEquals(base.socketFactory, pollClient.socketFactory)
