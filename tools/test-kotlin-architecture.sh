@@ -76,6 +76,24 @@ private val host = "\\{[A-Za-z]+}".toRegex()
 EOF
 expect_failure 'an ICU-incompatible brace regex in Android application code' "$checker" "$fixture"
 rm "$fixture/androidApp/src/main/kotlin/example/AndroidHost.kt"
+for variant in debug release directApk androidTest; do
+    mkdir -p "$fixture/androidApp/src/$variant/kotlin/example"
+    cat > "$fixture/androidApp/src/$variant/kotlin/example/VariantHost.kt" <<'EOF'
+package example
+private val host = Regex("\\{[A-Za-z]+}")
+EOF
+    expect_failure "an ICU-incompatible brace regex in the $variant source set" "$checker" "$fixture"
+    expect_failure "brace regex detection in the $variant source set without ripgrep" \
+        env KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH=true "$checker" "$fixture"
+    rm -r "$fixture/androidApp/src/$variant"
+done
+mkdir -p "$fixture/androidApp/src/test/kotlin/example"
+cat > "$fixture/androidApp/src/test/kotlin/example/JvmUnitHost.kt" <<'EOF'
+package example
+private val host = Regex("\\{[A-Za-z]+}")
+EOF
+"$checker" "$fixture" >/dev/null
+rm -r "$fixture/androidApp/src/test"
 
 cat > "$fixture/ui/src/commonMain/kotlin/example/PlatformImport.kt" <<'EOF'
 package example

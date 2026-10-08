@@ -146,9 +146,15 @@ fi
 
 # Android runs every one of these source sets on ICU, not the desktop regex engine.
 # Numeric quantifiers remain valid; literal brace templates need a deterministic parser.
+# Every androidApp source set except JVM unit tests is discovered, so build variants
+# such as debug, release, and directApk cannot be missed.
+android_portable_sources=()
+for android_source in "$project_root"/androidApp/src/*/; do
+    [[ "$(basename "$android_source")" == test ]] || android_portable_sources+=("${android_source%/}")
+done
 for portable_source in \
     "$project_root/ui/src/commonMain" "$project_root/ui/src/jvmMain" "$project_root/ui/src/androidMain" \
-    "$project_root/androidApp/src/main" "$project_root/contractAcquisition/src/main"; do
+    "${android_portable_sources[@]}" "$project_root/contractAcquisition/src/main"; do
     [[ -d "$portable_source" ]] || continue
     if search_kotlin_lines '(Regex\(|\.toRegex\().*\\[{}]|\\[{}].*\.toRegex\(' "$portable_source"; then
         printf 'Parse brace templates without Regex in Android-consumed shared code.\n' >&2
