@@ -19,6 +19,10 @@ internal enum class LoginAttemptPhase(val message: String, val buttonLabel: Stri
         "The server name could not be resolved. Check your network or VPN. Retrying...",
         "Retrying connection...",
     ),
+    ReconnectingToServer(
+        "The server could not be reached. Check your network or VPN. Retrying...",
+        "Retrying connection...",
+    ),
     Completing("Finishing sign-in...", "Finishing sign-in..."),
 }
 

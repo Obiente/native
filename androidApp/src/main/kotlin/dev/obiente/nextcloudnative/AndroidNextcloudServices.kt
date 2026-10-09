@@ -31,6 +31,7 @@ import dev.obiente.nextcloudnative.app.LoginTransportSecurity
 import dev.obiente.nextcloudnative.app.LOGIN_FLOW_RESPONSE_MAX_BYTES
 import dev.obiente.nextcloudnative.app.LoginPollHttpResponse
 import dev.obiente.nextcloudnative.app.executeLoginPollHttp
+import dev.obiente.nextcloudnative.app.withLoginPollHttpClient
 import dev.obiente.nextcloudnative.app.interpretLoginChallengeHttpResponse
 import dev.obiente.nextcloudnative.app.loginPollEndpointFallbackDiagnostic
 import dev.obiente.nextcloudnative.app.normalizeServerUrl
@@ -347,7 +348,6 @@ internal class AndroidNextcloudServices(
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
         .build()
-    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val noRedirectHttpClient = httpClient.newBuilder()
@@ -1202,7 +1202,7 @@ internal class AndroidNextcloudServices(
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         val formBody = "token=" + URLEncoder.encode(challenge.token, StandardCharsets.UTF_8.name())
         var networkFailure: JvmNetworkFailureDiagnostic? = null
-        val execution = executeLoginPollHttp(
+        val execution = withLoginPollHttpClient(httpClient) { loginPollHttpClient -> executeLoginPollHttp(
             challenge = challenge,
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
@@ -1219,7 +1219,7 @@ internal class AndroidNextcloudServices(
                 ).let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
-        )
+        ) }
         execution.selectedFallbackReason?.let { reason ->
             loginPollFallbackTokens += challenge.token
             runCatching {
@@ -3729,9 +3729,6 @@ internal class AndroidNextcloudServices(
         } else {
             LoginTransportSecurity.Tls
         }
-
-    private val LoginTransportSecurity.diagnosticValue: String
-        get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

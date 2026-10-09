@@ -878,10 +878,10 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
                 "The persisted sync decision choices do not match the pair direction."
             }
         }
-        val expectedOperation = if (resolved != null) {
-            resolveDecisionOperation(pair, work, resolved.choice)
-        } else {
-            planFileSync(
+        val expectedOperation = when {
+            resolved != null -> resolveDecisionOperation(pair, work, resolved.choice)
+            work.isUnavailableLocalItemReport() -> work.operation
+            else -> planFileSync(
                 localEntries = listOfNotNull(work.observedLocal),
                 remoteEntries = listOfNotNull(work.observedRemote),
                 baselines = listOfNotNull(work.observedBaseline),
