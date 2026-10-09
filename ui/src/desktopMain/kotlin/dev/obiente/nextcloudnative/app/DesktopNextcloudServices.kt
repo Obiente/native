@@ -3,11 +3,9 @@ package dev.obiente.nextcloudnative.app
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
-import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
-import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
@@ -5043,34 +5041,10 @@ class DesktopNextcloudServices(
         serverVersion: String,
         installedAppVersion: String?,
     ): AcquiredOpenApiContract? = withContext(Dispatchers.IO) {
-        contractAcquirer.acquire(ContractAcquisitionRequest(appId, serverVersion, installedAppVersion))
-            ?.let { contract ->
-                AcquiredOpenApiContract(
-                    appId = contract.appId,
-                    appVersion = contract.appVersion,
-                    contractVersion = contract.contractVersion,
-                    specFile = contract.specFile,
-                    document = contract.document,
-                    packageUrl = contract.packageUrl,
-                    sourceUrl = contract.sourceUrl,
-                    sourceKind = when (contract.sourceKind) {
-                        OpenApiContractSourceKind.SignedAppPackage ->
-                            AcquiredOpenApiContractSourceKind.SignedAppPackage
-                        OpenApiContractSourceKind.SignedCompatibleAppPackage ->
-                            AcquiredOpenApiContractSourceKind.SignedCompatibleAppPackage
-                        OpenApiContractSourceKind.AppStoreLinkedExactGitHubTag ->
-                            AcquiredOpenApiContractSourceKind.AppStoreLinkedExactGitHubTag
-                        OpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag ->
-                            AcquiredOpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag
-                    },
-                    contractKind = when (contract.contractKind) {
-                        VerifiedContractKind.OpenApi -> AcquiredContractKind.OpenApi
-                        VerifiedContractKind.VerifiedReadRoutes -> AcquiredContractKind.VerifiedReadRoutes
-                        VerifiedContractKind.OpenApiWithVerifiedReadRoutes ->
-                            AcquiredContractKind.OpenApiWithVerifiedReadRoutes
-                    },
-                )
-            }
+        acquireAppStoreContract(
+            ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
+            contractAcquirer::acquire,
+        )
     }
 
     override suspend fun listActivities(session: NextcloudSession, limit: Int): List<NextcloudActivity> =

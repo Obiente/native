@@ -14,8 +14,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
-import dev.obiente.nextcloudnative.app.AcquiredOpenApiContractSourceKind
-import dev.obiente.nextcloudnative.app.AcquiredContractKind
+import dev.obiente.nextcloudnative.app.acquireAppStoreContract
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
 import dev.obiente.nextcloudnative.app.DeckCardDraftKey
@@ -231,11 +230,9 @@ import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
-import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
-import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
@@ -2966,34 +2963,10 @@ internal class AndroidNextcloudServices(
         serverVersion: String,
         installedAppVersion: String?,
     ): AcquiredOpenApiContract? = withContext(Dispatchers.IO) {
-        contractAcquirer.acquire(ContractAcquisitionRequest(appId, serverVersion, installedAppVersion))
-            ?.let { contract ->
-                AcquiredOpenApiContract(
-                    appId = contract.appId,
-                    appVersion = contract.appVersion,
-                    contractVersion = contract.contractVersion,
-                    specFile = contract.specFile,
-                    document = contract.document,
-                    packageUrl = contract.packageUrl,
-                    sourceUrl = contract.sourceUrl,
-                    sourceKind = when (contract.sourceKind) {
-                        OpenApiContractSourceKind.SignedAppPackage ->
-                            AcquiredOpenApiContractSourceKind.SignedAppPackage
-                        OpenApiContractSourceKind.SignedCompatibleAppPackage ->
-                            AcquiredOpenApiContractSourceKind.SignedCompatibleAppPackage
-                        OpenApiContractSourceKind.AppStoreLinkedExactGitHubTag ->
-                            AcquiredOpenApiContractSourceKind.AppStoreLinkedExactGitHubTag
-                        OpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag ->
-                            AcquiredOpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag
-                    },
-                    contractKind = when (contract.contractKind) {
-                        VerifiedContractKind.OpenApi -> AcquiredContractKind.OpenApi
-                        VerifiedContractKind.VerifiedReadRoutes -> AcquiredContractKind.VerifiedReadRoutes
-                        VerifiedContractKind.OpenApiWithVerifiedReadRoutes ->
-                            AcquiredContractKind.OpenApiWithVerifiedReadRoutes
-                    },
-                )
-            }
+        acquireAppStoreContract(
+            ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
+            contractAcquirer::acquire,
+        )
     }
 
     override suspend fun listActivities(

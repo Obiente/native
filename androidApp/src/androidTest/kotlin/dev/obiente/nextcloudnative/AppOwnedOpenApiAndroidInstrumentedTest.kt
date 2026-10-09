@@ -1,7 +1,12 @@
 package dev.obiente.nextcloudnative
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.obiente.nextcloudnative.app.AppStoreContractAcquisitionException
+import dev.obiente.nextcloudnative.app.AppStoreContractFailureKind
+import dev.obiente.nextcloudnative.app.acquireAppStoreContract
+import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import java.lang.reflect.Method
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,6 +38,29 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
         )) {
             assertFalse("An invalid or foreign server was accepted", validate.accepts(server))
         }
+    }
+
+    @Test
+    fun everyContractStaticInitializerAndFailureBoundaryWorkOnAndroid() {
+        // Initialize each packaged top-level facade and companion owner on ART and ICU.
+        listOf(
+            "AppOwnedOpenApiContractKt", "ContractAcquisitionFailureKt", "SignedAppStoreContractAcquirerKt",
+            "StaticPhpParametersKt", "StaticRouteContractKt", "TarArchivePathKt", "VerifiedChoresContractKt",
+            "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt", "SignedAppStoreContractAcquirer",
+            "FileAppStoreCatalogCache", "DynamicApiResponseCache", "FileVerifiedContractCache",
+        ).forEach { name -> Class.forName("dev.obiente.nextcloudnative.contracts.$name") }
+        Class.forName("dev.obiente.nextcloudnative.app.JvmAppStoreContractAcquisitionKt")
+
+        val failed = try {
+            acquireAppStoreContract(ContractAcquisitionRequest("example", "34.0.3", "1.0.0")) {
+                throw NoClassDefFoundError("dev.obiente.nextcloudnative.contracts.SyntheticKt")
+            }
+            null
+        } catch (failure: AppStoreContractAcquisitionException) {
+            failure
+        }
+        assertEquals(AppStoreContractFailureKind.RuntimeIncompatible, failed?.kind)
+        assertFalse(failed?.message.orEmpty().contains("SyntheticKt"))
     }
 
     private fun Method.accepts(server: String): Boolean {
