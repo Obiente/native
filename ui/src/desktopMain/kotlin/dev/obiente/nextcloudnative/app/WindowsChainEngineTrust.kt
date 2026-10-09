@@ -84,6 +84,35 @@ internal class WindowsChainEngineTrustManager(
         throw CertificateException("Windows operating-system trust is used only for server certificates.")
 }
 
+/**
+ * Lets explicit Windows policy reject a chain the bundled roots accepted: an explicitly distrusted
+ * (Disallowed) or revoked certificate, or a certificate whose stored purpose excludes server
+ * authentication. An unknown or untrusted Windows root, any other rejection, and a failed native
+ * call do not veto, so behavior falls back to the bundled roots alone. Uses cached data only.
+ */
+internal class WindowsExplicitDistrustVeto(
+    private val verifier: WindowsServerChainVerifier,
+) : DesktopSystemTrustVeto {
+    override fun explicitDistrust(chain: Array<out X509Certificate>): CertificateException? {
+        if (chain.isEmpty() || chain.size > MAX_WINDOWS_VERIFIED_CHAIN_LENGTH) return null
+        val encoded = try {
+            chain.map { it.encoded }
+        } catch (_: CertificateEncodingException) {
+            return null
+        }
+        val verdict = verifier.verify(encoded) as? WindowsChainVerdict.Rejected ?: return null
+        if (!verdict.isExplicitWindowsDistrust()) return null
+        return CertificateException(
+            "Windows policy explicitly distrusts the server certificate chain (trust 0x%08X, policy 0x%08X)."
+                .format(verdict.trustErrorStatus, verdict.policyError),
+        )
+    }
+}
+
+internal fun WindowsChainVerdict.Rejected.isExplicitWindowsDistrust(): Boolean =
+    trustErrorStatus and WINDOWS_EXPLICIT_DISTRUST_TRUST_BITS != 0 ||
+        policyError in WINDOWS_EXPLICIT_DISTRUST_POLICY_ERRORS
+
 /** Loads the Windows chain engine trust, or reports why it is unavailable. */
 internal fun windowsChainEngineTrust(): DesktopSystemTrust {
     val verifier = try {
@@ -94,6 +123,7 @@ internal fun windowsChainEngineTrust(): DesktopSystemTrust {
     return DesktopSystemTrust.Available(
         DesktopSystemTrustSource.WindowsChainEngine,
         WindowsChainEngineTrustManager(verifier),
+        WindowsExplicitDistrustVeto(verifier),
     )
 }
 
@@ -265,3 +295,13 @@ private const val CHAIN_FLAGS = CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL or
     CERT_CHAIN_DISABLE_MD2_MD4 or
     CERT_CHAIN_DISABLE_AIA
 internal const val MAX_WINDOWS_VERIFIED_CHAIN_LENGTH = 16
+internal const val CERT_TRUST_IS_REVOKED = 0x00000004
+internal const val CERT_TRUST_IS_NOT_VALID_FOR_USAGE = 0x00000010
+internal const val CERT_TRUST_IS_EXPLICIT_DISTRUST = 0x04000000
+private const val WINDOWS_EXPLICIT_DISTRUST_TRUST_BITS =
+    CERT_TRUST_IS_REVOKED or CERT_TRUST_IS_NOT_VALID_FOR_USAGE or CERT_TRUST_IS_EXPLICIT_DISTRUST
+private val WINDOWS_EXPLICIT_DISTRUST_POLICY_ERRORS = setOf(
+    0x800B010C.toInt(), // CERT_E_REVOKED
+    0x800B0110.toInt(), // CERT_E_WRONG_USAGE
+    0x800B0111.toInt(), // TRUST_E_EXPLICIT_DISTRUST
+)

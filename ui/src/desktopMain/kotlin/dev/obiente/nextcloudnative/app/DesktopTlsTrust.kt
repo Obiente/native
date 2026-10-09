@@ -40,14 +40,27 @@ internal sealed interface DesktopSystemTrustStatus {
     data class Unavailable(val reason: DesktopSystemTrustUnavailableReason) : DesktopSystemTrustStatus
 }
 
-/** Operating-system trust consulted only after the bundled roots reject a server chain. */
+/**
+ * Operating-system trust. [Available.trustManager] is consulted only after the bundled roots reject
+ * a server chain. [Available.veto], when present, is consulted after the bundled roots accept one.
+ */
 internal sealed interface DesktopSystemTrust {
     data class Available(
         val source: DesktopSystemTrustSource,
         val trustManager: X509ExtendedTrustManager,
+        val veto: DesktopSystemTrustVeto? = null,
     ) : DesktopSystemTrust
 
     data class Unavailable(val reason: DesktopSystemTrustUnavailableReason) : DesktopSystemTrust
+}
+
+/**
+ * Explicit operating-system distrust of a chain the bundled roots accepted. It returns a failure
+ * only for negative policy such as an explicitly distrusted or purpose-restricted certificate,
+ * never because the operating system merely does not know the root.
+ */
+internal fun interface DesktopSystemTrustVeto {
+    fun explicitDistrust(chain: Array<out X509Certificate>): CertificateException?
 }
 
 /** Applies the process-wide desktop trust. Never use it to relax validation for one request. */
@@ -92,7 +105,7 @@ internal fun desktopTlsTrust(
             bundled to DesktopSystemTrustStatus.Unavailable(DesktopSystemTrustUnavailableReason.StoreUnavailable)
         else -> {
             systemTrust as DesktopSystemTrust.Available
-            DesktopCompositeTrustManager(extendedBundled, systemTrust.trustManager) to
+            DesktopCompositeTrustManager(extendedBundled, systemTrust.trustManager, systemTrust.veto) to
                 DesktopSystemTrustStatus.Active(systemTrust.source)
         }
     }
@@ -142,11 +155,13 @@ private fun trustManagerFor(store: KeyStore?): X509TrustManager? {
  * Accepts a server chain when the bundled roots or the operating-system trust validate it. The
  * bundled delegate is a full JSSE PKIX trust manager. The system delegate is either a PKIX manager
  * limited to Linux bundle anchors or the Windows chain engine with its own store policy. When both
- * reject the chain, the bundled failure is rethrown with the system failure suppressed.
+ * reject the chain, the bundled failure is rethrown with the system failure suppressed. A chain the
+ * bundled roots accept is still rejected when the optional [veto] reports explicit OS distrust.
  */
 internal class DesktopCompositeTrustManager(
     private val bundled: X509ExtendedTrustManager,
     private val system: X509ExtendedTrustManager,
+    private val veto: DesktopSystemTrustVeto? = null,
 ) : X509ExtendedTrustManager() {
     private val acceptedIssuers: Array<X509Certificate> =
         (bundled.acceptedIssuers.asSequence() + system.acceptedIssuers.asSequence())
@@ -156,18 +171,21 @@ internal class DesktopCompositeTrustManager(
 
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) =
         firstAccepting(
+            chain,
             { bundled.checkServerTrusted(chain, authType) },
             { system.checkServerTrusted(chain, authType) },
         )
 
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?, socket: Socket?) =
         firstAccepting(
+            chain,
             { bundled.checkServerTrusted(chain, authType, socket) },
             { system.checkServerTrusted(chain, authType, socket) },
         )
 
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?, engine: SSLEngine?) =
         firstAccepting(
+            chain,
             { bundled.checkServerTrusted(chain, authType, engine) },
             { system.checkServerTrusted(chain, authType, engine) },
         )
@@ -184,16 +202,27 @@ internal class DesktopCompositeTrustManager(
 
     override fun getAcceptedIssuers(): Array<X509Certificate> = acceptedIssuers.copyOf()
 
-    private inline fun firstAccepting(bundledCheck: () -> Unit, systemCheck: () -> Unit) {
-        try {
+    private inline fun firstAccepting(
+        chain: Array<out X509Certificate>?,
+        bundledCheck: () -> Unit,
+        systemCheck: () -> Unit,
+    ) {
+        val bundledFailure = try {
             bundledCheck()
-        } catch (bundledFailure: CertificateException) {
-            try {
-                systemCheck()
-            } catch (systemFailure: CertificateException) {
-                bundledFailure.addSuppressed(systemFailure)
-                throw bundledFailure
-            }
+            null
+        } catch (failure: CertificateException) {
+            failure
+        }
+        if (bundledFailure == null) {
+            // The bundled roots accepted a non-empty chain; explicit OS distrust still wins.
+            chain?.let { veto?.explicitDistrust(it) }?.let { throw it }
+            return
+        }
+        try {
+            systemCheck()
+        } catch (systemFailure: CertificateException) {
+            bundledFailure.addSuppressed(systemFailure)
+            throw bundledFailure
         }
     }
 }

@@ -80,6 +80,35 @@ class WindowsChainEngineTrustTest {
             }
         }
 
+    @Test
+    fun windowsPurposeRestrictionVetoesAChainTheBundledRootsAccept() =
+        withExclusiveRootEngine(privateAuthority, rootPurpose = CODE_SIGNING_ONLY_EKU) { verifier ->
+            // The same anchor is trusted by the bundled roots and restricted to code signing in Windows.
+            val trust = windowsTrustWithVeto(verifier, bundled = privateAuthority)
+            withSyntheticTlsServer(syntheticLeaf("localhost", privateAuthority)) { url ->
+                assertFailsWith<SSLHandshakeException> { fetchWithTrust(trust, url) }
+            }
+        }
+
+    @Test
+    fun rootUnknownToWindowsDoesNotVetoBundledAcceptance() =
+        withExclusiveRootEngine(unrelatedAuthority) { verifier ->
+            val trust = windowsTrustWithVeto(verifier, bundled = privateAuthority)
+            withSyntheticTlsServer(syntheticLeaf("localhost", privateAuthority)) { url ->
+                assertEquals("trusted", fetchWithTrust(trust, url))
+            }
+        }
+
+    private fun windowsTrustWithVeto(verifier: WindowsServerChainVerifier, bundled: HeldCertificate) =
+        desktopTlsTrust(
+            DesktopSystemTrust.Available(
+                DesktopSystemTrustSource.WindowsChainEngine,
+                WindowsChainEngineTrustManager(verifier),
+                WindowsExplicitDistrustVeto(verifier),
+            ),
+            bundled = pkixTrustManagerFor(bundled),
+        )
+
     private fun withExclusiveRootEngine(
         root: HeldCertificate,
         rootPurpose: ByteArray? = null,
@@ -172,7 +201,6 @@ class WindowsChainEngineTrustTest {
 
 private const val CERT_ENHKEY_USAGE_PROP_ID = 9
 private const val CERT_TRUST_IS_NOT_TIME_VALID = 0x00000001
-private const val CERT_TRUST_IS_NOT_VALID_FOR_USAGE = 0x00000010
 
 /** DER EnhancedKeyUsage SEQUENCE containing only id-kp-codeSigning (1.3.6.1.5.5.7.3.3). */
 private val CODE_SIGNING_ONLY_EKU = byteArrayOf(

@@ -361,15 +361,24 @@ guarantees, not claims about a published installer; the code may have changed.
   roots are not copied into Java, so Windows store policy such as the
   Disallowed store and certificate purpose restrictions stays in force. Chain
   building uses cached data only and does not fetch AIA or root updates.
+  After the bundled roots accept a chain, the same Windows check runs once
+  more as a veto: explicit distrust, revocation already known to Windows, or
+  a stored purpose that excludes server authentication rejects the chain. An
+  untrusted or unknown Windows root, other rejections, and failed native calls
+  keep the bundled decision, so a stale Windows root store cannot break public
+  servers. This adds one cached chain build to each new TLS connection.
 - macOS reads no system trust yet. Update checks and project news keep the
   bundled roots only.
 - `DesktopTlsTrustTest` and `DesktopSystemTrustAnchorsTest` cover synthetic CAs,
   untrusted and expired chains, hostname mismatch, malformed or missing
   bundles, and the Windows verdict mapping through an injected verifier.
+  `WindowsExplicitDistrustVetoTest` covers vetoing and non-vetoing verdicts
+  for chains the bundled roots accept.
   `WindowsChainEngineTrustTest` runs only on Windows hosts and drives the real
   chain engine with an in-memory exclusive root: a trusted root, an unrelated
   root, an expired leaf, and a root whose stored purpose excludes server
-  authentication. No test modifies a Windows certificate store, so Disallowed
+  authentication, including that restricted root vetoing a chain the bundled
+  roots also trust. No test modifies a Windows certificate store, so Disallowed
   handling relies on documented Windows engine behavior. No test establishes
   behavior inside a Flatpak or other sandbox.
 - User-facing guidance is in
