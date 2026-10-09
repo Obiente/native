@@ -208,6 +208,38 @@ class FileOperationsTest {
     }
 
     @Test
+    fun emailShareSendsTheTypedAddressAsShareWithForShareTypeFour() {
+        val request = CreateFileShareRequest(
+            path = "Documents/Guide.pdf",
+            target = FileShareTarget.Email,
+            shareWith = " first.last+share@example.test ",
+        ).toNextcloudApiRequest()
+
+        assertEquals(
+            "path=%2FDocuments%2FGuide.pdf&shareType=4&permissions=1&shareWith=first.last%2Bshare%40example.test",
+            request.body?.decodeToString(),
+        )
+        assertEquals(
+            "Enter an email address or choose one from the search results.",
+            assertFailsWith<IllegalArgumentException> {
+                CreateFileShareRequest("a.txt", FileShareTarget.Email, shareWith = " ").toNextcloudApiRequest()
+            }.message,
+        )
+        // Sharee results are the server's own identities; only the Share API validates them.
+        listOf("reader@localhost", "\"quoted name\"@example.test", "reader@[192.0.2.1]").forEach { address ->
+            val body = CreateFileShareRequest("a.txt", FileShareTarget.Email, shareWith = address)
+                .toNextcloudApiRequest().body!!.decodeToString()
+            assertTrue(body.startsWith("path=%2Fa.txt&shareType=4&permissions=1&shareWith="), address)
+        }
+        assertEquals(
+            "Choose a recipient from the search results.",
+            assertFailsWith<IllegalArgumentException> {
+                CreateFileShareRequest("a.txt", FileShareTarget.Remote).toNextcloudApiRequest()
+            }.message,
+        )
+    }
+
+    @Test
     fun reusableShareTargetsAndPermissionPresetsMatchSelectedItemContext() {
         assertEquals("Remote user", FileShareTarget.Remote.presentation().label)
         assertEquals("Search email addresses", FileShareTarget.Email.presentation().searchLabel)

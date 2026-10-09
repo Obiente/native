@@ -6529,7 +6529,7 @@ internal fun FilesScreen(
     var shareTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
     var fileShares by remember(session, path, userId) { mutableStateOf<List<NextcloudFileShare>?>(null) }
     var shareType by remember(session, path, userId) { mutableStateOf(FileShareTarget.PublicLink) }
-    var shareRecipient by remember(session, path, userId) { mutableStateOf("") }
+    var shareRecipient by remember(session, path, userId) { mutableStateOf<FileShareRecipient?>(null) }
     var shareAllowsEditing by remember(session, path, userId) { mutableStateOf(false) }
     var shareDetails by remember(session, path, userId) { mutableStateOf(FileShareCreationDetails()) }
     var effectiveFileSharing by remember(path, userId, fileSharing) { mutableStateOf(fileSharing) }
@@ -6753,7 +6753,7 @@ internal fun FilesScreen(
                 shareTarget = file
                 shareRunning = false
                 fileShares = null
-                shareRecipient = ""
+                shareRecipient = null
                 shareAllowsEditing = false
                 shareDetails = FileShareCreationDetails()
                 shareType = FileShareTarget.entries.firstOrNull(effectiveFileSharing::canOffer)
@@ -7434,7 +7434,7 @@ internal fun FilesScreen(
             },
             onTargetChanged = { targetType ->
                 shareType = targetType
-                shareRecipient = ""
+                shareRecipient = null
                 shareDetails = shareDetails.copy(
                     password = "",
                     expiration = FileShareExpiration.ServerDefault,
@@ -7465,7 +7465,7 @@ internal fun FilesScreen(
                             }.getOrElse { fileShares.orEmpty() + created }
                             if (!shareLoads.accepts(creationRequest)) return@onSuccess
                             fileShares = refreshedShares
-                            shareRecipient = ""
+                            shareRecipient = null
                         }
                         .onFailure {
                             if (!shareLoads.accepts(creationRequest)) return@onFailure
@@ -7480,10 +7480,10 @@ internal fun FilesScreen(
                     services = services,
                     target = targetType,
                     file = target,
-                    selectedRecipient = shareRecipient,
+                    selectedRecipient = shareRecipient?.id.orEmpty(),
                     enabled = !shareRunning,
                     onSelected = {
-                        shareRecipient = it?.id.orEmpty()
+                        shareRecipient = it
                         shareError = null
                     },
                     onResultsObserved = { recipients ->

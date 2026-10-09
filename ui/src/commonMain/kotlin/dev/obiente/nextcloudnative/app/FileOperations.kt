@@ -271,7 +271,13 @@ fun CreateFileShareRequest.toNextcloudApiRequest(): NextcloudApiRequest {
         FileShareTarget.Group,
         FileShareTarget.Email,
         FileShareTarget.Remote,
-        -> require(recipient != null) { "Choose a recipient from the search results." }
+        -> require(recipient != null) {
+            if (target == FileShareTarget.Email) {
+                "Enter an email address or choose one from the search results."
+            } else {
+                "Choose a recipient from the search results."
+            }
+        }
     }
     require(recipient == null || recipient.length <= MAX_FILE_SHARE_RECIPIENT_LENGTH &&
         recipient.none(Char::isISOControl)

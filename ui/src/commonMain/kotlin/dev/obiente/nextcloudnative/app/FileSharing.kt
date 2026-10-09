@@ -176,11 +176,21 @@ data class SearchFileShareRecipientsRequest(
     val limit: Int = DEFAULT_FILE_SHARE_RECIPIENT_LIMIT,
 )
 
+/** Where a share recipient identity came from. */
+enum class FileShareRecipientOrigin {
+    /** Returned by the server's sharee search; the Share API remains its only validator. */
+    Server,
+
+    /** Typed by the person and accepted by the local email address grammar. */
+    Typed,
+}
+
 data class FileShareRecipient(
     val id: String,
     val displayName: String,
     val target: FileShareTarget,
     val exact: Boolean = false,
+    val origin: FileShareRecipientOrigin = FileShareRecipientOrigin.Server,
 )
 
 fun SearchFileShareRecipientsRequest.toNextcloudApiRequest(): NextcloudApiRequest {
@@ -471,6 +481,7 @@ fun planFileShareCreation(
     permissions: FileSharePermissions,
     capabilities: NextcloudFileSharingCapabilities,
     details: FileShareCreationDetails = FileShareCreationDetails(),
+    recipientOrigin: FileShareRecipientOrigin = FileShareRecipientOrigin.Server,
 ): FileShareCreationPlan {
     val unavailableReason = fileNativeSharingDisabledReason(file, capabilities)
     if (unavailableReason != null) return FileShareCreationPlan.Blocked(unavailableReason)
@@ -487,6 +498,12 @@ fun planFileShareCreation(
             if (capabilities.remoteShares) null else "Federated sharing is unavailable on this server."
     }
     if (targetReason != null) return FileShareCreationPlan.Blocked(targetReason)
+    // Only a typed address is held to the local grammar. A sharee result is the server's own
+    // identity, so the Share API stays its only validator.
+    if (target == FileShareTarget.Email && recipientOrigin == FileShareRecipientOrigin.Typed && recipient != null) {
+        val validation = validateFileShareEmailAddress(recipient)
+        if (validation is FileShareEmailAddressValidation.Invalid) return FileShareCreationPlan.Blocked(validation.reason)
+    }
     val passwordPolicy = capabilities.passwordPolicy(target)
     if (details.password.isNotEmpty() && !passwordPolicy.supported) {
         return FileShareCreationPlan.Blocked("Passwords are unavailable for this share type.")
