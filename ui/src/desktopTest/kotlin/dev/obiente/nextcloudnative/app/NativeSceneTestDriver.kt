@@ -71,6 +71,16 @@ internal class NativeSceneTestDriver(val scene: ImageComposeScene) {
         settle()
     }
 
+    /** Sends the keyboard action (Enter or the IME Done key) of the field showing [value]. */
+    suspend fun performImeAction(value: String) {
+        val target = assertNotNull(nodes().lastOrNull {
+            it.config.getOrNull(SemanticsProperties.EditableText)?.text == value &&
+                it.config.getOrNull(SemanticsActions.OnImeAction)?.action != null
+        }, "No editable native field with the expected synthetic value")
+        target.config[SemanticsActions.OnImeAction].action!!.invoke()
+        settle()
+    }
+
     fun capture(name: String) {
         scene.render(System.nanoTime()).use { image ->
             val output = Path.of("build/reports/native-workflow-interactions/$name.png")
