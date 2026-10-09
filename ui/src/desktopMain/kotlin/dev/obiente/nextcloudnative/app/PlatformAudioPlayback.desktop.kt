@@ -42,7 +42,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
     private val mutableState = MutableStateFlow(NativeAudioEngineState())
     override val state: StateFlow<NativeAudioEngineState> = mutableState
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().useDesktopSystemTrust()
         .followRedirects(false)
         .followSslRedirects(false)
         .build()

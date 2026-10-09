@@ -40,6 +40,50 @@ Because no connection is kept between checks, returning to the app does not
 reuse one that ended while the app was in the background. A new sign-in attempt
 also never shares a connection with a check from an earlier attempt.
 
+## Server certificates and private certificate authorities
+
+**Last reviewed: 2026-10-08.** This describes repository source and
+deterministic tests, which may have changed. Check the
+[desktop trust source](https://github.com/obiente/native/blob/main/ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopTlsTrust.kt)
+and the release notes for the installed build; a published package may predate
+this behavior.
+
+The app never offers a switch that disables certificate validation. A server
+certificate must chain to a trusted certificate authority (CA) and match the
+server name.
+
+On Linux and Windows desktop, connections to the Nextcloud server trust the
+CAs bundled with the app's Java runtime and, when those reject a certificate,
+the operating system's trust decision:
+
+- **Linux** reads the first complete system CA bundle among
+  `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
+  `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`, `/etc/ssl/ca-bundle.pem`,
+  and `/etc/ssl/cert.pem`. Add a private CA with the distribution's tool, such
+  as `update-ca-certificates` (Debian and Ubuntu), `trust anchor` (Arch Linux),
+  or `update-ca-trust` (Fedora), then restart nati.ve. If `curl` verifies the
+  server without extra options, the bundle normally contains the CA.
+- **Windows** asks the Windows certificate chain engine for the current user
+  to validate the chain. It honors roots installed for the user or the whole
+  machine, certificates in the Untrusted Certificates (Disallowed) store, and
+  purpose restrictions set on stored certificates. Chain building uses only
+  locally available data: it does not download missing intermediate
+  certificates or root updates, so the server must send its intermediates.
+  Restart nati.ve after adding a root.
+- **macOS** desktop does not yet read the Keychain; it uses only the bundled
+  Java roots.
+
+The Linux bundle is read once when the app starts. An unreadable, oversized,
+truncated, or malformed bundle adds no CAs; the bundled roots still apply.
+Inside a sandbox such as Flatpak, the app sees only the CA bundle that the
+sandbox exposes at those paths, which might not include CAs added on the host.
+Release update checks and downloads, and project news, keep using only the
+bundled roots.
+
+Android honors CAs that the device owner installed and can trust one reviewed
+self-signed certificate for one server address. Desktop does not offer that
+per-server certificate review.
+
 ## Time limit and uncertain results
 
 Each attempt has a five-minute deadline, including network waits.
