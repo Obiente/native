@@ -7253,9 +7253,9 @@ internal fun FilesScreen(
                                         sourceIsDirectory = target.isDirectory,
                                     ),
                                 )
-                            }.onSuccess {
+                            }.onSuccess { result ->
                                 renameTarget = null
-                                mutationNotice = "Renamed to $renameValue"
+                                mutationNotice = result.localFollowUp.reportFor("Renamed to $renameValue")
                                 files = null
                                 loadAttempt += 1
                             }.onFailure {
@@ -7320,13 +7320,9 @@ internal fun FilesScreen(
                     }
                     filesRequest {
                         services.executeFileMutation(session, requireNotNull(userId), mutation)
-                    }.onSuccess {
+                    }.onSuccess { result ->
                         transferTarget = null
-                        mutationNotice = if (moving) {
-                            "Moved ${target.name}"
-                        } else {
-                            "Copied ${target.name}"
-                        }
+                        mutationNotice = result.localFollowUp.reportFor(if (moving) "Moved ${target.name}" else "Copied ${target.name}")
                         files = null
                         loadAttempt += 1
                     }.onFailure {

@@ -3843,6 +3843,7 @@ class DesktopNextcloudServices(
 
     private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String, fileCacheAccountId: String) {
         fileReadCache.retireAccount(fileCacheAccountId)
+        fileMutationFollowUps.abandonAccount(fileCacheAccountId)
         sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
         dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }
@@ -4834,18 +4835,17 @@ class DesktopNextcloudServices(
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
         val affectedPaths = listOfNotNull(spec.sourcePath, spec.destinationPath)
         fun refreshLocalState(path: String) = refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val response = request(
+        val response = fileMutationFollowUps.reconcilingUnknownResult(accountId, affectedPaths, ::refreshLocalState) { onUnknownResult -> request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
             headers = headers,
             maxResponseBytes = 64 * 1024,
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = { fileMutationFollowUps.afterUnknownResult(accountId, affectedPaths, ::refreshLocalState) },
-        )
+            onAmbiguousMutationResult = onUnknownResult,
+        ) }
         if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
-        val localFollowUp = fileMutationFollowUps.afterConfirmedMutation(accountId, affectedPaths, ::refreshLocalState)
-        NextcloudFileMutationResult(spec.destinationPath, response.etag, localFollowUp)
+        NextcloudFileMutationResult(spec.destinationPath, response.etag, fileMutationFollowUps.afterConfirmedMutation(accountId, affectedPaths, ::refreshLocalState))
     }
 
     override suspend fun executeNextcloudApi(

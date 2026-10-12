@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -19,7 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * One drain worker refreshes one remote path at a time in submission order. Pending refreshes are
  * coalesced per account and path, keeping only the newest refresh, and at most [maximumPending]
  * paths wait behind a stalled refresh. A path beyond that bound is reported as a local failure
- * instead of growing the queue.
+ * instead of growing the queue, both after a confirmed change and after an unknown result.
  */
 internal class DesktopFileMutationFollowUps(
     private val scope: CoroutineScope,
@@ -45,6 +46,7 @@ internal class DesktopFileMutationFollowUps(
 
     private val lock = Any()
     private val pending = LinkedHashMap<Key, Pending>()
+    private var running: Pair<Key, Pending>? = null
     private var draining = false
 
     init {
@@ -87,9 +89,46 @@ internal class DesktopFileMutationFollowUps(
         return followUp
     }
 
-    /** Queues a refresh after an unknown remote result without delaying the caller's failure. */
-    fun afterUnknownResult(accountId: String, paths: List<String>, refresh: (path: String) -> Throwable?) {
-        paths.distinct().forEach { path -> submit(Key(accountId, path), { refresh(path) }, waiter = null) }
+    /**
+     * Queues a refresh after an unknown remote result without delaying the caller's failure.
+     * Returns false when a path could not be queued, so the caller must not imply local recovery.
+     */
+    fun afterUnknownResult(accountId: String, paths: List<String>, refresh: (path: String) -> Throwable?): Boolean =
+        paths.distinct().map { path -> submit(Key(accountId, path), { refresh(path) }, waiter = null) }.all { it }
+
+    /**
+     * Runs [mutation], which reports an interrupted exchange through its callback. When the
+     * reconciliation for that unknown result cannot be queued, the failure says so explicitly.
+     */
+    inline fun <T> reconcilingUnknownResult(
+        accountId: String,
+        paths: List<String>,
+        noinline refresh: (path: String) -> Throwable?,
+        mutation: (onUnknownResult: () -> Unit) -> T,
+    ): T {
+        var queued = true
+        try {
+            return mutation { queued = afterUnknownResult(accountId, paths, refresh) }
+        } catch (unknown: DesktopFileSyncAmbiguousMutationException) {
+            if (queued) throw unknown
+            throw DesktopFileMutationReconciliationDroppedException(unknown)
+        }
+    }
+
+    /**
+     * Drops [accountId]'s queued refreshes at sign-out or account removal; their waiters and those
+     * of its running refresh see a local failure. A running refresh cannot be interrupted, and its
+     * late completion no longer changes that result. Every refresh also carries the file cache
+     * incarnation it was created under, which teardown retires, so it cannot touch or recreate the
+     * removed account's state.
+     */
+    fun abandonAccount(accountId: String) {
+        val abandoned = synchronized(lock) {
+            val keys = pending.keys.filter { it.accountId == accountId }
+            val current = running?.takeIf { (key, _) -> key.accountId == accountId }?.second?.waiters.orEmpty()
+            current.toList() + keys.flatMap { key -> requireNotNull(pending.remove(key)).waiters }
+        }
+        abandoned.forEach { it.finish(FileMutationLocalFollowUp.Failed) }
     }
 
     private fun submit(
@@ -142,7 +181,7 @@ internal class DesktopFileMutationFollowUps(
                     return
                 }
                 pending.remove(next.key)
-                next.key to next.value
+                (next.key to next.value).also { running = it }
             }
             // Worker fault boundary: refreshes are blocking and do not suspend, so they cannot
             // observe cancellation; an unexpected failure is reported instead of stopping the drain.
@@ -157,7 +196,10 @@ internal class DesktopFileMutationFollowUps(
                 recordOutcome(key.accountId, "failed", "FILE_MUTATION_LOCAL_FOLLOW_UP_FAILED", failure)
                 FileMutationLocalFollowUp.Failed
             }
-            synchronized(lock) { entry.waiters.toList() }.forEach { it.finish(result) }
+            synchronized(lock) {
+                running = null
+                entry.waiters.toList()
+            }.forEach { it.finish(result) }
         }
     }
 
@@ -180,6 +222,13 @@ internal class DesktopFileMutationFollowUps(
         }
     }
 }
+
+/** The mutation's server result is unknown, and its local reconciliation could not be queued. */
+internal class DesktopFileMutationReconciliationDroppedException(cause: IOException) : IOException(
+    "The server response was interrupted, and local file status could not be scheduled for an update. " +
+        "Refresh the folder before trying again.",
+    cause,
+)
 
 /**
  * How long a caller waits for local bookkeeping before reporting a server-confirmed change.

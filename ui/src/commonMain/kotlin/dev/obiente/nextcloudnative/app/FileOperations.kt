@@ -86,6 +86,13 @@ enum class FileMutationLocalFollowUp {
     Failed,
 }
 
+/** What to tell the user after the server confirmed [done]; incomplete local bookkeeping is never hidden. */
+internal fun FileMutationLocalFollowUp.reportFor(done: String): String = when (this) {
+    FileMutationLocalFollowUp.Completed -> done
+    FileMutationLocalFollowUp.StillRunning -> "$done. Local file status is still updating in the background."
+    FileMutationLocalFollowUp.Failed -> "$done. Local file status could not be updated; refresh the folder if it looks out of date."
+}
+
 enum class NextcloudFileOperationError {
     AuthenticationRequired,
     PermissionDenied,

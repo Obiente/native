@@ -16,6 +16,9 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class DesktopFileMutationFollowUpsTest {
@@ -194,6 +197,99 @@ class DesktopFileMutationFollowUpsTest {
         withTimeout(5_000L) { while (followUps.pendingCount > 0) delay(10L) }
         delay(100L)
         assertTrue(runs.isEmpty(), "No queued refresh may run after teardown: $runs")
+    }
+
+    @Test
+    fun `account teardown drops only that account's queued refreshes`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 60_000L)
+        val release = latch()
+        val started = CountDownLatch(1)
+        val stalledReturned = CountDownLatch(1)
+        followUps.afterUnknownResult("retired", listOf("stalled")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            stalledReturned.countDown()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val runs = Collections.synchronizedList(mutableListOf<String>())
+        followUps.afterUnknownResult("retired", listOf("queued")) { runs += "retired/$it"; null }
+        followUps.afterUnknownResult("active", listOf("queued")) { runs += "active/$it"; null }
+        val retiredCaller = async(Dispatchers.Default) {
+            followUps.afterConfirmedMutation("retired", listOf("confirmed")) { runs += "retired/$it"; null }
+        }
+        withTimeout(5_000L) { while (followUps.pendingCount < 3) delay(10L) }
+
+        followUps.abandonAccount("retired")
+
+        assertEquals(FileMutationLocalFollowUp.Failed, withTimeout(5_000L) { retiredCaller.await() })
+        assertEquals(1, followUps.pendingCount, "The other account's refresh stays queued.")
+        release.countDown()
+        assertTrue(stalledReturned.await(5, TimeUnit.SECONDS), "A running refresh cannot be interrupted.")
+        withTimeout(5_000L) { while (runs.isEmpty()) delay(10L) }
+        delay(100L)
+        assertEquals(listOf("active/queued"), runs.toList(), "No retired refresh may run after teardown.")
+    }
+
+    @Test
+    fun `a running refresh completing after account teardown cannot change the reported failure`(): Unit =
+        runBlocking {
+            val followUps = followUps(waitMillis = 60_000L)
+            val release = latch()
+            val started = CountDownLatch(1)
+            val finished = CountDownLatch(1)
+            val caller = async(Dispatchers.Default) {
+                followUps.afterConfirmedMutation("retired", listOf("stalled")) {
+                    started.countDown()
+                    release.awaitUninterruptibly()
+                    finished.countDown()
+                    null
+                }
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+
+            followUps.abandonAccount("retired")
+
+            assertEquals(
+                FileMutationLocalFollowUp.Failed,
+                withTimeout(5_000L) { caller.await() },
+                "The caller learns of the teardown without waiting for the blocked refresh.",
+            )
+            release.countDown()
+            assertTrue(finished.await(5, TimeUnit.SECONDS))
+            assertEquals(FileMutationLocalFollowUp.Failed, caller.await())
+        }
+
+    @Test
+    fun `an unknown result whose reconciliation cannot be queued says so`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 20L, maximumPending = 1)
+        val release = latch()
+        val started = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("stalled")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val interrupted = DesktopFileSyncAmbiguousMutationException(java.io.IOException("reset"))
+
+        val queued = assertFailsWith<DesktopFileSyncAmbiguousMutationException> {
+            followUps.reconcilingUnknownResult("account", listOf("source"), { null }) { onUnknown ->
+                onUnknown()
+                throw interrupted
+            }
+        }
+        val dropped = assertFailsWith<DesktopFileMutationReconciliationDroppedException> {
+            followUps.reconcilingUnknownResult("account", listOf("source", "destination"), { null }) { onUnknown ->
+                onUnknown()
+                throw interrupted
+            }
+        }
+
+        assertSame(interrupted, queued, "A queued reconciliation keeps the original unknown result.")
+        assertSame(interrupted, dropped.cause)
+        assertFalse(followUps.afterUnknownResult("account", listOf("other")) { null })
+        assertEquals("ok", followUps.reconcilingUnknownResult("account", listOf("other"), { null }) { "ok" })
     }
 
     @Test

@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Files deletes always finish, even after leaving Files: stalled local updates no longer hold the dialog, interrupted responses are checked on the server, and other changes to the item wait until the delete is verified.
+Files deletes always finish, even after leaving Files. Other changes to the item wait until it is verified or refreshed, and renames, moves, copies, and deletes report incomplete local file status.

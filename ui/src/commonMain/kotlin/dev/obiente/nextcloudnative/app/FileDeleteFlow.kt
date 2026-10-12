@@ -123,16 +123,7 @@ internal data class FileDeleteScreenEffect(val notice: String?, val reloadFolder
 
 internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boolean): FileDeleteScreenEffect =
     when (this) {
-        is FileDeleteOutcome.Deleted -> FileDeleteScreenEffect(
-            notice = when (localFollowUp) {
-                FileMutationLocalFollowUp.StillRunning ->
-                    "Deleted $name. Local file status is still updating in the background."
-                FileMutationLocalFollowUp.Failed ->
-                    "Deleted $name. Local file status could not be updated; refresh if it still appears."
-                FileMutationLocalFollowUp.Completed -> "Deleted $name"
-            },
-            reloadFolder = true,
-        )
+        is FileDeleteOutcome.Deleted -> FileDeleteScreenEffect(notice = localFollowUp.reportFor("Deleted $name"), reloadFolder = true)
         is FileDeleteOutcome.NoLongerAtLocation -> FileDeleteScreenEffect(
             notice = if (afterUnknownResult) {
                 "$name is no longer in this folder. The delete response was interrupted, so it may " +

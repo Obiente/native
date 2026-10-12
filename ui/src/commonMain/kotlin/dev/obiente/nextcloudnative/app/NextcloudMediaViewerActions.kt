@@ -156,9 +156,12 @@ private fun MediaTransferDialog(
     var name by remember(file.path) { mutableStateOf(file.name) }
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
+    var followUpNotice by remember(file.path) { mutableStateOf<String?>(null) }
     MediaMutationRunningEffect(running, onMutationRunningChanged)
     val validationError = fileTransferValidationError(file, directory, name)
     val scope = rememberCoroutineScope()
+    val finished = if (moving) onMoved else onDismiss
+    followUpNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = finished) }
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
         title = { Text("$verb ${file.name}") },
@@ -218,7 +221,11 @@ private fun MediaTransferDialog(
                             NextcloudFileMutation.Copy(file.path, directory, name, etag)
                         }
                         runCatching { services.executeFileMutation(session, userId, mutation) }
-                            .onSuccess { if (moving) onMoved() else onDismiss() }
+                            .onSuccess { result ->
+                                val done = if (moving) "Moved ${file.name}" else "Copied ${file.name}"
+                                if (result.localFollowUp == FileMutationLocalFollowUp.Completed) finished()
+                                else followUpNotice = result.localFollowUp.reportFor(done)
+                            }
                             .onFailure { error = it.message ?: "Could not ${verb.lowercase()} this file." }
                         running = false
                     }
@@ -246,8 +253,10 @@ private fun MediaDeleteDialog(
 ) {
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
+    var followUpNotice by remember(file.path) { mutableStateOf<String?>(null) }
     MediaMutationRunningEffect(running, onMutationRunningChanged)
     val scope = rememberCoroutineScope()
+    followUpNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = onDeleted) }
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
         title = { Text("Delete ${file.name}?") },
@@ -286,8 +295,10 @@ private fun MediaDeleteDialog(
                                 userId,
                                 NextcloudFileMutation.Delete(file.path, etag),
                             )
-                        }.onSuccess { onDeleted() }
-                            .onFailure { error = it.message ?: "Could not delete this file." }
+                        }.onSuccess { result ->
+                            if (result.localFollowUp == FileMutationLocalFollowUp.Completed) onDeleted()
+                            else followUpNotice = result.localFollowUp.reportFor("Deleted ${file.name}")
+                        }.onFailure { error = it.message ?: "Could not delete this file." }
                         running = false
                     }
                 },
@@ -299,6 +310,20 @@ private fun MediaDeleteDialog(
                 Text(if (running) "Deleting..." else "Delete")
             }
         },
+    )
+}
+
+/**
+ * The server already applied the change, but local bookkeeping is incomplete. The viewer moves on
+ * only after the user has seen that, so stale local state is never reported as a plain success.
+ */
+@Composable
+private fun MediaLocalFollowUpDialog(notice: String, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Saved on the server") },
+        text = { Text(notice) },
+        confirmButton = { Button(onClick = onClose) { Text("Close") } },
     )
 }
 

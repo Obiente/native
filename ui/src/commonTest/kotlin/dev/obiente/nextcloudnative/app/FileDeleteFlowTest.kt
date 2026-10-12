@@ -59,7 +59,7 @@ class FileDeleteFlowTest {
                 FileMutationLocalFollowUp.StillRunning to
                     "Deleted report.txt. Local file status is still updating in the background.",
                 FileMutationLocalFollowUp.Failed to
-                    "Deleted report.txt. Local file status could not be updated; refresh if it still appears.",
+                    "Deleted report.txt. Local file status could not be updated; refresh the folder if it looks out of date.",
             )) {
                 val deletes = coordinator()
                 val state = FileDeleteDialogState(deletes).apply { open(report) }
@@ -244,6 +244,64 @@ class FileDeleteFlowTest {
         assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/report.txt"))
         release.complete(Unit)
         deletes.awaitCompletion(state)
+    }
+
+    @Test
+    fun `a delete needing a refresh blocks every related write until the folder is read`(): Unit = runBlocking {
+        val outcomes = listOf<suspend () -> NextcloudFileMutationResult>(
+            { throw fileOperationException(412) },
+            { throw fileOperationException(429) },
+            { throw fileOperationException(403) },
+        )
+        for (outcome in outcomes) {
+            val folder = file("Documents/Sub", etag = "f1", directory = true)
+            val deletes = coordinator()
+            val otherAccount = coordinator(NextcloudSession("https://example.invalid", "bob", "x").accountId)
+            deletes.finish(FileDeleteDialogState(deletes).apply { open(folder) }, FakeDeleteBoundary(deleteResult = outcome))
+            val expected = "Refresh Documents before changing Sub or anything inside it."
+
+            assertEquals(expected, deletes.writeBlockedMessage("Documents/Sub"), "The old path may name a replacement.")
+            assertEquals(expected, deletes.writeBlockedMessage("Documents/Sub/new.txt"))
+            assertEquals(expected, deletes.writeBlockedMessage("Documents"), "Its folder is blocked too.")
+            assertTrue(deletes.blocksWrites(file("Documents/Sub/notes.md")))
+            assertNull(deletes.writeBlockedMessage("Documents/new.txt"), "A sibling is unaffected.")
+            assertNull(deletes.writeBlockedMessage("Documents/Sub2"))
+            assertNull(otherAccount.writeBlockedMessage("Documents/Sub"))
+            val child = FileDeleteDialogState(deletes).apply { open(file("Documents/Sub/notes.md")) }
+            assertNull(child.begin(), "An overlapping delete must wait for the refresh too.")
+            assertEquals(expected, child.error)
+
+            deletes.readFolder("Documents") { NextcloudFileListing(listOf(folder.copy(etag = "f2")), NextcloudFileListingSource.Network) }
+
+            assertNull(deletes.writeBlockedMessage("Documents/Sub/new.txt"))
+            assertNotNull(child.begin())
+            otherAccount.close()
+        }
+    }
+
+    @Test
+    fun `a refresh that started before the outcome does not lift the write block`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val readStarted = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val staleRead = async {
+            deletes.readFolder("Documents") {
+                readStarted.complete(Unit)
+                releaseRead.await()
+                NextcloudFileListing(listOf(report), NextcloudFileListingSource.Network)
+            }
+        }
+        readStarted.await()
+
+        deletes.finish(FileDeleteDialogState(deletes).apply { open(report) }, FakeDeleteBoundary(deleteResult = { throw fileOperationException(412) }))
+        releaseRead.complete(Unit)
+        staleRead.await()
+
+        assertEquals("Refresh Documents before changing report.txt or anything inside it.", deletes.writeBlockedMessage("Documents/report.txt"))
+        assertEquals(
+            "Refresh your Nextcloud root before changing Documents or anything inside it.",
+            writeBlockedUntilRefresh("Documents"),
+        )
     }
 
     @Test
