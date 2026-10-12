@@ -71,10 +71,14 @@ the operating system's trust decision:
   certificates or root updates, so the server must send its intermediates.
   Restart nati.ve after adding a root. Windows can also veto a certificate
   that the bundled Java roots accept: a certificate in the Disallowed store,
-  a revoked certificate Windows already knows about, or one whose stored
-  purpose excludes server authentication is rejected. A root that Windows
-  merely does not have, or a failure of the Windows check itself, does not
-  block a certificate the bundled roots accept.
+  a server certificate that cached revocation data already marks as revoked,
+  or one whose stored purpose excludes server authentication is rejected.
+  Revocation is checked only for the server certificate and only against CRL
+  or OCSP data Windows has already cached; nati.ve never downloads revocation
+  data during a connection, so a revocation Windows has not cached is not
+  detected. Unknown or offline revocation status, a root that Windows merely
+  does not have, or a failure of the Windows check itself does not block a
+  certificate the bundled roots accept.
 - **macOS** desktop does not yet read the Keychain; it uses only the bundled
   Java roots.
 

@@ -5,6 +5,8 @@ import javax.net.ssl.SSLHandshakeException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -37,6 +39,11 @@ class WindowsExplicitDistrustVetoTest {
         for (verdict in listOf(
             WindowsChainVerdict.Rejected(CERT_TRUST_IS_UNTRUSTED_ROOT, CERT_E_UNTRUSTEDROOT),
             WindowsChainVerdict.Rejected(CERT_TRUST_IS_PARTIAL_CHAIN, CERT_E_CHAINING),
+            WindowsChainVerdict.Rejected(CERT_TRUST_REVOCATION_STATUS_UNKNOWN, CRYPT_E_NO_REVOCATION_CHECK),
+            WindowsChainVerdict.Rejected(
+                CERT_TRUST_REVOCATION_STATUS_UNKNOWN or CERT_TRUST_IS_OFFLINE_REVOCATION,
+                CRYPT_E_REVOCATION_OFFLINE,
+            ),
             WindowsChainVerdict.Failed(win32Error = 87),
             WindowsChainVerdict.Trusted,
         )) {
@@ -46,6 +53,50 @@ class WindowsExplicitDistrustVetoTest {
                 assertEquals("trusted", fetchWithTrust(trust, url), verdict.toString())
             }
             assertEquals(1, calls.get(), "The veto consults Windows once per bundled acceptance.")
+        }
+    }
+
+    @Test
+    fun unknownOrOfflineRevocationAloneNeverRejectsAChain() {
+        val unknown = CERT_TRUST_REVOCATION_STATUS_UNKNOWN or CERT_TRUST_IS_OFFLINE_REVOCATION
+        for ((status, policy) in listOf(
+            unknown to 0,
+            CERT_TRUST_REVOCATION_STATUS_UNKNOWN to CRYPT_E_NO_REVOCATION_CHECK,
+            unknown to CRYPT_E_REVOCATION_OFFLINE,
+        )) {
+            assertEquals(WindowsChainVerdict.Trusted, windowsChainVerdict(status, policy))
+        }
+    }
+
+    @Test
+    fun definiteRevocationIsRejectedAndVetoedEvenWithOtherwiseUnknownStatus() {
+        val verdict = windowsChainVerdict(CERT_TRUST_IS_REVOKED or CERT_TRUST_REVOCATION_STATUS_UNKNOWN, CERT_E_REVOKED)
+        val rejected = assertIs<WindowsChainVerdict.Rejected>(verdict)
+        assertTrue(rejected.isExplicitWindowsDistrust())
+        val trust = trustWithWindowsVerdict { verdict }
+        withSyntheticTlsServer(syntheticLeaf("localhost", bundledAuthority)) { url ->
+            assertFailsWith<SSLHandshakeException> { fetchWithTrust(trust, url) }
+        }
+    }
+
+    @Test
+    fun otherWindowsErrorsAreRejectedWithoutBecomingAVeto() {
+        val unknown = CERT_TRUST_REVOCATION_STATUS_UNKNOWN or CERT_TRUST_IS_OFFLINE_REVOCATION
+        val untrusted = assertIs<WindowsChainVerdict.Rejected>(
+            windowsChainVerdict(CERT_TRUST_IS_UNTRUSTED_ROOT or unknown, CERT_E_UNTRUSTEDROOT),
+        )
+        assertFalse(untrusted.isExplicitWindowsDistrust())
+        // An unknown-revocation policy code cannot hide a definite chain error.
+        assertIs<WindowsChainVerdict.Rejected>(windowsChainVerdict(CERT_TRUST_IS_UNTRUSTED_ROOT, CRYPT_E_REVOCATION_OFFLINE))
+    }
+
+    @Test
+    fun unknownRevocationDoesNotNewlyFailTheWindowsTrustFallback() {
+        val verdict = windowsChainVerdict(CERT_TRUST_REVOCATION_STATUS_UNKNOWN or CERT_TRUST_IS_OFFLINE_REVOCATION, 0)
+        val trust = trustWithWindowsVerdict { verdict }
+        // The bundled roots reject this private CA; the Windows decision accepts it.
+        withSyntheticTlsServer(syntheticLeaf("localhost", privateAuthority)) { url ->
+            assertEquals("trusted", fetchWithTrust(trust, url))
         }
     }
 

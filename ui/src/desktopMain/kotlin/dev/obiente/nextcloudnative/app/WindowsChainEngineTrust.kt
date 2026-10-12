@@ -168,6 +168,8 @@ internal class JnaWindowsServerChainVerifier(
             RequestedUsage.dwType = USAGE_MATCH_TYPE_AND
             RequestedUsage.Usage.cUsageIdentifier = 1
             RequestedUsage.Usage.rgpszUsageIdentifier = usageArray
+            // Revocation is cache-only; this bounds any retrieval Windows still attempts.
+            dwUrlRetrievalTimeout = WINDOWS_REVOCATION_TIMEOUT_MILLIS
         }
         try {
             val chainReference = PointerByReference()
@@ -201,7 +203,8 @@ internal class JnaWindowsServerChainVerifier(
         }
         val policyPara = WinCrypt.CERT_CHAIN_POLICY_PARA().apply {
             cbSize = size()
-            dwFlags = 0
+            // Cached revocation data is often absent; only a definite revocation may reject.
+            dwFlags = CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS
             pvExtraPolicyPara = sslPara.pointer
         }
         val policyStatus = WinCrypt.CERT_CHAIN_POLICY_STATUS().apply { cbSize = size() }
@@ -213,12 +216,22 @@ internal class JnaWindowsServerChainVerifier(
             Reference.reachabilityFence(sslPara)
         }
         // CERT_CHAIN_CONTEXT starts with cbSize followed by CERT_TRUST_STATUS.dwErrorStatus.
-        val trustErrorStatus = chain.getInt(4)
-        return if (trustErrorStatus == 0 && policyStatus.dwError == 0) {
-            WindowsChainVerdict.Trusted
-        } else {
-            WindowsChainVerdict.Rejected(trustErrorStatus, policyStatus.dwError)
-        }
+        return windowsChainVerdict(trustErrorStatus = chain.getInt(4), policyError = policyStatus.dwError)
+    }
+}
+
+/**
+ * Classifies one evaluated chain. Unknown or offline revocation status never rejects a chain by
+ * itself, because cache-only checking often has no revocation data. A definite revocation, and
+ * every other trust or policy error, rejects it.
+ */
+internal fun windowsChainVerdict(trustErrorStatus: Int, policyError: Int): WindowsChainVerdict {
+    val definiteErrors = trustErrorStatus and WINDOWS_UNKNOWN_REVOCATION_TRUST_BITS.inv()
+    val policyAccepts = policyError == 0 || policyError in WINDOWS_UNKNOWN_REVOCATION_POLICY_ERRORS
+    return if (definiteErrors == 0 && policyAccepts) {
+        WindowsChainVerdict.Trusted
+    } else {
+        WindowsChainVerdict.Rejected(trustErrorStatus, policyError)
     }
 }
 
@@ -290,10 +303,24 @@ private const val CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL = 0x00000004
 private const val CERT_CHAIN_DISABLE_AUTH_ROOT_AUTO_UPDATE = 0x00000100
 private const val CERT_CHAIN_DISABLE_MD2_MD4 = 0x00001000
 private const val CERT_CHAIN_DISABLE_AIA = 0x00002000
-private const val CHAIN_FLAGS = CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL or
+private const val CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT = 0x08000000
+private const val CERT_CHAIN_REVOCATION_CHECK_END_CERT = 0x10000000
+private val CERT_CHAIN_REVOCATION_CHECK_CACHE_ONLY = 0x80000000.toInt()
+private const val CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS = 0x00000F00
+private const val WINDOWS_REVOCATION_TIMEOUT_MILLIS = 1_000
+
+/**
+ * Same flags for the trust fallback and the distrust veto. CACHE_ONLY_URL_RETRIEVAL does not cover
+ * revocation, so end-certificate revocation is requested separately and limited to cached CRL or
+ * OCSP data. Nothing is downloaded during a handshake.
+ */
+private val CHAIN_FLAGS = CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL or
     CERT_CHAIN_DISABLE_AUTH_ROOT_AUTO_UPDATE or
     CERT_CHAIN_DISABLE_MD2_MD4 or
-    CERT_CHAIN_DISABLE_AIA
+    CERT_CHAIN_DISABLE_AIA or
+    CERT_CHAIN_REVOCATION_CHECK_END_CERT or
+    CERT_CHAIN_REVOCATION_CHECK_CACHE_ONLY or
+    CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT
 internal const val MAX_WINDOWS_VERIFIED_CHAIN_LENGTH = 16
 internal const val CERT_TRUST_IS_REVOKED = 0x00000004
 internal const val CERT_TRUST_IS_NOT_VALID_FOR_USAGE = 0x00000010
@@ -305,3 +332,10 @@ private val WINDOWS_EXPLICIT_DISTRUST_POLICY_ERRORS = setOf(
     0x800B0110.toInt(), // CERT_E_WRONG_USAGE
     0x800B0111.toInt(), // TRUST_E_EXPLICIT_DISTRUST
 )
+internal const val CERT_TRUST_REVOCATION_STATUS_UNKNOWN = 0x00000040
+internal const val CERT_TRUST_IS_OFFLINE_REVOCATION = 0x01000000
+private const val WINDOWS_UNKNOWN_REVOCATION_TRUST_BITS =
+    CERT_TRUST_REVOCATION_STATUS_UNKNOWN or CERT_TRUST_IS_OFFLINE_REVOCATION
+internal val CRYPT_E_NO_REVOCATION_CHECK = 0x80092012.toInt()
+internal val CRYPT_E_REVOCATION_OFFLINE = 0x80092013.toInt()
+private val WINDOWS_UNKNOWN_REVOCATION_POLICY_ERRORS = setOf(CRYPT_E_NO_REVOCATION_CHECK, CRYPT_E_REVOCATION_OFFLINE)
