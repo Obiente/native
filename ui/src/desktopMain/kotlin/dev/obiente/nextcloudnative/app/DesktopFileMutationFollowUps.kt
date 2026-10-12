@@ -42,7 +42,81 @@ internal class DesktopFileMutationFollowUps(
         }
     }
 
-    private class Pending(var refresh: () -> Throwable?, val waiters: MutableList<Waiter> = mutableListOf())
+    private class Pending(var refresh: () -> Throwable?, val waiters: MutableList<Waiter> = mutableListOf()) {
+        /** Set once, when the refresh finishes or is abandoned. Guarded by the follow-ups lock. */
+        var result: FileMutationLocalFollowUp? = null
+    }
+
+    /**
+     * One remote mutation's local follow-up. The refresh queued when the server accepted the
+     * request, or when its result became unknown, and the wait after confirmation share one entry
+     * per path. A path is therefore refreshed once, and a full queue never fails a path whose
+     * refresh for this mutation is already queued, running, or finished.
+     */
+    inner class Mutation internal constructor(
+        private val accountId: String,
+        paths: List<String>,
+        private val refresh: (path: String) -> Throwable?,
+    ) {
+        private val paths = paths.distinct()
+        private val joined = HashMap<String, Pending>()
+
+        /** Queues the refresh of every path. Returns false when a path could not be queued. */
+        fun onAcceptedOrUnknownResult(): Boolean = paths.map { path ->
+            val entry = submit(Key(accountId, path), { refresh(path) }, waiter = null, previous = joinedEntry(path))
+            synchronized(lock) { entry?.let { joined[path] = it } }
+            entry != null
+        }.all { it }
+
+        /**
+         * Runs [mutation], which reports an accepted response or an interrupted exchange through
+         * its callback. When the reconciliation for an unknown result cannot be queued, the
+         * failure says so explicitly.
+         */
+        inline fun <T> reconcilingUnknownResult(mutation: (onAcceptedOrUnknownResult: () -> Unit) -> T): T {
+            var queued = true
+            try {
+                return mutation { queued = onAcceptedOrUnknownResult() }
+            } catch (unknown: DesktopFileSyncAmbiguousMutationException) {
+                if (queued) throw unknown
+                throw DesktopFileMutationReconciliationDroppedException(unknown)
+            }
+        }
+
+        /**
+         * Waits at most [completionWaitMillis] for the refresh of every path after the server
+         * confirmed the mutation, reusing the refresh this mutation already queued.
+         */
+        suspend fun afterConfirmedMutation(): FileMutationLocalFollowUp {
+            val waiters = paths.map { path ->
+                Waiter().also { waiter ->
+                    val entry = submit(Key(accountId, path), { refresh(path) }, waiter, previous = joinedEntry(path))
+                    if (entry == null) waiter.finish(FileMutationLocalFollowUp.Failed)
+                }
+            }
+            try {
+                withTimeoutOrNull(completionWaitMillis) { waiters.forEach { it.done.await() } }
+            } finally {
+                synchronized(lock) {
+                    pending.values.forEach { entry -> entry.waiters.removeAll(waiters) }
+                    running?.second?.waiters?.removeAll(waiters)
+                }
+            }
+            // A failed or dropped path is known now; it must not be hidden behind one still running.
+            val results = waiters.map(Waiter::result)
+            val followUp = when {
+                FileMutationLocalFollowUp.Failed in results -> FileMutationLocalFollowUp.Failed
+                results.all { it == FileMutationLocalFollowUp.Completed } -> FileMutationLocalFollowUp.Completed
+                else -> FileMutationLocalFollowUp.StillRunning
+            }
+            if (followUp == FileMutationLocalFollowUp.StillRunning) {
+                recordOutcome(accountId, "still-running", "FILE_MUTATION_LOCAL_FOLLOW_UP_DELAYED")
+            }
+            return followUp
+        }
+
+        private fun joinedEntry(path: String): Pending? = synchronized(lock) { joined[path] }
+    }
 
     private val lock = Any()
     private val pending = LinkedHashMap<Key, Pending>()
@@ -57,63 +131,23 @@ internal class DesktopFileMutationFollowUps(
     /** Paths waiting behind the running refresh. Bounded by [maximumPending]. */
     internal val pendingCount: Int get() = synchronized(lock) { pending.size }
 
-    /**
-     * Refreshes [paths] after the server confirmed a mutation and waits at most
-     * [completionWaitMillis]. [refresh] returns the first local failure it recovered from.
-     */
+    /** The local follow-up of one mutation of [paths]. [refresh] returns the first local failure it recovered from. */
+    fun mutation(accountId: String, paths: List<String>, refresh: (path: String) -> Throwable?) =
+        Mutation(accountId, paths, refresh)
+
+    /** Refreshes [paths] after the server confirmed a mutation that queued nothing earlier. */
     suspend fun afterConfirmedMutation(
         accountId: String,
         paths: List<String>,
         refresh: (path: String) -> Throwable?,
-    ): FileMutationLocalFollowUp {
-        val waiters = paths.distinct().map { path ->
-            Waiter().also { waiter ->
-                if (!submit(Key(accountId, path), { refresh(path) }, waiter)) waiter.finish(FileMutationLocalFollowUp.Failed)
-            }
-        }
-        try {
-            withTimeoutOrNull(completionWaitMillis) { waiters.forEach { it.done.await() } }
-        } finally {
-            synchronized(lock) { pending.values.forEach { entry -> entry.waiters.removeAll(waiters) } }
-        }
-        // A failed or dropped path is known now; it must not be hidden behind one still running.
-        val results = waiters.map(Waiter::result)
-        val followUp = when {
-            FileMutationLocalFollowUp.Failed in results -> FileMutationLocalFollowUp.Failed
-            results.all { it == FileMutationLocalFollowUp.Completed } -> FileMutationLocalFollowUp.Completed
-            else -> FileMutationLocalFollowUp.StillRunning
-        }
-        if (followUp == FileMutationLocalFollowUp.StillRunning) {
-            recordOutcome(accountId, "still-running", "FILE_MUTATION_LOCAL_FOLLOW_UP_DELAYED")
-        }
-        return followUp
-    }
+    ): FileMutationLocalFollowUp = mutation(accountId, paths, refresh).afterConfirmedMutation()
 
     /**
      * Queues a refresh after an unknown remote result without delaying the caller's failure.
      * Returns false when a path could not be queued, so the caller must not imply local recovery.
      */
     fun afterUnknownResult(accountId: String, paths: List<String>, refresh: (path: String) -> Throwable?): Boolean =
-        paths.distinct().map { path -> submit(Key(accountId, path), { refresh(path) }, waiter = null) }.all { it }
-
-    /**
-     * Runs [mutation], which reports an interrupted exchange through its callback. When the
-     * reconciliation for that unknown result cannot be queued, the failure says so explicitly.
-     */
-    inline fun <T> reconcilingUnknownResult(
-        accountId: String,
-        paths: List<String>,
-        noinline refresh: (path: String) -> Throwable?,
-        mutation: (onUnknownResult: () -> Unit) -> T,
-    ): T {
-        var queued = true
-        try {
-            return mutation { queued = afterUnknownResult(accountId, paths, refresh) }
-        } catch (unknown: DesktopFileSyncAmbiguousMutationException) {
-            if (queued) throw unknown
-            throw DesktopFileMutationReconciliationDroppedException(unknown)
-        }
-    }
+        mutation(accountId, paths, refresh).onAcceptedOrUnknownResult()
 
     /**
      * Drops [accountId]'s queued refreshes at sign-out or account removal; their waiters and those
@@ -124,35 +158,52 @@ internal class DesktopFileMutationFollowUps(
      */
     fun abandonAccount(accountId: String) {
         val abandoned = synchronized(lock) {
-            val keys = pending.keys.filter { it.accountId == accountId }
-            val current = running?.takeIf { (key, _) -> key.accountId == accountId }?.second?.waiters.orEmpty()
-            current.toList() + keys.flatMap { key -> requireNotNull(pending.remove(key)).waiters }
+            val current = running?.takeIf { (key, _) -> key.accountId == accountId }?.second
+            val queued = pending.keys.filter { it.accountId == accountId }.map { key -> requireNotNull(pending.remove(key)) }
+            (listOfNotNull(current) + queued).flatMap { entry -> entry.abandon() }
         }
         abandoned.forEach { it.finish(FileMutationLocalFollowUp.Failed) }
     }
 
+    /** Marks [this] failed unless it already finished, and returns the waiters to notify. Called under the lock. */
+    private fun Pending.abandon(): List<Waiter> {
+        if (result == null) result = FileMutationLocalFollowUp.Failed
+        return waiters.toList()
+    }
+
+    /**
+     * Joins or creates the entry for [key], or returns null when the path was dropped. [previous]
+     * is the entry this mutation already joined for [key]; a waiter attaches to it while it runs and
+     * reads its result once it finished, instead of queueing the same refresh again.
+     */
     private fun submit(
         key: Key,
         refresh: () -> Throwable?,
         waiter: Waiter?,
-    ): Boolean {
-        val accepted = synchronized(lock) {
-            if (!scope.isActive) return@synchronized false
-            val entry = pending[key]
-            when {
-                entry != null -> entry.refresh = refresh
-                pending.size >= maximumPending -> return@synchronized false
-                else -> pending[key] = Pending(refresh)
+        previous: Pending?,
+    ): Pending? {
+        var finished: FileMutationLocalFollowUp? = null
+        val entry = synchronized(lock) {
+            if (!scope.isActive) return@synchronized null
+            val queued = pending[key]
+            val entry = when {
+                queued != null -> queued.also { it.refresh = refresh }
+                // Finished or abandoned, including an abandoned refresh that is still running.
+                previous?.result != null -> previous.also { finished = it.result }
+                previous != null && previous === running?.second -> previous
+                pending.size >= maximumPending -> return@synchronized null
+                else -> Pending(refresh).also { pending[key] = it }
             }
-            waiter?.let { requireNotNull(pending[key]).waiters += it }
-            if (!draining) {
+            if (finished == null) waiter?.let { entry.waiters += it }
+            if (!draining && pending.isNotEmpty()) {
                 draining = true
                 startDrain()
             }
-            true
+            entry
         }
-        if (!accepted) recordOutcome(key.accountId, "dropped", "FILE_MUTATION_LOCAL_FOLLOW_UP_DROPPED")
-        return accepted
+        finished?.let { result -> waiter?.finish(result) }
+        if (entry == null) recordOutcome(key.accountId, "dropped", "FILE_MUTATION_LOCAL_FOLLOW_UP_DROPPED")
+        return entry
     }
 
     private fun startDrain() {
@@ -165,7 +216,7 @@ internal class DesktopFileMutationFollowUps(
     private fun abandonQueue() {
         val abandoned = synchronized(lock) {
             draining = false
-            pending.values.flatMap { it.waiters }.also { pending.clear() }
+            pending.values.flatMap { entry -> entry.abandon() }.also { pending.clear() }
         }
         abandoned.forEach { it.finish(FileMutationLocalFollowUp.Failed) }
     }
@@ -196,8 +247,10 @@ internal class DesktopFileMutationFollowUps(
                 recordOutcome(key.accountId, "failed", "FILE_MUTATION_LOCAL_FOLLOW_UP_FAILED", failure)
                 FileMutationLocalFollowUp.Failed
             }
+            // An abandoned entry keeps its failure; its waiters were already told.
             synchronized(lock) {
                 running = null
+                if (entry.result == null) entry.result = result
                 entry.waiters.toList()
             }.forEach { it.finish(result) }
         }

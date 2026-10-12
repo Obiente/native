@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -217,8 +218,8 @@ class FileDeleteFlowTest {
             })::delete,
         ) { error("not read") }
 
-        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/New folder"))
-        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/Sub/notes.md"))
+        assertEquals(FileWriteBlock.DeleteRunning.message, deletes.writeBlockedMessage("Documents/New folder"))
+        assertEquals(FileWriteBlock.DeleteRunning.message, deletes.writeBlockedMessage("Documents/Sub/notes.md"))
         assertNull(deletes.writeBlockedMessage("New folder"))
         assertNull(deletes.writeBlockedMessage("Documents2/notes.md"))
 
@@ -241,7 +242,7 @@ class FileDeleteFlowTest {
         ) { error("not read") }
 
         assertNull(deletes.writeBlockedMessage("Documents/new.txt"))
-        assertEquals(WRITE_BLOCKED_BY_DELETE, deletes.writeBlockedMessage("Documents/report.txt"))
+        assertEquals(FileWriteBlock.DeleteRunning.message, deletes.writeBlockedMessage("Documents/report.txt"))
         release.complete(Unit)
         deletes.awaitCompletion(state)
     }
@@ -258,7 +259,7 @@ class FileDeleteFlowTest {
             val deletes = coordinator()
             val otherAccount = coordinator(NextcloudSession("https://example.invalid", "bob", "x").accountId)
             deletes.finish(FileDeleteDialogState(deletes).apply { open(folder) }, FakeDeleteBoundary(deleteResult = outcome))
-            val expected = "Refresh Documents before changing Sub or anything inside it."
+            val expected = "Open or refresh Documents before changing Sub or anything inside it."
 
             assertEquals(expected, deletes.writeBlockedMessage("Documents/Sub"), "The old path may name a replacement.")
             assertEquals(expected, deletes.writeBlockedMessage("Documents/Sub/new.txt"))
@@ -297,11 +298,80 @@ class FileDeleteFlowTest {
         releaseRead.complete(Unit)
         staleRead.await()
 
-        assertEquals("Refresh Documents before changing report.txt or anything inside it.", deletes.writeBlockedMessage("Documents/report.txt"))
+        assertEquals("Open or refresh Documents before changing report.txt or anything inside it.", deletes.writeBlockedMessage("Documents/report.txt"))
         assertEquals(
-            "Refresh your Nextcloud root before changing Documents or anything inside it.",
-            writeBlockedUntilRefresh("Documents"),
+            "Open or refresh your Nextcloud root before changing Documents or anything inside it.",
+            FileWriteBlock.RefreshRequired("Documents").message,
         )
+    }
+
+    @Test
+    fun `a delete outside the shown folder reads its own folder so the refresh block lifts`(): Unit = runBlocking {
+        val archived = file("Archive/old.txt", etag = "a1")
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(archived) }
+        val reads = mutableListOf<String>()
+        val completion = deletes.finishUnapplied(state) { throw fileOperationException(412) }
+
+        val effect = deletes.applyCompletion(completion, state, shownFolder = "Documents") { folder ->
+            reads += folder
+            NextcloudFileListing(listOf(archived.copy(etag = "a2")), NextcloudFileListingSource.Network)
+        }
+
+        assertTrue(effect.reloadFolder)
+        withTimeout(5_000L) { while (deletes.writeBlockedMessage("Archive/old.txt") != null) yield() }
+        assertEquals(listOf("Archive"), reads, "Only the deleted item's own folder is read.")
+    }
+
+    @Test
+    fun `the shown folder's own reload is not duplicated`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val completion = deletes.finishUnapplied(state) { throw fileOperationException(412) }
+
+        deletes.applyCompletion(completion, state, shownFolder = "Documents") { error("The Files screen reloads its own folder.") }
+        repeat(10) { yield() }
+
+        assertNotNull(deletes.writeBlockedMessage("Documents/report.txt"), "The screen's reload lifts it.")
+    }
+
+    @Test
+    fun `a failed folder read keeps the block until the user opens that folder`(): Unit = runBlocking {
+        val archived = file("Archive/old.txt", etag = "a1")
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(archived) }
+        val completion = deletes.finishUnapplied(state) { throw fileOperationException(412) }
+        val attempted = CompletableDeferred<Unit>()
+
+        deletes.applyCompletion(completion, state, shownFolder = "") {
+            attempted.complete(Unit)
+            throw IllegalStateException("offline")
+        }
+        attempted.await()
+        repeat(10) { yield() }
+
+        assertEquals(
+            "Open or refresh Archive before changing old.txt or anything inside it.",
+            deletes.writeBlockedMessage("Archive/old.txt"),
+        )
+        deletes.readFolder("Archive") { NextcloudFileListing(emptyList(), NextcloudFileListingSource.Network) }
+        assertNull(deletes.writeBlockedMessage("Archive/old.txt"), "Opening the folder lifts it.")
+    }
+
+    @Test
+    fun `throttled or rejected deletes start no folder read`(): Unit = runBlocking {
+        for (status in listOf(429, 401, 403)) {
+            val archived = file("Archive/old.txt", etag = "a1")
+            val deletes = coordinator()
+            val state = FileDeleteDialogState(deletes).apply { open(archived) }
+            val completion = deletes.finishUnapplied(state) { throw fileOperationException(status) }
+
+            val effect = deletes.applyCompletion(completion, state, shownFolder = "Documents") { error("No extra request.") }
+            repeat(10) { yield() }
+
+            assertFalse(effect.reloadFolder)
+            assertNotNull(deletes.writeBlockedMessage("Archive/old.txt"))
+        }
     }
 
     @Test
@@ -638,6 +708,15 @@ class FileDeleteFlowTest {
     ): FileDeleteScreenEffect {
         start(assertNotNull(state.begin()), fake::delete, fake::read).join()
         return awaitCompletion(state)
+    }
+
+    /** Runs the open dialog's delete to its outcome and claims the completion without applying it. */
+    private suspend fun FileDeleteCoordinator.finishUnapplied(
+        state: FileDeleteDialogState,
+        result: suspend () -> NextcloudFileMutationResult,
+    ): FileDeleteCompletion {
+        start(assertNotNull(state.begin()), FakeDeleteBoundary(deleteResult = result)::delete) { error("not read") }.join()
+        return assertNotNull(nextCompletion).also { assertTrue(consume(it)) }
     }
 
     private suspend fun FileDeleteCoordinator.awaitCompletion(state: FileDeleteDialogState): FileDeleteScreenEffect {

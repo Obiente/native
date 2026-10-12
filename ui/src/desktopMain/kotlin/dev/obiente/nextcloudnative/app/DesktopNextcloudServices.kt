@@ -4833,9 +4833,9 @@ class DesktopNextcloudServices(
             }
         }
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        val affectedPaths = listOfNotNull(spec.sourcePath, spec.destinationPath)
         fun refreshLocalState(path: String) = refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val response = fileMutationFollowUps.reconcilingUnknownResult(accountId, affectedPaths, ::refreshLocalState) { onUnknownResult -> request(
+        val followUp = fileMutationFollowUps.mutation(accountId, listOfNotNull(spec.sourcePath, spec.destinationPath), ::refreshLocalState)
+        val response = followUp.reconcilingUnknownResult { onUnknownResult -> request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
@@ -4845,7 +4845,7 @@ class DesktopNextcloudServices(
             onAmbiguousMutationResult = onUnknownResult,
         ) }
         if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
-        NextcloudFileMutationResult(spec.destinationPath, response.etag, fileMutationFollowUps.afterConfirmedMutation(accountId, affectedPaths, ::refreshLocalState))
+        NextcloudFileMutationResult(spec.destinationPath, response.etag, followUp.afterConfirmedMutation())
     }
 
     override suspend fun executeNextcloudApi(

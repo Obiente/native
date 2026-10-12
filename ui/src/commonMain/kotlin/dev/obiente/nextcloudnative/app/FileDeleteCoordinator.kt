@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -78,22 +79,54 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     val nextCompletion: FileDeleteCompletion? get() = completions.firstOrNull()
 
     /**
-     * Other writes to [file] must wait while a delete of it, a parent, or a child is unverified, and
-     * until a folder refresh after a delete outcome that left that item's state unknown or stale.
+     * Why other writes to [file] must wait: a delete of it, a parent, or a child is unverified, or
+     * such a delete finished with an outcome that left the item's state unknown or stale.
      */
-    fun blocksWrites(file: NextcloudFile): Boolean = writeBlockedMessage(file.path) != null
+    fun writeBlock(file: NextcloudFile): FileWriteBlock? = writeBlockFor(file.path)
+
+    fun blocksWrites(file: NextcloudFile): Boolean = writeBlock(file) != null
 
     /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
-    fun writeBlockedMessage(path: String): String? =
-        WRITE_BLOCKED_BY_DELETE.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) } ?: refreshBlockedMessage(path)
+    fun writeBlockFor(path: String): FileWriteBlock? =
+        FileWriteBlock.DeleteRunning.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) } ?: refreshBlockFor(path)
+
+    fun writeBlockedMessage(path: String): String? = writeBlockFor(path)?.message
 
     /**
      * Why a write to [path] must wait for a folder refresh after a finished delete of it, a parent,
      * or a child, or null. The old path may now name a replacement item, so path-based writes wait too.
      */
-    fun refreshBlockedMessage(path: String): String? {
+    fun refreshBlockFor(path: String): FileWriteBlock.RefreshRequired? {
         val key = FileDeleteResourceKey(account, path)
-        return retryBlocks.keys.firstOrNull { it.overlaps(key) }?.let { writeBlockedUntilRefresh(it.path) }
+        return retryBlocks.keys.firstOrNull { it.overlaps(key) }?.let { FileWriteBlock.RefreshRequired(it.path) }
+    }
+
+    /**
+     * Applies [completion] to [dialog]. When the outcome asks for a folder reload but the item's
+     * folder is not [shownFolder], that folder is read here, through [readFolder], so the screen's
+     * own reload is not the only way to lift its retry block. A failed read leaves the block; the
+     * message then tells the user which folder to open.
+     */
+    fun applyCompletion(
+        completion: FileDeleteCompletion,
+        dialog: FileDeleteDialogState,
+        shownFolder: String,
+        read: suspend (String) -> NextcloudFileListing,
+    ): FileDeleteScreenEffect {
+        val effect = dialog.complete(completion)
+        val folder = completion.request.parentPath
+        if (effect.reloadFolder && folder != shownFolder && completion.request.key in retryBlocks) {
+            scope.launch {
+                try {
+                    readFolder(folder) { read(folder) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Best effort: the block stays until the user opens or refreshes the folder.
+                }
+            }
+        }
+        return effect
     }
 
     /** Why another delete of [file] must wait for a fresh folder listing, or null. */
@@ -150,12 +183,23 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     fun close() = job.cancel()
 }
 
-internal const val WRITE_BLOCKED_BY_DELETE = "Wait until the delete of this item or its folder finishes."
+/** Why writes to a Files item must wait. User-facing copy derives only from this type. */
+sealed interface FileWriteBlock {
+    val message: String
 
-/** A delete of [blockedPath] needs a server listing of its folder before related writes may proceed. */
-internal fun writeBlockedUntilRefresh(blockedPath: String): String {
-    val folder = blockedPath.substringBeforeLast('/', missingDelimiterValue = "").ifEmpty { "your Nextcloud root" }
-    return "Refresh $folder before changing ${blockedPath.substringAfterLast('/')} or anything inside it."
+    /** A delete of the item, one of its folders, or its contents is not verified yet. */
+    data object DeleteRunning : FileWriteBlock {
+        override val message = "Wait until the delete of this item or its folder finishes."
+    }
+
+    /** A finished delete of [blockedPath] needs a server listing of its folder first. */
+    data class RefreshRequired(val blockedPath: String) : FileWriteBlock {
+        val folder: String get() = blockedPath.substringBeforeLast('/', missingDelimiterValue = "")
+
+        override val message: String
+            get() = "Open or refresh ${folder.ifEmpty { "your Nextcloud root" }} before changing " +
+                "${blockedPath.substringAfterLast('/')} or anything inside it."
+    }
 }
 
 @Composable
@@ -200,8 +244,8 @@ internal class FileDeleteDialogState(private val deletes: FileDeleteCoordinator)
         }
         val key = deletes.keyFor(file)
         // A parent or child whose delete left its state unknown must be refreshed first.
-        deletes.refreshBlockedMessage(file.path)?.let {
-            localError = it
+        deletes.refreshBlockFor(file.path)?.let {
+            localError = it.message
             return null
         }
         val token = deletes.inFlight.claim(key) ?: run {

@@ -7022,7 +7022,7 @@ internal fun FilesScreen(
                     onLayoutChanged = onLayoutChanged,
                     offlineAvailability = offlineAvailability,
                     offlineStorageSupported = services.supportsFileOfflineStorage,
-                    writesBlocked = fileDeletes::blocksWrites,
+                    writeBlock = fileDeletes::writeBlock,
                     fileSharing = fileSharing,
                     externalHandoffCapability = externalHandoffCapability,
                     services = services,
@@ -7336,8 +7336,8 @@ internal fun FilesScreen(
 
     userId?.let { uid ->
         FileDeleteHost(
-            deleteDialog, fileDeletes,
-            delete = { mutation -> services.executeFileMutation(session, uid, mutation) },
+            deleteDialog, fileDeletes, path,
+            delete ={ mutation -> services.executeFileMutation(session, uid, mutation) },
             readFolder = { folder -> services.listFilesWithSource(session, uid, folder) },
         ) { effect ->
             effect.notice?.let { mutationNotice = it }

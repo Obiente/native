@@ -213,13 +213,13 @@ fun planFilesScreenActions(
     file: NextcloudFile,
     support: FileActionSupport = FileActionSupport(),
     offlineState: FileOfflineState = FileOfflineState.NotStored,
-    writesBlocked: Boolean = false,
+    writeBlock: FileWriteBlock? = null,
 ): FileLongPressActionPlan {
     val plan = planFileActions(file, support, offlineState)
     return FileLongPressActionPlan(
         plan.actions.map { action ->
-            if (writesBlocked && action.enabled && action.action in fileWriteActions) {
-                action.copy(enabled = false, disabledReason = "Wait until the delete of this item or its folder finishes.")
+            if (writeBlock != null && action.enabled && action.action in fileWriteActions) {
+                action.copy(enabled = false, disabledReason = writeBlock.message)
             } else if (!action.enabled || action.action in filesScreenImplementedActions) {
                 action
             } else {

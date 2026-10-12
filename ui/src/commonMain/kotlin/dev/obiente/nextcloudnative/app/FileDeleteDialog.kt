@@ -20,21 +20,26 @@ import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
 /**
- * Shows the delete dialog of one Files screen and applies finished deletes, including ones
- * started before this screen was shown. The requests themselves belong to [deletes].
+ * Shows the delete dialog of one Files screen showing [shownFolder] and applies finished deletes,
+ * including ones started before this screen was shown. The requests themselves belong to [deletes].
  */
 @Composable
 internal fun FileDeleteHost(
     dialog: FileDeleteDialogState,
     deletes: FileDeleteCoordinator,
+    shownFolder: String,
     delete: suspend (NextcloudFileMutation.Delete) -> NextcloudFileMutationResult,
     readFolder: suspend (String) -> NextcloudFileListing,
     onEffect: (FileDeleteScreenEffect) -> Unit,
 ) {
     val currentOnEffect by rememberUpdatedState(onEffect)
+    val currentShownFolder by rememberUpdatedState(shownFolder)
+    val currentReadFolder by rememberUpdatedState(readFolder)
     val completion = deletes.nextCompletion
     LaunchedEffect(deletes, completion) {
-        if (completion != null && deletes.consume(completion)) currentOnEffect(dialog.complete(completion))
+        if (completion != null && deletes.consume(completion)) {
+            currentOnEffect(deletes.applyCompletion(completion, dialog, currentShownFolder, currentReadFolder))
+        }
     }
     dialog.target?.let { target ->
         FileDeleteDialog(

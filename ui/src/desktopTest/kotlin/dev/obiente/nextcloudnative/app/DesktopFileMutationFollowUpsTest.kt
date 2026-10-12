@@ -274,13 +274,13 @@ class DesktopFileMutationFollowUpsTest {
         val interrupted = DesktopFileSyncAmbiguousMutationException(java.io.IOException("reset"))
 
         val queued = assertFailsWith<DesktopFileSyncAmbiguousMutationException> {
-            followUps.reconcilingUnknownResult("account", listOf("source"), { null }) { onUnknown ->
+            followUps.mutation("account", listOf("source")) { null }.reconcilingUnknownResult { onUnknown ->
                 onUnknown()
                 throw interrupted
             }
         }
         val dropped = assertFailsWith<DesktopFileMutationReconciliationDroppedException> {
-            followUps.reconcilingUnknownResult("account", listOf("source", "destination"), { null }) { onUnknown ->
+            followUps.mutation("account", listOf("source", "destination")) { null }.reconcilingUnknownResult { onUnknown ->
                 onUnknown()
                 throw interrupted
             }
@@ -289,7 +289,127 @@ class DesktopFileMutationFollowUpsTest {
         assertSame(interrupted, queued, "A queued reconciliation keeps the original unknown result.")
         assertSame(interrupted, dropped.cause)
         assertFalse(followUps.afterUnknownResult("account", listOf("other")) { null })
-        assertEquals("ok", followUps.reconcilingUnknownResult("account", listOf("other"), { null }) { "ok" })
+        assertEquals("ok", followUps.mutation("account", listOf("other")) { null }.reconcilingUnknownResult { "ok" })
+    }
+
+    @Test
+    fun `confirmation attaches to the accepted-response refresh while it runs`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 60_000L)
+        val release = latch()
+        val started = CountDownLatch(1)
+        val runs = Collections.synchronizedList(mutableListOf<String>())
+        val mutation = followUps.mutation("account", listOf("a")) { path ->
+            runs += path
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+
+        assertTrue(mutation.onAcceptedOrUnknownResult())
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val confirmed = async(Dispatchers.Default) { mutation.afterConfirmedMutation() }
+        delay(100L)
+        assertEquals(0, followUps.pendingCount, "The running refresh is not queued again.")
+        release.countDown()
+
+        assertEquals(FileMutationLocalFollowUp.Completed, withTimeout(5_000L) { confirmed.await() })
+        assertEquals(listOf("a"), runs.toList())
+    }
+
+    @Test
+    fun `confirmation attaches to the accepted-response refresh while it is queued or after it finished`(): Unit =
+        runBlocking {
+            val followUps = followUps(waitMillis = 60_000L)
+            val release = latch()
+            val started = CountDownLatch(1)
+            followUps.afterUnknownResult("account", listOf("stalled")) {
+                started.countDown()
+                release.awaitUninterruptibly()
+                null
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val runs = Collections.synchronizedList(mutableListOf<String>())
+            val queued = followUps.mutation("account", listOf("queued")) { path -> runs += path; null }
+
+            assertTrue(queued.onAcceptedOrUnknownResult())
+            val confirmed = async(Dispatchers.Default) { queued.afterConfirmedMutation() }
+            delay(100L)
+            assertEquals(1, followUps.pendingCount)
+            release.countDown()
+            assertEquals(FileMutationLocalFollowUp.Completed, withTimeout(5_000L) { confirmed.await() })
+
+            val finished = followUps.mutation("account", listOf("finished")) { path -> runs += path; null }
+            assertTrue(finished.onAcceptedOrUnknownResult())
+            withTimeout(5_000L) { while ("finished" !in runs) delay(10L) }
+            delay(50L)
+            assertEquals(FileMutationLocalFollowUp.Completed, finished.afterConfirmedMutation())
+            delay(100L)
+            assertEquals(listOf("queued", "finished"), runs.toList(), "Each path refreshes once.")
+        }
+
+    @Test
+    fun `a full queue does not fail a path whose refresh for this mutation is already running`(): Unit =
+        runBlocking {
+            val followUps = followUps(waitMillis = 60_000L, maximumPending = 1)
+            val release = latch()
+            val started = CountDownLatch(1)
+            val mutation = followUps.mutation("account", listOf("a")) {
+                started.countDown()
+                release.awaitUninterruptibly()
+                null
+            }
+            assertTrue(mutation.onAcceptedOrUnknownResult())
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            assertTrue(followUps.afterUnknownResult("account", listOf("b")) { null })
+            assertEquals(1, followUps.pendingCount, "The queue is full.")
+
+            val confirmed = async(Dispatchers.Default) { mutation.afterConfirmedMutation() }
+            delay(100L)
+            release.countDown()
+
+            assertEquals(FileMutationLocalFollowUp.Completed, withTimeout(5_000L) { confirmed.await() })
+            assertTrue(diagnostics.none { it.second.outcome == "dropped" })
+        }
+
+    @Test
+    fun `another mutation's running refresh is never reused for a dropped path`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 20L, maximumPending = 1)
+        val release = latch()
+        val started = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("a")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        assertTrue(followUps.afterUnknownResult("account", listOf("b")) { null })
+        val later = followUps.mutation("account", listOf("a")) { null }
+
+        assertFalse(later.onAcceptedOrUnknownResult(), "The queue is full, so its own refresh was dropped.")
+        assertEquals(
+            FileMutationLocalFollowUp.Failed,
+            later.afterConfirmedMutation(),
+            "The running refresh started before this mutation was accepted.",
+        )
+    }
+
+    @Test
+    fun `confirmation after account teardown reports the abandoned refresh as failed`(): Unit = runBlocking {
+        val followUps = followUps(waitMillis = 60_000L)
+        val release = latch()
+        val started = CountDownLatch(1)
+        val mutation = followUps.mutation("retired", listOf("a")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+        assertTrue(mutation.onAcceptedOrUnknownResult())
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+
+        followUps.abandonAccount("retired")
+
+        assertEquals(FileMutationLocalFollowUp.Failed, withTimeout(5_000L) { mutation.afterConfirmedMutation() })
+        release.countDown()
     }
 
     @Test
