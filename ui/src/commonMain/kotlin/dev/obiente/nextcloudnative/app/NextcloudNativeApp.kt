@@ -1888,8 +1888,8 @@ private fun AuthenticatedApp(
                     selected = snapshot.selected,
                     session = session,
                     userId = serverInfo?.userId.orEmpty(),
-                    services = services,
-                    taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
+                    services = services, writeFence = fileDeletes,
+                    taggingAvailable =serverInfo?.apps?.any { it.id == "memories" } == true,
                     memoriesLivePhotoCapability = memoriesLivePhotoCapability,
                     sharingCapabilities = serverInfo?.fileSharing
                         ?: NextcloudFileSharingCapabilities.Unavailable,
@@ -1917,7 +1917,7 @@ private fun AuthenticatedApp(
             }
         }
         is Screen.FileInfo -> FileInfoScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
@@ -1941,7 +1941,7 @@ private fun AuthenticatedApp(
             )
         }
         is Screen.TextEditor -> TextEditorScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
@@ -7280,7 +7280,7 @@ internal fun FilesScreen(
         val moving = action == FileMenuAction.Move
         val verb = if (moving) "Move" else "Copy"
         val pickerOperations = remember(services, session, currentUserId) {
-            remoteFolderPickerOperations(services, session, currentUserId)
+            remoteFolderPickerOperations(services, session, currentUserId, writeFence = fileDeletes)
         }
         FileTransferDialog(
             file = target,
@@ -10448,7 +10448,7 @@ internal enum class MediaTileLayout {
 
 @Composable
 private fun FileInfoScreen(
-    services: NextcloudPlatformServices,
+    services: NextcloudPlatformServices, writeFence: FileWriteFence,
     session: NextcloudSession,
     userId: String,
     file: NextcloudFile,
@@ -10498,7 +10498,7 @@ private fun FileInfoScreen(
             if (!file.isDirectory && file.fileId != null) {
                 item {
                     FileVersionHistorySection(
-                        services = services,
+                        services = services, writeFence = writeFence,
                         session = session,
                         userId = userId,
                         file = file,

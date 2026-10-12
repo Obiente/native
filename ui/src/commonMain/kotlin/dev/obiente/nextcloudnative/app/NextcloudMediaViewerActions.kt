@@ -86,11 +86,14 @@ internal fun MediaViewerActionDialog(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onDismiss: () -> Unit,
     onSourceRemoved: () -> Unit,
     onMutationRunningChanged: (Boolean) -> Unit,
 ) {
+    // Read in composition, so a dialog that is open when a block appears switches to its reason.
+    if (action in mediaWriteActions) writeFence.writeBlock(file.path)?.let { block -> return MediaWriteBlockedDialog(block, onDismiss) }
     when (action) {
         MediaViewerAction.Move, MediaViewerAction.Copy -> MediaTransferDialog(
             moving = action == MediaViewerAction.Move,
@@ -98,6 +101,7 @@ internal fun MediaViewerActionDialog(
             session = session,
             userId = userId,
             services = services,
+            writeFence = writeFence,
             onDismiss = onDismiss,
             onMoved = onSourceRemoved,
             onMutationRunningChanged = onMutationRunningChanged,
@@ -107,6 +111,7 @@ internal fun MediaViewerActionDialog(
             session = session,
             userId = userId,
             services = services,
+            writeFence = writeFence,
             onDismiss = onDismiss,
             onDeleted = onSourceRemoved,
             onMutationRunningChanged = onMutationRunningChanged,
@@ -145,6 +150,7 @@ private fun MediaTransferDialog(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     onDismiss: () -> Unit,
     onMoved: () -> Unit,
     onMutationRunningChanged: (Boolean) -> Unit,
@@ -212,6 +218,11 @@ private fun MediaTransferDialog(
                         error = "Refresh the media item before changing it."
                         return@Button
                     }
+                    // The destination may be inside a folder whose delete is not verified yet.
+                    writeFence.writeBlock(if (directory.isEmpty()) name else "$directory/$name")?.let { block ->
+                        error = block.message
+                        return@Button
+                    }
                     running = true
                     error = null
                     scope.launch {
@@ -247,6 +258,7 @@ private fun MediaDeleteDialog(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     onDismiss: () -> Unit,
     onDeleted: () -> Unit,
     onMutationRunningChanged: (Boolean) -> Unit,
@@ -286,6 +298,10 @@ private fun MediaDeleteDialog(
                         error = "Refresh the media item before deleting it."
                         return@Button
                     }
+                    writeFence.writeBlock(file.path)?.let { block ->
+                        error = block.message
+                        return@Button
+                    }
                     running = true
                     error = null
                     scope.launch {
@@ -310,6 +326,26 @@ private fun MediaDeleteDialog(
                 Text(if (running) "Deleting..." else "Delete")
             }
         },
+    )
+}
+
+/** Actions that change the item, create files next to it, or bind it to a share or album. */
+private val mediaWriteActions = setOf(
+    MediaViewerAction.Move,
+    MediaViewerAction.Copy,
+    MediaViewerAction.Delete,
+    MediaViewerAction.ShareNextcloud,
+    MediaViewerAction.AddToAlbum,
+)
+
+/** A media change refused by the account's write fence, with its typed reason. */
+@Composable
+internal fun MediaWriteBlockedDialog(block: FileWriteBlock, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("This file cannot be changed yet") },
+        text = { Text(block.message) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 

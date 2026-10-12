@@ -55,17 +55,22 @@ internal suspend fun RemoteFolderPickerOperations.createAndConfirmDestination(
     }
 }
 
+/** [writeFence] refuses creating a folder inside one whose delete is unverified or needs a refresh. */
 fun remoteFolderPickerOperations(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String,
+    writeFence: FileWriteFence = FileWriteFence.None,
 ): RemoteFolderPickerOperations {
     require(userId.isNotBlank())
     return RemoteFolderPickerOperations(
         identity = "${session.accountId.storageKey}|$userId",
         listCached = { path -> services.listFilesCachedWithSource(session, userId, path) },
         listNetwork = { path -> services.listFilesWithSource(session, userId, path) },
-        createDirectoryIfAbsent = { path -> services.createDirectoryIfAbsent(session, userId, path) },
+        createDirectoryIfAbsent = { path ->
+            writeFence.writeBlock(path)?.let { block -> throw FileWriteBlockedException(block) }
+            services.createDirectoryIfAbsent(session, userId, path)
+        },
     )
 }
 

@@ -82,6 +82,7 @@ fun NextcloudMediaViewer(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     taggingAvailable: Boolean,
     memoriesLivePhotoCapability: MemoriesLivePhotoCapability,
     sharingCapabilities: NextcloudFileSharingCapabilities,
@@ -175,6 +176,7 @@ fun NextcloudMediaViewer(
         mutableStateOf(false)
     }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
+    var writeBlockNotice by remember(selected.path) { mutableStateOf<FileWriteBlock?>(null) }
     val scope = rememberCoroutineScope()
     val onActionMutationRunningChanged: (Boolean) -> Unit = remember(selected.path) {
         { running ->
@@ -766,7 +768,7 @@ fun NextcloudMediaViewer(
                         highDetailSourceFile = fullQuality?.source?.file,
                     )
                 ) {
-                    { editing = true }
+                    { writeBlockNotice = writeFence.writeBlock(selected.path); if (writeBlockNotice == null) editing = true }
                 } else {
                     null
                 },
@@ -849,17 +851,15 @@ fun NextcloudMediaViewer(
         )
     }
 
+    writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,
             file = selected,
-            session = session,
-            userId = userId,
-            services = services,
+            session = session, userId = userId,
+            services = services, writeFence = writeFence,
             sharingCapabilities = sharingCapabilities,
-            onDismiss = {
-                if (activeActionMutations == 0) viewerAction = null
-            },
+            onDismiss = { if (activeActionMutations == 0) viewerAction = null },
             onSourceRemoved = {
                 viewerAction = null
                 onSourceRemoved(selected)

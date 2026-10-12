@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Files deletes always finish, even after leaving Files. Other changes to the item wait until it is verified or refreshed, and renames, moves, copies, and deletes report incomplete local file status.
+Files deletes always finish, even after leaving Files. Edits from Files, the media viewer, the text editor, and version history wait until a covering delete is verified or refreshed, and file changes report incomplete local status.

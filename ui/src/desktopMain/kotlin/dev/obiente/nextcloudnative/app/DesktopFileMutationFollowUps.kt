@@ -258,17 +258,7 @@ internal class DesktopFileMutationFollowUps(
 
     private fun recordOutcome(accountId: String, outcome: String, code: String, failure: Throwable? = null) {
         try {
-            recordDiagnostic(
-                accountId,
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Warning,
-                    component = SupportDiagnosticComponent.Files,
-                    operation = "files.mutation-local-follow-up",
-                    outcome = outcome,
-                    code = code,
-                    exception = failure?.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
+            recordDiagnostic(accountId, fileMutationLocalFollowUpDiagnostic(outcome, code, failure))
         } catch (diagnosticFailure: Exception) {
             // Diagnostics must never change the reported mutation result.
             failure?.addSuppressed(diagnosticFailure)

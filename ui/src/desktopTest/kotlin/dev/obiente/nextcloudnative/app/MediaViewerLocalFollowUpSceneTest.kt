@@ -65,14 +65,51 @@ class MediaViewerLocalFollowUpSceneTest {
         }
     }
 
+    @Test
+    fun `every media change is refused with the typed reason while a covering delete is unverified`() {
+        for (action in listOf(
+            MediaViewerAction.Move, MediaViewerAction.Copy, MediaViewerAction.Delete,
+            MediaViewerAction.ShareNextcloud, MediaViewerAction.AddToAlbum,
+        )) {
+            val events = mutableListOf<String>()
+            val fence = FileWriteFence { path -> FileWriteBlock.DeleteRunning.takeIf { path.startsWith("Photos/") } }
+            nativeSceneTest(800, 700, content = { dialog(action, FileMutationLocalFollowUp.Completed, events, fence) }) {
+                assertTrue(has("This file cannot be changed yet"), "$action must be refused.")
+                assertTrue(has(FileWriteBlock.DeleteRunning.message))
+                click("Close")
+                assertEquals(listOf("dismissed"), events, "Nothing was sent for $action.")
+            }
+        }
+    }
+
+    @Test
+    fun `a move into a folder that needs a refresh is refused before anything is sent`() {
+        val events = mutableListOf<String>()
+        val block = FileWriteBlock.RefreshRequired("Archive")
+        val fence = FileWriteFence { path -> block.takeIf { path == "Archive" || path.startsWith("Archive/") } }
+        nativeSceneTest(800, 700, content = { dialog(MediaViewerAction.Move, FileMutationLocalFollowUp.Completed, events, fence) }) {
+            replaceText("Photos", "Archive")
+            click("Move")
+
+            assertTrue(has("Open or refresh your Nextcloud root before changing Archive or anything inside it."))
+            assertEquals(emptyList(), events)
+        }
+    }
+
     @androidx.compose.runtime.Composable
-    private fun dialog(action: MediaViewerAction, followUp: FileMutationLocalFollowUp, events: MutableList<String>) =
+    private fun dialog(
+        action: MediaViewerAction,
+        followUp: FileMutationLocalFollowUp,
+        events: MutableList<String>,
+        fence: FileWriteFence = FileWriteFence.None,
+    ) =
         MediaViewerActionDialog(
             action = action,
             file = photo,
             session = session,
             userId = "alice",
             services = services(followUp),
+            writeFence = fence,
             sharingCapabilities = NextcloudFileSharingCapabilities(),
             onDismiss = { events += "dismissed" },
             onSourceRemoved = { events += "removed" },
@@ -90,6 +127,7 @@ class MediaViewerLocalFollowUpSceneTest {
                 "equals" -> proxy === args?.singleOrNull()
                 // The server confirmed the change; only the local bookkeeping differs.
                 "executeFileMutation" -> NextcloudFileMutationResult(null, "v2", followUp)
+                "getExternalFileHandoffSupport" -> ExternalFileHandoffSupport.Unsupported("synthetic")
                 else -> error("Unexpected synthetic media operation: ${method.name}")
             }
         } as NextcloudPlatformServices

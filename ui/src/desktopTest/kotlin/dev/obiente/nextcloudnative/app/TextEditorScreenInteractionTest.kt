@@ -21,7 +21,7 @@ class TextEditorScreenInteractionTest {
         listOf(800 to 360, 390 to 844).forEach { (width, height) ->
             val fixture = EditorFixture()
             nativeSceneTest(width, height, content = {
-                TextEditorScreen(fixture.services, session, "synthetic-user", file, {})
+                TextEditorScreen(fixture.services, session, "synthetic-user", file, {}, FileWriteFence.None)
             }) {
                 assertTrue(has("Document content"))
                 val field = assertNotNull(nodes().firstOrNull {
@@ -48,7 +48,7 @@ class TextEditorScreenInteractionTest {
         val fixture = EditorFixture().apply { stored = TextEditorDraft("", "Restored synthetic draft", "etag") }
         val navigationBusy = mutableStateOf(false)
         nativeSceneTest(800, 360, content = {
-            TextEditorScreen(fixture.services, session, "synthetic-user", file, {},
+            TextEditorScreen(fixture.services, session, "synthetic-user", file, {}, FileWriteFence.None,
                 navigationCommitInProgress = navigationBusy.value)
         }) {
             assertTrue(has("Document content"))
@@ -74,7 +74,7 @@ class TextEditorScreenInteractionTest {
         val visibility = MutableStateFlow(true)
         nativeSceneTest(800, 360, content = {
             CompositionLocalProvider(LocalAppWindowVisibility provides visibility) {
-                TextEditorScreen(fixture.services, session, "synthetic-user", file, {})
+                TextEditorScreen(fixture.services, session, "synthetic-user", file, {}, FileWriteFence.None)
             }
         }) {
             val field = assertNotNull(nodes().lastOrNull {
@@ -94,7 +94,7 @@ class TextEditorScreenInteractionTest {
     fun unknownRevisionStillExplainsDisabledSavingAndOffersVerification() {
         val fixture = EditorFixture().apply { revision = null }
         nativeSceneTest(800, 360, content = {
-            TextEditorScreen(fixture.services, session, "synthetic-user", file, {})
+            TextEditorScreen(fixture.services, session, "synthetic-user", file, {}, FileWriteFence.None)
         }) {
             assertTrue(has("Saving is disabled until the server version is verified."))
             assertTrue(has("Verify server version"))

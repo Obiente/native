@@ -66,7 +66,7 @@ internal data class FileDeleteCompletion(val request: FileDeleteRequest, val out
  * permission) stays recorded per resource until a server listing of its folder starts after it.
  * Until then it also blocks every other write to that item, its folders, and its contents.
  */
-internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: CoroutineScope) {
+internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: CoroutineScope) : FileWriteFence {
     private class RetryBlock(val message: String, val recordedAt: Long)
 
     val inFlight = FileDeleteInFlight()
@@ -89,6 +89,8 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
     fun writeBlockFor(path: String): FileWriteBlock? =
         FileWriteBlock.DeleteRunning.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) } ?: refreshBlockFor(path)
+
+    override fun writeBlock(path: String): FileWriteBlock? = writeBlockFor(path)
 
     fun writeBlockedMessage(path: String): String? = writeBlockFor(path)?.message
 
@@ -182,6 +184,24 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
 
     fun close() = job.cancel()
 }
+
+/**
+ * The account-scoped fence every surface that changes account files consults before it writes,
+ * so no surface can create, move, or change an item while a delete that covers it is unverified
+ * or needs a refresh.
+ */
+fun interface FileWriteFence {
+    /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
+    fun writeBlock(path: String): FileWriteBlock?
+
+    companion object {
+        /** For surfaces outside an account session that owns deletes, such as previews. */
+        val None = FileWriteFence { null }
+    }
+}
+
+/** A write refused by a [FileWriteFence]; its message is the block's typed reason. */
+class FileWriteBlockedException(val block: FileWriteBlock) : IllegalStateException(block.message)
 
 /** Why writes to a Files item must wait. User-facing copy derives only from this type. */
 sealed interface FileWriteBlock {

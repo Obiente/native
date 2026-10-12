@@ -197,6 +197,7 @@ import dev.obiente.nextcloudnative.app.fileVersionHistoryRequest
 import dev.obiente.nextcloudnative.app.fileVersionContentRequest
 import dev.obiente.nextcloudnative.app.fileVersionRestoreRequest
 import dev.obiente.nextcloudnative.app.historicalFileCopyName
+import dev.obiente.nextcloudnative.app.invalidateAfterConfirmedFileMutation
 import dev.obiente.nextcloudnative.app.isExactHttpByteContentRange
 import dev.obiente.nextcloudnative.app.normalizeFileVersionHistory
 import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
@@ -2731,11 +2732,9 @@ internal class AndroidNextcloudServices(
                 )
                 if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
                 val accountId = NextcloudDocumentIds.accountKey(currentSession)
-                runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
-                spec.destinationPath?.let { destination ->
-                    runCatching { fileReadCache.invalidate(accountId, destination) }
-                }
-                NextcloudFileMutationResult(spec.destinationPath, response.etag)
+                val localFollowUp = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
+                    { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
+                NextcloudFileMutationResult(spec.destinationPath, response.etag, localFollowUp)
             }
         }
     }
