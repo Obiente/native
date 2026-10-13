@@ -118,6 +118,26 @@ class MediaViewerDeleteSceneTest {
     }
 
     @Test
+    fun `an unknown result whose listing omits the file ID keeps the item and blocks a retry`() {
+        val events = mutableListOf<String>()
+        val fake = FakeMediaServices(
+            delete = { throw IllegalStateException("response interrupted") },
+            // Same path, type, and ETag, but no file ID to compare with the shown item's.
+            listing = { NextcloudFileListing(listOf(first.copy(fileId = null)), NextcloudFileListingSource.Network) },
+        )
+        nativeSceneTest(800, 700, content = { Viewer(fake, listOf(first, second), events) }) {
+            click("Delete")
+            val reason = "Could not confirm that first.jpg is still the same item. Refresh the folder."
+            settleUntil { has(reason) }
+
+            assertTrue(has(reason))
+            click("Delete")
+            assertEquals(listOf("delete", "list:Photos"), fake.calls, "A possible replacement is never deleted by a retry.")
+            assertTrue(events.isEmpty())
+        }
+    }
+
+    @Test
     fun `a confirmed delete applies after the dialog closed and the user moved to another item`() {
         val events = mutableListOf<String>()
         val release = CompletableDeferred<Unit>()

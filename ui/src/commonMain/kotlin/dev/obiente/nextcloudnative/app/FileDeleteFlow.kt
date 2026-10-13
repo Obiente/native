@@ -121,11 +121,18 @@ private suspend fun verifyFileDeletePostcondition(
             FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true)
         }
     }
-    // Retrying is safe only for positively the same item. A differing stable file ID means a
-    // replacement now holds the path, even when its type and ETag match. Without an ID on either
-    // side, the type and ETag are the only identity evidence the listing offers.
-    if (target.fileId != null && current.fileId != null && current.fileId != target.fileId) {
-        return FileDeleteOutcome.RefreshRequired("${target.name} was replaced on the server. Refresh the folder.")
+    // Retrying is safe only for positively the same item. Matching stable file IDs prove it; a
+    // differing ID means a replacement holds the path, and an ID on only one side cannot be
+    // compared, so both need a refresh even when type and ETag match. Only when neither side has
+    // an ID are the type and ETag the identity evidence.
+    if (target.fileId != current.fileId) {
+        return FileDeleteOutcome.RefreshRequired(
+            if (target.fileId != null && current.fileId != null) {
+                "${target.name} was replaced on the server. Refresh the folder."
+            } else {
+                "Could not confirm that ${target.name} is still the same item. Refresh the folder."
+            },
+        )
     }
     return if (current.isDirectory == target.isDirectory && current.etag == expectedEtag) {
         FileDeleteOutcome.NotDeleted("The delete did not finish. ${target.name} is still on the server.")

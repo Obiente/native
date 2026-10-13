@@ -381,9 +381,11 @@ class FileDeleteFlowTest {
             Triple(7L, 7L, "The delete did not finish. report.txt is still on the server."),
             // A replacement with matching type and ETag but another ID must not be deleted by a retry.
             Triple(7L, 8L, "report.txt was replaced on the server. Refresh the folder."),
-            // Without an ID on one side, type and ETag are the only identity evidence.
-            Triple(null, 8L, "The delete did not finish. report.txt is still on the server."),
-            Triple(7L, null, "The delete did not finish. report.txt is still on the server."),
+            // An ID on only one side cannot be compared, so the item is not positively the same.
+            Triple(null, 8L, "Could not confirm that report.txt is still the same item. Refresh the folder."),
+            Triple(7L, null, "Could not confirm that report.txt is still the same item. Refresh the folder."),
+            // Without an ID on either side, type and ETag are the only identity evidence.
+            Triple(null, null, "The delete did not finish. report.txt is still on the server."),
         )
         for ((shownId, listedId, message) in cases) {
             val shown = file("Documents/report.txt", etag = "v1", fileId = shownId)
@@ -399,7 +401,7 @@ class FileDeleteFlowTest {
             deletes.finish(state, fake)
 
             assertEquals(message, state.error, "shown=$shownId listed=$listedId")
-            assertEquals(shownId != null && listedId != null && shownId != listedId, state.retryBlocked)
+            assertEquals(shownId != listedId, state.retryBlocked, "Only positively the same item may be retried.")
             assertEquals(1, fake.deletes.size)
         }
     }

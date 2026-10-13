@@ -376,8 +376,9 @@ releases its block, and a recreated screen shows the same typed reason and
 receives the pending outcome.
 
 - After an unknown result, a retry is offered only for positively the same
-  item: matching stable file IDs when both are known, otherwise matching type
-  and ETag. A differing ID at the same path requires a refresh.
+  item: matching stable file IDs, or matching type and ETag only when neither
+  side has an ID. A differing ID, or an ID on only one side, requires a
+  refresh.
 - A request that provably never left the device is a plain retryable failure
   without a verification read: the account-session guard and, on desktop, a
   connection, name-resolution, or TLS failure before the mutation executor saw
