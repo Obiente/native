@@ -88,9 +88,7 @@ private suspend fun verifyFileDeletePostcondition(
     expectedEtag: String,
     readParent: suspend () -> NextcloudFileListing,
 ): FileDeleteOutcome {
-    val unconfirmed = FileDeleteOutcome.RefreshRequired(
-        "Could not confirm whether ${target.name} was deleted. Refresh the folder before trying again.",
-    )
+    val unconfirmed = FileDeleteOutcome.RefreshRequired(unconfirmedDeleteMessage(target.name))
     val listing = try {
         readParent()
     } catch (cancelled: CancellationException) {

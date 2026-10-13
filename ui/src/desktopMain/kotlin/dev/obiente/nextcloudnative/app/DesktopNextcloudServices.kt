@@ -1340,7 +1340,7 @@ class DesktopNextcloudServices(
     private val startOnLoginController = DesktopStartOnLoginController()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val fileMutationFollowUps = DesktopFileMutationFollowUps(serviceScope) { id, event -> supportDiagnostics.recordForAccountIdentity(id, event) }
-    override val fileWriteFences = FileWriteFenceRegistry()
+    override val fileWriteFences = FileWriteFenceRegistry(CoroutineScope(serviceScope.coroutineContext + Dispatchers.Main))
     private var backgroundFileSyncJob: Job? = null
     private val mutableFileSyncTraySnapshot = MutableStateFlow(
         DesktopFileSyncTraySnapshot(

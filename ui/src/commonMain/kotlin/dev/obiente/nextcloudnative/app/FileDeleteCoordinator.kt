@@ -1,17 +1,17 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
@@ -27,16 +27,18 @@ internal data class FileDeleteRequest(
 internal data class FileDeleteCompletion(val request: FileDeleteRequest, val outcome: FileDeleteOutcome)
 
 /**
- * Owns Files deletes for one account session. A delete and its verification outlive the dialog and
- * the Files screen, so leaving either never cancels the request or releases the resource without
- * an outcome. Finished outcomes wait until a Files screen consumes them. Only [close], at account
- * session teardown, cancels unfinished work.
+ * Owns Files deletes for one account in this process; [AccountFileWriteFence] holds the only
+ * instance. A delete and its verification run under the process-level owner's scope, so leaving
+ * the dialog or the Files screen, or recreating the activity, never cancels the request or
+ * releases the resource without an outcome. Compositions start requests and observe state.
+ * Finished outcomes wait until a Files screen consumes them. Only [close], when the account is
+ * signed out or removed, cancels unfinished work.
  *
- * The resulting write blocks live in the account's process-level [fence], so surfaces outside this
- * session's composition see them too. An outcome that must not be retried as-is (stale version,
- * throttling, rejected credentials or permission) stays recorded per resource until a server
- * listing of its folder starts after it, and until then blocks every other write to that item,
- * its folders, and its contents.
+ * The resulting write blocks live in [fence], so every surface of the account sees them. An
+ * outcome that must not be retried as-is (stale version, throttling, rejected credentials or
+ * permission) stays recorded per resource until a server listing of its folder starts after it,
+ * and until then blocks every other write to that item, its folders, and its contents. Work
+ * cancelled after the request may have been sent records such a block instead of releasing it.
  */
 internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: CoroutineScope) : FileWriteFence by fence {
     val account: NextcloudAccountId get() = fence.account
@@ -103,7 +105,10 @@ internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: C
         request: FileDeleteRequest,
         delete: suspend (NextcloudFileMutation.Delete) -> NextcloudFileMutationResult,
         readFolder: suspend (String) -> NextcloudFileListing,
-    ): Job = scope.launch {
+    ): Job = scope.launch(start = CoroutineStart.ATOMIC) {
+        // Atomic start runs the body, and with it the release below, even when cancelled before it began.
+        var maySendRequest = false
+        var outcomeRecorded = false
         try {
             val mutation = NextcloudFileMutation.Delete(
                 request.file.path,
@@ -113,14 +118,22 @@ internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: C
             val outcome = deleteFileWithVerifiedOutcome(
                 target = request.file,
                 expectedEtag = request.expectedEtag,
-                delete = { delete(mutation) },
+                delete = {
+                    currentCoroutineContext().ensureActive()
+                    maySendRequest = true
+                    delete(mutation)
+                },
                 readParent = { readFolder(request.parentPath) },
             )
-            // Reject even a non-cooperative service's completion after session teardown.
+            // Reject even a non-cooperative service's completion after the account was removed.
             ensureActive()
             fence.recordOutcome(request.key, outcome.retryBlockMessage())
+            outcomeRecorded = true
             completions += FileDeleteCompletion(request, outcome)
         } finally {
+            // Before the request could be sent, the item is unchanged. Afterwards the server state is
+            // unknown, so another write must wait for a fresh listing of the item's folder.
+            if (maySendRequest && !outcomeRecorded) fence.recordOutcome(request.key, unconfirmedDeleteMessage(request.file.name))
             inFlight.release(request.key, request.token)
         }
     }
@@ -131,13 +144,13 @@ internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: C
     fun close() = job.cancel()
 }
 
+internal fun unconfirmedDeleteMessage(name: String) =
+    "Could not confirm whether $name was deleted. Refresh the folder before trying again."
+
+/** The account's process-level delete owner. Leaving the composition neither cancels nor releases it. */
 @Composable
-internal fun rememberFileDeleteCoordinator(session: NextcloudSession, fences: FileWriteFenceRegistry): FileDeleteCoordinator {
-    val parent = rememberCoroutineScope()
-    val coordinator = remember(session, fences, parent) { FileDeleteCoordinator(fences.account(session.accountId), parent) }
-    DisposableEffect(coordinator) { onDispose(coordinator::close) }
-    return coordinator
-}
+internal fun rememberFileDeleteCoordinator(session: NextcloudSession, fences: FileWriteFenceRegistry): FileDeleteCoordinator =
+    remember(session, fences) { fences.account(session.accountId).deletes }
 
 
 /**

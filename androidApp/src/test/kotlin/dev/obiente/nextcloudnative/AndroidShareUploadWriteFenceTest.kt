@@ -15,6 +15,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 
 class AndroidShareUploadWriteFenceTest {
@@ -51,7 +53,7 @@ class AndroidShareUploadWriteFenceTest {
     @Test
     fun folderPermissionsStillApplyWhenTheFenceAllows(): Unit = runBlocking {
         val operations = androidIncomingShareFolderPickerOperations(
-            remoteFolderPickerOperations(services(mutableListOf()), session, "alice", FileWriteFenceRegistry().account(session.accountId)),
+            remoteFolderPickerOperations(services(mutableListOf()), session, "alice", FileWriteFenceRegistry(CoroutineScope(Job())).account(session.accountId)),
         ) { access(canCreateFiles = false, canCreateDirectories = false) }
 
         assertEquals(
@@ -65,7 +67,7 @@ class AndroidShareUploadWriteFenceTest {
     fun queueingIntoABlockedFolderIsRefusedAndAnUnblockedAccountIsNot() {
         assertEquals(block, incomingShareUploadBlock(fence, "Inbox/Old"))
         assertNull(incomingShareUploadBlock(fence, "Inbox"))
-        assertNull(incomingShareUploadBlock(FileWriteFenceRegistry().account(session.accountId), "Inbox/Old"))
+        assertNull(incomingShareUploadBlock(FileWriteFenceRegistry(CoroutineScope(Job())).account(session.accountId), "Inbox/Old"))
     }
 
     private fun access(canCreateFiles: Boolean = false, canCreateDirectories: Boolean = false) =

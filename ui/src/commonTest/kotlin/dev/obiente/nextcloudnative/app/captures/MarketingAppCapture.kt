@@ -4,6 +4,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
@@ -88,7 +89,7 @@ fun NextcloudNativeMarketingCapture(
                             FilesScreen(
                                 services = assets.services,
                                 session = marketingHomepageSession,
-                                fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession, remember { FileWriteFenceRegistry() }),
+                                fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession, rememberCoroutineScope().let { scope -> remember(scope) { FileWriteFenceRegistry(scope) } }),
                                 userId = marketingHomepageTalkUserId,
                                 fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
                                 path = "",
@@ -105,7 +106,7 @@ fun NextcloudNativeMarketingCapture(
                         FilesScreen(
                             services = assets.services,
                             session = marketingHomepageSession,
-                            fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession, remember { FileWriteFenceRegistry() }),
+                            fileDeletes = rememberFileDeleteCoordinator(marketingHomepageSession, rememberCoroutineScope().let { scope -> remember(scope) { FileWriteFenceRegistry(scope) } }),
                             userId = marketingHomepageTalkUserId,
                             fileSharing = nextcloudNativeMarketingFileShareFixture.capabilities,
                             path = "",

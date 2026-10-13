@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.mutableStateMapOf
+import kotlinx.coroutines.CoroutineScope
 
 /**
  * The account-scoped fence every surface that changes account files consults before it writes,
@@ -82,13 +83,19 @@ internal class FileDeleteInFlight {
  * outcome needs a server listing of the item's folder. Every surface of the account reads the same
  * instance, including ones outside the composition that started the delete, such as another
  * activity. State is held in memory only: a new process starts without blocks.
+ *
+ * The account's Files deletes run in [deletes], under [scope] from the process-level owner, so
+ * recreating an activity or leaving Files neither cancels a request nor releases its block.
  */
-class AccountFileWriteFence internal constructor(val account: NextcloudAccountId) : FileWriteFence {
+class AccountFileWriteFence internal constructor(val account: NextcloudAccountId, scope: CoroutineScope) : FileWriteFence {
     private class RetryBlock(val message: String, val recordedAt: Long)
 
     internal val inFlight = FileDeleteInFlight()
     private val retryBlocks = mutableStateMapOf<FileDeleteResourceKey, RetryBlock>()
     private var sequence = 0L
+
+    /** The account's delete owner. Only [FileWriteFenceRegistry.removeAccount] closes it. */
+    internal val deletes = FileDeleteCoordinator(this, scope)
 
     override fun writeBlock(path: String): FileWriteBlock? =
         FileWriteBlock.DeleteRunning.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) } ?: refreshBlockFor(path)
@@ -140,18 +147,20 @@ interface FileWriteFencePlatformServices {
 /**
  * Process-level owner of [AccountFileWriteFence]s, keyed by the non-secret local account identity.
  * Each platform's process-scoped service owner holds one registry, so the main window, other
- * activities, and pickers of the same account share blocks. Sign-out and account removal call
- * [removeAccount], which drops that account's blocks with its other private state.
+ * activities, and pickers of the same account share blocks. Deletes run under [scope], which that
+ * owner keeps for the process lifetime on the thread that owns UI state. Sign-out and account
+ * removal call [removeAccount], which cancels that account's deletes and drops its blocks with its
+ * other private state; a later account of the same identity starts a new, unblocked incarnation.
  */
-class FileWriteFenceRegistry {
+class FileWriteFenceRegistry(private val scope: CoroutineScope) {
     private val lock = DynamicNativeMemoryCacheLock()
     private val accounts = mutableMapOf<String, AccountFileWriteFence>()
 
     fun account(account: NextcloudAccountId): AccountFileWriteFence = lock.withLock {
-        accounts.getOrPut(account.storageKey) { AccountFileWriteFence(account) }
+        accounts.getOrPut(account.storageKey) { AccountFileWriteFence(account, scope) }
     }
 
     fun removeAccount(accountStorageKey: String) {
-        lock.withLock { accounts.remove(accountStorageKey) }
+        lock.withLock { accounts.remove(accountStorageKey) }?.deletes?.close()
     }
 }

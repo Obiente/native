@@ -364,12 +364,23 @@ keeps the source ETag and no-overwrite preconditions.
 
 ### Files delete write fence
 
-A Files delete and its verification are owned by the account session's
-`FileDeleteCoordinator`, but the resulting write blocks live in an
+Each account's write blocks and its `FileDeleteCoordinator` live in an
 `AccountFileWriteFence` held by the process-level `FileWriteFenceRegistry`,
 keyed by the non-secret local account identity. Desktop services own one
 registry; on Android the `Application` owns it, so the main activity, the share
-upload activity, and workers of the same process see the same blocks.
+upload activity, and workers of the same process see the same blocks. The
+registry runs deletes and their verification in a main-thread scope that lives
+as long as that owner, so a composition only starts a delete and observes its
+state: leaving Files or recreating an activity neither cancels the request nor
+releases its block, and a recreated screen shows the same typed reason and
+receives the pending outcome.
+
+- Cancellation before the request can be sent releases the item unchanged.
+  Cancellation after it may have been sent records a refresh-required block,
+  so the item is never released without an outcome.
+- Sign-out and account removal cancel that account's deletes and drop its
+  fence object. A late completion lands only in the dropped object, never in a
+  later incarnation of the same account.
 
 - An item is blocked while a delete of it, a parent, or a child is unverified,
   and after an outcome that leaves its state unknown or stale (stale version,

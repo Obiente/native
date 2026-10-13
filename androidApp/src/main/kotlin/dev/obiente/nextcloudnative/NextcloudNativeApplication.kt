@@ -18,8 +18,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class NextcloudNativeApplication : Application() {
-    /** The process's account-scoped write fences, shared by the main activity and the share activity. */
-    internal val fileWriteFences = FileWriteFenceRegistry()
+    /**
+     * The process's account-scoped write fences and Files delete owners, shared by the main and share
+     * activities. Their main-thread scope lives as long as the process, so recreating an activity
+     * never cancels a delete or releases its block.
+     */
+    internal val fileWriteFences = FileWriteFenceRegistry(CoroutineScope(SupervisorJob() + Dispatchers.Main))
     private val startupRecoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var accountCleanupListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 

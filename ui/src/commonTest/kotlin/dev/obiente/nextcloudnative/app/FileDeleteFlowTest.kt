@@ -519,7 +519,7 @@ class FileDeleteFlowTest {
         }
 
     @Test
-    fun `account session teardown cancels the delete and releases the item without an outcome`(): Unit =
+    fun `cancelling after the request may have been sent leaves a refresh-required block`(): Unit =
         runBlocking {
             val deletes = coordinator()
             val state = FileDeleteDialogState(deletes).apply { open(report) }
@@ -537,9 +537,27 @@ class FileDeleteFlowTest {
             assertTrue(job.isCancelled)
             assertNull(deletes.nextCompletion)
             assertFalse(state.running)
-            assertNull(state.error)
-            assertTrue(fake.reads.isEmpty(), "Cancellation is not an unknown result to verify.")
+            assertEquals(unconfirmedDeleteMessage("report.txt"), state.error, "The block is never released without an outcome.")
+            assertTrue(state.retryBlocked)
+            assertEquals(FileWriteBlock.RefreshRequired("Documents/report.txt"), deletes.writeBlockFor("Documents/report.txt"))
+            assertTrue(fake.reads.isEmpty(), "Cancellation sends no verification request.")
         }
+
+    @Test
+    fun `cancelling before the request is sent releases the item unchanged`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val fake = FakeDeleteBoundary(deleteResult = { error("The request must not be sent.") })
+
+        val job = deletes.start(assertNotNull(state.begin()), fake::delete, fake::read)
+        deletes.close()
+        job.join()
+
+        assertTrue(fake.deletes.isEmpty())
+        assertFalse(state.running)
+        assertFalse(state.retryBlocked)
+        assertNull(deletes.writeBlockFor("Documents/report.txt"), "Nothing was sent, so the item is unchanged.")
+    }
 
     @Test
     fun `noncooperative completion after teardown is not published`(): Unit = runBlocking {
@@ -564,6 +582,7 @@ class FileDeleteFlowTest {
         assertNull(deletes.nextCompletion)
         assertFalse(state.running)
         assertEquals(report, state.target)
+        assertTrue(state.retryBlocked, "The unpublished result leaves the item waiting for a refresh.")
     }
 
     @Test
@@ -699,7 +718,7 @@ class FileDeleteFlowTest {
 
     /** The event loop stays the test's, but its job does not keep the test running. */
     private fun CoroutineScope.coordinator(accountId: NextcloudAccountId = account) =
-        FileDeleteCoordinator(FileWriteFenceRegistry().account(accountId), CoroutineScope(coroutineContext.minusKey(Job)))
+        FileWriteFenceRegistry(CoroutineScope(coroutineContext.minusKey(Job))).account(accountId).deletes
 
     /** Starts the open dialog's delete and applies its outcome as a Files screen would. */
     private suspend fun FileDeleteCoordinator.finish(
