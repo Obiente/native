@@ -687,9 +687,8 @@ internal class AndroidNextcloudServices(
 
     override suspend fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
 
-    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
-        supportDiagnostics.record(event)
-    }
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = supportDiagnostics.record(event)
+    override val fileWriteFences get() = androidFileWriteFences(appContext)
 
     internal fun recordSupportDiagnosticForAccountIdentity(
         accountIdentity: String,

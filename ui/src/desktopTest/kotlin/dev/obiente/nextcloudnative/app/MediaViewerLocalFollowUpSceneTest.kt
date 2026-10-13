@@ -101,7 +101,7 @@ class MediaViewerLocalFollowUpSceneTest {
         action: MediaViewerAction,
         followUp: FileMutationLocalFollowUp,
         events: MutableList<String>,
-        fence: FileWriteFence = FileWriteFence.None,
+        fence: FileWriteFence = NoFileWriteBlocksForTests,
     ) =
         MediaViewerActionDialog(
             action = action,

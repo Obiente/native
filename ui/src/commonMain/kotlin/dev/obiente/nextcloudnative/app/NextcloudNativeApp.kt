@@ -684,7 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
-    val fileDeletes = rememberFileDeleteCoordinator(session)
+    val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1534,7 +1534,7 @@ private fun AuthenticatedApp(
                     onSettings = { destination = NextcloudDestination.Settings },
                 )
                 RootDestinationContent.FolderSync -> FileOfflineCenterScreen(
-                    services = services,
+                    services = services, writeFence = fileDeletes,
                     session = session,
                     userId = serverInfo?.userId.orEmpty(),
                     onBack = { destination = NextcloudDestination.Home },
@@ -1600,7 +1600,7 @@ private fun AuthenticatedApp(
                 onBack = ::navigateBack,
             )
             Screen.OfflineCenter -> FileOfflineCenterScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             onBack = ::navigateBack,

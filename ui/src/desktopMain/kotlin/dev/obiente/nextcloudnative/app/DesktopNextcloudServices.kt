@@ -1340,6 +1340,7 @@ class DesktopNextcloudServices(
     private val startOnLoginController = DesktopStartOnLoginController()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val fileMutationFollowUps = DesktopFileMutationFollowUps(serviceScope) { id, event -> supportDiagnostics.recordForAccountIdentity(id, event) }
+    override val fileWriteFences = FileWriteFenceRegistry()
     private var backgroundFileSyncJob: Job? = null
     private val mutableFileSyncTraySnapshot = MutableStateFlow(
         DesktopFileSyncTraySnapshot(
@@ -3258,9 +3259,7 @@ class DesktopNextcloudServices(
         supportDiagnostics.clear()
     }
 
-    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
-        supportDiagnostics.record(event)
-    }
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = supportDiagnostics.record(event)
 
     override fun registerSupportDiagnosticPrivateValue(value: String?) {
         supportDiagnostics.registerPrivateValue(value)
@@ -3844,6 +3843,7 @@ class DesktopNextcloudServices(
     private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String, fileCacheAccountId: String) {
         fileReadCache.retireAccount(fileCacheAccountId)
         fileMutationFollowUps.abandonAccount(fileCacheAccountId)
+        fileWriteFences.removeAccount(accountStorageKey)
         sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
         dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }

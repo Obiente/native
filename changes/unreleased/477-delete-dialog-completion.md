@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Files deletes always finish, even after leaving Files. Edits from Files, the media viewer, the text editor, and version history wait until a covering delete is verified or refreshed, and file changes report incomplete local status.
+Files deletes always finish, even after leaving Files. Edits, folder pickers, sync setup, and Android share uploads wait until a covering delete is verified or refreshed, and file changes report incomplete local status.

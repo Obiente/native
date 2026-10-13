@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.incomingShareUploadBlock
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +116,11 @@ internal class AndroidIncomingShareUploadWorker(
                 return Result.retry()
             }
             return failUnavailableAccount(store, requestId)
+        }
+        // A delete of the destination or a parent that is unverified in this process finishes first;
+        // the queued upload is retried later and nothing is sent meanwhile.
+        if (incomingShareUploadBlock(services.fileWriteFences.account(session.accountId), requireNotNull(request.destinationPath)) != null) {
+            return Result.retry()
         }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         var foregroundPromotionAvailable = setForegroundIfAvailable(request)

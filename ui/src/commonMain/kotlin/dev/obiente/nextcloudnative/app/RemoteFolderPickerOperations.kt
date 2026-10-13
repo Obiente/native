@@ -55,12 +55,15 @@ internal suspend fun RemoteFolderPickerOperations.createAndConfirmDestination(
     }
 }
 
-/** [writeFence] refuses creating a folder inside one whose delete is unverified or needs a refresh. */
+/**
+ * [writeFence] refuses creating a folder inside one whose delete is unverified or needs a refresh,
+ * and refuses choosing such a folder as a destination for later writes.
+ */
 fun remoteFolderPickerOperations(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String,
-    writeFence: FileWriteFence = FileWriteFence.None,
+    writeFence: FileWriteFence,
 ): RemoteFolderPickerOperations {
     require(userId.isNotBlank())
     return RemoteFolderPickerOperations(
@@ -71,6 +74,10 @@ fun remoteFolderPickerOperations(
             writeFence.writeBlock(path)?.let { block -> throw FileWriteBlockedException(block) }
             services.createDirectoryIfAbsent(session, userId, path)
         },
+        selectionAccess = { path ->
+            writeFence.newChildBlock(path)?.let { block -> RemoteFolderSelectionAccess.Denied(block.message) }
+                ?: RemoteFolderSelectionAccess.Allowed
+        },
     )
 }
 
@@ -79,13 +86,14 @@ fun RemoteFolderPickerDialog(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String,
+    writeFence: FileWriteFence,
     initialPath: String,
     selectionError: String? = null,
     onDismiss: () -> Unit,
     onSelected: (String) -> Unit,
 ) {
-    val operations = remember(services, session, userId) {
-        remoteFolderPickerOperations(services, session, userId)
+    val operations = remember(services, session, userId, writeFence) {
+        remoteFolderPickerOperations(services, session, userId, writeFence)
     }
     RemoteFolderPickerDialog(
         operations = operations,

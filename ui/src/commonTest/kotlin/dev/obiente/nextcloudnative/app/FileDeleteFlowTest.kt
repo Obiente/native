@@ -699,7 +699,7 @@ class FileDeleteFlowTest {
 
     /** The event loop stays the test's, but its job does not keep the test running. */
     private fun CoroutineScope.coordinator(accountId: NextcloudAccountId = account) =
-        FileDeleteCoordinator(accountId, CoroutineScope(coroutineContext.minusKey(Job)))
+        FileDeleteCoordinator(FileWriteFenceRegistry().account(accountId), CoroutineScope(coroutineContext.minusKey(Job)))
 
     /** Starts the open dialog's delete and applies its outcome as a Files screen would. */
     private suspend fun FileDeleteCoordinator.finish(

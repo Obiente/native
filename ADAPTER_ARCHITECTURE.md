@@ -362,6 +362,33 @@ dialog owns only the temporary name and destination choice. The parent captures
 an immutable validated destination for the typed mutation, and the transport
 keeps the source ETag and no-overwrite preconditions.
 
+### Files delete write fence
+
+A Files delete and its verification are owned by the account session's
+`FileDeleteCoordinator`, but the resulting write blocks live in an
+`AccountFileWriteFence` held by the process-level `FileWriteFenceRegistry`,
+keyed by the non-secret local account identity. Desktop services own one
+registry; on Android the `Application` owns it, so the main activity, the share
+upload activity, and workers of the same process see the same blocks.
+
+- An item is blocked while a delete of it, a parent, or a child is unverified,
+  and after an outcome that leaves its state unknown or stale (stale version,
+  throttling, rejected credentials or permission) until a server listing of its
+  folder starts after that outcome.
+- Surfaces receive only the narrow `FileWriteFence`. Files actions, the media
+  viewer, photo editing, text editor saves, version restore, every remote
+  folder picker (create and destination choice, including folder-sync setup),
+  and Android share uploads (destination, queueing, and the queued worker)
+  refuse a blocked write, send nothing, and show the typed `FileWriteBlock`
+  reason.
+- Blocks are in memory only. A new process starts unblocked, and sign-out or
+  account removal drops that account's blocks with its other private state.
+- Not fenced: Memories tags (they target the file ID), Deck attachments and
+  dynamic-app uploads (application APIs, not Files paths), and the background
+  folder-sync, media-backup, virtual-file, and Android documents-provider
+  engines, which keep their own ETag and conflict preconditions. A media viewer
+  delete is refused while a block applies but does not itself register a block.
+
 ### Groupware (CardDAV and CalDAV)
 
 **Multiget requests**

@@ -576,3 +576,35 @@ internal fun incomingShareRecoveryRefreshMillis(hasRecoveries: Boolean): Long =
 
 private const val INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 2_000L
 private const val EMPTY_INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 5_000L
+
+/**
+ * Folder picker operations for an incoming share upload. [base] carries the account's write fence,
+ * so a destination must pass it before [selectionAccess] checks folder permissions, and a new
+ * folder is created only where [requireCreateDirectories] allows it and the fence permits.
+ */
+fun incomingShareFolderPickerOperations(
+    base: RemoteFolderPickerOperations,
+    selectionAccess: suspend (path: String) -> RemoteFolderSelectionAccess,
+    requireCreateDirectories: suspend (parentPath: String) -> Unit,
+): RemoteFolderPickerOperations = RemoteFolderPickerOperations(
+    identity = base.identity + "|incoming-share",
+    listCached = base.listCached,
+    listNetwork = base.listNetwork,
+    createDirectoryIfAbsent = { path ->
+        requireCreateDirectories(path.substringBeforeLast('/', ""))
+        base.createDirectoryIfAbsent(path)
+    },
+    selectionAccess = { path ->
+        when (val fenced = base.selectionAccess(path)) {
+            RemoteFolderSelectionAccess.Allowed -> selectionAccess(path)
+            else -> fenced
+        }
+    },
+)
+
+/**
+ * Why queueing shared files into [destinationPath] must wait, or null. Checked again when the
+ * upload is queued, because a delete may have started after the folder was chosen.
+ */
+fun incomingShareUploadBlock(fence: FileWriteFence, destinationPath: String): FileWriteBlock? =
+    fence.newChildBlock(destinationPath)

@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -15,35 +14,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-
-/** One remote resource in one account. */
-internal data class FileDeleteResourceKey(val account: NextcloudAccountId, val path: String) {
-    val parentPath: String get() = path.substringBeforeLast('/', missingDelimiterValue = "")
-
-    fun overlaps(other: FileDeleteResourceKey): Boolean = account == other.account && (
-        path == other.path || path.startsWith("${other.path}/") || other.path.startsWith("$path/")
-        )
-}
-
-/** Account-scoped Files deletes that have not reached a verified outcome. */
-internal class FileDeleteInFlight {
-    private val pending = mutableStateMapOf<FileDeleteResourceKey, Long>()
-    private var nextToken = 0L
-
-    operator fun contains(key: FileDeleteResourceKey): Boolean = key in pending
-
-    /** True when an unverified delete targets [key], one of its folders, or one of its children. */
-    fun blocks(key: FileDeleteResourceKey): Boolean = pending.keys.any { it.overlaps(key) }
-
-    fun claim(key: FileDeleteResourceKey): Long? {
-        if (blocks(key)) return null
-        return (++nextToken).also { pending[key] = it }
-    }
-
-    fun release(key: FileDeleteResourceKey, token: Long) {
-        if (pending[key] == token) pending.remove(key)
-    }
-}
 
 internal data class FileDeleteRequest(
     val key: FileDeleteResourceKey,
@@ -62,19 +32,18 @@ internal data class FileDeleteCompletion(val request: FileDeleteRequest, val out
  * an outcome. Finished outcomes wait until a Files screen consumes them. Only [close], at account
  * session teardown, cancels unfinished work.
  *
- * An outcome that must not be retried as-is (stale version, throttling, rejected credentials or
- * permission) stays recorded per resource until a server listing of its folder starts after it.
- * Until then it also blocks every other write to that item, its folders, and its contents.
+ * The resulting write blocks live in the account's process-level [fence], so surfaces outside this
+ * session's composition see them too. An outcome that must not be retried as-is (stale version,
+ * throttling, rejected credentials or permission) stays recorded per resource until a server
+ * listing of its folder starts after it, and until then blocks every other write to that item,
+ * its folders, and its contents.
  */
-internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: CoroutineScope) : FileWriteFence {
-    private class RetryBlock(val message: String, val recordedAt: Long)
-
-    val inFlight = FileDeleteInFlight()
+internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: CoroutineScope) : FileWriteFence by fence {
+    val account: NextcloudAccountId get() = fence.account
+    val inFlight: FileDeleteInFlight get() = fence.inFlight
     private val job = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + job)
     private val completions = mutableStateListOf<FileDeleteCompletion>()
-    private val retryBlocks = mutableStateMapOf<FileDeleteResourceKey, RetryBlock>()
-    private var sequence = 0L
 
     val nextCompletion: FileDeleteCompletion? get() = completions.firstOrNull()
 
@@ -82,26 +51,16 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
      * Why other writes to [file] must wait: a delete of it, a parent, or a child is unverified, or
      * such a delete finished with an outcome that left the item's state unknown or stale.
      */
-    fun writeBlock(file: NextcloudFile): FileWriteBlock? = writeBlockFor(file.path)
+    fun writeBlock(file: NextcloudFile): FileWriteBlock? = fence.writeBlock(file.path)
 
     fun blocksWrites(file: NextcloudFile): Boolean = writeBlock(file) != null
 
     /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
-    fun writeBlockFor(path: String): FileWriteBlock? =
-        FileWriteBlock.DeleteRunning.takeIf { inFlight.blocks(FileDeleteResourceKey(account, path)) } ?: refreshBlockFor(path)
+    fun writeBlockFor(path: String): FileWriteBlock? = fence.writeBlock(path)
 
-    override fun writeBlock(path: String): FileWriteBlock? = writeBlockFor(path)
+    fun writeBlockedMessage(path: String): String? = fence.writeBlock(path)?.message
 
-    fun writeBlockedMessage(path: String): String? = writeBlockFor(path)?.message
-
-    /**
-     * Why a write to [path] must wait for a folder refresh after a finished delete of it, a parent,
-     * or a child, or null. The old path may now name a replacement item, so path-based writes wait too.
-     */
-    fun refreshBlockFor(path: String): FileWriteBlock.RefreshRequired? {
-        val key = FileDeleteResourceKey(account, path)
-        return retryBlocks.keys.firstOrNull { it.overlaps(key) }?.let { FileWriteBlock.RefreshRequired(it.path) }
-    }
+    fun refreshBlockFor(path: String): FileWriteBlock.RefreshRequired? = fence.refreshBlockFor(path)
 
     /**
      * Applies [completion] to [dialog]. When the outcome asks for a folder reload but the item's
@@ -117,7 +76,7 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     ): FileDeleteScreenEffect {
         val effect = dialog.complete(completion)
         val folder = completion.request.parentPath
-        if (effect.reloadFolder && folder != shownFolder && completion.request.key in retryBlocks) {
+        if (effect.reloadFolder && folder != shownFolder && fence.hasRetryBlock(completion.request.key)) {
             scope.launch {
                 try {
                     readFolder(folder) { read(folder) }
@@ -132,23 +91,13 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     }
 
     /** Why another delete of [file] must wait for a fresh folder listing, or null. */
-    fun retryBlockFor(file: NextcloudFile): String? = retryBlocks[keyFor(file)]?.message
+    fun retryBlockFor(file: NextcloudFile): String? = fence.retryBlockMessage(keyFor(file))
 
     fun keyFor(file: NextcloudFile) = FileDeleteResourceKey(account, file.path)
 
-    /**
-     * Reads the folder at [path]. A server listing lifts the retry blocks of its items that were
-     * recorded before the read started, never ones recorded while it ran.
-     */
-    suspend fun readFolder(path: String, read: suspend () -> NextcloudFileListing): NextcloudFileListing {
-        val startedAfter = sequence
-        val listing = read()
-        if (listing.source == NextcloudFileListingSource.Network) {
-            retryBlocks.filter { (key, block) -> key.parentPath == path && block.recordedAt <= startedAfter }
-                .keys.forEach(retryBlocks::remove)
-        }
-        return listing
-    }
+    /** See [AccountFileWriteFence.readFolder]: only a listing started after an outcome lifts it. */
+    suspend fun readFolder(path: String, read: suspend () -> NextcloudFileListing): NextcloudFileListing =
+        fence.readFolder(path, read)
 
     fun start(
         request: FileDeleteRequest,
@@ -169,10 +118,7 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
             )
             // Reject even a non-cooperative service's completion after session teardown.
             ensureActive()
-            when (val message = outcome.retryBlockMessage()) {
-                null -> retryBlocks.remove(request.key)
-                else -> retryBlocks[request.key] = RetryBlock(message, ++sequence)
-            }
+            fence.recordOutcome(request.key, outcome.retryBlockMessage())
             completions += FileDeleteCompletion(request, outcome)
         } finally {
             inFlight.release(request.key, request.token)
@@ -185,50 +131,14 @@ internal class FileDeleteCoordinator(val account: NextcloudAccountId, parent: Co
     fun close() = job.cancel()
 }
 
-/**
- * The account-scoped fence every surface that changes account files consults before it writes,
- * so no surface can create, move, or change an item while a delete that covers it is unverified
- * or needs a refresh.
- */
-fun interface FileWriteFence {
-    /** Why a write that creates or changes [path] must wait, or null when it may proceed. */
-    fun writeBlock(path: String): FileWriteBlock?
-
-    companion object {
-        /** For surfaces outside an account session that owns deletes, such as previews. */
-        val None = FileWriteFence { null }
-    }
-}
-
-/** A write refused by a [FileWriteFence]; its message is the block's typed reason. */
-class FileWriteBlockedException(val block: FileWriteBlock) : IllegalStateException(block.message)
-
-/** Why writes to a Files item must wait. User-facing copy derives only from this type. */
-sealed interface FileWriteBlock {
-    val message: String
-
-    /** A delete of the item, one of its folders, or its contents is not verified yet. */
-    data object DeleteRunning : FileWriteBlock {
-        override val message = "Wait until the delete of this item or its folder finishes."
-    }
-
-    /** A finished delete of [blockedPath] needs a server listing of its folder first. */
-    data class RefreshRequired(val blockedPath: String) : FileWriteBlock {
-        val folder: String get() = blockedPath.substringBeforeLast('/', missingDelimiterValue = "")
-
-        override val message: String
-            get() = "Open or refresh ${folder.ifEmpty { "your Nextcloud root" }} before changing " +
-                "${blockedPath.substringAfterLast('/')} or anything inside it."
-    }
-}
-
 @Composable
-internal fun rememberFileDeleteCoordinator(session: NextcloudSession): FileDeleteCoordinator {
+internal fun rememberFileDeleteCoordinator(session: NextcloudSession, fences: FileWriteFenceRegistry): FileDeleteCoordinator {
     val parent = rememberCoroutineScope()
-    val coordinator = remember(session, parent) { FileDeleteCoordinator(session.accountId, parent) }
+    val coordinator = remember(session, fences, parent) { FileDeleteCoordinator(fences.account(session.accountId), parent) }
     DisposableEffect(coordinator) { onDispose(coordinator::close) }
     return coordinator
 }
+
 
 /**
  * Main-thread owner of one Files screen's delete dialog. A closed or replaced dialog no longer
