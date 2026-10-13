@@ -141,6 +141,9 @@ internal class FileDeleteCoordinator(val fence: AccountFileWriteFence, parent: C
     /** The oldest unconsumed outcome for [key], for a screen that shows only that item. */
     fun completionFor(key: FileDeleteResourceKey): FileDeleteCompletion? = completions.firstOrNull { it.request.key == key }
 
+    /** The oldest unconsumed outcome for any of [paths], for a screen that shows a list of items. */
+    fun completionFor(paths: Set<String>): FileDeleteCompletion? = completions.firstOrNull { it.request.key.path in paths }
+
     /** Claims [completion] for one screen; false when another screen already applied it. */
     fun consume(completion: FileDeleteCompletion): Boolean = completions.remove(completion)
 

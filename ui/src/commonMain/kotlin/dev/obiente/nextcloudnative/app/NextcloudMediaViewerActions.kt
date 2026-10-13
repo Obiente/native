@@ -245,48 +245,61 @@ private fun MediaTransferDialog(
 }
 
 /**
- * The media viewer's delete. It runs in the account's shared [deletes] owner exactly like a Files
+ * The media viewer's deletes. They run in the account's shared [deletes] owner exactly like a Files
  * delete: the same in-flight and refresh blocks for every screen, verification of an unknown
  * result, retry rules, local follow-up, and completion fencing. The host stays composed with the
- * viewer, so a delete whose dialog was closed is still applied here. The item leaves the viewer
- * only when the server confirmed the delete or the item is no longer at its path; any other
- * outcome keeps it and shows the reason.
+ * viewer and watches every item in [items], not only [selected], so a delete whose dialog was
+ * closed is applied even after the user moved to another item or the viewer was recreated.
+ *
+ * An item leaves the viewer, through [onRemoved], only when the server confirmed its delete or it
+ * is no longer at its path. Any other outcome keeps it, and its reason is shown in the open dialog
+ * or, for an item without one, as a notice once that item is selected.
  */
 @Composable
 internal fun MediaDeleteHost(
-    file: NextcloudFile,
+    items: List<NextcloudFile>,
+    selected: NextcloudFile,
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
     deletes: FileDeleteCoordinator,
     open: Boolean,
     onClose: () -> Unit,
-    onRemoved: () -> Unit,
+    onRemoved: (NextcloudFile) -> Unit,
 ) {
-    val dialog = remember(deletes, file.path) { FileDeleteDialogState(deletes) }
-    var removalNotice by remember(deletes, file.path) { mutableStateOf<String?>(null) }
-    var outcomeNotice by remember(deletes, file.path) { mutableStateOf<String?>(null) }
+    val dialog = remember(deletes, selected.path) { FileDeleteDialogState(deletes) }
+    var removalNotices by remember(deletes) { mutableStateOf(emptyList<Pair<NextcloudFile, String>>()) }
+    var keptNotices by remember(deletes) { mutableStateOf(emptyMap<String, String>()) }
     val currentOnRemoved by rememberUpdatedState(onRemoved)
-    val completion = deletes.completionFor(deletes.keyFor(file))
+    val paths = remember(items, selected) { items.mapTo(HashSet()) { it.path } + selected.path }
+    val completion = deletes.completionFor(paths)
     LaunchedEffect(deletes, completion) {
         if (completion == null || !deletes.consume(completion)) return@LaunchedEffect
-        val effect = dialog.complete(completion)
+        val file = completion.request.file
+        val shown = file.path == selected.path
+        val effect = if (shown) dialog.complete(completion) else completion.outcome.screenEffect(file.name, dialogShowsResult = false)
         when (val outcome = completion.outcome) {
             is FileDeleteOutcome.Deleted ->
-                if (outcome.localFollowUp == FileMutationLocalFollowUp.Completed) currentOnRemoved() else removalNotice = effect.notice
-            is FileDeleteOutcome.NoLongerAtLocation -> removalNotice = effect.notice
-            // An open dialog shows the reason itself; otherwise it is reported here.
-            else -> outcomeNotice = effect.notice
+                if (outcome.localFollowUp == FileMutationLocalFollowUp.Completed) currentOnRemoved(file)
+                else removalNotices = removalNotices + (file to requireNotNull(effect.notice))
+            is FileDeleteOutcome.NoLongerAtLocation -> removalNotices = removalNotices + (file to requireNotNull(effect.notice))
+            // An open dialog for the item shows the reason itself; otherwise it waits for that item.
+            else -> if (!shown || dialog.target == null) effect.notice?.let { keptNotices = keptNotices + (file.path to it) }
         }
     }
-    LaunchedEffect(open) { if (open && dialog.target == null) dialog.open(file) }
-    removalNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = { removalNotice = null; currentOnRemoved() }) }
-    outcomeNotice?.let { notice ->
+    LaunchedEffect(open, selected.path) { if (open && dialog.target == null) dialog.open(selected) }
+    removalNotices.firstOrNull()?.let { (file, notice) ->
+        return MediaLocalFollowUpDialog(notice) {
+            removalNotices = removalNotices.drop(1)
+            currentOnRemoved(file)
+        }
+    }
+    keptNotices[selected.path]?.let { notice ->
         return AlertDialog(
-            onDismissRequest = { outcomeNotice = null },
-            title = { Text("${file.name} was not deleted") },
+            onDismissRequest = { keptNotices = keptNotices - selected.path },
+            title = { Text("${selected.name} was not deleted") },
             text = { Text(notice) },
-            confirmButton = { TextButton(onClick = { outcomeNotice = null }) { Text("Close") } },
+            confirmButton = { TextButton(onClick = { keptNotices = keptNotices - selected.path }) { Text("Close") } },
         )
     }
     dialog.target?.let { target ->
@@ -309,6 +322,33 @@ internal fun MediaDeleteHost(
             },
         )
     }
+}
+
+/** The viewer's items: [media] without items whose delete was applied, or only [selected] when it is not listed. */
+internal fun mediaViewerItems(media: List<NextcloudFile>, selected: NextcloudFile, removedPaths: Collection<String>): List<NextcloudFile> {
+    val visible = if (removedPaths.isEmpty()) media else media.filterNot { it.path in removedPaths }
+    return if (mediaViewerNavigationIndex(visible, selected) >= 0) visible else listOf(selected)
+}
+
+/**
+ * Drops [removed] from the viewer. Another item is simply hidden. When the shown item goes, the
+ * next item, or else the previous one, is selected; when none is left, [closeLast] closes the viewer.
+ */
+internal fun mediaViewerRemove(
+    removed: NextcloudFile,
+    items: List<NextcloudFile>,
+    selected: NextcloudFile,
+    markRemoved: (String) -> Unit,
+    select: (NextcloudFile) -> Unit,
+    closeLast: () -> Unit,
+) {
+    if (removed.path != selected.path) return markRemoved(removed.path)
+    val remaining = items.filterNot { it.path == removed.path }
+    val index = items.indexOfFirst { it.path == removed.path }
+    val neighbor = remaining.getOrNull(index.coerceAtLeast(0)) ?: remaining.lastOrNull()
+    if (neighbor == null) return closeLast()
+    markRemoved(removed.path)
+    select(neighbor)
 }
 
 /** Actions that change the item, create files next to it, or bind it to a share or album. */

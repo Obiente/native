@@ -10,11 +10,10 @@ import kotlin.test.assertTrue
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 
@@ -58,7 +57,7 @@ class FileWriteFenceRegistryTest {
         assertEquals(listOf("createDirectoryIfAbsent:Projects/Old/Synced"), calls, "Only the other account wrote.")
 
         release.complete(Unit)
-        job.join()
+        withTimeout(5_000L) { job.join() }
         assertNull(incomingShareUploadBlock(registry.account(alice.accountId), "Projects/Old"), "A verified delete lifts it.")
     }
 
@@ -105,8 +104,10 @@ class FileWriteFenceRegistryTest {
     }
 
     @Test
-    fun `disposing the composition that started a delete neither cancels it nor releases its block`() {
-        val registry = FileWriteFenceRegistry(CoroutineScope(SupervisorJob() + Dispatchers.Default))
+    fun `disposing the composition that started a delete neither cancels it nor releases its block`(): Unit =
+        withTestDeleteOwnerThread { registry -> disposalScenario(registry) }
+
+    private fun disposalScenario(registry: FileWriteFenceRegistry) {
         val accepted = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var job: Job? = null
@@ -123,6 +124,7 @@ class FileWriteFenceRegistryTest {
         }) {
             settleUntil { accepted.isCompleted }
         }
+        awaitTestCondition("the owner thread starts the delete") { accepted.isCompleted }
 
         // The first composition is gone, as after an activity recreation; the request still runs.
         assertTrue(job?.isActive == true, "Disposal must not cancel the request.")
@@ -132,7 +134,7 @@ class FileWriteFenceRegistryTest {
         }
 
         release.complete(Unit)
-        runBlocking { assertNotNull(job).join() }
+        awaitTestCondition("the delete finishes on the owner thread") { assertNotNull(job).isCompleted }
         val refresh = FileWriteBlock.RefreshRequired("Projects/Old")
         assertEquals(refresh, registry.account(alice.accountId).writeBlock("Projects/Old/new.txt"), "Blocked until verified.")
         val completion = assertNotNull(registry.account(alice.accountId).deletes.nextCompletion, "The outcome waits for a screen.")
@@ -161,7 +163,7 @@ class FileWriteFenceRegistryTest {
         registry.removeAccount(alice.accountId.storageKey)
         val next = registry.account(alice.accountId)
         release.complete(Unit)
-        job.join()
+        withTimeout(5_000L) { job.join() }
 
         assertTrue(job.isCancelled)
         assertTrue(next !== removed, "Signing in again starts a new incarnation.")
@@ -189,7 +191,8 @@ class FileWriteFenceRegistryTest {
     private suspend fun CoroutineScope.refreshRequired(registry: FileWriteFenceRegistry, session: NextcloudSession) {
         val deletes = coordinator(registry, session)
         val dialog = FileDeleteDialogState(deletes).apply { open(folder) }
-        deletes.start(assertNotNull(dialog.begin()), { throw fileOperationException(412) }) { error("not read") }.join()
+        val job = deletes.start(assertNotNull(dialog.begin()), { throw fileOperationException(412) }) { error("not read") }
+        withTimeout(5_000L) { job.join() }
     }
 
     private fun coordinator(registry: FileWriteFenceRegistry, session: NextcloudSession) = registry.account(session.accountId).deletes

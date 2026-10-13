@@ -416,9 +416,13 @@ receives the pending outcome.
   engines, which keep their own ETag and conflict preconditions.
 - A media viewer delete runs in the same coordinator as a Files delete, so it
   registers the same blocks, verifies an unknown result, and follows the same
-  retry rules. The viewer drops the item only when the delete was confirmed or
-  the item is no longer at its path, and applies an outcome that arrives after
-  its dialog closed or the viewer was recreated.
+  retry rules. The viewer watches outcomes for every item in its list, not only
+  the shown one. It drops an item only when its delete was confirmed or the
+  item is no longer at its path, moving the selection to a neighbor or closing
+  when none is left, and applies an outcome that arrives after its dialog
+  closed, after the user moved to another item, or after the viewer was
+  recreated. Any other outcome keeps the item and shows its reason when that
+  item is shown.
 
 ### Groupware (CardDAV and CalDAV)
 

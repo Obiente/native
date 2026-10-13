@@ -615,7 +615,7 @@ class FileDeleteFlowTest {
             started.await()
 
             deletes.close()
-            job.join()
+            withTimeout(5_000L) { job.join() }
 
             assertTrue(job.isCancelled)
             assertNull(deletes.nextCompletion)
@@ -634,7 +634,7 @@ class FileDeleteFlowTest {
 
         val job = deletes.start(assertNotNull(state.begin()), fake::delete, fake::read)
         deletes.close()
-        job.join()
+        withTimeout(5_000L) { job.join() }
 
         assertTrue(fake.deletes.isEmpty())
         assertFalse(state.running)
@@ -660,7 +660,7 @@ class FileDeleteFlowTest {
 
         deletes.close()
         release.complete(Unit)
-        job.join()
+        withTimeout(5_000L) { job.join() }
 
         assertNull(deletes.nextCompletion)
         assertFalse(state.running)
@@ -808,7 +808,8 @@ class FileDeleteFlowTest {
         state: FileDeleteDialogState,
         fake: FakeDeleteBoundary,
     ): FileDeleteScreenEffect {
-        start(assertNotNull(state.begin()), fake::delete, fake::read).join()
+        val job = start(assertNotNull(state.begin()), fake::delete, fake::read)
+        withTimeout(5_000L) { job.join() }
         return awaitCompletion(state)
     }
 
@@ -817,17 +818,22 @@ class FileDeleteFlowTest {
         state: FileDeleteDialogState,
         result: suspend () -> NextcloudFileMutationResult,
     ): FileDeleteCompletion {
-        start(assertNotNull(state.begin()), FakeDeleteBoundary(deleteResult = result)::delete) { error("not read") }.join()
+        val job = start(assertNotNull(state.begin()), FakeDeleteBoundary(deleteResult = result)::delete) { error("not read") }
+        withTimeout(5_000L) { job.join() }
         return assertNotNull(nextCompletion).also { assertTrue(consume(it)) }
     }
 
-    private suspend fun FileDeleteCoordinator.awaitCompletion(state: FileDeleteDialogState): FileDeleteScreenEffect {
-        while (true) {
-            val completion = nextCompletion
-            if (completion != null && consume(completion)) return state.complete(completion)
-            yield()
+    /** Applies the next outcome as a Files screen would, failing instead of waiting forever. */
+    private suspend fun FileDeleteCoordinator.awaitCompletion(state: FileDeleteDialogState): FileDeleteScreenEffect =
+        withTimeout(5_000L) {
+            while (true) {
+                val completion = nextCompletion
+                if (completion != null && consume(completion)) return@withTimeout state.complete(completion)
+                yield()
+            }
+            @Suppress("UNREACHABLE_CODE")
+            error("unreachable")
         }
-    }
 
     private class FakeDeleteBoundary(
         private val deleteResult: suspend () -> NextcloudFileMutationResult,

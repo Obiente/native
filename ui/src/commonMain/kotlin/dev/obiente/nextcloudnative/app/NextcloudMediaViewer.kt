@@ -98,9 +98,8 @@ internal fun NextcloudMediaViewer(
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val items = remember(media, selected) {
-        if (mediaViewerNavigationIndex(media, selected) >= 0) media else listOf(selected)
-    }
+    val removedPaths = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    val items = remember(media, selected, removedPaths.toList()) { mediaViewerItems(media, selected, removedPaths) }
     val sourcePlan = remember(sourceMembers, selected) {
         planMediaSources(sourceMembers, selected)
     }
@@ -849,7 +848,8 @@ internal fun NextcloudMediaViewer(
     }
 
     writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
-    MediaDeleteHost(selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { viewerAction = null; onSourceRemoved(selected) }
+    MediaDeleteHost(items, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed ->
+        viewerAction = null; mediaViewerRemove(removed, items, selected, removedPaths::add, onSelect) { onSourceRemoved(selected) } }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,
