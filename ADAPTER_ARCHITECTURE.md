@@ -400,7 +400,9 @@ receives the pending outcome.
   and after an outcome that leaves its state unknown or stale (stale version,
   throttling, rejected credentials or permission) until a server listing of its
   folder starts after that outcome.
-- Surfaces receive only the narrow `FileWriteFence`. Files actions, the media
+- Surfaces receive only the narrow `FileWriteFence`, except Files and the
+  media viewer, which receive the account's delete coordinator to start
+  deletes. Files actions, the media
   viewer, photo editing, text editor saves, version restore, every remote
   folder picker (create and destination choice, including folder-sync setup),
   and Android share uploads (destination, queueing, and the queued worker)
@@ -411,8 +413,12 @@ receives the pending outcome.
 - Not fenced: Memories tags (they target the file ID), Deck attachments and
   dynamic-app uploads (application APIs, not Files paths), and the background
   folder-sync, media-backup, virtual-file, and Android documents-provider
-  engines, which keep their own ETag and conflict preconditions. A media viewer
-  delete is refused while a block applies but does not itself register a block.
+  engines, which keep their own ETag and conflict preconditions.
+- A media viewer delete runs in the same coordinator as a Files delete, so it
+  registers the same blocks, verifies an unknown result, and follows the same
+  retry rules. The viewer drops the item only when the delete was confirmed or
+  the item is no longer at its path, and applies an outcome that arrives after
+  its dialog closed or the viewer was recreated.
 
 ### Groupware (CardDAV and CalDAV)
 

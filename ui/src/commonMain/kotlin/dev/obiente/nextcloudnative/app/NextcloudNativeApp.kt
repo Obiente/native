@@ -1888,8 +1888,8 @@ private fun AuthenticatedApp(
                     selected = snapshot.selected,
                     session = session,
                     userId = serverInfo?.userId.orEmpty(),
-                    services = services, writeFence = fileDeletes,
-                    taggingAvailable =serverInfo?.apps?.any { it.id == "memories" } == true,
+                    services = services, fileDeletes = fileDeletes,
+                    taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
                     memoriesLivePhotoCapability = memoriesLivePhotoCapability,
                     sharingCapabilities = serverInfo?.fileSharing
                         ?: NextcloudFileSharingCapabilities.Unavailable,
@@ -7337,7 +7337,7 @@ internal fun FilesScreen(
     userId?.let { uid ->
         FileDeleteHost(
             deleteDialog, fileDeletes, path,
-            delete ={ mutation -> services.executeFileMutation(session, uid, mutation) },
+            delete = { mutation -> services.executeFileMutation(session, uid, mutation) },
             readFolder = { folder -> services.listFilesWithSource(session, uid, folder) },
         ) { effect ->
             effect.notice?.let { mutationNotice = it }

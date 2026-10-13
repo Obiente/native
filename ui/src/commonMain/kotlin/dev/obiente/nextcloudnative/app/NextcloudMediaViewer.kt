@@ -74,15 +74,16 @@ import kotlinx.coroutines.launch
  * Arrow keys navigate on desktop; Escape closes the viewer. Focusable icon buttons also support
  * normal keyboard activation. Image edits are reversible previews until the user explicitly saves
  * a new recipe sidecar; the source file is never passed to a write operation.
+ * Deletes run in the account's shared [fileDeletes] owner, like deletes from Files.
  */
 @Composable
-fun NextcloudMediaViewer(
+internal fun NextcloudMediaViewer(
     media: List<NextcloudFile>,
     selected: NextcloudFile,
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
-    writeFence: FileWriteFence,
+    fileDeletes: FileDeleteCoordinator,
     taggingAvailable: Boolean,
     memoriesLivePhotoCapability: MemoriesLivePhotoCapability,
     sharingCapabilities: NextcloudFileSharingCapabilities,
@@ -565,11 +566,7 @@ fun NextcloudMediaViewer(
                     }.getOrNull()
                 }
         }
-        DisposableEffect(playbackRangeSource) {
-            onDispose {
-                playbackRangeSource?.close()
-            }
-        }
+        DisposableEffect(playbackRangeSource) { onDispose { playbackRangeSource?.close() } }
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -768,7 +765,7 @@ fun NextcloudMediaViewer(
                         highDetailSourceFile = fullQuality?.source?.file,
                     )
                 ) {
-                    { writeBlockNotice = writeFence.writeBlock(selected.path); if (writeBlockNotice == null) editing = true }
+                    { writeBlockNotice = fileDeletes.writeBlock(selected.path); if (writeBlockNotice == null) editing = true }
                 } else {
                     null
                 },
@@ -852,12 +849,13 @@ fun NextcloudMediaViewer(
     }
 
     writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
+    MediaDeleteHost(selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { viewerAction = null; onSourceRemoved(selected) }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,
             file = selected,
             session = session, userId = userId,
-            services = services, writeFence = writeFence,
+            services = services, writeFence = fileDeletes,
             sharingCapabilities = sharingCapabilities,
             onDismiss = { if (activeActionMutations == 0) viewerAction = null },
             onSourceRemoved = {

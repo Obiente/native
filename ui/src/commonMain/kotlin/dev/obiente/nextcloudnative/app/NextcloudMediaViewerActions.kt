@@ -11,7 +11,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,16 +106,8 @@ internal fun MediaViewerActionDialog(
             onMoved = onSourceRemoved,
             onMutationRunningChanged = onMutationRunningChanged,
         )
-        MediaViewerAction.Delete -> MediaDeleteDialog(
-            file = file,
-            session = session,
-            userId = userId,
-            services = services,
-            writeFence = writeFence,
-            onDismiss = onDismiss,
-            onDeleted = onSourceRemoved,
-            onMutationRunningChanged = onMutationRunningChanged,
-        )
+        // The viewer's MediaDeleteHost owns delete, so its outcome survives this dialog.
+        MediaViewerAction.Delete -> Unit
         MediaViewerAction.AddToAlbum -> MediaAlbumDialog(
             file = file,
             session = session,
@@ -252,88 +244,77 @@ private fun MediaTransferDialog(
     )
 }
 
+/**
+ * The media viewer's delete. It runs in the account's shared [deletes] owner exactly like a Files
+ * delete: the same in-flight and refresh blocks for every screen, verification of an unknown
+ * result, retry rules, local follow-up, and completion fencing. The host stays composed with the
+ * viewer, so a delete whose dialog was closed is still applied here. The item leaves the viewer
+ * only when the server confirmed the delete or the item is no longer at its path; any other
+ * outcome keeps it and shows the reason.
+ */
 @Composable
-private fun MediaDeleteDialog(
+internal fun MediaDeleteHost(
     file: NextcloudFile,
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
-    writeFence: FileWriteFence,
-    onDismiss: () -> Unit,
-    onDeleted: () -> Unit,
-    onMutationRunningChanged: (Boolean) -> Unit,
+    deletes: FileDeleteCoordinator,
+    open: Boolean,
+    onClose: () -> Unit,
+    onRemoved: () -> Unit,
 ) {
-    var running by remember(file.path) { mutableStateOf(false) }
-    var error by remember(file.path) { mutableStateOf<String?>(null) }
-    var followUpNotice by remember(file.path) { mutableStateOf<String?>(null) }
-    MediaMutationRunningEffect(running, onMutationRunningChanged)
-    val scope = rememberCoroutineScope()
-    followUpNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = onDeleted) }
-    AlertDialog(
-        onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Delete ${file.name}?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
-                Text("This removes the original file from Nextcloud. Album membership and previews are not substitutes for the original.")
-                Text(
-                    "The delete checks the exact ETag and stops if the file changed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    val dialog = remember(deletes, file.path) { FileDeleteDialogState(deletes) }
+    var removalNotice by remember(deletes, file.path) { mutableStateOf<String?>(null) }
+    var outcomeNotice by remember(deletes, file.path) { mutableStateOf<String?>(null) }
+    val currentOnRemoved by rememberUpdatedState(onRemoved)
+    val completion = deletes.completionFor(deletes.keyFor(file))
+    LaunchedEffect(deletes, completion) {
+        if (completion == null || !deletes.consume(completion)) return@LaunchedEffect
+        val effect = dialog.complete(completion)
+        when (val outcome = completion.outcome) {
+            is FileDeleteOutcome.Deleted ->
+                if (outcome.localFollowUp == FileMutationLocalFollowUp.Completed) currentOnRemoved() else removalNotice = effect.notice
+            is FileDeleteOutcome.NoLongerAtLocation -> removalNotice = effect.notice
+            // An open dialog shows the reason itself; otherwise it is reported here.
+            else -> outcomeNotice = effect.notice
+        }
+    }
+    LaunchedEffect(open) { if (open && dialog.target == null) dialog.open(file) }
+    removalNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = { removalNotice = null; currentOnRemoved() }) }
+    outcomeNotice?.let { notice ->
+        return AlertDialog(
+            onDismissRequest = { outcomeNotice = null },
+            title = { Text("${file.name} was not deleted") },
+            text = { Text(notice) },
+            confirmButton = { TextButton(onClick = { outcomeNotice = null }) { Text("Close") } },
+        )
+    }
+    dialog.target?.let { target ->
+        FileDeleteDialog(
+            target = target,
+            running = dialog.running,
+            error = dialog.error,
+            retryBlocked = dialog.retryBlocked,
+            onConfirm = {
+                dialog.begin()?.let { request ->
+                    deletes.start(request, { mutation -> services.executeFileMutation(session, userId, mutation) }) { folder ->
+                        services.listFilesWithSource(session, userId, folder)
+                    }
                 }
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !running, onClick = onDismiss) { Text("Cancel") }
-        },
-        confirmButton = {
-            Button(
-                enabled = !running,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                onClick = {
-                    val etag = file.etag?.takeIf(String::isNotBlank)
-                    if (etag == null) {
-                        error = "Refresh the media item before deleting it."
-                        return@Button
-                    }
-                    writeFence.writeBlock(file.path)?.let { block ->
-                        error = block.message
-                        return@Button
-                    }
-                    running = true
-                    error = null
-                    scope.launch {
-                        runCatching {
-                            services.executeFileMutation(
-                                session,
-                                userId,
-                                NextcloudFileMutation.Delete(file.path, etag),
-                            )
-                        }.onSuccess { result ->
-                            if (result.localFollowUp == FileMutationLocalFollowUp.Completed) onDeleted()
-                            else followUpNotice = result.localFollowUp.reportFor("Deleted ${file.name}")
-                        }.onFailure { error = it.message ?: "Could not delete this file." }
-                        running = false
-                    }
-                },
-            ) {
-                if (running) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.size(8.dp))
-                }
-                Text(if (running) "Deleting..." else "Delete")
-            }
-        },
-    )
+            },
+            // Closing never cancels a running delete; its outcome is still applied by this host.
+            onDismiss = {
+                dialog.dismiss()
+                onClose()
+            },
+        )
+    }
 }
 
 /** Actions that change the item, create files next to it, or bind it to a share or album. */
 private val mediaWriteActions = setOf(
     MediaViewerAction.Move,
     MediaViewerAction.Copy,
-    MediaViewerAction.Delete,
     MediaViewerAction.ShareNextcloud,
     MediaViewerAction.AddToAlbum,
 )

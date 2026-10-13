@@ -21,19 +21,6 @@ class MediaViewerLocalFollowUpSceneTest {
     )
 
     @Test
-    fun `delete with incomplete local bookkeeping is reported before the viewer moves on`() {
-        val events = mutableListOf<String>()
-        nativeSceneTest(800, 700, content = { dialog(MediaViewerAction.Delete, FileMutationLocalFollowUp.StillRunning, events) }) {
-            click("Delete")
-
-            assertTrue(has("Deleted photo.jpg. Local file status is still updating in the background."))
-            assertEquals(emptyList(), events, "The viewer must not move on as if everything finished.")
-            click("Close")
-            assertEquals(listOf("removed"), events)
-        }
-    }
-
-    @Test
     fun `move whose local bookkeeping failed is reported, then removes the source`() {
         val events = mutableListOf<String>()
         nativeSceneTest(800, 700, content = { dialog(MediaViewerAction.Move, FileMutationLocalFollowUp.Failed, events) }) {
@@ -50,13 +37,12 @@ class MediaViewerLocalFollowUpSceneTest {
     @Test
     fun `completed local bookkeeping finishes without an extra step`() {
         for ((action, button, expected) in listOf(
-            Triple(MediaViewerAction.Delete, "Delete", "removed"),
             Triple(MediaViewerAction.Move, "Move", "removed"),
             Triple(MediaViewerAction.Copy, "Copy", "dismissed"),
         )) {
             val events = mutableListOf<String>()
             nativeSceneTest(800, 700, content = { dialog(action, FileMutationLocalFollowUp.Completed, events) }) {
-                if (action != MediaViewerAction.Delete) replaceText("photo.jpg", "other.jpg")
+                replaceText("photo.jpg", "other.jpg")
                 click(button)
 
                 assertEquals(listOf(expected), events)
@@ -68,7 +54,7 @@ class MediaViewerLocalFollowUpSceneTest {
     @Test
     fun `every media change is refused with the typed reason while a covering delete is unverified`() {
         for (action in listOf(
-            MediaViewerAction.Move, MediaViewerAction.Copy, MediaViewerAction.Delete,
+            MediaViewerAction.Move, MediaViewerAction.Copy,
             MediaViewerAction.ShareNextcloud, MediaViewerAction.AddToAlbum,
         )) {
             val events = mutableListOf<String>()
