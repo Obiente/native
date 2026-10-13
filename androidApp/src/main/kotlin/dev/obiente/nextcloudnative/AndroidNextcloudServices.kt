@@ -2729,11 +2729,11 @@ internal class AndroidNextcloudServices(
                     maxResponseBytes = 64 * 1024,
                     accountMutationSerialized = accountMutationSerialized,
                 )
-                if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
                 val accountId = NextcloudDocumentIds.accountKey(currentSession)
-                val localFollowUp = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
+                fun invalidateLocal() = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
                     { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
-                NextcloudFileMutationResult(spec.destinationPath, response.etag, localFollowUp)
+                if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) invalidateLocal() else null)
+                NextcloudFileMutationResult(spec.destinationPath, response.etag, invalidateLocal())
             }
         }
     }

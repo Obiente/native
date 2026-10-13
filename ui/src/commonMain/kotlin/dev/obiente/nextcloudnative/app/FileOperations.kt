@@ -110,7 +110,16 @@ class NextcloudFileOperationException(
     val error: NextcloudFileOperationError,
     val status: Int,
     message: String,
+    /** Local bookkeeping run for a definitive answer such as 404, where the path is known to be gone. */
+    val localFollowUp: FileMutationLocalFollowUp? = null,
 ) : Exception(message)
+
+/**
+ * A file mutation that never left this device, for example because the account changed before it
+ * could be sent or no connection to the server could be opened. Only code that can prove nothing
+ * was sent raises it, so the server state is known to be unchanged and the mutation may be retried.
+ */
+class FileMutationNotSentException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
 fun NextcloudFileMutation.toWebDavMutationSpec(): FileWebDavMutationSpec {
     val safeSource = requireSafeFilePath(sourcePath, allowRoot = false)
@@ -147,7 +156,11 @@ fun NextcloudFileMutation.toWebDavMutationSpec(): FileWebDavMutationSpec {
     )
 }
 
-fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): NextcloudFileOperationException {
+fun fileOperationException(
+    status: Int,
+    sourceIsDirectory: Boolean = false,
+    localFollowUp: FileMutationLocalFollowUp? = null,
+): NextcloudFileOperationException {
     val error = when (status) {
         401 -> NextcloudFileOperationError.AuthenticationRequired
         403 -> NextcloudFileOperationError.PermissionDenied
@@ -171,7 +184,7 @@ fun fileOperationException(status: Int, sourceIsDirectory: Boolean = false): Nex
         NextcloudFileOperationError.Throttled -> "The server is limiting requests. Wait a while, then refresh and try again."
         NextcloudFileOperationError.ServerFailure -> "The file operation failed (HTTP $status)."
     }
-    return NextcloudFileOperationException(error, status, message)
+    return NextcloudFileOperationException(error, status, message, localFollowUp)
 }
 
 enum class FileShareTarget(val wireValue: Int) {

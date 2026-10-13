@@ -375,6 +375,20 @@ state: leaving Files or recreating an activity neither cancels the request nor
 releases its block, and a recreated screen shows the same typed reason and
 receives the pending outcome.
 
+- After an unknown result, a retry is offered only for positively the same
+  item: matching stable file IDs when both are known, otherwise matching type
+  and ETag. A differing ID at the same path requires a refresh.
+- A request that provably never left the device is a plain retryable failure
+  without a verification read: the account-session guard and, on desktop, a
+  connection, name-resolution, or TLS failure before the mutation executor saw
+  a network exchange raise `FileMutationNotSentException`. Android's file
+  mutation transport does not track the exchange, so its I/O failures stay
+  ambiguous and are verified.
+- A 404 runs the same local follow-up as a confirmed delete and reports an
+  incomplete one.
+- Android share uploads check the fence before each file; a block pauses the
+  upload before the next file, keeps finished files, and the next run resumes
+  at the first unfinished one.
 - Cancellation before the request can be sent releases the item unchanged.
   Cancellation after it may have been sent records a refresh-required block,
   so the item is never released without an outcome.

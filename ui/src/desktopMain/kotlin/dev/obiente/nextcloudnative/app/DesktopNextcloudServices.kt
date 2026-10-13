@@ -4844,7 +4844,7 @@ class DesktopNextcloudServices(
             mutationExecutor = fileMutationHttpExecutor,
             onAmbiguousMutationResult = onUnknownResult,
         ) }
-        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
+        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) followUp.afterConfirmedMutation() else null)
         NextcloudFileMutationResult(spec.destinationPath, response.etag, followUp.afterConfirmedMutation())
     }
 

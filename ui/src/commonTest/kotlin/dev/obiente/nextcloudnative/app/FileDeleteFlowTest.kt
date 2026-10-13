@@ -375,6 +375,89 @@ class FileDeleteFlowTest {
     }
 
     @Test
+    fun `after an unknown result only positively the same item is retryable`(): Unit = runBlocking {
+        val cases = listOf(
+            // Same stable ID, type, and ETag: the original is still there and unchanged.
+            Triple(7L, 7L, "The delete did not finish. report.txt is still on the server."),
+            // A replacement with matching type and ETag but another ID must not be deleted by a retry.
+            Triple(7L, 8L, "report.txt was replaced on the server. Refresh the folder."),
+            // Without an ID on one side, type and ETag are the only identity evidence.
+            Triple(null, 8L, "The delete did not finish. report.txt is still on the server."),
+            Triple(7L, null, "The delete did not finish. report.txt is still on the server."),
+        )
+        for ((shownId, listedId, message) in cases) {
+            val shown = file("Documents/report.txt", etag = "v1", fileId = shownId)
+            val deletes = coordinator()
+            val state = FileDeleteDialogState(deletes).apply { open(shown) }
+            val fake = FakeDeleteBoundary(
+                deleteResult = { throw IllegalStateException("response interrupted") },
+                listing = {
+                    NextcloudFileListing(listOf(file("Documents/report.txt", etag = "v1", fileId = listedId)), NextcloudFileListingSource.Network)
+                },
+            )
+
+            deletes.finish(state, fake)
+
+            assertEquals(message, state.error, "shown=$shownId listed=$listedId")
+            assertEquals(shownId != null && listedId != null && shownId != listedId, state.retryBlocked)
+            assertEquals(1, fake.deletes.size)
+        }
+    }
+
+    @Test
+    fun `a delete answered with 404 reports the local follow-up for the vanished path`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val fake = FakeDeleteBoundary(deleteResult = {
+            throw fileOperationException(404, localFollowUp = FileMutationLocalFollowUp.Failed)
+        })
+
+        val effect = deletes.finish(state, fake)
+
+        assertEquals(
+            FileDeleteScreenEffect(
+                "report.txt is no longer in this folder. Local file status could not be updated; refresh the folder if it looks out of date.",
+                reloadFolder = true,
+            ),
+            effect,
+        )
+        assertTrue(fake.reads.isEmpty(), "A 404 is definitive and needs no verification request.")
+    }
+
+    @Test
+    fun `a delete that never left the device is a plain retryable failure without verification`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val fake = FakeDeleteBoundary(deleteResult = {
+            throw FileMutationNotSentException("Could not reach the server, so nothing was changed. Try again.")
+        })
+
+        deletes.finish(state, fake)
+
+        assertEquals("Could not reach the server, so nothing was changed. Try again.", state.error)
+        assertFalse(state.retryBlocked)
+        assertNull(deletes.writeBlockFor("Documents/report.txt"), "Nothing was sent, so related writes may proceed.")
+        assertTrue(fake.reads.isEmpty(), "No second request is made for a failure that sent nothing.")
+        assertNotNull(state.begin(), "Retrying is safe.")
+    }
+
+    @Test
+    fun `an ambiguous failure is still verified on the server`(): Unit = runBlocking {
+        val deletes = coordinator()
+        val state = FileDeleteDialogState(deletes).apply { open(report) }
+        val fake = FakeDeleteBoundary(
+            deleteResult = { throw IllegalStateException("connection reset after sending") },
+            listing = { throw IllegalStateException("offline") },
+        )
+
+        deletes.finish(state, fake)
+
+        assertEquals(listOf("Documents"), fake.reads)
+        assertEquals(unconfirmedDeleteMessage("report.txt"), state.error)
+        assertTrue(state.retryBlocked)
+    }
+
+    @Test
     fun `missing item is reported as no longer in the folder, not as deleted`(): Unit = runBlocking {
         val deletes = coordinator()
         val state = FileDeleteDialogState(deletes).apply { open(report) }

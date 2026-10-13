@@ -9,11 +9,18 @@ internal sealed interface FileDeleteOutcome {
 
     /**
      * The item is no longer at its path. That is not proof of deletion: after an unknown result
-     * ([afterUnknownResult]) another client may have moved or renamed it instead.
+     * ([afterUnknownResult]) another client may have moved or renamed it instead. [localFollowUp]
+     * reports the local bookkeeping for the vanished path, as for a confirmed delete.
      */
-    data class NoLongerAtLocation(val afterUnknownResult: Boolean) : FileDeleteOutcome
+    data class NoLongerAtLocation(
+        val afterUnknownResult: Boolean,
+        val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
+    ) : FileDeleteOutcome
 
-    /** The item is verified to be unchanged on the server, so trying again is safe. */
+    /**
+     * The same item is verified to be unchanged on the server, or the request was never sent, so
+     * trying again is safe.
+     */
     data class NotDeleted(val message: String) : FileDeleteOutcome
 
     /**
@@ -60,9 +67,16 @@ internal suspend fun deleteFileWithVerifiedOutcome(
     } catch (failure: Exception) {
         failure
     }
+    // Nothing left this device, so the item is unchanged and no verification request is needed.
+    if (failure is FileMutationNotSentException) {
+        return FileDeleteOutcome.NotDeleted(failure.message ?: "${target.name} was not deleted. Nothing was sent.")
+    }
     if (failure is NextcloudFileOperationException) {
         when (failure.error) {
-            NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = false)
+            NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.NoLongerAtLocation(
+                afterUnknownResult = false,
+                localFollowUp = failure.localFollowUp ?: FileMutationLocalFollowUp.Completed,
+            )
             NextcloudFileOperationError.ServerFailure -> Unit
             // Resending the same ETag precondition cannot succeed.
             NextcloudFileOperationError.Conflict -> return FileDeleteOutcome.RefreshRequired(
@@ -107,6 +121,12 @@ private suspend fun verifyFileDeletePostcondition(
             FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true)
         }
     }
+    // Retrying is safe only for positively the same item. A differing stable file ID means a
+    // replacement now holds the path, even when its type and ETag match. Without an ID on either
+    // side, the type and ETag are the only identity evidence the listing offers.
+    if (target.fileId != null && current.fileId != null && current.fileId != target.fileId) {
+        return FileDeleteOutcome.RefreshRequired("${target.name} was replaced on the server. Refresh the folder.")
+    }
     return if (current.isDirectory == target.isDirectory && current.etag == expectedEtag) {
         FileDeleteOutcome.NotDeleted("The delete did not finish. ${target.name} is still on the server.")
     } else {
@@ -126,8 +146,10 @@ internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boo
             notice = if (afterUnknownResult) {
                 "$name is no longer in this folder. The delete response was interrupted, so it may " +
                     "have been deleted, moved, or renamed."
-            } else {
+            } else if (localFollowUp == FileMutationLocalFollowUp.Completed) {
                 "$name is no longer in this folder."
+            } else {
+                localFollowUp.reportFor("$name is no longer in this folder")
             },
             reloadFolder = true,
         )

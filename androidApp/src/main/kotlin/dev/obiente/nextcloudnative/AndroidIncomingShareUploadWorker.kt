@@ -119,9 +119,9 @@ internal class AndroidIncomingShareUploadWorker(
         }
         // A delete of the destination or a parent that is unverified in this process finishes first;
         // the queued upload is retried later and nothing is sent meanwhile.
-        if (incomingShareUploadBlock(services.fileWriteFences.account(session.accountId), requireNotNull(request.destinationPath)) != null) {
-            return Result.retry()
-        }
+        val destinationFence = services.fileWriteFences.account(session.accountId)
+        val destinationBlocked = { incomingShareUploadBlock(destinationFence, requireNotNull(request.destinationPath)) != null }
+        if (destinationBlocked()) return Result.retry()
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         var foregroundPromotionAvailable = setForegroundIfAvailable(request)
         request = store.beginUpload(requestId) ?: return Result.success()
@@ -147,11 +147,11 @@ internal class AndroidIncomingShareUploadWorker(
                 addAll(request.uploadedNames)
             }
             val transfer = AndroidIncomingShareFileTransfer(store, remote, requestCancellation)
-            for (index in request.completedFiles until request.files.size) {
+            val (uploaded, allPublished) = uploadIncomingShareFilesUntilBlocked(request, destinationBlocked) { current, index ->
                 ensureNotCanceled(requestId, store)
-                request = transfer.upload(
+                transfer.upload(
                     requestId,
-                    request,
+                    current,
                     index,
                     occupiedNames,
                     destinationSnapshot.complete,
@@ -160,10 +160,22 @@ internal class AndroidIncomingShareUploadWorker(
                         throw CancellationException("Incoming share upload canceled")
                     }
                     mutationInFlight = inFlight
+                }.also { published ->
+                    if (foregroundPromotionAvailable) {
+                        foregroundPromotionAvailable = setForegroundIfAvailable(published)
+                    }
                 }
-                if (foregroundPromotionAvailable) {
-                    foregroundPromotionAvailable = setForegroundIfAvailable(request)
-                }
+            }
+            request = uploaded
+            if (!allPublished) {
+                // Finished files stay completed; the rest continue from completedFiles on the next run.
+                store.transition(
+                    id = requestId,
+                    expected = setOf(AndroidIncomingShareState.Uploading),
+                    target = AndroidIncomingShareState.Queued,
+                    message = INCOMING_SHARE_PAUSED_FOR_DELETE,
+                ) ?: return Result.success()
+                return Result.retry()
             }
             scheduleIncomingShareCleanup(applicationContext, request.id)
             request = store.transition(
@@ -352,4 +364,29 @@ internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Lo
         ?.takeIf { it > INCOMING_SHARE_WORK_BACKOFF_SECONDS }
         ?: return null
     return nowEpochMillis + retryAfterSeconds * 1_000L
+}
+
+internal const val INCOMING_SHARE_PAUSED_FOR_DELETE =
+    "Upload paused while a delete in the destination folder finishes. Finished files are kept."
+
+/**
+ * Publishes the remaining files of [request] in order, from its completed count. Before each file
+ * it consults [blocked], the account's write fence for the destination, and stops before sending
+ * that file when a covering delete is unverified or needs a refresh. Returns the updated request
+ * and whether every file was published; a later run resumes at the first unpublished file, so
+ * finished files are never sent again.
+ */
+internal suspend fun uploadIncomingShareFilesUntilBlocked(
+    request: AndroidIncomingShareRequest,
+    blocked: () -> Boolean,
+    publish: suspend (AndroidIncomingShareRequest, Int) -> AndroidIncomingShareRequest,
+): Pair<AndroidIncomingShareRequest, Boolean> {
+    var current = request
+    while (current.completedFiles < current.files.size) {
+        if (blocked()) return current to false
+        val index = current.completedFiles
+        current = publish(current, index)
+        check(current.completedFiles > index) { "A published file must advance the completed count." }
+    }
+    return current to true
 }

@@ -18,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -410,6 +411,55 @@ class DesktopFileMutationFollowUpsTest {
 
         assertEquals(FileMutationLocalFollowUp.Failed, withTimeout(5_000L) { mutation.afterConfirmedMutation() })
         release.countDown()
+    }
+
+    @Test
+    fun `a refused connection is reported as not sent and queues no reconciliation`(): Unit = runBlocking {
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        val executor = DesktopHttpMutationExecutor(okhttp3.OkHttpClient())
+        val request = okhttp3.Request.Builder().url("http://127.0.0.1:$port/remote.php/dav/files/alice/a.txt")
+            .method("DELETE", null).build()
+        val runs = Collections.synchronizedList(mutableListOf<String>())
+        val mutation = followUps().mutation("account", listOf("a.txt")) { path -> runs += path; null }
+
+        val unsent = assertFailsWith<FileMutationNotSentException> {
+            mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } }
+        }
+
+        assertIs<java.io.IOException>(unsent.cause)
+        delay(100L)
+        assertTrue(runs.isEmpty(), "Nothing was sent, so there is nothing to reconcile.")
+    }
+
+    @Test
+    fun `a failure after the request left the device stays ambiguous`(): Unit = runBlocking {
+        mockwebserver3.MockWebServer().use { server ->
+            server.enqueue(mockwebserver3.MockResponse.Builder().code(204).headersDelay(5, TimeUnit.SECONDS).build())
+            server.start()
+            val executor = DesktopHttpMutationExecutor(
+                okhttp3.OkHttpClient.Builder().readTimeout(200, TimeUnit.MILLISECONDS).build(),
+            )
+            val request = okhttp3.Request.Builder().url(server.url("/remote.php/dav/files/alice/a.txt"))
+                .method("DELETE", null).build()
+            val mutation = followUps().mutation("account", listOf("a.txt")) { null }
+
+            assertFailsWith<DesktopFileSyncAmbiguousMutationException> {
+                mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } }
+            }
+        }
+    }
+
+    @Test
+    fun `an account change before sending is reported as not sent`(): Unit = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val expected = NextcloudSession("https://guard.invalid", "alice", "synthetic")
+        val other = NextcloudSession("https://guard.invalid", "bob", "synthetic")
+        var sent = false
+
+        assertFailsWith<FileMutationNotSentException> {
+            guard.withAuthenticatedMutationSession(expected, { other }) { sent = true }
+        }
+        assertFalse(sent)
     }
 
     @Test

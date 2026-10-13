@@ -69,9 +69,14 @@ internal class DesktopFileMutationFollowUps(
         }.all { it }
 
         /**
-         * Runs [mutation], which reports an accepted response or an interrupted exchange through
-         * its callback. When the reconciliation for an unknown result cannot be queued, the
-         * failure says so explicitly.
+         * Runs [mutation], which sends one request through the desktop mutation executor and reports
+         * an accepted response or an interrupted exchange through its callback. When the
+         * reconciliation for an unknown result cannot be queued, the failure says so explicitly.
+         *
+         * The executor reports every I/O failure after a network exchange began as
+         * [DesktopFileSyncAmbiguousMutationException]; any other I/O failure from it happened before
+         * the request could leave this device (name resolution, connection, or TLS setup), so it
+         * becomes [FileMutationNotSentException].
          */
         inline fun <T> reconcilingUnknownResult(mutation: (onAcceptedOrUnknownResult: () -> Unit) -> T): T {
             var queued = true
@@ -80,6 +85,8 @@ internal class DesktopFileMutationFollowUps(
             } catch (unknown: DesktopFileSyncAmbiguousMutationException) {
                 if (queued) throw unknown
                 throw DesktopFileMutationReconciliationDroppedException(unknown)
+            } catch (unsent: IOException) {
+                throw FileMutationNotSentException("Could not reach the server, so nothing was changed. Try again.", unsent)
             }
         }
 
