@@ -701,7 +701,7 @@ class DesktopNextcloudServices(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
-    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val httpClient = OkHttpClient.Builder().useDesktopSystemTrust().trackJvmNetworkFailures().build()
     private val supportIntake = JvmSupportIntake(
         diagnostics = supportDiagnostics,
         temporaryRoot = resolvedSupportIntakeRoot,

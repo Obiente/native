@@ -342,6 +342,58 @@ published installer.
   retained-data and support guidance, without a reset or an update claim. A
   valid legacy session can still repair malformed registry data.
 
+### Desktop TLS trust
+
+**Last reviewed: 2026-10-08.** These are source and deterministic-test
+guarantees, not claims about a published installer; the code may have changed.
+
+- Desktop clients that contact the Nextcloud server use one process-wide trust
+  manager from `DesktopTlsTrust.kt`. It accepts a chain when the bundled Java
+  runtime roots validate it, or, after they reject it, when the operating
+  system's trust decision accepts it. OkHttp hostname verification is
+  unchanged, and no trust-all path exists.
+- Linux: `DesktopSystemTrustAnchors.kt` reads the first complete system CA
+  bundle into a PKIX trust manager limited to those anchors. An unreadable,
+  oversized, truncated, or malformed bundle contributes no anchors.
+- Windows: `WindowsChainEngineTrust.kt` passes the presented chain to the
+  current user's Windows chain engine (`CertGetCertificateChain` with the
+  server-authentication usage, then the SSL policy) through JNA. Windows
+  roots are not copied into Java, so Windows store policy such as the
+  Disallowed store and certificate purpose restrictions stays in force. Chain
+  building uses cached data only and does not fetch AIA or root updates.
+  End-certificate revocation is requested with
+  `CERT_CHAIN_REVOCATION_CHECK_END_CERT` and
+  `CERT_CHAIN_REVOCATION_CHECK_CACHE_ONLY`, because
+  `CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL` does not cover revocation. Unknown or
+  offline revocation status is ignored, so only a revocation already present
+  in the Windows cache can reject a chain.
+  After the bundled roots accept a chain, the same Windows check runs once
+  more as a veto: explicit distrust, a cached revocation of the server
+  certificate, or a stored purpose that excludes server authentication
+  rejects the chain. An untrusted or unknown Windows root, unknown revocation
+  status, other rejections, and failed native calls keep the bundled decision,
+  so a stale Windows root store cannot break public servers. This adds one
+  cached chain build to each new TLS connection.
+- macOS reads no system trust yet. Update checks and project news keep the
+  bundled roots only.
+- `DesktopTlsTrustTest` and `DesktopSystemTrustAnchorsTest` cover synthetic CAs,
+  untrusted and expired chains, hostname mismatch, malformed or missing
+  bundles, and the Windows verdict mapping through an injected verifier.
+  `WindowsExplicitDistrustVetoTest` covers vetoing and non-vetoing verdicts
+  for chains the bundled roots accept, including revoked, unknown, and
+  offline revocation status.
+  `WindowsChainEngineTrustTest` runs only on Windows hosts and drives the real
+  chain engine with an in-memory exclusive root: a trusted root, an unrelated
+  root, an expired leaf, and a root whose stored purpose excludes server
+  authentication, including that restricted root vetoing a chain the bundled
+  roots also trust. They also confirm that synthetic certificates without
+  revocation data stay trusted with revocation checking enabled. No test
+  modifies a Windows certificate store or revocation cache, so Disallowed
+  handling and a definite cached revocation rely on documented Windows engine
+  behavior. No test establishes behavior inside a Flatpak or other sandbox.
+- User-facing guidance is in
+  [sign-in diagnostics](docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities).
+
 ## Platform delivery rule
 
 Shared code is valuable only when it preserves correct native behavior. Move a
