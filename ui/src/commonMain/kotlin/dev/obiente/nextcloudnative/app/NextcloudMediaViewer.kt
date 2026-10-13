@@ -74,7 +74,8 @@ import kotlinx.coroutines.launch
  * Arrow keys navigate on desktop; Escape closes the viewer. Focusable icon buttons also support
  * normal keyboard activation. Image edits are reversible previews until the user explicitly saves
  * a new recipe sidecar; the source file is never passed to a write operation.
- * Deletes run in the account's shared [fileDeletes] owner, like deletes from Files.
+ * Deletes run in the account's shared [fileDeletes] owner, like deletes from Files. An applied
+ * delete goes to [onItemRemoved], whose owner removes it from the navigable sequence.
  */
 @Composable
 internal fun NextcloudMediaViewer(
@@ -89,6 +90,7 @@ internal fun NextcloudMediaViewer(
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
+    onItemRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
@@ -98,8 +100,7 @@ internal fun NextcloudMediaViewer(
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val removedPaths = remember { androidx.compose.runtime.mutableStateListOf<String>() }
-    val items = remember(media, selected, removedPaths.toList()) { mediaViewerItems(media, selected, removedPaths) }
+    val items = remember(media, selected) { mediaViewerItems(media, selected) }
     val sourcePlan = remember(sourceMembers, selected) {
         planMediaSources(sourceMembers, selected)
     }
@@ -848,8 +849,7 @@ internal fun NextcloudMediaViewer(
     }
 
     writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
-    MediaDeleteHost(items, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed ->
-        viewerAction = null; mediaViewerRemove(removed, items, selected, removedPaths::add, onSelect) { onSourceRemoved(selected) } }
+    MediaDeleteHost(items, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed -> viewerAction = null; onItemRemoved(removed) }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,

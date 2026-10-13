@@ -1,17 +1,22 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileMutationLocalFollowUp
+import dev.obiente.nextcloudnative.app.FileMutationOutcomeUnknownException
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.invalidateAfterConfirmedFileMutation
+import dev.obiente.nextcloudnative.app.reportingUnknownFileMutationResult
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 
 class AndroidFileMutationLocalFollowUpTest {
     @Test
@@ -65,6 +70,48 @@ class AndroidFileMutationLocalFollowUpTest {
 
         assertEquals(FileMutationLocalFollowUp.Failed, followUp)
     }
+
+    @Test
+    fun anInterruptedRequestReportsItsCacheInvalidationWithTheUnknownResult() = withCache { root, cache -> runBlocking {
+        val events = mutableListOf<SupportDiagnosticEventDraft>()
+        fun invalidate() = invalidateAfterConfirmedFileMutation(listOf("Documents/a.txt"), events::add) { path ->
+            cache.invalidate(ACCOUNT, path)
+        }
+
+        val completed = assertIs<FileMutationOutcomeUnknownException>(failureOf {
+            reportingUnknownFileMutationResult(::invalidate) { throw java.io.IOException("connection reset") }
+        })
+        // A file where the account's cache directory belongs makes the next invalidation fail.
+        File(root, ACCOUNT).deleteRecursively()
+        File(root, ACCOUNT).writeText("blocked")
+        val failed = assertIs<FileMutationOutcomeUnknownException>(failureOf {
+            reportingUnknownFileMutationResult(::invalidate) { throw java.io.IOException("connection reset") }
+        })
+
+        assertEquals(FileMutationLocalFollowUp.Completed, completed.localFollowUp)
+        assertIs<java.io.IOException>(completed.cause)
+        assertEquals(FileMutationLocalFollowUp.Failed, failed.localFollowUp, "A failed invalidation is not reported as complete.")
+    } }
+
+    @Test
+    fun aDefinitiveFailureOrCancellationIsNotAnUnknownResult(): Unit = runBlocking {
+        var invalidated = false
+        val invalidate = { invalidated = true; FileMutationLocalFollowUp.Completed }
+
+        assertIs<IllegalArgumentException>(failureOf { reportingUnknownFileMutationResult(invalidate) { throw IllegalArgumentException("bad") } })
+        assertIs<CancellationException>(failureOf { reportingUnknownFileMutationResult(invalidate) { throw CancellationException("closed") } })
+        assertEquals(7, reportingUnknownFileMutationResult(invalidate) { 7 })
+        assertFalse(invalidated)
+    }
+
+    /** The failure [block] ends with; a suspend call cannot run inside `assertFailsWith`. */
+    private suspend fun failureOf(block: suspend () -> Unit): Throwable? =
+        try {
+            block()
+            null
+        } catch (failure: Throwable) {
+            failure
+        }
 
     private fun withCache(block: (File, AndroidFileReadCache) -> Unit) {
         val root = Files.createTempDirectory("android-file-mutation-follow-up").toFile()

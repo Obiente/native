@@ -274,21 +274,27 @@ class DesktopFileMutationFollowUpsTest {
         assertTrue(started.await(5, TimeUnit.SECONDS))
         val interrupted = DesktopFileSyncAmbiguousMutationException(java.io.IOException("reset"))
 
-        val queued = assertFailsWith<DesktopFileSyncAmbiguousMutationException> {
-            followUps.mutation("account", listOf("source")) { null }.reconcilingUnknownResult { onUnknown ->
-                onUnknown()
-                throw interrupted
-            }
-        }
-        val dropped = assertFailsWith<DesktopFileMutationReconciliationDroppedException> {
-            followUps.mutation("account", listOf("source", "destination")) { null }.reconcilingUnknownResult { onUnknown ->
-                onUnknown()
-                throw interrupted
-            }
-        }
+        val queued = assertIs<FileMutationOutcomeUnknownException>(
+            failureOf {
+                followUps.mutation("account", listOf("source")) { null }.reconcilingUnknownResult { onUnknown ->
+                    onUnknown()
+                    throw interrupted
+                }
+            },
+        )
+        val dropped = assertIs<DesktopFileMutationReconciliationDroppedException>(
+            failureOf {
+                followUps.mutation("account", listOf("source", "destination")) { null }.reconcilingUnknownResult { onUnknown ->
+                    onUnknown()
+                    throw interrupted
+                }
+            },
+        )
 
-        assertSame(interrupted, queued, "A queued reconciliation keeps the original unknown result.")
+        assertSame(interrupted, queued.cause, "A queued reconciliation keeps the original unknown result.")
+        assertEquals(FileMutationLocalFollowUp.StillRunning, queued.localFollowUp, "It waits behind the stall.")
         assertSame(interrupted, dropped.cause)
+        assertEquals(FileMutationLocalFollowUp.Failed, dropped.localFollowUp, "A dropped reconciliation is reported.")
         assertFalse(followUps.afterUnknownResult("account", listOf("other")) { null })
         assertEquals("ok", followUps.mutation("account", listOf("other")) { null }.reconcilingUnknownResult { "ok" })
     }
@@ -422,9 +428,9 @@ class DesktopFileMutationFollowUpsTest {
         val runs = Collections.synchronizedList(mutableListOf<String>())
         val mutation = followUps().mutation("account", listOf("a.txt")) { path -> runs += path; null }
 
-        val unsent = assertFailsWith<FileMutationNotSentException> {
-            mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } }
-        }
+        val unsent = assertIs<FileMutationNotSentException>(
+            failureOf { mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } } },
+        )
 
         assertIs<java.io.IOException>(unsent.cause)
         delay(100L)
@@ -443,10 +449,52 @@ class DesktopFileMutationFollowUpsTest {
                 .method("DELETE", null).build()
             val mutation = followUps().mutation("account", listOf("a.txt")) { null }
 
-            assertFailsWith<DesktopFileSyncAmbiguousMutationException> {
-                mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } }
-            }
+            val unknown = assertIs<FileMutationOutcomeUnknownException>(
+                failureOf { mutation.reconcilingUnknownResult { onUnknown -> executor.execute(request, onUnknown) { it.code } } },
+            )
+            assertIs<DesktopFileSyncAmbiguousMutationException>(unknown.cause)
+            assertEquals(FileMutationLocalFollowUp.Completed, unknown.localFollowUp)
         }
+    }
+
+    @Test
+    fun `an unknown result reports a failed or still-running reconciliation`(): Unit = runBlocking {
+        val interrupted = DesktopFileSyncAmbiguousMutationException(java.io.IOException("reset"))
+        for ((refresh, expected) in listOf<Pair<(String) -> Throwable?, FileMutationLocalFollowUp>>(
+            { _: String -> null } to FileMutationLocalFollowUp.Completed,
+            { _: String -> IllegalStateException("cache") } to FileMutationLocalFollowUp.Failed,
+        )) {
+            val unknown = assertIs<FileMutationOutcomeUnknownException>(
+                failureOf {
+                    followUps().mutation("account", listOf("a.txt"), refresh).reconcilingUnknownResult { onUnknown ->
+                        onUnknown()
+                        throw interrupted
+                    }
+                },
+            )
+            assertEquals(expected, unknown.localFollowUp)
+        }
+        val release = latch()
+        val stalled = assertIs<FileMutationOutcomeUnknownException>(
+            failureOf {
+                followUps(waitMillis = 20L).mutation("account", listOf("slow.txt")) {
+                    release.awaitUninterruptibly()
+                    null
+                }.reconcilingUnknownResult { onUnknown ->
+                    onUnknown()
+                    throw interrupted
+                }
+            },
+        )
+        assertEquals(FileMutationLocalFollowUp.StillRunning, stalled.localFollowUp, "A slow reconciliation is not awaited.")
+    }
+
+    /** The failure of [block], for wrappers that are suspending and cannot run inside assertFailsWith. */
+    private suspend fun failureOf(block: suspend () -> Unit): Throwable? = try {
+        block()
+        null
+    } catch (failure: Throwable) {
+        failure
     }
 
     @Test

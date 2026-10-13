@@ -4,7 +4,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -19,6 +18,7 @@ import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -217,25 +217,79 @@ class MediaViewerDeleteSceneTest {
         }
 
     @Test
-    fun `the selection rule picks the next item, then the previous one, and closes on the last`() {
-        val items = listOf(first, second, third)
-        fun removeFrom(removed: NextcloudFile, selected: NextcloudFile): List<String> {
-            val events = mutableListOf<String>()
-            mediaViewerRemove(removed, items, selected, { events += "hide:$it" }, { events += "select:${it.name}" }) { events += "close" }
-            return events
+    fun `a confirmed delete stays applied when the viewer is recreated`() {
+        val events = mutableListOf<String>()
+        val fake = FakeMediaServices(delete = { NextcloudFileMutationResult(null, null) })
+        val route = ViewerRoute(listOf(first, second, third))
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, events) }) {
+            click("Delete")
+            settleUntil { events.isNotEmpty() }
+            assertTrue(has("showing second.jpg of 2"))
         }
 
-        assertEquals(listOf("hide:Photos/third.jpg"), removeFrom(third, first), "Another item is only hidden.")
-        assertEquals(listOf("hide:Photos/second.jpg", "select:third.jpg"), removeFrom(second, second))
-        assertEquals(listOf("hide:Photos/third.jpg", "select:second.jpg"), removeFrom(third, third))
-        val events = mutableListOf<String>()
-        mediaViewerRemove(first, listOf(first), first, { events += "hide" }, { events += "select" }) { events += "close" }
-        assertEquals(listOf("close"), events)
-        assertEquals(listOf(second, third), mediaViewerItems(items, second, listOf("Photos/first.jpg")))
-        assertEquals(listOf(first), mediaViewerItems(items, first, listOf("Photos/first.jpg")), "A shown item is never hidden from itself.")
+        // A new composition with a new delete owner reads the same route, as after an activity recreation.
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, mutableListOf(), open = false) }) {
+            assertTrue(has("showing second.jpg of 2"), "The deleted item is not navigable again.")
+            click("Previous")
+            assertTrue(has("showing second.jpg of 2"), "The selection stays valid.")
+            click("Next")
+            assertTrue(has("showing third.jpg of 2"))
+        }
+        assertEquals(listOf("delete"), fake.calls)
     }
 
-    /** A minimal viewer: the shared delete host, the viewer's list rule, and next/previous selection. */
+    @Test
+    fun `a non-confirmed outcome keeps the item after the viewer is recreated`() {
+        val events = mutableListOf<String>()
+        val fake = FakeMediaServices(delete = { throw fileOperationException(412) })
+        val route = ViewerRoute(listOf(first, second))
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, events) }) {
+            click("Delete")
+            settleUntil { has("The file or destination changed. Refresh and try again.") }
+        }
+
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, mutableListOf(), open = false) }) {
+            assertTrue(has("showing first.jpg of 2"), "The item is kept.")
+            click("Next")
+            assertTrue(has("showing second.jpg of 2"))
+        }
+        assertTrue(events.none { it.startsWith("removed") })
+    }
+
+    @Test
+    fun `the route drops a removed item, selects the next or the previous one, and ends on the last`() {
+        fun removeFrom(removed: NextcloudFile, shown: NextcloudFile): Pair<String, Int> {
+            val repository = MediaViewerNavigationRepository()
+            val route = assertNotNull(repository.register(alice.accountId, listOf(first, second, third), shown))
+            val next = assertNotNull(repository.remove(alice.accountId, route, removed))
+            val snapshot = assertNotNull(repository.resolve(alice.accountId, next))
+            assertTrue(snapshot.media.none { it.path == removed.path }, "The removed item is not navigable.")
+            return snapshot.selected.name to snapshot.media.size
+        }
+
+        assertEquals("first.jpg" to 2, removeFrom(third, first), "Another item only leaves the sequence.")
+        assertEquals("third.jpg" to 2, removeFrom(second, second), "The next item replaces the shown one.")
+        assertEquals("second.jpg" to 2, removeFrom(third, third), "The previous item replaces the last one.")
+        val repository = MediaViewerNavigationRepository()
+        val only = assertNotNull(repository.register(alice.accountId, listOf(first), first))
+        assertNull(repository.remove(alice.accountId, only, first), "Removing the last item ends the route.")
+        assertNull(repository.resolve(alice.accountId, only), "The ended route cannot be restored.")
+        val shown = assertNotNull(repository.register(alice.accountId, listOf(first, second), first))
+        val kept = assertNotNull(repository.remove(alice.accountId, shown, first))
+        assertNotEquals(shown, kept, "A removal changes the route even when the next item takes the same index.")
+        assertNull(repository.resolve(alice.accountId, shown), "A stale copy of the old route no longer resolves.")
+        val other = assertNotNull(repository.register(alice.accountId, listOf(first, second), first))
+        assertNull(repository.remove(bob.accountId, other, first), "Another account cannot change the route.")
+        assertEquals(2, assertNotNull(repository.resolve(alice.accountId, other)).media.size)
+        assertEquals(listOf(first), mediaViewerItems(listOf(second, third), first), "A shown item outside the list stays shown.")
+    }
+
+    /** The viewer's navigable sequence, held by a route repository that outlives any composition. */
+    private inner class ViewerRoute(media: List<NextcloudFile>) {
+        val repository = MediaViewerNavigationRepository()
+        var route: MediaViewerNavigationRoute? = repository.register(alice.accountId, media, media.first())
+    }
+
     @Composable
     private fun Viewer(
         fake: FakeMediaServices,
@@ -243,23 +297,48 @@ class MediaViewerDeleteSceneTest {
         events: MutableList<String>,
         deletes: FileDeleteCoordinator = rememberFileDeletesForTests(alice),
         open: Boolean = true,
+    ) = Viewer(fake, remember { ViewerRoute(media) }, events, deletes, open)
+
+    /** A minimal viewer: the shared delete host, the route repository, and next/previous selection. */
+    @Composable
+    private fun Viewer(
+        fake: FakeMediaServices,
+        state: ViewerRoute,
+        events: MutableList<String>,
+        deletes: FileDeleteCoordinator = rememberFileDeletesForTests(alice),
+        open: Boolean = true,
     ) {
-        var selected by remember { mutableStateOf(media.first()) }
+        var route by remember { mutableStateOf(state.route) }
         var deleteOpen by remember { mutableStateOf(open) }
-        val removedPaths = remember { mutableStateListOf<String>() }
-        val items = mediaViewerItems(media, selected, removedPaths)
+        fun show(next: MediaViewerNavigationRoute?) {
+            route = next
+            state.route = next
+        }
+        val current = route
+        val snapshot = current?.let { state.repository.resolve(alice.accountId, it) }
+        if (current == null || snapshot == null) {
+            Text("viewer closed")
+            return
+        }
+        val selected = snapshot.selected
+        val items = mediaViewerItems(snapshot.media, selected)
         val index = items.indexOfFirst { it.path == selected.path }
+        fun move(to: NextcloudFile?) {
+            to?.let { state.repository.select(alice.accountId, current, it) }?.let(::show)
+        }
         Column {
             Text("showing ${selected.name} of ${items.size}")
-            TextButton(onClick = { items.getOrNull(index + 1)?.let { selected = it } }) { Text("Next") }
-            TextButton(onClick = { items.getOrNull(index - 1)?.let { selected = it } }) { Text("Previous") }
+            TextButton(onClick = { move(items.getOrNull(index + 1)) }) { Text("Next") }
+            TextButton(onClick = { move(items.getOrNull(index - 1)) }) { Text("Previous") }
         }
         MediaDeleteHost(items, selected, alice, "alice", fake.services, deletes, deleteOpen, onClose = {
             deleteOpen = false
             events += "closed"
         }) { removed ->
             events += "removed:${removed.name}"
-            mediaViewerRemove(removed, items, selected, removedPaths::add, { selected = it }) { events += "viewer closed" }
+            val next = state.repository.remove(alice.accountId, current, removed)
+            show(next)
+            if (next == null) events += "viewer closed"
         }
     }
 

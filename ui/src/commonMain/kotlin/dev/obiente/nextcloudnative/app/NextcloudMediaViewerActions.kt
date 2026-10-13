@@ -324,32 +324,9 @@ internal fun MediaDeleteHost(
     }
 }
 
-/** The viewer's items: [media] without items whose delete was applied, or only [selected] when it is not listed. */
-internal fun mediaViewerItems(media: List<NextcloudFile>, selected: NextcloudFile, removedPaths: Collection<String>): List<NextcloudFile> {
-    val visible = if (removedPaths.isEmpty()) media else media.filterNot { it.path in removedPaths }
-    return if (mediaViewerNavigationIndex(visible, selected) >= 0) visible else listOf(selected)
-}
-
-/**
- * Drops [removed] from the viewer. Another item is simply hidden. When the shown item goes, the
- * next item, or else the previous one, is selected; when none is left, [closeLast] closes the viewer.
- */
-internal fun mediaViewerRemove(
-    removed: NextcloudFile,
-    items: List<NextcloudFile>,
-    selected: NextcloudFile,
-    markRemoved: (String) -> Unit,
-    select: (NextcloudFile) -> Unit,
-    closeLast: () -> Unit,
-) {
-    if (removed.path != selected.path) return markRemoved(removed.path)
-    val remaining = items.filterNot { it.path == removed.path }
-    val index = items.indexOfFirst { it.path == removed.path }
-    val neighbor = remaining.getOrNull(index.coerceAtLeast(0)) ?: remaining.lastOrNull()
-    if (neighbor == null) return closeLast()
-    markRemoved(removed.path)
-    select(neighbor)
-}
+/** The viewer's items: [media], or only [selected] when it is not listed. */
+internal fun mediaViewerItems(media: List<NextcloudFile>, selected: NextcloudFile): List<NextcloudFile> =
+    if (mediaViewerNavigationIndex(media, selected) >= 0) media else listOf(selected)
 
 /** Actions that change the item, create files next to it, or bind it to a share or album. */
 private val mediaWriteActions = setOf(

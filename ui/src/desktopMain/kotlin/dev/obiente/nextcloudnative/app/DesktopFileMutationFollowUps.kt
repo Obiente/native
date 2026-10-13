@@ -78,13 +78,14 @@ internal class DesktopFileMutationFollowUps(
          * the request could leave this device (name resolution, connection, or TLS setup), so it
          * becomes [FileMutationNotSentException].
          */
-        inline fun <T> reconcilingUnknownResult(mutation: (onAcceptedOrUnknownResult: () -> Unit) -> T): T {
+        suspend inline fun <T> reconcilingUnknownResult(mutation: (onAcceptedOrUnknownResult: () -> Unit) -> T): T {
             var queued = true
             try {
                 return mutation { queued = onAcceptedOrUnknownResult() }
             } catch (unknown: DesktopFileSyncAmbiguousMutationException) {
-                if (queued) throw unknown
-                throw DesktopFileMutationReconciliationDroppedException(unknown)
+                if (!queued) throw DesktopFileMutationReconciliationDroppedException(unknown)
+                // Report the queued reconciliation like a confirmed change: bounded, never blocking.
+                throw FileMutationOutcomeUnknownException(FILE_MUTATION_OUTCOME_UNKNOWN_MESSAGE, unknown, afterConfirmedMutation())
             } catch (unsent: IOException) {
                 throw FileMutationNotSentException("Could not reach the server, so nothing was changed. Try again.", unsent)
             }
@@ -274,10 +275,11 @@ internal class DesktopFileMutationFollowUps(
 }
 
 /** The mutation's server result is unknown, and its local reconciliation could not be queued. */
-internal class DesktopFileMutationReconciliationDroppedException(cause: IOException) : IOException(
+internal class DesktopFileMutationReconciliationDroppedException(cause: IOException) : FileMutationOutcomeUnknownException(
     "The server response was interrupted, and local file status could not be scheduled for an update. " +
         "Refresh the folder before trying again.",
     cause,
+    FileMutationLocalFollowUp.Failed,
 )
 
 /**

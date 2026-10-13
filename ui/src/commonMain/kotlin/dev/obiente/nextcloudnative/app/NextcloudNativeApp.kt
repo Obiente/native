@@ -1883,6 +1883,7 @@ private fun AuthenticatedApp(
                 }
                 LoadingMessage("Restoring the media timeline...")
             } else {
+                fun closeViewer() { mediaViewerNavigationRepository.release(session.accountId, current.navigationKey); screen = current.returnTo }
                 NextcloudMediaViewer(
                     media = snapshot.media,
                     selected = snapshot.selected,
@@ -1901,14 +1902,13 @@ private fun AuthenticatedApp(
                             )
                         }
                     },
-                    onSourceRemoved = {
-                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
-                        screen = current.returnTo
+                    onSourceRemoved = { closeViewer() },
+                    onItemRemoved = { removed ->
+                        mediaViewerNavigationRepository.remove(session.accountId, route, removed)?.let { next ->
+                            screen = current.copy(navigationKey = next.key, selectedIndex = next.selectedIndex, selectedSourceIndex = next.selectedSourceIndex)
+                        } ?: closeViewer()
                     },
-                    onClose = {
-                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
-                        screen = current.returnTo
-                    },
+                    onClose = ::closeViewer,
                     navigationRequest = pendingEditorNavigationRequest,
                     onNavigationConfirmed = ::applyPendingNavigationRequest,
                     onNavigationCancelled = ::cancelPendingNavigationRequest,

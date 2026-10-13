@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 
 /** The support diagnostic for local bookkeeping after a server-confirmed file change. */
@@ -47,3 +48,16 @@ fun invalidateAfterConfirmedFileMutation(
     }
     return followUp
 }
+
+/**
+ * Runs one file mutation request whose transport cannot tell whether a failed exchange was sent.
+ * An I/O failure leaves the server result unknown, so the local state is invalidated with
+ * [invalidate] and its result travels with [FileMutationOutcomeUnknownException], letting a later
+ * verified outcome report it. Other failures and cancellation propagate unchanged.
+ */
+suspend fun <T> reportingUnknownFileMutationResult(invalidate: () -> FileMutationLocalFollowUp, request: suspend () -> T): T =
+    try {
+        request()
+    } catch (unknown: IOException) {
+        throw FileMutationOutcomeUnknownException(FILE_MUTATION_OUTCOME_UNKNOWN_MESSAGE, unknown, invalidate())
+    }

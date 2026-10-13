@@ -94,12 +94,15 @@ internal suspend fun deleteFileWithVerifiedOutcome(
             -> return FileDeleteOutcome.NotDeleted(failure.message ?: "Could not delete ${target.name}.")
         }
     }
-    return verifyFileDeletePostcondition(target, expectedEtag, readParent)
+    // The local reconciliation run for an unknown result, reported if the item turns out to be gone.
+    val unknownFollowUp = (failure as? FileMutationOutcomeUnknownException)?.localFollowUp ?: FileMutationLocalFollowUp.Completed
+    return verifyFileDeletePostcondition(target, expectedEtag, unknownFollowUp, readParent)
 }
 
 private suspend fun verifyFileDeletePostcondition(
     target: NextcloudFile,
     expectedEtag: String,
+    unknownFollowUp: FileMutationLocalFollowUp,
     readParent: suspend () -> NextcloudFileListing,
 ): FileDeleteOutcome {
     val unconfirmed = FileDeleteOutcome.RefreshRequired(unconfirmedDeleteMessage(target.name))
@@ -118,7 +121,7 @@ private suspend fun verifyFileDeletePostcondition(
         return if (renamedInPlace) {
             FileDeleteOutcome.RefreshRequired("${target.name} was renamed on the server. Refresh the folder.")
         } else {
-            FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true)
+            FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true, localFollowUp = unknownFollowUp)
         }
     }
     // Retrying is safe only for positively the same item. Matching stable file IDs prove it; a
@@ -150,14 +153,14 @@ internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boo
     when (this) {
         is FileDeleteOutcome.Deleted -> FileDeleteScreenEffect(notice = localFollowUp.reportFor("Deleted $name"), reloadFolder = true)
         is FileDeleteOutcome.NoLongerAtLocation -> FileDeleteScreenEffect(
-            notice = if (afterUnknownResult) {
-                "$name is no longer in this folder. The delete response was interrupted, so it may " +
-                    "have been deleted, moved, or renamed."
-            } else if (localFollowUp == FileMutationLocalFollowUp.Completed) {
-                "$name is no longer in this folder."
-            } else {
-                localFollowUp.reportFor("$name is no longer in this folder")
-            },
+            notice = (
+                if (afterUnknownResult) {
+                    "$name is no longer in this folder. The delete response was interrupted, so it may " +
+                        "have been deleted, moved, or renamed"
+                } else {
+                    "$name is no longer in this folder"
+                }
+                ).let { done -> if (localFollowUp == FileMutationLocalFollowUp.Completed) "$done." else localFollowUp.reportFor(done) },
             reloadFolder = true,
         )
         is FileDeleteOutcome.NotDeleted -> FileDeleteScreenEffect(

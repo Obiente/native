@@ -494,6 +494,33 @@ class FileDeleteFlowTest {
     }
 
     @Test
+    fun `an item found gone after an unknown result reports the reconciliation run for that result`(): Unit = runBlocking {
+        val interrupted = "report.txt is no longer in this folder. The delete response was interrupted, so it may " +
+            "have been deleted, moved, or renamed"
+        for ((failure, notice) in listOf<Pair<Exception, String>>(
+            FileMutationOutcomeUnknownException("unknown", null, FileMutationLocalFollowUp.Completed) to "$interrupted.",
+            FileMutationOutcomeUnknownException("unknown", null, FileMutationLocalFollowUp.StillRunning) to
+                "$interrupted. Local file status is still updating in the background.",
+            // A failed reconciliation, and one that could not be queued at all, both report a failure.
+            FileMutationOutcomeUnknownException("unknown", null, FileMutationLocalFollowUp.Failed) to
+                "$interrupted. Local file status could not be updated; refresh the folder if it looks out of date.",
+            // Without reconciliation evidence the outcome keeps the plain notice.
+            IllegalStateException("reset") to "$interrupted.",
+        )) {
+            val deletes = coordinator()
+            val state = FileDeleteDialogState(deletes).apply { open(report) }
+            val fake = FakeDeleteBoundary(
+                deleteResult = { throw failure },
+                listing = { NextcloudFileListing(emptyList(), NextcloudFileListingSource.Network) },
+            )
+
+            assertEquals(FileDeleteScreenEffect(notice, reloadFolder = true), deletes.finish(state, fake), "$failure")
+            assertEquals(listOf("Documents"), fake.reads)
+            assertNull(state.target)
+        }
+    }
+
+    @Test
     fun `same file ID under another name after an unknown result is a rename, not a delete`(): Unit = runBlocking {
         val deletes = coordinator()
         val state = FileDeleteDialogState(deletes).apply { open(report) }

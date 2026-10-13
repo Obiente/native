@@ -121,6 +121,20 @@ class NextcloudFileOperationException(
  */
 class FileMutationNotSentException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
+/**
+ * The server result of a file mutation is unknown because the exchange was interrupted after the
+ * request may have been sent. [localFollowUp] reports the local reconciliation run for that
+ * unknown result, so an outcome verified later reports the local state truthfully.
+ */
+open class FileMutationOutcomeUnknownException(
+    message: String,
+    cause: Throwable?,
+    val localFollowUp: FileMutationLocalFollowUp,
+) : Exception(message, cause)
+
+const val FILE_MUTATION_OUTCOME_UNKNOWN_MESSAGE =
+    "The server response was interrupted, so the result is unknown. Refresh the folder before trying again."
+
 fun NextcloudFileMutation.toWebDavMutationSpec(): FileWebDavMutationSpec {
     val safeSource = requireSafeFilePath(sourcePath, allowRoot = false)
     val safeEtag = expectedEtag.trim().also {

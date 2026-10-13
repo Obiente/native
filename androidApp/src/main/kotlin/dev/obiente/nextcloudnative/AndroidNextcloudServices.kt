@@ -2721,17 +2721,17 @@ internal class AndroidNextcloudServices(
                         put("Overwrite", if (spec.overwrite) "T" else "F")
                     }
                 }
-                val response = request(
+                val accountId = NextcloudDocumentIds.accountKey(currentSession)
+                fun invalidateLocal() = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
+                    { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
+                val response = dev.obiente.nextcloudnative.app.reportingUnknownFileMutationResult(::invalidateLocal) { request(
                     method = spec.method,
                     url = buildNextcloudFileUrl(currentSession.serverUrl, userId, spec.sourcePath),
                     session = currentSession,
                     headers = headers,
                     maxResponseBytes = 64 * 1024,
                     accountMutationSerialized = accountMutationSerialized,
-                )
-                val accountId = NextcloudDocumentIds.accountKey(currentSession)
-                fun invalidateLocal() = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
-                    { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
+                ) }
                 if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) invalidateLocal() else null)
                 NextcloudFileMutationResult(spec.destinationPath, response.etag, invalidateLocal())
             }

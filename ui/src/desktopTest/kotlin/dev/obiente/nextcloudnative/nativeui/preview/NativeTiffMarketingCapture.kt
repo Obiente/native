@@ -60,6 +60,7 @@ internal class NativeTiffMarketingCapture private constructor(
                     onSourceRemoved = {
                         error("The isolated TIFF capture is read-only.")
                     },
+                    onItemRemoved = { error("The isolated TIFF capture is read-only.") },
                     onClose = {},
                     initialZoom = HIGH_DETAIL_CAPTURE_ZOOM,
                     onStateObserved = { observation -> observations += observation },

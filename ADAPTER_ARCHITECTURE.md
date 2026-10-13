@@ -386,7 +386,10 @@ receives the pending outcome.
   mutation transport does not track the exchange, so its I/O failures stay
   ambiguous and are verified.
 - A 404 runs the same local follow-up as a confirmed delete and reports an
-  incomplete one.
+  incomplete one. An item found gone after an unknown result reports the
+  local reconciliation run for that result: on desktop the queued follow-up,
+  including still running, failed, or dropped; on Android its cache
+  invalidation.
 - Android share uploads check the fence before each file; a block pauses the
   upload before the next file, keeps finished files, and the next run resumes
   at the first unfinished one.
@@ -419,8 +422,10 @@ receives the pending outcome.
   registers the same blocks, verifies an unknown result, and follows the same
   retry rules. The viewer watches outcomes for every item in its list, not only
   the shown one. It drops an item only when its delete was confirmed or the
-  item is no longer at its path, moving the selection to a neighbor or closing
-  when none is left, and applies an outcome that arrives after its dialog
+  item is no longer at its path, by removing it from the viewer's navigation
+  route in the process-level route repository, so a recreated viewer never
+  shows it again; the selection moves to a neighbor, or the viewer closes when
+  none is left. It applies an outcome that arrives after its dialog
   closed, after the user moved to another item, or after the viewer was
   recreated. Any other outcome keeps the item and shows its reason when that
   item is shown.

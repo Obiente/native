@@ -75,6 +75,7 @@ internal class RawMediaMarketingCapture private constructor(
                     onSourceRemoved = {
                         error("The isolated RAW capture is read-only.")
                     },
+                    onItemRemoved = { error("The isolated RAW capture is read-only.") },
                     onClose = {},
                     initialZoom = if (mode == RawCaptureMode.HighDetail) HIGH_DETAIL_CAPTURE_ZOOM else 1f,
                     onStateObserved = { observation -> observations += observation },
