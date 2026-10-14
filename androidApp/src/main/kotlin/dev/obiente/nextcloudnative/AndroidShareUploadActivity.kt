@@ -493,6 +493,7 @@ internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPr
         destinationPath = destinationPath,
         completedFiles = completedFiles,
         message = message,
+        waitingForDestinationDelete = waitingForDestinationDelete,
         canVerifyOutcome = (visibleMutationTargetName != null || chunkSession?.targetName != null) && (
             state == AndroidIncomingShareState.OutcomeUnknown ||
                 state == AndroidIncomingShareState.Canceled && message == CANCELED_INCOMING_SHARE_MUTATION_WARNING

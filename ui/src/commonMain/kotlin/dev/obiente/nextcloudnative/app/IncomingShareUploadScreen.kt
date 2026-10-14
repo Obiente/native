@@ -72,6 +72,8 @@ data class IncomingShareUploadPresentation(
     val message: String?,
     val canVerifyOutcome: Boolean = false,
     val isCorruptRecovery: Boolean = false,
+    /** A queued upload waits until a delete covering its destination is verified or refreshed. */
+    val waitingForDestinationDelete: Boolean = false,
 )
 
 data class IncomingShareRecoveryPage(
@@ -415,12 +417,17 @@ fun IncomingShareUploadScreen(
     }
 }
 
-@Composable
-private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
-    val label = when (request.state) {
+/** The progress line for [request]. A queued upload says what it waits for. */
+fun incomingShareProgressLabel(request: IncomingShareUploadPresentation): String =
+    when (request.state) {
         IncomingShareUploadState.Staged ->
             "Choose a destination. Existing names are kept as numbered copies, never overwritten."
-        IncomingShareUploadState.Queued -> "Waiting for a network connection."
+        IncomingShareUploadState.Queued -> if (request.waitingForDestinationDelete) {
+            "Paused until a delete in the destination folder is verified. Open or refresh the destination " +
+                "folder in Files to continue. Finished files are kept."
+        } else {
+            "Waiting for a network connection."
+        }
         IncomingShareUploadState.Uploading -> "${request.completedFiles} of ${request.files.size} files uploaded."
         IncomingShareUploadState.Completed -> "All files were uploaded."
         IncomingShareUploadState.Failed ->
@@ -431,6 +438,10 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
                 (request.message ?: "The next file result is unknown. Check Files before trying again.")
         IncomingShareUploadState.Canceled -> request.message ?: "Upload canceled."
     }
+
+@Composable
+private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
+    val label = incomingShareProgressLabel(request)
     if (request.state in setOf(IncomingShareUploadState.Queued, IncomingShareUploadState.Uploading)) {
         LinearProgressIndicator(
             progress = { request.completedFiles.toFloat() / request.files.size },

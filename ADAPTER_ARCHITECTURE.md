@@ -390,9 +390,11 @@ receives the pending outcome.
   local reconciliation run for that result: on desktop the queued follow-up,
   including still running, failed, or dropped; on Android its cache
   invalidation.
-- Android share uploads check the fence before each file; a block pauses the
-  upload before the next file, keeps finished files, and the next run resumes
-  at the first unfinished one.
+- Android share uploads check the fence before the first file and before each
+  later one; a block pauses the upload, keeps finished files, and the next run
+  resumes at the first unfinished one. The paused request records a typed
+  delete wait, so its progress asks the user to open or refresh the destination
+  folder instead of describing a network wait; starting the upload clears it.
 - Cancellation before the request can be sent releases the item unchanged.
   Cancellation after it may have been sent records a refresh-required block,
   so the item is never released without an outcome.
@@ -420,15 +422,18 @@ receives the pending outcome.
   engines, which keep their own ETag and conflict preconditions.
 - A media viewer delete runs in the same coordinator as a Files delete, so it
   registers the same blocks, verifies an unknown result, and follows the same
-  retry rules. The viewer watches outcomes for every item in its list, not only
-  the shown one. It drops an item only when its delete was confirmed or the
-  item is no longer at its path, by removing it from the viewer's navigation
-  route in the process-level route repository, so a recreated viewer never
-  shows it again; the selection moves to a neighbor, or the viewer closes when
-  none is left. It applies an outcome that arrives after its dialog
-  closed, after the user moved to another item, or after the viewer was
-  recreated. Any other outcome keeps the item and shows its reason when that
-  item is shown.
+  retry rules. The viewer watches outcomes for every item in its list and every
+  member of their RAW and rendered stacks, not only the shown one. It drops a
+  file only when its delete was confirmed or the file is no longer at its path,
+  by removing it from the viewer's navigation route in the process-level route
+  repository, so a recreated viewer never shows it again. Only that file
+  leaves: a stack whose cover was deleted is rebuilt in place by the stacking
+  rule around a surviving member, and an item leaves only when none of its
+  members survive. The selection moves to the rebuilt stack or a neighbor, or
+  the viewer closes when nothing is left. It applies an outcome that arrives
+  after its dialog closed, after the user moved to another item or member, or
+  after the viewer was recreated. Any other outcome keeps the file and shows
+  its reason when that file is shown.
 
 ### Groupware (CardDAV and CalDAV)
 

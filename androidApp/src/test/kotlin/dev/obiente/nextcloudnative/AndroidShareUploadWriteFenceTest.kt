@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.app.FileWriteFenceRegistry
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
+import dev.obiente.nextcloudnative.app.incomingShareProgressLabel
 import dev.obiente.nextcloudnative.app.incomingShareUploadBlock
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
 import java.lang.reflect.Proxy
@@ -15,11 +16,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 
 class AndroidShareUploadWriteFenceTest {
     private val session = NextcloudSession("https://share-fence.example.test", "alice", "fixture-password")
@@ -105,6 +108,53 @@ class AndroidShareUploadWriteFenceTest {
 
         assertFalse(allPublished)
         assertEquals(0, unchanged.completedFiles)
+    }
+
+    @Test
+    fun aDestinationBlockedAtStartIsPersistedAndShownUntilTheUploadStarts() {
+        val queued = threeFiles().copy(state = AndroidIncomingShareState.Queued)
+
+        val paused = assertNotNull(pauseIncomingShareRequestForDestinationDelete(queued))
+        val restored = JSONObject(paused.toJson().toString()).toIncomingShareRequest()
+
+        assertEquals(AndroidIncomingShareState.Queued, restored.state)
+        assertTrue(restored.waitingForDestinationDelete, "The reason survives a restart.")
+        assertEquals(INCOMING_SHARE_PAUSED_FOR_DELETE, restored.message, "The per-file pause message is reused.")
+        val shown = incomingShareProgressLabel(restored.toPresentation())
+        assertTrue("Open or refresh the destination folder" in shown, shown)
+        assertFalse("network" in shown, "A delete wait is not described as a network wait.")
+
+        val started = assertNotNull(
+            transitionIncomingShareRequest(restored, setOf(AndroidIncomingShareState.Queued), AndroidIncomingShareState.Uploading),
+        )
+        assertFalse(started.waitingForDestinationDelete, "Starting the upload clears the reason.")
+        assertEquals(null, started.message)
+    }
+
+    @Test
+    fun aBlockBetweenFilesKeepsFinishedFilesAndRecordsTheSameReason() {
+        val uploading = threeFiles().published(0)
+
+        val paused = assertNotNull(pauseIncomingShareRequestForDestinationDelete(uploading))
+
+        assertEquals(AndroidIncomingShareState.Queued, paused.state)
+        assertEquals(1, paused.completedFiles)
+        assertTrue(paused.waitingForDestinationDelete)
+        assertEquals(INCOMING_SHARE_PAUSED_FOR_DELETE, paused.message)
+        assertNull(pauseIncomingShareRequestForDestinationDelete(uploading.copy(state = AndroidIncomingShareState.Canceled)))
+        val requeued = prepareIncomingShareRequestForQueue(
+            paused.copy(state = AndroidIncomingShareState.Failed, userId = "alice"), "account-1", "alice", "Inbox",
+        )
+        assertFalse(requeued.waitingForDestinationDelete, "A new queueing starts without the old reason.")
+    }
+
+    @Test
+    fun aNetworkWaitStillShowsTheNetworkText() {
+        val queued = threeFiles().copy(state = AndroidIncomingShareState.Queued)
+        val legacy = JSONObject(queued.toJson().toString()).apply { remove("waitingForDestinationDelete") }
+
+        assertEquals("Waiting for a network connection.", incomingShareProgressLabel(queued.toPresentation()))
+        assertFalse(legacy.toIncomingShareRequest().waitingForDestinationDelete, "An older record has no delete wait.")
     }
 
     @Test

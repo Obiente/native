@@ -68,6 +68,7 @@ internal data class AndroidIncomingShareRequest(
     val retryNotBeforeEpochMillis: Long? = null,
     val message: String? = null,
     val discardRequested: Boolean = false,
+    val waitingForDestinationDelete: Boolean = false,
 ) {
     init {
         require(runCatching { UUID.fromString(id) }.isSuccess)
@@ -266,6 +267,12 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             expected = setOf(AndroidIncomingShareState.Queued),
             target = AndroidIncomingShareState.Uploading,
         )?.copy(retryNotBeforeEpochMillis = null) ?: return@synchronized null
+        save(updated)
+        updated
+    }
+
+    fun pauseForDestinationDelete(id: String): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val updated = load(id)?.let(::pauseIncomingShareRequestForDestinationDelete) ?: return@synchronized null
         save(updated)
         updated
     }
@@ -573,7 +580,7 @@ internal fun transitionIncomingShareRequest(
     message: String? = null,
 ): AndroidIncomingShareRequest? = current
     .takeIf { it.state in expected }
-    ?.copy(state = target, message = message)
+    ?.copy(state = target, message = message, waitingForDestinationDelete = false)
 
 internal fun prepareIncomingShareRequestForQueue(
     current: AndroidIncomingShareRequest,
@@ -609,6 +616,7 @@ internal fun prepareIncomingShareRequestForQueue(
         automaticTransferAttempts = 0,
         retryNotBeforeEpochMillis = null,
         message = null,
+        waitingForDestinationDelete = false,
     )
 }
 

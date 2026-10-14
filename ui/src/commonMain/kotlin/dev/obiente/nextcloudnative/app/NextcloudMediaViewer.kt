@@ -849,7 +849,7 @@ internal fun NextcloudMediaViewer(
     }
 
     writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
-    MediaDeleteHost(items, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed -> viewerAction = null; onItemRemoved(removed) }
+    MediaDeleteHost(items, sourceMembers, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed -> viewerAction = null; onItemRemoved(removed) }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,

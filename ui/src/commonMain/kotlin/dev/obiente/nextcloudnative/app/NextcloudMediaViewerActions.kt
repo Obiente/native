@@ -248,8 +248,9 @@ private fun MediaTransferDialog(
  * The media viewer's deletes. They run in the account's shared [deletes] owner exactly like a Files
  * delete: the same in-flight and refresh blocks for every screen, verification of an unknown
  * result, retry rules, local follow-up, and completion fencing. The host stays composed with the
- * viewer and watches every item in [items], not only [selected], so a delete whose dialog was
- * closed is applied even after the user moved to another item or the viewer was recreated.
+ * viewer and watches every item in [items] and every member of their stacks in [sources], not only
+ * [selected], so a delete whose dialog was closed is applied even after the user moved to another
+ * item or stack member, or the viewer was recreated.
  *
  * An item leaves the viewer, through [onRemoved], only when the server confirmed its delete or it
  * is no longer at its path. Any other outcome keeps it, and its reason is shown in the open dialog
@@ -258,6 +259,7 @@ private fun MediaTransferDialog(
 @Composable
 internal fun MediaDeleteHost(
     items: List<NextcloudFile>,
+    sources: List<NextcloudFile>,
     selected: NextcloudFile,
     session: NextcloudSession,
     userId: String,
@@ -271,7 +273,7 @@ internal fun MediaDeleteHost(
     var removalNotices by remember(deletes) { mutableStateOf(emptyList<Pair<NextcloudFile, String>>()) }
     var keptNotices by remember(deletes) { mutableStateOf(emptyMap<String, String>()) }
     val currentOnRemoved by rememberUpdatedState(onRemoved)
-    val paths = remember(items, selected) { items.mapTo(HashSet()) { it.path } + selected.path }
+    val paths = remember(items, sources, selected) { (items + sources).mapTo(HashSet()) { it.path } + selected.path }
     val completion = deletes.completionFor(paths)
     LaunchedEffect(deletes, completion) {
         if (completion == null || !deletes.consume(completion)) return@LaunchedEffect

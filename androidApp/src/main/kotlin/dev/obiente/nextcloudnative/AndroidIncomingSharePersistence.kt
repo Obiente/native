@@ -121,6 +121,7 @@ internal fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     })
     .put("message", message)
     .put("discardRequested", discardRequested)
+    .put("waitingForDestinationDelete", waitingForDestinationDelete)
     .put("files", JSONArray().also { array ->
         files.forEach { file ->
             array.put(
@@ -163,6 +164,7 @@ internal fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = 
     },
     message = optString("message").takeIf(String::isNotBlank),
     discardRequested = optBoolean("discardRequested"),
+    waitingForDestinationDelete = optBoolean("waitingForDestinationDelete"),
     files = getJSONArray("files").let { array ->
         List(array.length()) { index ->
             array.getJSONObject(index).let { file ->

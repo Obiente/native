@@ -18,7 +18,6 @@ import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -257,37 +256,47 @@ class MediaViewerDeleteSceneTest {
     }
 
     @Test
-    fun `the route drops a removed item, selects the next or the previous one, and ends on the last`() {
-        fun removeFrom(removed: NextcloudFile, shown: NextcloudFile): Pair<String, Int> {
-            val repository = MediaViewerNavigationRepository()
-            val route = assertNotNull(repository.register(alice.accountId, listOf(first, second, third), shown))
-            val next = assertNotNull(repository.remove(alice.accountId, route, removed))
-            val snapshot = assertNotNull(repository.resolve(alice.accountId, next))
-            assertTrue(snapshot.media.none { it.path == removed.path }, "The removed item is not navigable.")
-            return snapshot.selected.name to snapshot.media.size
-        }
+    fun `a stack member deleted while another member is shown leaves the route for good`() {
+        val events = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val fake = FakeMediaServices(delete = { release.await(); NextcloudFileMutationResult(null, null) })
+        val stackJpeg = photo("stack.jpg", 21L)
+        val stackRaw = photo("stack.dng", 22L).copy(mimeType = "image/x-adobe-dng")
+        val route = ViewerRoute(mediaStackViewerSequence(stackMediaFiles(listOf(stackJpeg, stackRaw, third))), stackRaw)
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, events) }) {
+            assertTrue(has("showing stack.dng of 2"))
+            click("Delete")
+            click("Close")
+            click("select:stack.jpg")
+            assertTrue(has("showing stack.jpg of 2"))
 
-        assertEquals("first.jpg" to 2, removeFrom(third, first), "Another item only leaves the sequence.")
-        assertEquals("third.jpg" to 2, removeFrom(second, second), "The next item replaces the shown one.")
-        assertEquals("second.jpg" to 2, removeFrom(third, third), "The previous item replaces the last one.")
-        val repository = MediaViewerNavigationRepository()
-        val only = assertNotNull(repository.register(alice.accountId, listOf(first), first))
-        assertNull(repository.remove(alice.accountId, only, first), "Removing the last item ends the route.")
-        assertNull(repository.resolve(alice.accountId, only), "The ended route cannot be restored.")
-        val shown = assertNotNull(repository.register(alice.accountId, listOf(first, second), first))
-        val kept = assertNotNull(repository.remove(alice.accountId, shown, first))
-        assertNotEquals(shown, kept, "A removal changes the route even when the next item takes the same index.")
-        assertNull(repository.resolve(alice.accountId, shown), "A stale copy of the old route no longer resolves.")
-        val other = assertNotNull(repository.register(alice.accountId, listOf(first, second), first))
-        assertNull(repository.remove(bob.accountId, other, first), "Another account cannot change the route.")
-        assertEquals(2, assertNotNull(repository.resolve(alice.accountId, other)).media.size)
-        assertEquals(listOf(first), mediaViewerItems(listOf(second, third), first), "A shown item outside the list stays shown.")
+            release.complete(Unit)
+            settleUntil { events.contains("removed:stack.dng") }
+            assertEquals(listOf("closed", "removed:stack.dng"), events)
+            assertTrue(has("showing stack.jpg of 2"), "The shown member stays shown.")
+            assertFalse(has("select:stack.dng"), "The deleted RAW member is not offered.")
+        }
+        val snapshot = assertNotNull(route.repository.resolve(alice.accountId, assertNotNull(route.route)))
+        assertEquals(listOf("Photos/stack.jpg", "Photos/third.jpg"), snapshot.sourceMembers.map { it.path })
+
+        nativeSceneTest(800, 700, content = { Viewer(fake, route, mutableListOf(), open = false) }) {
+            assertTrue(has("showing stack.jpg of 2"))
+            assertFalse(has("select:stack.dng"), "A recreated viewer does not bring the RAW member back.")
+        }
     }
 
     /** The viewer's navigable sequence, held by a route repository that outlives any composition. */
-    private inner class ViewerRoute(media: List<NextcloudFile>) {
+    private inner class ViewerRoute(sequence: MediaStackViewerSequence, selected: NextcloudFile = sequence.navigationItems.first()) {
+        constructor(media: List<NextcloudFile>) : this(MediaStackViewerSequence(media, media))
+
         val repository = MediaViewerNavigationRepository()
-        var route: MediaViewerNavigationRoute? = repository.register(alice.accountId, media, media.first())
+        var route: MediaViewerNavigationRoute? = repository.register(
+            alice.accountId,
+            sequence.navigationItems,
+            sequence.navigationItems.first { it.sharesMediaStackWith(selected) },
+            sourceMembers = sequence.sourceMembers,
+            navigationIdentityBySourceIdentity = sequence.navigationIdentityBySourceIdentity,
+        )?.let { repository.select(alice.accountId, it, selected) }
     }
 
     @Composable
@@ -330,8 +339,11 @@ class MediaViewerDeleteSceneTest {
             Text("showing ${selected.name} of ${items.size}")
             TextButton(onClick = { move(items.getOrNull(index + 1)) }) { Text("Next") }
             TextButton(onClick = { move(items.getOrNull(index - 1)) }) { Text("Previous") }
+            snapshot.sourceMembers.forEach { member ->
+                TextButton(onClick = { move(member) }) { Text("select:${member.name}") }
+            }
         }
-        MediaDeleteHost(items, selected, alice, "alice", fake.services, deletes, deleteOpen, onClose = {
+        MediaDeleteHost(items, snapshot.sourceMembers, selected, alice, "alice", fake.services, deletes, deleteOpen, onClose = {
             deleteOpen = false
             events += "closed"
         }) { removed ->

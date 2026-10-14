@@ -121,7 +121,10 @@ internal class AndroidIncomingShareUploadWorker(
         // the queued upload is retried later and nothing is sent meanwhile.
         val destinationFence = services.fileWriteFences.account(session.accountId)
         val destinationBlocked = { incomingShareUploadBlock(destinationFence, requireNotNull(request.destinationPath)) != null }
-        if (destinationBlocked()) return Result.retry()
+        if (destinationBlocked()) {
+            store.pauseForDestinationDelete(requestId) ?: return Result.success()
+            return Result.retry()
+        }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         var foregroundPromotionAvailable = setForegroundIfAvailable(request)
         request = store.beginUpload(requestId) ?: return Result.success()
@@ -169,12 +172,7 @@ internal class AndroidIncomingShareUploadWorker(
             request = uploaded
             if (!allPublished) {
                 // Finished files stay completed; the rest continue from completedFiles on the next run.
-                store.transition(
-                    id = requestId,
-                    expected = setOf(AndroidIncomingShareState.Uploading),
-                    target = AndroidIncomingShareState.Queued,
-                    message = INCOMING_SHARE_PAUSED_FOR_DELETE,
-                ) ?: return Result.success()
+                store.pauseForDestinationDelete(requestId) ?: return Result.success()
                 return Result.retry()
             }
             scheduleIncomingShareCleanup(applicationContext, request.id)
@@ -368,6 +366,19 @@ internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Lo
 
 internal const val INCOMING_SHARE_PAUSED_FOR_DELETE =
     "Upload paused while a delete in the destination folder finishes. Finished files are kept."
+
+/**
+ * Queues [current] again, before its first file or between files, recording as a typed state that
+ * a delete covering the destination must be verified or refreshed first. Starting the upload clears
+ * it. Returns null when the request was canceled or finished meanwhile.
+ */
+internal fun pauseIncomingShareRequestForDestinationDelete(current: AndroidIncomingShareRequest): AndroidIncomingShareRequest? =
+    transitionIncomingShareRequest(
+        current,
+        expected = setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading),
+        target = AndroidIncomingShareState.Queued,
+        message = INCOMING_SHARE_PAUSED_FOR_DELETE,
+    )?.copy(waitingForDestinationDelete = true)
 
 /**
  * Publishes the remaining files of [request] in order, from its completed count. Before each file
