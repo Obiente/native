@@ -846,7 +846,7 @@ private fun java.io.InputStream.copyBoundedTo(output: java.io.OutputStream, maxi
 private fun okhttp3.Response.requireAccepted(accepted: Boolean, operation: String): Unit =
     if (accepted) Unit else throw DesktopFileSyncHttpStatusException(code, operation)
 
-private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
+private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder().useDesktopSystemTrust()
     .followRedirects(false)
     .followSslRedirects(false)
     .readTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
