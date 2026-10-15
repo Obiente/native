@@ -9,6 +9,19 @@ import kotlin.test.assertTrue
 
 class FileOperationsTest {
     @Test
+    fun serverConfirmedChangeReportsIncompleteLocalBookkeeping() {
+        assertEquals("Renamed to b.txt", FileMutationLocalFollowUp.Completed.reportFor("Renamed to b.txt"))
+        assertEquals(
+            "Moved a.txt. Local file status is still updating in the background.",
+            FileMutationLocalFollowUp.StillRunning.reportFor("Moved a.txt"),
+        )
+        assertEquals(
+            "Copied a.txt. Local file status could not be updated; refresh the folder if it looks out of date.",
+            FileMutationLocalFollowUp.Failed.reportFor("Copied a.txt"),
+        )
+    }
+
+    @Test
     fun renameBuildsConflictSafeMoveWithoutOverwrite() {
         val spec = NextcloudFileMutation.Rename(
             sourcePath = "Documents/old name.md",
@@ -102,6 +115,7 @@ class FileOperationsTest {
         assertEquals(NextcloudFileOperationError.Conflict, fileOperationException(412).error)
         assertEquals(NextcloudFileOperationError.Locked, fileOperationException(423).error)
         assertEquals(NextcloudFileOperationError.InsufficientStorage, fileOperationException(507).error)
+        assertEquals(NextcloudFileOperationError.Throttled, fileOperationException(429).error)
         assertEquals(NextcloudFileOperationError.ServerFailure, fileOperationException(500).error)
     }
 

@@ -31,7 +31,8 @@ is the source of truth for maintained public documents.
 ## Contributing, testing and security
 
 - [Sign-in recovery and login diagnostics](login-diagnostics.md): browser approval,
-  connection retries, cancellation, and saving a diagnostics report before sign-in.
+  connection retries, server certificate trust, cancellation, and saving a
+  diagnostics report before sign-in.
 - [Contributing](../CONTRIBUTING.md): quick start, running the apps and tests,
   troubleshooting, test-account safety, pull requests, and authorship.
 - [Nextcloud compatibility instance](../integration/nextcloud-demo/README.md):

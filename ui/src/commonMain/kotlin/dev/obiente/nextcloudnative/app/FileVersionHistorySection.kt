@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun FileVersionHistorySection(
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     session: NextcloudSession,
     userId: String,
     file: NextcloudFile,
@@ -232,6 +233,13 @@ internal fun FileVersionHistorySection(
                 val version = pending.version
                 if (previewLoadingId != null) return@FileVersionConfirmationDialog
                 confirmation = null
+                // Restoring rewrites the file; it must not race a delete that covers it.
+                if (pending is FileVersionConfirmation.Restore) {
+                    writeFence.writeBlock(file.path)?.let { block ->
+                        error = block.message
+                        return@FileVersionConfirmationDialog
+                    }
+                }
                 previewLoadingId = version.id
                 actionMessage = null
                 error = null

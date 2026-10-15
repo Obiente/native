@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.preview
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.Typography
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
+import dev.obiente.nextcloudnative.app.rememberFileDeletesForTests
 import dev.obiente.nextcloudnative.app.MAX_PHOTO_EDIT_SOURCE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
 import dev.obiente.nextcloudnative.app.MarketingCaptureScenario
@@ -51,7 +52,7 @@ internal class NativeTiffMarketingCapture private constructor(
                     selected = tiffFile,
                     session = fixtureSession,
                     userId = FIXTURE_USER_ID,
-                    services = services,
+                    services = services, fileDeletes = rememberFileDeletesForTests(fixtureSession),
                     taggingAvailable = false,
                     memoriesLivePhotoCapability = MemoriesLivePhotoCapability.NotAdvertised,
                     sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
@@ -59,6 +60,7 @@ internal class NativeTiffMarketingCapture private constructor(
                     onSourceRemoved = {
                         error("The isolated TIFF capture is read-only.")
                     },
+                    onItemRemoved = { error("The isolated TIFF capture is read-only.") },
                     onClose = {},
                     initialZoom = HIGH_DETAIL_CAPTURE_ZOOM,
                     onStateObserved = { observation -> observations += observation },

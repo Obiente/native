@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.preview
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.Typography
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
+import dev.obiente.nextcloudnative.app.rememberFileDeletesForTests
 import dev.obiente.nextcloudnative.app.MAX_PHOTO_EDIT_SOURCE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_RAW_DISPLAY_PREVIEW_BYTES
 import dev.obiente.nextcloudnative.app.MediaDisplayPayloadKind
@@ -62,7 +63,7 @@ internal class RawMediaMarketingCapture private constructor(
                     selected = rawFile,
                     session = session,
                     userId = FIXTURE_USER_ID,
-                    services = services,
+                    services = services, fileDeletes = rememberFileDeletesForTests(session),
                     taggingAvailable = false,
                     memoriesLivePhotoCapability = MemoriesLivePhotoCapability.NotAdvertised,
                     sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
@@ -74,6 +75,7 @@ internal class RawMediaMarketingCapture private constructor(
                     onSourceRemoved = {
                         error("The isolated RAW capture is read-only.")
                     },
+                    onItemRemoved = { error("The isolated RAW capture is read-only.") },
                     onClose = {},
                     initialZoom = if (mode == RawCaptureMode.HighDetail) HIGH_DETAIL_CAPTURE_ZOOM else 1f,
                     onStateObserved = { observation -> observations += observation },

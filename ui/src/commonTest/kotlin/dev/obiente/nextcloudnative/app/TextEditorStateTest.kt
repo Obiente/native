@@ -54,6 +54,35 @@ class TextEditorStateTest {
     }
 
     @Test
+    fun `a covering delete refuses the save without sending or losing edits`(): Unit = runBlocking {
+        val store = MemoryStore()
+        var block: FileWriteBlock? = FileWriteBlock.DeleteRunning
+        var uploads = 0
+        val editor = TextEditorState(
+            store,
+            { content("old", "v1") },
+            { _, _ -> uploads += 1; SavedTextFile("v2", false) },
+            writeBlock = { block },
+        )
+        editor.open()
+        editor.edit("draft")
+
+        editor.save()
+
+        assertEquals(0, uploads, "Nothing is sent while the delete is unverified.")
+        assertEquals(FileWriteBlock.DeleteRunning.message, editor.saveError)
+        assertEquals("draft", editor.draft)
+        assertTrue(editor.canSave, "The known revision stays usable once the block lifts.")
+
+        block = null
+        editor.save()
+
+        assertEquals(1, uploads)
+        assertNull(editor.saveError)
+        assertEquals("draft", editor.originalText)
+    }
+
+    @Test
     fun `undoing all edits removes the stale recovery draft`() = runBlocking {
         val store = MemoryStore()
         val editor = TextEditorState(store, { content("old", "v1") }, { _, _ -> error("unused") })

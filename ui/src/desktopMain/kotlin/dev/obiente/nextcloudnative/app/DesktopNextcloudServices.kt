@@ -699,7 +699,7 @@ class DesktopNextcloudServices(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
-    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val httpClient = OkHttpClient.Builder().useDesktopSystemTrust().trackJvmNetworkFailures().build()
     private val supportIntake = JvmSupportIntake(
         diagnostics = supportDiagnostics,
         temporaryRoot = resolvedSupportIntakeRoot,
@@ -1243,14 +1243,15 @@ class DesktopNextcloudServices(
         accountId: String,
         path: String,
         cacheProducer: DesktopFileReadCacheProducer?,
-    ) {
+    ): Throwable? {
+        // Each step stays best effort; the first recovered failure is returned for reporting.
+        var failure: Throwable? = null
+        fun <T> Result<T>.recorded(): Result<T> = onFailure { failure = failure ?: it }
         synchronized(virtualFileProviderLock) {
-            if (!runCatching { invalidateDesktopFileMetadata(accountId, path, cacheProducer) }.getOrDefault(false)) return
-            val cache = runCatching { virtualRangeCache(accountId) }.getOrNull() ?: return
-            val roots = runCatching {
-                cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path))
-            }
-                .getOrDefault(emptyList())
+            if (!runCatching { invalidateDesktopFileMetadata(accountId, path, cacheProducer) }.recorded().getOrDefault(false)) return failure
+            val cache = runCatching { virtualRangeCache(accountId) }.recorded().getOrNull() ?: return failure
+            val roots = runCatching { cache.retainedFoldersAffectedByListingChanges(accountId, listOf(path)) }
+                .recorded().getOrDefault(emptyList())
             synchronized(virtualFolderMutationLock) {
                 advanceAffectedVirtualFolderGenerations(
                     virtualFolderMutationGenerationsByJob,
@@ -1259,12 +1260,11 @@ class DesktopNextcloudServices(
                     roots,
                 )
             }
-            runCatching { cache.invalidate(accountId, path) }
-            runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }
-            roots.forEach { root ->
-                runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }
-            }
+            runCatching { cache.invalidate(accountId, path) }.recorded()
+            runCatching { cache.queueRetainedFoldersForRefresh(accountId, path) }.recorded()
+            roots.forEach { root -> runCatching { scheduleVirtualFolderHydration(session, userId, root, accountId, cache) }.recorded() }
         }
+        return failure
     }
 
     private fun refreshRetainedFoldersAfterRemoteListing(
@@ -1337,6 +1337,8 @@ class DesktopNextcloudServices(
     ) { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalMalformedDiagnostic()) }
     private val startOnLoginController = DesktopStartOnLoginController()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val fileMutationFollowUps = DesktopFileMutationFollowUps(serviceScope) { id, event -> supportDiagnostics.recordForAccountIdentity(id, event) }
+    override val fileWriteFences = FileWriteFenceRegistry(CoroutineScope(serviceScope.coroutineContext + Dispatchers.Main))
     private var backgroundFileSyncJob: Job? = null
     private val mutableFileSyncTraySnapshot = MutableStateFlow(
         DesktopFileSyncTraySnapshot(
@@ -3255,9 +3257,7 @@ class DesktopNextcloudServices(
         supportDiagnostics.clear()
     }
 
-    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
-        supportDiagnostics.record(event)
-    }
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = supportDiagnostics.record(event)
 
     override fun registerSupportDiagnosticPrivateValue(value: String?) {
         supportDiagnostics.registerPrivateValue(value)
@@ -3840,6 +3840,8 @@ class DesktopNextcloudServices(
 
     private fun fenceDesktopAccountPrivateCaches(accountStorageKey: String, fileCacheAccountId: String) {
         fileReadCache.retireAccount(fileCacheAccountId)
+        fileMutationFollowUps.abandonAccount(fileCacheAccountId)
+        fileWriteFences.removeAccount(accountStorageKey)
         sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
         dynamicDiscoveryCache.fenceAccount(accountStorageKey)
     }
@@ -4829,26 +4831,19 @@ class DesktopNextcloudServices(
             }
         }
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun invalidateAffectedMetadata() {
-            runCatching {
-                refreshRetainedFoldersAfterMutation(session, userId, accountId, spec.sourcePath, cacheProducer)
-                spec.destinationPath?.let { destination ->
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, destination, cacheProducer)
-                }
-            }
-        }
-        val response = request(
+        fun refreshLocalState(path: String) = refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
+        val followUp = fileMutationFollowUps.mutation(accountId, listOfNotNull(spec.sourcePath, spec.destinationPath), ::refreshLocalState)
+        val response = followUp.reconcilingUnknownResult { onUnknownResult -> request(
             method = spec.method,
             url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
             session = session,
             headers = headers,
             maxResponseBytes = 64 * 1024,
             mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::invalidateAffectedMetadata,
-        )
-        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
-        invalidateAffectedMetadata()
-        NextcloudFileMutationResult(spec.destinationPath, response.etag)
+            onAmbiguousMutationResult = onUnknownResult,
+        ) }
+        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) followUp.afterConfirmedMutation() else null)
+        NextcloudFileMutationResult(spec.destinationPath, response.etag, followUp.afterConfirmedMutation())
     }
 
     override suspend fun executeNextcloudApi(

@@ -72,6 +72,8 @@ data class IncomingShareUploadPresentation(
     val message: String?,
     val canVerifyOutcome: Boolean = false,
     val isCorruptRecovery: Boolean = false,
+    /** A queued upload waits until a delete covering its destination is verified or refreshed. */
+    val waitingForDestinationDelete: Boolean = false,
 )
 
 data class IncomingShareRecoveryPage(
@@ -415,12 +417,17 @@ fun IncomingShareUploadScreen(
     }
 }
 
-@Composable
-private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
-    val label = when (request.state) {
+/** The progress line for [request]. A queued upload says what it waits for. */
+fun incomingShareProgressLabel(request: IncomingShareUploadPresentation): String =
+    when (request.state) {
         IncomingShareUploadState.Staged ->
             "Choose a destination. Existing names are kept as numbered copies, never overwritten."
-        IncomingShareUploadState.Queued -> "Waiting for a network connection."
+        IncomingShareUploadState.Queued -> if (request.waitingForDestinationDelete) {
+            "Paused until a delete in the destination folder is verified. Open or refresh the destination " +
+                "folder in Files to continue. Finished files are kept."
+        } else {
+            "Waiting for a network connection."
+        }
         IncomingShareUploadState.Uploading -> "${request.completedFiles} of ${request.files.size} files uploaded."
         IncomingShareUploadState.Completed -> "All files were uploaded."
         IncomingShareUploadState.Failed ->
@@ -431,6 +438,10 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
                 (request.message ?: "The next file result is unknown. Check Files before trying again.")
         IncomingShareUploadState.Canceled -> request.message ?: "Upload canceled."
     }
+
+@Composable
+private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
+    val label = incomingShareProgressLabel(request)
     if (request.state in setOf(IncomingShareUploadState.Queued, IncomingShareUploadState.Uploading)) {
         LinearProgressIndicator(
             progress = { request.completedFiles.toFloat() / request.files.size },
@@ -576,3 +587,35 @@ internal fun incomingShareRecoveryRefreshMillis(hasRecoveries: Boolean): Long =
 
 private const val INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 2_000L
 private const val EMPTY_INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 5_000L
+
+/**
+ * Folder picker operations for an incoming share upload. [base] carries the account's write fence,
+ * so a destination must pass it before [selectionAccess] checks folder permissions, and a new
+ * folder is created only where [requireCreateDirectories] allows it and the fence permits.
+ */
+fun incomingShareFolderPickerOperations(
+    base: RemoteFolderPickerOperations,
+    selectionAccess: suspend (path: String) -> RemoteFolderSelectionAccess,
+    requireCreateDirectories: suspend (parentPath: String) -> Unit,
+): RemoteFolderPickerOperations = RemoteFolderPickerOperations(
+    identity = base.identity + "|incoming-share",
+    listCached = base.listCached,
+    listNetwork = base.listNetwork,
+    createDirectoryIfAbsent = { path ->
+        requireCreateDirectories(path.substringBeforeLast('/', ""))
+        base.createDirectoryIfAbsent(path)
+    },
+    selectionAccess = { path ->
+        when (val fenced = base.selectionAccess(path)) {
+            RemoteFolderSelectionAccess.Allowed -> selectionAccess(path)
+            else -> fenced
+        }
+    },
+)
+
+/**
+ * Why queueing shared files into [destinationPath] must wait, or null. Checked again when the
+ * upload is queued, because a delete may have started after the folder was chosen.
+ */
+fun incomingShareUploadBlock(fence: FileWriteFence, destinationPath: String): FileWriteBlock? =
+    fence.newChildBlock(destinationPath)

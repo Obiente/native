@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.AnnotatedString
 import java.lang.reflect.Proxy
@@ -24,10 +25,15 @@ class GroupwareContactsMutationSceneTest {
             NativeGroupwareContactsScreen(fixture.services, fixture.session, "alice", {},
                 onMutationInProgressChanged = { blocked = it })
         }) {
+            // The list appears only after the recovery read and the DAV discovery and listing requests.
+            settleUntil(SCENE_TIMEOUT_MILLIS) { has("Synthetic contact") }
             click("Synthetic contact")
             click("Delete")
             click("Delete")
-            repeat(4) { settle() }
+            settleUntil(SCENE_TIMEOUT_MILLIS) {
+                fixture.deletes > 0 && fixture.recovery == null && !blocked && !has("Synthetic contact")
+            }
+            settle()
             assertEquals(1, fixture.deletes)
             assertTrue(fixture.verifications >= 1, "Successful deletion must verify authoritative absence")
             assertNull(fixture.recovery)
@@ -52,13 +58,19 @@ class GroupwareContactsMutationSceneTest {
                 navigationEnabled = !blocked.value, content = workspace,
             )
         }) {
+            // Creation is enabled only after the recovery read and the address book discovery complete.
+            settleUntil(SCENE_TIMEOUT_MILLIS) { enabled("Create contact") }
+            assertTrue(enabled("Create contact"), "Contacts did not finish loading a writable address book")
             click("Create contact")
             val name = generateSequence(requireNotNull(node("Name"))) { it.parent }
                 .first { it.config.getOrNull(SemanticsActions.SetText)?.action != null }
             assertTrue(name.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Synthetic contact")))
             settle()
             click("Save")
-            repeat(4) { settle() }
+            settleUntil(SCENE_TIMEOUT_MILLIS) {
+                fixture.creates > 0 && fixture.recovery == null && !blocked.value && has("Synthetic contact")
+            }
+            settle()
             assertEquals(1, fixture.creates)
             assertNull(fixture.recovery)
             assertFalse(blocked.value)
@@ -66,7 +78,10 @@ class GroupwareContactsMutationSceneTest {
             click("Synthetic contact")
             click("Delete")
             click("Delete")
-            repeat(4) { settle() }
+            settleUntil(SCENE_TIMEOUT_MILLIS) {
+                fixture.deletes > 0 && fixture.recovery == null && !blocked.value && !has("Synthetic contact")
+            }
+            settle()
             assertEquals(1, fixture.deletes)
             assertTrue(fixture.verifications >= 2)
             assertNull(fixture.recovery)
@@ -75,6 +90,9 @@ class GroupwareContactsMutationSceneTest {
             assertFalse(has("Resolve contact recovery"))
         }
     }
+
+    private fun NativeSceneTestDriver.enabled(label: String): Boolean =
+        node(label)?.let { SemanticsProperties.Disabled !in it.config } == true
 
     private class Fixture {
         val session = NextcloudSession("https://contacts-scene.invalid", "alice", "synthetic")
@@ -129,5 +147,10 @@ class GroupwareContactsMutationSceneTest {
         }
         private fun item(href: String, props: String) = "<d:response><d:href>$href</d:href><d:propstat><d:prop>$props</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
         private fun response(status: Int, body: String = "") = NextcloudApiResponse(status, body.encodeToByteArray(), "application/xml", "etag")
+    }
+
+    private companion object {
+        /** Bounds each wait for the delayed synthetic store and transport, which takes several frames. */
+        const val SCENE_TIMEOUT_MILLIS = 5_000L
     }
 }

@@ -15,6 +15,7 @@ internal fun FileActionMenu(
     file: NextcloudFile,
     offlineAvailability: FileOfflineAvailability,
     offlineStorageSupported: Boolean,
+    writeBlock: FileWriteBlock? = null,
     fileSharing: NextcloudFileSharingCapabilities,
     externalHandoffCapability: ExternalFileHandoffCapability?,
     expanded: Boolean,
@@ -37,6 +38,7 @@ internal fun FileActionMenu(
                 discoverDocumentEditing = true,
             ),
             offlineState = offlineAvailability.toFileActionOfflineState(),
+            writeBlock = writeBlock,
         ).actions.forEach { action ->
             DropdownMenuItem(
                 text = {

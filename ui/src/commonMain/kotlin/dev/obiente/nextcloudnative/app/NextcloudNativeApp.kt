@@ -684,6 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1533,7 +1534,7 @@ private fun AuthenticatedApp(
                     onSettings = { destination = NextcloudDestination.Settings },
                 )
                 RootDestinationContent.FolderSync -> FileOfflineCenterScreen(
-                    services = services,
+                    services = services, writeFence = fileDeletes,
                     session = session,
                     userId = serverInfo?.userId.orEmpty(),
                     onBack = { destination = NextcloudDestination.Home },
@@ -1599,7 +1600,7 @@ private fun AuthenticatedApp(
                 onBack = ::navigateBack,
             )
             Screen.OfflineCenter -> FileOfflineCenterScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             onBack = ::navigateBack,
@@ -1612,6 +1613,7 @@ private fun AuthenticatedApp(
         is Screen.Files -> FilesScreen(
             services = services,
             session = session,
+            fileDeletes = fileDeletes,
             userId = serverInfo?.userId,
             fileSharing = serverInfo?.fileSharing ?: NextcloudFileSharingCapabilities.Unavailable,
             path = current.path,
@@ -1881,12 +1883,13 @@ private fun AuthenticatedApp(
                 }
                 LoadingMessage("Restoring the media timeline...")
             } else {
+                fun closeViewer() { mediaViewerNavigationRepository.release(session.accountId, current.navigationKey); screen = current.returnTo }
                 NextcloudMediaViewer(
                     media = snapshot.media,
                     selected = snapshot.selected,
                     session = session,
                     userId = serverInfo?.userId.orEmpty(),
-                    services = services,
+                    services = services, fileDeletes = fileDeletes,
                     taggingAvailable = serverInfo?.apps?.any { it.id == "memories" } == true,
                     memoriesLivePhotoCapability = memoriesLivePhotoCapability,
                     sharingCapabilities = serverInfo?.fileSharing
@@ -1899,14 +1902,13 @@ private fun AuthenticatedApp(
                             )
                         }
                     },
-                    onSourceRemoved = {
-                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
-                        screen = current.returnTo
+                    onSourceRemoved = { closeViewer() },
+                    onItemRemoved = { removed ->
+                        mediaViewerNavigationRepository.remove(session.accountId, route, removed)?.let { next ->
+                            screen = current.copy(navigationKey = next.key, selectedIndex = next.selectedIndex, selectedSourceIndex = next.selectedSourceIndex)
+                        } ?: closeViewer()
                     },
-                    onClose = {
-                        mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
-                        screen = current.returnTo
-                    },
+                    onClose = ::closeViewer,
                     navigationRequest = pendingEditorNavigationRequest,
                     onNavigationConfirmed = ::applyPendingNavigationRequest,
                     onNavigationCancelled = ::cancelPendingNavigationRequest,
@@ -1915,7 +1917,7 @@ private fun AuthenticatedApp(
             }
         }
         is Screen.FileInfo -> FileInfoScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
@@ -1939,7 +1941,7 @@ private fun AuthenticatedApp(
             )
         }
         is Screen.TextEditor -> TextEditorScreen(
-            services = services,
+            services = services, writeFence = fileDeletes,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
             file = current.file,
@@ -6468,6 +6470,7 @@ private fun readableAppName(value: String): String = value
 internal fun FilesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    fileDeletes: FileDeleteCoordinator,
     userId: String?,
     fileSharing: NextcloudFileSharingCapabilities,
     path: String,
@@ -6489,7 +6492,7 @@ internal fun FilesScreen(
     var renameTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
     var renameValue by remember(session, path, userId) { mutableStateOf("") }
     var transferTarget by remember(session, path, userId) { mutableStateOf<Pair<NextcloudFile, FileMenuAction>?>(null) }
-    var deleteTarget by remember(session, path, userId) { mutableStateOf<NextcloudFile?>(null) }
+    val deleteDialog = remember(fileDeletes, path, userId) { FileDeleteDialogState(fileDeletes) }
     var creationKind by remember(session, path, userId) { mutableStateOf<FileCreationKind?>(null) }
     var creationName by remember(session, path, userId) { mutableStateOf("") }
     var creationError by remember(session, path, userId) { mutableStateOf<String?>(null) }
@@ -6558,7 +6561,7 @@ internal fun FilesScreen(
         }
         val hasRetainedFiles = cached != null || retainedFiles != null
         refreshing = hasRetainedFiles
-        filesRequest { services.listFilesWithSource(session, userId, path) }
+        filesRequest { fileDeletes.readFolder(path) { services.listFilesWithSource(session, userId, path) } }
             .onSuccess { listing ->
                 files = favorites.refreshed(listing.files, readRevision)
                 listingSource = listing.source
@@ -6681,6 +6684,7 @@ internal fun FilesScreen(
         action: FileMenuAction,
         loadedFiles: List<NextcloudFile>,
     ) {
+        if (action.changesRemoteItem()) fileDeletes.writeBlockedMessage(file.path)?.let { mutationError = it; return }
         when (action) {
             FileMenuAction.Rename -> {
                 renameTarget = file
@@ -6715,7 +6719,7 @@ internal fun FilesScreen(
                 }
             }
             FileMenuAction.Delete -> {
-                deleteTarget = file
+                deleteDialog.open(file)
                 mutationError = null
             }
             FileMenuAction.Move, FileMenuAction.Copy -> {
@@ -6934,7 +6938,7 @@ internal fun FilesScreen(
                 )
             }
         }
-        if (renameTarget == null && transferTarget == null && deleteTarget == null) {
+        if (renameTarget == null && transferTarget == null && deleteDialog.target == null) {
             mutationError?.let { message ->
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -7016,6 +7020,7 @@ internal fun FilesScreen(
                     onLayoutChanged = onLayoutChanged,
                     offlineAvailability = offlineAvailability,
                     offlineStorageSupported = services.supportsFileOfflineStorage,
+                    writeBlock = fileDeletes::writeBlock,
                     fileSharing = fileSharing,
                     externalHandoffCapability = externalHandoffCapability,
                     services = services,
@@ -7114,6 +7119,7 @@ internal fun FilesScreen(
                     enabled = creationPlan != null && !creationRunning && userId != null,
                     onClick = {
                         val plan = creationPlan ?: return@Button
+                        fileDeletes.writeBlockedMessage(plan.path)?.let { creationError = it; return@Button }
                         val loadedFiles = files.orEmpty()
                         creationRunning = true
                         creationError = null
@@ -7245,9 +7251,9 @@ internal fun FilesScreen(
                                         sourceIsDirectory = target.isDirectory,
                                     ),
                                 )
-                            }.onSuccess {
+                            }.onSuccess { result ->
                                 renameTarget = null
-                                mutationNotice = "Renamed to $renameValue"
+                                mutationNotice = result.localFollowUp.reportFor("Renamed to $renameValue")
                                 files = null
                                 loadAttempt += 1
                             }.onFailure {
@@ -7272,7 +7278,7 @@ internal fun FilesScreen(
         val moving = action == FileMenuAction.Move
         val verb = if (moving) "Move" else "Copy"
         val pickerOperations = remember(services, session, currentUserId) {
-            remoteFolderPickerOperations(services, session, currentUserId)
+            remoteFolderPickerOperations(services, session, currentUserId, writeFence = fileDeletes)
         }
         FileTransferDialog(
             file = target,
@@ -7284,6 +7290,7 @@ internal fun FilesScreen(
             onEdited = { mutationError = null },
             onDismiss = { transferTarget = null; mutationError = null },
             onConfirm = confirm@{ destination ->
+                fileDeletes.writeBlockedMessage(destination.path)?.let { mutationError = it; return@confirm }
                 val etag = target.etag?.takeIf(String::isNotBlank)
                 if (etag == null) {
                     mutationError = "Refresh the folder before changing this item."
@@ -7311,13 +7318,9 @@ internal fun FilesScreen(
                     }
                     filesRequest {
                         services.executeFileMutation(session, requireNotNull(userId), mutation)
-                    }.onSuccess {
+                    }.onSuccess { result ->
                         transferTarget = null
-                        mutationNotice = if (moving) {
-                            "Moved ${target.name}"
-                        } else {
-                            "Copied ${target.name}"
-                        }
+                        mutationNotice = result.localFollowUp.reportFor(if (moving) "Moved ${target.name}" else "Copied ${target.name}")
                         files = null
                         loadAttempt += 1
                     }.onFailure {
@@ -7329,84 +7332,15 @@ internal fun FilesScreen(
         )
     }
 
-    deleteTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!mutationRunning) {
-                    deleteTarget = null
-                    mutationError = null
-                }
-            },
-            title = { Text("Delete ${target.name}?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
-                    Text(
-                        if (target.isDirectory) {
-                            "This removes the folder and everything inside it from Nextcloud. This cannot be undone here."
-                        } else {
-                            "This removes the file from Nextcloud. This cannot be undone here."
-                        },
-                    )
-                    Text(
-                        "The delete is ETag-protected and will stop if the item changed since this folder was loaded.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !mutationRunning,
-                    onClick = {
-                        deleteTarget = null
-                        mutationError = null
-                    },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !mutationRunning,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        val etag = target.etag?.takeIf(String::isNotBlank)
-                        if (etag == null) {
-                            mutationError = "Refresh the folder before deleting this item."
-                            return@Button
-                        }
-                        mutationRunning = true
-                        mutationError = null
-                        scope.launch {
-                            filesRequest {
-                                services.executeFileMutation(
-                                    session,
-                                    requireNotNull(userId),
-                                    NextcloudFileMutation.Delete(
-                                        target.path,
-                                        etag,
-                                        sourceIsDirectory = target.isDirectory,
-                                    ),
-                                )
-                            }.onSuccess {
-                                deleteTarget = null
-                                mutationNotice = "Deleted ${target.name}"
-                                files = null
-                                loadAttempt += 1
-                            }.onFailure {
-                                mutationError = it.message ?: "Could not delete this item."
-                            }
-                            mutationRunning = false
-                        }
-                    },
-                ) {
-                    if (mutationRunning) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(if (mutationRunning) "Deleting..." else "Delete")
-                }
-            },
-        )
+    userId?.let { uid ->
+        FileDeleteHost(
+            deleteDialog, fileDeletes, path,
+            delete = { mutation -> services.executeFileMutation(session, uid, mutation) },
+            readFolder = { folder -> services.listFilesWithSource(session, uid, folder) },
+        ) { effect ->
+            effect.notice?.let { mutationNotice = it }
+            if (effect.reloadFolder) { files = null; loadAttempt += 1 }
+        }
     }
 
     shareTarget?.let { target ->
@@ -10512,7 +10446,7 @@ internal enum class MediaTileLayout {
 
 @Composable
 private fun FileInfoScreen(
-    services: NextcloudPlatformServices,
+    services: NextcloudPlatformServices, writeFence: FileWriteFence,
     session: NextcloudSession,
     userId: String,
     file: NextcloudFile,
@@ -10562,7 +10496,7 @@ private fun FileInfoScreen(
             if (!file.isDirectory && file.fileId != null) {
                 item {
                     FileVersionHistorySection(
-                        services = services,
+                        services = services, writeFence = writeFence,
                         session = session,
                         userId = userId,
                         file = file,

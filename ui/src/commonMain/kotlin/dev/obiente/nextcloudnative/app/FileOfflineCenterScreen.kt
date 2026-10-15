@@ -78,7 +78,7 @@ internal enum class FileOfflineWorkspaceSection(
 
 @Composable
 internal fun FileOfflineCenterScreen(
-    services: NextcloudPlatformServices,
+    services: NextcloudPlatformServices, writeFence: FileWriteFence,
     session: NextcloudSession,
     userId: String,
     onBack: () -> Unit,
@@ -955,7 +955,7 @@ internal fun FileOfflineCenterScreen(
 
     if (virtualFolderPickerVisible) {
         RemoteFolderPickerDialog(
-            services = services,
+            services = services, writeFence = writeFence,
             session = session,
             userId = userId,
             initialPath = "",
@@ -982,7 +982,7 @@ internal fun FileOfflineCenterScreen(
     val localRootForDestination = pendingLocalRoot
     if (remoteFolderPickerVisible && localRootForDestination != null) {
         RemoteFolderPickerDialog(
-            services = services,
+            services = services, writeFence = writeFence,
             session = session,
             userId = userId,
             initialPath = pendingRemotePath

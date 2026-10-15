@@ -196,6 +196,7 @@ import dev.obiente.nextcloudnative.app.fileVersionHistoryRequest
 import dev.obiente.nextcloudnative.app.fileVersionContentRequest
 import dev.obiente.nextcloudnative.app.fileVersionRestoreRequest
 import dev.obiente.nextcloudnative.app.historicalFileCopyName
+import dev.obiente.nextcloudnative.app.invalidateAfterConfirmedFileMutation
 import dev.obiente.nextcloudnative.app.isExactHttpByteContentRange
 import dev.obiente.nextcloudnative.app.normalizeFileVersionHistory
 import dev.obiente.nextcloudnative.app.requireMatchingFileVersion
@@ -683,9 +684,8 @@ internal class AndroidNextcloudServices(
 
     override suspend fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
 
-    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) {
-        supportDiagnostics.record(event)
-    }
+    override fun recordSupportDiagnostic(event: SupportDiagnosticEventDraft) = supportDiagnostics.record(event)
+    override val fileWriteFences get() = androidFileWriteFences(appContext)
 
     internal fun recordSupportDiagnosticForAccountIdentity(
         accountIdentity: String,
@@ -2718,21 +2718,19 @@ internal class AndroidNextcloudServices(
                         put("Overwrite", if (spec.overwrite) "T" else "F")
                     }
                 }
-                val response = request(
+                val accountId = NextcloudDocumentIds.accountKey(currentSession)
+                fun invalidateLocal() = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
+                    { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
+                val response = dev.obiente.nextcloudnative.app.reportingUnknownFileMutationResult(::invalidateLocal) { request(
                     method = spec.method,
                     url = buildNextcloudFileUrl(currentSession.serverUrl, userId, spec.sourcePath),
                     session = currentSession,
                     headers = headers,
                     maxResponseBytes = 64 * 1024,
                     accountMutationSerialized = accountMutationSerialized,
-                )
-                if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory)
-                val accountId = NextcloudDocumentIds.accountKey(currentSession)
-                runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
-                spec.destinationPath?.let { destination ->
-                    runCatching { fileReadCache.invalidate(accountId, destination) }
-                }
-                NextcloudFileMutationResult(spec.destinationPath, response.etag)
+                ) }
+                if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) invalidateLocal() else null)
+                NextcloudFileMutationResult(spec.destinationPath, response.etag, invalidateLocal())
             }
         }
     }
