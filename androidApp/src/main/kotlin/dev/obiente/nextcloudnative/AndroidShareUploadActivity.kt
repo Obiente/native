@@ -22,6 +22,8 @@ import dev.obiente.nextcloudnative.app.RemoteFolderPickerOperations
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
+import dev.obiente.nextcloudnative.app.incomingShareFolderPickerOperations
+import dev.obiente.nextcloudnative.app.incomingShareUploadBlock
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.util.UUID
@@ -82,7 +84,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     val activeUserId = serverInfo?.userId
                     val folderOperations = remember(activeSession, activeUserId) {
                         if (activeSession != null && activeUserId != null) {
-                            incomingShareFolderPickerOperations(
+                            shareUploadFolderPickerOperations(
                                 services,
                                 activeSession,
                                 activeUserId,
@@ -249,6 +251,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
         val activeSession = session ?: return
         val info = serverInfo ?: return
         val staged = request ?: return
+        incomingShareUploadBlock(services.fileWriteFences.account(activeSession.accountId), destinationPath)?.let { block ->
+            error = block.message
+            return
+        }
         val generation = restoreGeneration
         queueing = true
         error = null
@@ -417,32 +423,30 @@ internal suspend fun <Result> restoreIncomingShareForActiveSession(
     restore: suspend (NextcloudSession) -> Result,
 ): Result = guard.withExactAccountSession(expectedSession, resolveActiveSession, unavailable, restore)
 
-private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
+/**
+ * The share upload's picker: the account's process-wide write fence, resolved from the same owner
+ * the main activity uses, then this folder's permissions.
+ */
+private fun AndroidShareUploadActivity.shareUploadFolderPickerOperations(
     services: AndroidNextcloudServices,
     session: NextcloudSession,
     userId: String,
     webDav: NextcloudDocumentWebDav,
-): RemoteFolderPickerOperations {
-    val base = remoteFolderPickerOperations(services, session, userId)
-    return RemoteFolderPickerOperations(
-        identity = base.identity + "|incoming-share",
-        listCached = base.listCached,
-        listNetwork = base.listNetwork,
-        createDirectoryIfAbsent = { path ->
-            val parent = path.substringBeforeLast('/', "")
-            val access = inspectIncomingShareDirectoryAccess(session, userId, parent, webDav)
-            require(access.canCreateDirectories) {
-                "This Nextcloud folder does not allow creating subfolders."
-            }
-            base.createDirectoryIfAbsent(path)
-        },
-        selectionAccess = { path ->
-            incomingShareFolderSelectionAccess(
-                inspectIncomingShareDirectoryAccess(session, userId, path, webDav),
-            )
-        },
-    )
-}
+): RemoteFolderPickerOperations = androidIncomingShareFolderPickerOperations(
+    remoteFolderPickerOperations(services, session, userId, services.fileWriteFences.account(session.accountId)),
+) { path -> inspectIncomingShareDirectoryAccess(session, userId, path, webDav) }
+
+/** Builds the share upload's picker over [base], which carries the account's write fence. */
+internal fun androidIncomingShareFolderPickerOperations(
+    base: RemoteFolderPickerOperations,
+    inspect: suspend (path: String) -> DocumentDirectoryAccess,
+): RemoteFolderPickerOperations = incomingShareFolderPickerOperations(
+    base,
+    selectionAccess = { path -> incomingShareFolderSelectionAccess(inspect(path)) },
+    requireCreateDirectories = { parent ->
+        require(inspect(parent).canCreateDirectories) { "This Nextcloud folder does not allow creating subfolders." }
+    },
+)
 
 internal fun incomingShareFolderSelectionAccess(access: DocumentDirectoryAccess): RemoteFolderSelectionAccess = when {
     access.canCreateFiles -> RemoteFolderSelectionAccess.Allowed
@@ -489,6 +493,7 @@ internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPr
         destinationPath = destinationPath,
         completedFiles = completedFiles,
         message = message,
+        waitingForDestinationDelete = waitingForDestinationDelete,
         canVerifyOutcome = (visibleMutationTargetName != null || chunkSession?.targetName != null) && (
             state == AndroidIncomingShareState.OutcomeUnknown ||
                 state == AndroidIncomingShareState.Canceled && message == CANCELED_INCOMING_SHARE_MUTATION_WARNING

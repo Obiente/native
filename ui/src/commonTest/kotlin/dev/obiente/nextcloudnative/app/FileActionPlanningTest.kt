@@ -129,6 +129,38 @@ class FileActionPlanningTest {
     }
 
     @Test
+    fun unverifiedDeleteDisablesEveryRemoteWriteWithAReason() {
+        val file = file(name = "notes.txt", mimeType = "text/plain", size = 10L, etag = "v1")
+        val support = FileActionSupport(sharing = true, platformEditor = true)
+
+        for ((block, reason) in listOf(
+            FileWriteBlock.DeleteRunning to "Wait until the delete of this item or its folder finishes.",
+            FileWriteBlock.RefreshRequired("Archive/notes.txt") to
+                "Open or refresh Archive before changing notes.txt or anything inside it.",
+            FileWriteBlock.RefreshRequired("notes.txt") to
+                "Open or refresh your Nextcloud root before changing notes.txt or anything inside it.",
+        )) {
+            val plan = planFilesScreenActions(file, support, writeBlock = block)
+
+            val writes = plan.actions.filter { it.action.changesRemoteItem() }
+            assertEquals(
+                setOf(
+                    FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.AddFavorite,
+                    FileMenuAction.Rename, FileMenuAction.Move, FileMenuAction.Copy, FileMenuAction.Share,
+                    FileMenuAction.Delete,
+                ),
+                writes.map { it.action }.toSet(),
+            )
+            writes.forEach { action ->
+                assertFalse(action.enabled, "${action.action} must wait.")
+                assertEquals(reason, action.disabledReason, "A finished delete needs a refresh, not waiting.")
+            }
+            assertTrue(plan.action(FileMenuAction.Details).enabled)
+        }
+        assertTrue(planFilesScreenActions(file, support).action(FileMenuAction.Rename).enabled)
+    }
+
+    @Test
     fun seekableStreamingEnablesLargeOpenAndSendCopyWithoutEnablingBoundedDownload() {
         val file = file(
             name = "large-video.mp4",

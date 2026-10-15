@@ -1,0 +1,179 @@
+package dev.obiente.nextcloudnative.app
+
+import kotlinx.coroutines.CancellationException
+
+/** The verified result of one ETag-guarded Files delete. */
+internal sealed interface FileDeleteOutcome {
+    /** The server confirmed the delete. [localFollowUp] reports the local bookkeeping separately. */
+    data class Deleted(val localFollowUp: FileMutationLocalFollowUp) : FileDeleteOutcome
+
+    /**
+     * The item is no longer at its path. That is not proof of deletion: after an unknown result
+     * ([afterUnknownResult]) another client may have moved or renamed it instead. [localFollowUp]
+     * reports the local bookkeeping for the vanished path, as for a confirmed delete.
+     */
+    data class NoLongerAtLocation(
+        val afterUnknownResult: Boolean,
+        val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
+    ) : FileDeleteOutcome
+
+    /**
+     * The same item is verified to be unchanged on the server, or the request was never sent, so
+     * trying again is safe.
+     */
+    data class NotDeleted(val message: String) : FileDeleteOutcome
+
+    /**
+     * The outcome is unknown, or the item changed so its version precondition is stale. The folder
+     * must be refreshed before another try.
+     */
+    data class RefreshRequired(val message: String) : FileDeleteOutcome
+
+    /**
+     * The server rate-limited the request without changing anything. File mutations do not expose
+     * Retry-After, so no delay is invented: writes stay blocked and no extra read is started.
+     */
+    data class Throttled(val message: String) : FileDeleteOutcome
+
+    /**
+     * The server rejected the account's credentials or permission. Repeating the request cannot
+     * succeed until the user signs in again or the item's permissions change.
+     */
+    data class NotPermitted(val message: String) : FileDeleteOutcome
+}
+
+/** Why another delete of the same item must wait for a fresh folder listing, or null. */
+internal fun FileDeleteOutcome.retryBlockMessage(): String? = when (this) {
+    is FileDeleteOutcome.RefreshRequired -> message
+    is FileDeleteOutcome.Throttled -> message
+    is FileDeleteOutcome.NotPermitted -> message
+    is FileDeleteOutcome.Deleted, is FileDeleteOutcome.NoLongerAtLocation, is FileDeleteOutcome.NotDeleted -> null
+}
+
+/**
+ * Deletes [target] once and never retries. A result without a definitive server answer is resolved
+ * by reading the parent folder from the server, never by sending the delete again.
+ */
+internal suspend fun deleteFileWithVerifiedOutcome(
+    target: NextcloudFile,
+    expectedEtag: String,
+    delete: suspend () -> NextcloudFileMutationResult,
+    readParent: suspend () -> NextcloudFileListing,
+): FileDeleteOutcome {
+    val failure = try {
+        return FileDeleteOutcome.Deleted(delete().localFollowUp)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        failure
+    }
+    // Nothing left this device, so the item is unchanged and no verification request is needed.
+    if (failure is FileMutationNotSentException) {
+        return FileDeleteOutcome.NotDeleted(failure.message ?: "${target.name} was not deleted. Nothing was sent.")
+    }
+    if (failure is NextcloudFileOperationException) {
+        when (failure.error) {
+            NextcloudFileOperationError.NotFound -> return FileDeleteOutcome.NoLongerAtLocation(
+                afterUnknownResult = false,
+                localFollowUp = failure.localFollowUp ?: FileMutationLocalFollowUp.Completed,
+            )
+            NextcloudFileOperationError.ServerFailure -> Unit
+            // Resending the same ETag precondition cannot succeed.
+            NextcloudFileOperationError.Conflict -> return FileDeleteOutcome.RefreshRequired(
+                failure.message ?: "${target.name} changed on the server. Refresh the folder before deleting it.",
+            )
+            NextcloudFileOperationError.Throttled -> return FileDeleteOutcome.Throttled(
+                failure.message ?: "The server is limiting requests. Wait a while, then try again.",
+            )
+            NextcloudFileOperationError.AuthenticationRequired,
+            NextcloudFileOperationError.PermissionDenied,
+            -> return FileDeleteOutcome.NotPermitted(failure.message ?: "You cannot delete ${target.name}.")
+            // A lock is released and storage can be freed without changing this item: retry is safe.
+            NextcloudFileOperationError.Locked,
+            NextcloudFileOperationError.InsufficientStorage,
+            -> return FileDeleteOutcome.NotDeleted(failure.message ?: "Could not delete ${target.name}.")
+        }
+    }
+    // The local reconciliation run for an unknown result, reported if the item turns out to be gone.
+    val unknownFollowUp = (failure as? FileMutationOutcomeUnknownException)?.localFollowUp ?: FileMutationLocalFollowUp.Completed
+    return verifyFileDeletePostcondition(target, expectedEtag, unknownFollowUp, readParent)
+}
+
+private suspend fun verifyFileDeletePostcondition(
+    target: NextcloudFile,
+    expectedEtag: String,
+    unknownFollowUp: FileMutationLocalFollowUp,
+    readParent: suspend () -> NextcloudFileListing,
+): FileDeleteOutcome {
+    val unconfirmed = FileDeleteOutcome.RefreshRequired(unconfirmedDeleteMessage(target.name))
+    val listing = try {
+        readParent()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        return unconfirmed
+    }
+    if (listing.source != NextcloudFileListingSource.Network) return unconfirmed
+    val current = listing.files.firstOrNull { it.path == target.path }
+    if (current == null) {
+        // The stable file ID can only be reconciled within the listing already read.
+        val renamedInPlace = target.fileId != null && listing.files.any { it.fileId == target.fileId }
+        return if (renamedInPlace) {
+            FileDeleteOutcome.RefreshRequired("${target.name} was renamed on the server. Refresh the folder.")
+        } else {
+            FileDeleteOutcome.NoLongerAtLocation(afterUnknownResult = true, localFollowUp = unknownFollowUp)
+        }
+    }
+    // Retrying is safe only for positively the same item. Matching stable file IDs prove it; a
+    // differing ID means a replacement holds the path, and an ID on only one side cannot be
+    // compared, so both need a refresh even when type and ETag match. Only when neither side has
+    // an ID are the type and ETag the identity evidence.
+    if (target.fileId != current.fileId) {
+        return FileDeleteOutcome.RefreshRequired(
+            if (target.fileId != null && current.fileId != null) {
+                "${target.name} was replaced on the server. Refresh the folder."
+            } else {
+                "Could not confirm that ${target.name} is still the same item. Refresh the folder."
+            },
+        )
+    }
+    return if (current.isDirectory == target.isDirectory && current.etag == expectedEtag) {
+        FileDeleteOutcome.NotDeleted("The delete did not finish. ${target.name} is still on the server.")
+    } else {
+        FileDeleteOutcome.RefreshRequired(
+            "${target.name} changed on the server. Refresh the folder before deleting it.",
+        )
+    }
+}
+
+/** Screen effects of a finished delete. They apply even after its dialog was closed. */
+internal data class FileDeleteScreenEffect(val notice: String?, val reloadFolder: Boolean)
+
+internal fun FileDeleteOutcome.screenEffect(name: String, dialogShowsResult: Boolean): FileDeleteScreenEffect =
+    when (this) {
+        is FileDeleteOutcome.Deleted -> FileDeleteScreenEffect(notice = localFollowUp.reportFor("Deleted $name"), reloadFolder = true)
+        is FileDeleteOutcome.NoLongerAtLocation -> FileDeleteScreenEffect(
+            notice = (
+                if (afterUnknownResult) {
+                    "$name is no longer in this folder. The delete response was interrupted, so it may " +
+                        "have been deleted, moved, or renamed"
+                } else {
+                    "$name is no longer in this folder"
+                }
+                ).let { done -> if (localFollowUp == FileMutationLocalFollowUp.Completed) "$done." else localFollowUp.reportFor(done) },
+            reloadFolder = true,
+        )
+        is FileDeleteOutcome.NotDeleted -> FileDeleteScreenEffect(
+            notice = if (dialogShowsResult) null else "$name was not deleted. $message",
+            reloadFolder = false,
+        )
+        is FileDeleteOutcome.RefreshRequired -> FileDeleteScreenEffect(
+            notice = if (dialogShowsResult) null else message,
+            reloadFolder = true,
+        )
+        // A folder reload is another request; leave it to the user after the rate limit or sign-in.
+        is FileDeleteOutcome.Throttled, is FileDeleteOutcome.NotPermitted -> FileDeleteScreenEffect(
+            notice = if (dialogShowsResult) null else "$name was not deleted. ${retryBlockMessage()}",
+            reloadFolder = false,
+        )
+    }

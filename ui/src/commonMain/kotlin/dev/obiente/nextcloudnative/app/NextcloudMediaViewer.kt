@@ -74,19 +74,23 @@ import kotlinx.coroutines.launch
  * Arrow keys navigate on desktop; Escape closes the viewer. Focusable icon buttons also support
  * normal keyboard activation. Image edits are reversible previews until the user explicitly saves
  * a new recipe sidecar; the source file is never passed to a write operation.
+ * Deletes run in the account's shared [fileDeletes] owner, like deletes from Files. An applied
+ * delete goes to [onItemRemoved], whose owner removes it from the navigable sequence.
  */
 @Composable
-fun NextcloudMediaViewer(
+internal fun NextcloudMediaViewer(
     media: List<NextcloudFile>,
     selected: NextcloudFile,
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    fileDeletes: FileDeleteCoordinator,
     taggingAvailable: Boolean,
     memoriesLivePhotoCapability: MemoriesLivePhotoCapability,
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
+    onItemRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
@@ -96,9 +100,7 @@ fun NextcloudMediaViewer(
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val items = remember(media, selected) {
-        if (mediaViewerNavigationIndex(media, selected) >= 0) media else listOf(selected)
-    }
+    val items = remember(media, selected) { mediaViewerItems(media, selected) }
     val sourcePlan = remember(sourceMembers, selected) {
         planMediaSources(sourceMembers, selected)
     }
@@ -175,6 +177,7 @@ fun NextcloudMediaViewer(
         mutableStateOf(false)
     }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
+    var writeBlockNotice by remember(selected.path) { mutableStateOf<FileWriteBlock?>(null) }
     val scope = rememberCoroutineScope()
     val onActionMutationRunningChanged: (Boolean) -> Unit = remember(selected.path) {
         { running ->
@@ -563,11 +566,7 @@ fun NextcloudMediaViewer(
                     }.getOrNull()
                 }
         }
-        DisposableEffect(playbackRangeSource) {
-            onDispose {
-                playbackRangeSource?.close()
-            }
-        }
+        DisposableEffect(playbackRangeSource) { onDispose { playbackRangeSource?.close() } }
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -766,7 +765,7 @@ fun NextcloudMediaViewer(
                         highDetailSourceFile = fullQuality?.source?.file,
                     )
                 ) {
-                    { editing = true }
+                    { writeBlockNotice = fileDeletes.writeBlock(selected.path); if (writeBlockNotice == null) editing = true }
                 } else {
                     null
                 },
@@ -849,17 +848,16 @@ fun NextcloudMediaViewer(
         )
     }
 
+    writeBlockNotice?.let { block -> MediaWriteBlockedDialog(block) { writeBlockNotice = null } }
+    MediaDeleteHost(items, sourceMembers, selected, session, userId, services, fileDeletes, viewerAction == MediaViewerAction.Delete, onClose = { viewerAction = null }) { removed -> viewerAction = null; onItemRemoved(removed) }
     viewerAction?.let { action ->
         MediaViewerActionDialog(
             action = action,
             file = selected,
-            session = session,
-            userId = userId,
-            services = services,
+            session = session, userId = userId,
+            services = services, writeFence = fileDeletes,
             sharingCapabilities = sharingCapabilities,
-            onDismiss = {
-                if (activeActionMutations == 0) viewerAction = null
-            },
+            onDismiss = { if (activeActionMutations == 0) viewerAction = null },
             onSourceRemoved = {
                 viewerAction = null
                 onSourceRemoved(selected)

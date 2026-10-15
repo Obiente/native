@@ -90,8 +90,8 @@ internal suspend fun <Result> DesktopAccountOperationGuard.withAuthenticatedMuta
     action: suspend (NextcloudSession) -> Result,
 ): Result = serialize {
     val current = resolveSession()
-    check(desktopSyncRunMatchesActiveSession(current, expectedSession)) {
-        "The account changed before the authenticated change could be sent."
+    if (!desktopSyncRunMatchesActiveSession(current, expectedSession)) {
+        throw FileMutationNotSentException("The account changed before the authenticated change could be sent.")
     }
     action(requireNotNull(current))
 }

@@ -201,6 +201,72 @@ internal class MediaViewerNavigationRepository private constructor(
         }
     }
 
+    /**
+     * Removes the file [removed] from the route after its delete was confirmed or it is no longer
+     * at its path, so a recreated viewer never shows it again. Only that file leaves: when it was
+     * the cover of a stack whose other members survive, the stack is rebuilt by the stacking rule
+     * with a surviving member as its cover, in the same position. An item leaves only when none of
+     * its members survive.
+     *
+     * Returns the route for the item to show: the same file when it survives, else its rebuilt
+     * stack, else the next item, else the previous one. The route gets a new key, so a holder whose
+     * indices did not change still observes the removal and a stale copy of the old route no longer
+     * resolves. Returns null, releasing the route, when no item is left or the route is gone.
+     */
+    fun remove(
+        accountId: NextcloudAccountId,
+        route: MediaViewerNavigationRoute,
+        removed: NextcloudFile,
+    ): MediaViewerNavigationRoute? = gate.read(accountId.storageKey, null) {
+        lock.withLock {
+            val content = routes[route.key]?.takeIf { it.accountId == accountId } ?: return@withLock null
+            val removedIdentity = mediaViewerFileIdentity(removed)
+            // The navigation item each source belongs to, as registered.
+            val itemIdentities = content.media.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+            val itemOf = content.sourceMembers.associate { source ->
+                val identity = mediaViewerFileIdentity(source)
+                identity to (
+                    content.navigationIdentityBySourceIdentity[identity]
+                        ?: identity.takeIf(itemIdentities::contains)
+                        ?: content.media.firstOrNull { it.sharesMediaStackWith(source) }?.let(::mediaViewerFileIdentity)
+                        ?: identity
+                    )
+            }
+            val survivingSources = content.sourceMembers.filterNot { mediaViewerFileIdentity(it) == removedIdentity }
+            val promoted = survivingSources
+                .filter { itemOf[mediaViewerFileIdentity(it)] == removedIdentity }
+                .takeIf { removedIdentity in itemIdentities && it.isNotEmpty() }
+                ?.let { survivors -> createMediaStack(survivors).cover }
+            val media = content.media.mapNotNull { item -> if (mediaViewerFileIdentity(item) == removedIdentity) promoted else item }
+            if (media.isEmpty()) {
+                routes.remove(route.key)
+                return@withLock null
+            }
+            val retained = media.mapTo(mutableSetOf(), ::mediaViewerFileIdentity)
+            val navigationIdentities = survivingSources.mapNotNull { source ->
+                val identity = mediaViewerFileIdentity(source)
+                val item = itemOf.getValue(identity).let { if (it == removedIdentity) promoted?.let(::mediaViewerFileIdentity) else it }
+                item?.takeIf(retained::contains)?.let { identity to it }
+            }.toMap()
+            val sources = survivingSources.filter { mediaViewerFileIdentity(it) in navigationIdentities }
+            val shown = content.sourceMembers.getOrNull(route.selectedSourceIndex)
+            val shownItem = shown?.let { itemOf[mediaViewerFileIdentity(it)] }
+                ?.let { if (it == removedIdentity) promoted?.let(::mediaViewerFileIdentity) else it }
+            val next = shown?.takeIf { mediaViewerFileIdentity(it) in navigationIdentities }
+                ?: media.firstOrNull { mediaViewerFileIdentity(it) == shownItem }
+                ?: media.getOrNull(route.selectedIndex)
+                ?: media.last()
+            val nextIdentity = mediaViewerFileIdentity(next)
+            val navigationIndex = media.indexOfFirst { mediaViewerFileIdentity(it) == navigationIdentities[nextIdentity] }
+            val sourceIndex = sources.indexOfFirst { mediaViewerFileIdentity(it) == nextIdentity }
+            routes.remove(route.key)
+            if (navigationIndex < 0 || sourceIndex < 0) return@withLock null
+            val key = "media-${nextRouteId++}"
+            routes[key] = content.copy(media = media, sourceMembers = sources, navigationIdentityBySourceIdentity = navigationIdentities)
+            MediaViewerNavigationRoute(key, selectedIndex = navigationIndex, selectedSourceIndex = sourceIndex)
+        }
+    }
+
     fun release(accountId: NextcloudAccountId, routeKey: String) {
         gate.read(accountId.storageKey, Unit) {
             lock.withLock {

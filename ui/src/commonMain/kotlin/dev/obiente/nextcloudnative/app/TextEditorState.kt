@@ -36,6 +36,8 @@ internal class TextEditorState(
     private val upload: suspend (String, String) -> SavedTextFile,
     // The Files listing revision is a conflict-safe fallback when the download omits its ETag.
     private val listingEtag: String? = null,
+    // Why a save must wait, such as an unverified delete of the file or its folder.
+    private val writeBlock: () -> FileWriteBlock? = { null },
 ) {
     var originalText by mutableStateOf<String?>(null)
         private set
@@ -116,6 +118,11 @@ internal class TextEditorState(
 
     suspend fun save() {
         if (!canSave) return
+        // Nothing is sent and the edits stay; the reason says what has to finish first.
+        writeBlock()?.let { block ->
+            saveError = block.message
+            return
+        }
         val submitted = draft
         val expected = requireNotNull(etag)
         saving = true

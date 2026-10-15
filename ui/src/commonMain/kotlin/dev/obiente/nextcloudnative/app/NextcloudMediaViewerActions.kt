@@ -11,7 +11,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,11 +86,14 @@ internal fun MediaViewerActionDialog(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     sharingCapabilities: NextcloudFileSharingCapabilities,
     onDismiss: () -> Unit,
     onSourceRemoved: () -> Unit,
     onMutationRunningChanged: (Boolean) -> Unit,
 ) {
+    // Read in composition, so a dialog that is open when a block appears switches to its reason.
+    if (action in mediaWriteActions) writeFence.writeBlock(file.path)?.let { block -> return MediaWriteBlockedDialog(block, onDismiss) }
     when (action) {
         MediaViewerAction.Move, MediaViewerAction.Copy -> MediaTransferDialog(
             moving = action == MediaViewerAction.Move,
@@ -98,19 +101,13 @@ internal fun MediaViewerActionDialog(
             session = session,
             userId = userId,
             services = services,
+            writeFence = writeFence,
             onDismiss = onDismiss,
             onMoved = onSourceRemoved,
             onMutationRunningChanged = onMutationRunningChanged,
         )
-        MediaViewerAction.Delete -> MediaDeleteDialog(
-            file = file,
-            session = session,
-            userId = userId,
-            services = services,
-            onDismiss = onDismiss,
-            onDeleted = onSourceRemoved,
-            onMutationRunningChanged = onMutationRunningChanged,
-        )
+        // The viewer's MediaDeleteHost owns delete, so its outcome survives this dialog.
+        MediaViewerAction.Delete -> Unit
         MediaViewerAction.AddToAlbum -> MediaAlbumDialog(
             file = file,
             session = session,
@@ -145,6 +142,7 @@ private fun MediaTransferDialog(
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
+    writeFence: FileWriteFence,
     onDismiss: () -> Unit,
     onMoved: () -> Unit,
     onMutationRunningChanged: (Boolean) -> Unit,
@@ -156,9 +154,12 @@ private fun MediaTransferDialog(
     var name by remember(file.path) { mutableStateOf(file.name) }
     var running by remember(file.path) { mutableStateOf(false) }
     var error by remember(file.path) { mutableStateOf<String?>(null) }
+    var followUpNotice by remember(file.path) { mutableStateOf<String?>(null) }
     MediaMutationRunningEffect(running, onMutationRunningChanged)
     val validationError = fileTransferValidationError(file, directory, name)
     val scope = rememberCoroutineScope()
+    val finished = if (moving) onMoved else onDismiss
+    followUpNotice?.let { notice -> return MediaLocalFollowUpDialog(notice, onClose = finished) }
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
         title = { Text("$verb ${file.name}") },
@@ -209,6 +210,11 @@ private fun MediaTransferDialog(
                         error = "Refresh the media item before changing it."
                         return@Button
                     }
+                    // The destination may be inside a folder whose delete is not verified yet.
+                    writeFence.writeBlock(if (directory.isEmpty()) name else "$directory/$name")?.let { block ->
+                        error = block.message
+                        return@Button
+                    }
                     running = true
                     error = null
                     scope.launch {
@@ -218,7 +224,11 @@ private fun MediaTransferDialog(
                             NextcloudFileMutation.Copy(file.path, directory, name, etag)
                         }
                         runCatching { services.executeFileMutation(session, userId, mutation) }
-                            .onSuccess { if (moving) onMoved() else onDismiss() }
+                            .onSuccess { result ->
+                                val done = if (moving) "Moved ${file.name}" else "Copied ${file.name}"
+                                if (result.localFollowUp == FileMutationLocalFollowUp.Completed) finished()
+                                else followUpNotice = result.localFollowUp.reportFor(done)
+                            }
                             .onFailure { error = it.message ?: "Could not ${verb.lowercase()} this file." }
                         running = false
                     }
@@ -234,71 +244,122 @@ private fun MediaTransferDialog(
     )
 }
 
+/**
+ * The media viewer's deletes. They run in the account's shared [deletes] owner exactly like a Files
+ * delete: the same in-flight and refresh blocks for every screen, verification of an unknown
+ * result, retry rules, local follow-up, and completion fencing. The host stays composed with the
+ * viewer and watches every item in [items] and every member of their stacks in [sources], not only
+ * [selected], so a delete whose dialog was closed is applied even after the user moved to another
+ * item or stack member, or the viewer was recreated.
+ *
+ * An item leaves the viewer, through [onRemoved], only when the server confirmed its delete or it
+ * is no longer at its path. Any other outcome keeps it, and its reason is shown in the open dialog
+ * or, for an item without one, as a notice once that item is selected.
+ */
 @Composable
-private fun MediaDeleteDialog(
-    file: NextcloudFile,
+internal fun MediaDeleteHost(
+    items: List<NextcloudFile>,
+    sources: List<NextcloudFile>,
+    selected: NextcloudFile,
     session: NextcloudSession,
     userId: String,
     services: NextcloudPlatformServices,
-    onDismiss: () -> Unit,
-    onDeleted: () -> Unit,
-    onMutationRunningChanged: (Boolean) -> Unit,
+    deletes: FileDeleteCoordinator,
+    open: Boolean,
+    onClose: () -> Unit,
+    onRemoved: (NextcloudFile) -> Unit,
 ) {
-    var running by remember(file.path) { mutableStateOf(false) }
-    var error by remember(file.path) { mutableStateOf<String?>(null) }
-    MediaMutationRunningEffect(running, onMutationRunningChanged)
-    val scope = rememberCoroutineScope()
+    val dialog = remember(deletes, selected.path) { FileDeleteDialogState(deletes) }
+    var removalNotices by remember(deletes) { mutableStateOf(emptyList<Pair<NextcloudFile, String>>()) }
+    var keptNotices by remember(deletes) { mutableStateOf(emptyMap<String, String>()) }
+    val currentOnRemoved by rememberUpdatedState(onRemoved)
+    val paths = remember(items, sources, selected) { (items + sources).mapTo(HashSet()) { it.path } + selected.path }
+    val completion = deletes.completionFor(paths)
+    LaunchedEffect(deletes, completion) {
+        if (completion == null || !deletes.consume(completion)) return@LaunchedEffect
+        val file = completion.request.file
+        val shown = file.path == selected.path
+        val effect = if (shown) dialog.complete(completion) else completion.outcome.screenEffect(file.name, dialogShowsResult = false)
+        when (val outcome = completion.outcome) {
+            is FileDeleteOutcome.Deleted ->
+                if (outcome.localFollowUp == FileMutationLocalFollowUp.Completed) currentOnRemoved(file)
+                else removalNotices = removalNotices + (file to requireNotNull(effect.notice))
+            is FileDeleteOutcome.NoLongerAtLocation -> removalNotices = removalNotices + (file to requireNotNull(effect.notice))
+            // An open dialog for the item shows the reason itself; otherwise it waits for that item.
+            else -> if (!shown || dialog.target == null) effect.notice?.let { keptNotices = keptNotices + (file.path to it) }
+        }
+    }
+    LaunchedEffect(open, selected.path) { if (open && dialog.target == null) dialog.open(selected) }
+    removalNotices.firstOrNull()?.let { (file, notice) ->
+        return MediaLocalFollowUpDialog(notice) {
+            removalNotices = removalNotices.drop(1)
+            currentOnRemoved(file)
+        }
+    }
+    keptNotices[selected.path]?.let { notice ->
+        return AlertDialog(
+            onDismissRequest = { keptNotices = keptNotices - selected.path },
+            title = { Text("${selected.name} was not deleted") },
+            text = { Text(notice) },
+            confirmButton = { TextButton(onClick = { keptNotices = keptNotices - selected.path }) { Text("Close") } },
+        )
+    }
+    dialog.target?.let { target ->
+        FileDeleteDialog(
+            target = target,
+            running = dialog.running,
+            error = dialog.error,
+            retryBlocked = dialog.retryBlocked,
+            onConfirm = {
+                dialog.begin()?.let { request ->
+                    deletes.start(request, { mutation -> services.executeFileMutation(session, userId, mutation) }) { folder ->
+                        services.listFilesWithSource(session, userId, folder)
+                    }
+                }
+            },
+            // Closing never cancels a running delete; its outcome is still applied by this host.
+            onDismiss = {
+                dialog.dismiss()
+                onClose()
+            },
+        )
+    }
+}
+
+/** The viewer's items: [media], or only [selected] when it is not listed. */
+internal fun mediaViewerItems(media: List<NextcloudFile>, selected: NextcloudFile): List<NextcloudFile> =
+    if (mediaViewerNavigationIndex(media, selected) >= 0) media else listOf(selected)
+
+/** Actions that change the item, create files next to it, or bind it to a share or album. */
+private val mediaWriteActions = setOf(
+    MediaViewerAction.Move,
+    MediaViewerAction.Copy,
+    MediaViewerAction.ShareNextcloud,
+    MediaViewerAction.AddToAlbum,
+)
+
+/** A media change refused by the account's write fence, with its typed reason. */
+@Composable
+internal fun MediaWriteBlockedDialog(block: FileWriteBlock, onDismiss: () -> Unit) {
     AlertDialog(
-        onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Delete ${file.name}?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
-                Text("This removes the original file from Nextcloud. Album membership and previews are not substitutes for the original.")
-                Text(
-                    "The delete checks the exact ETag and stops if the file changed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !running, onClick = onDismiss) { Text("Cancel") }
-        },
-        confirmButton = {
-            Button(
-                enabled = !running,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                onClick = {
-                    val etag = file.etag?.takeIf(String::isNotBlank)
-                    if (etag == null) {
-                        error = "Refresh the media item before deleting it."
-                        return@Button
-                    }
-                    running = true
-                    error = null
-                    scope.launch {
-                        runCatching {
-                            services.executeFileMutation(
-                                session,
-                                userId,
-                                NextcloudFileMutation.Delete(file.path, etag),
-                            )
-                        }.onSuccess { onDeleted() }
-                            .onFailure { error = it.message ?: "Could not delete this file." }
-                        running = false
-                    }
-                },
-            ) {
-                if (running) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.size(8.dp))
-                }
-                Text(if (running) "Deleting..." else "Delete")
-            }
-        },
+        onDismissRequest = onDismiss,
+        title = { Text("This file cannot be changed yet") },
+        text = { Text(block.message) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/**
+ * The server already applied the change, but local bookkeeping is incomplete. The viewer moves on
+ * only after the user has seen that, so stale local state is never reported as a plain success.
+ */
+@Composable
+private fun MediaLocalFollowUpDialog(notice: String, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Saved on the server") },
+        text = { Text(notice) },
+        confirmButton = { Button(onClick = onClose) { Text("Close") } },
     )
 }
 

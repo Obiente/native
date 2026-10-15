@@ -32,7 +32,9 @@ internal data class FileTransferDialogIdentity(
     val moving: Boolean,
 )
 
-internal data class FileTransferDestination(val directory: String, val name: String)
+internal data class FileTransferDestination(val directory: String, val name: String) {
+    val path: String get() = if (directory.isEmpty()) name else "$directory/$name"
+}
 
 /** Ephemeral dialog choices; transport, preconditions, and mutation recovery stay with the caller. */
 internal data class FileTransferDialogState(

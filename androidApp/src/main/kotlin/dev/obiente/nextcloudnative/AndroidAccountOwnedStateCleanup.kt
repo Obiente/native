@@ -39,6 +39,7 @@ internal class AndroidAccountOwnedStateCleanup(
 
     suspend fun remove(session: NextcloudSession) {
         dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(session.accountId.storageKey)
+        dropAndroidFileWriteFences(appContext, session.accountId.storageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val cacheIdentity = NextcloudDocumentIds.cacheAccountId(session)
@@ -90,6 +91,7 @@ internal class AndroidAccountOwnedStateCleanup(
         legacyAccountScopeDigest: String?,
     ) {
         dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(session.accountId.storageKey)
+        dropAndroidFileWriteFences(appContext, session.accountId.storageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(session.accountId.storageKey)
         val cacheIdentity = previewCacheIdentity ?: NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
@@ -137,6 +139,7 @@ internal class AndroidAccountOwnedStateCleanup(
         legacyAccountScopeDigest: String? = null,
     ) {
         dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(accountStorageKey)
+        dropAndroidFileWriteFences(appContext, accountStorageKey)
         AndroidFileSyncRootAcquisitionGenerations.retireCanonical(accountStorageKey)
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,

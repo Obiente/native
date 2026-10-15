@@ -428,7 +428,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices {
+interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")

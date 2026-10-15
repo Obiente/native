@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import dev.obiente.nextcloudnative.app.FileWriteFenceRegistry
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
@@ -17,6 +18,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class NextcloudNativeApplication : Application() {
+    /**
+     * The process's account-scoped write fences and Files delete owners, shared by the main and share
+     * activities. Their main-thread scope lives as long as the process, so recreating an activity
+     * never cancels a delete or releases its block.
+     */
+    internal val fileWriteFences = FileWriteFenceRegistry(CoroutineScope(SupervisorJob() + Dispatchers.Main))
     private val startupRecoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var accountCleanupListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 

@@ -48,6 +48,7 @@ internal fun TextEditorScreen(
     userId: String,
     file: NextcloudFile,
     onBack: () -> Unit,
+    writeFence: FileWriteFence,
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
@@ -55,12 +56,13 @@ internal fun TextEditorScreen(
 ) {
     val descriptor = remember(file) { describeDocument(file) }
     val isMarkdown = descriptor.kind == DocumentKind.Markdown
-    val editor = remember(services, session, userId, file.path) {
+    val editor = remember(services, session, userId, file.path, writeFence) {
         TextEditorState(
             store = services.textEditorDraftStore(session, file.path),
             download = { services.downloadFile(session, userId, file.path, maxBytes = MAX_EDITABLE_TEXT_BYTES) },
             upload = { text, revision -> services.saveTextFile(session, userId, file.path, text, revision) },
             listingEtag = file.etag,
+            writeBlock = { writeFence.writeBlock(file.path) },
         )
     }
     val originalText = editor.originalText

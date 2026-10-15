@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileMutationNotSentException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -181,7 +182,7 @@ internal suspend fun <Result> AndroidAccountOperationGuard.withAuthenticatedMuta
 ): Result = withExactAccountSession(
     expectedSession = expectedSession,
     resolveSession = resolveSession,
-    unavailable = { error("The account changed before the authenticated change could be sent.") },
+    unavailable = { throw FileMutationNotSentException("The account changed before the authenticated change could be sent.") },
     action = action,
 )
 

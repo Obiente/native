@@ -407,7 +407,7 @@ fun NextcloudFile.mediaAssetFormat(): MediaAssetFormat {
     }
 }
 
-private fun createMediaStack(files: List<NextcloudFile>): MediaStack {
+internal fun createMediaStack(files: List<NextcloudFile>): MediaStack {
     val ordered = files.sortedWith(mediaSourceOrder)
     val cover = ordered.first()
     return MediaStack(
