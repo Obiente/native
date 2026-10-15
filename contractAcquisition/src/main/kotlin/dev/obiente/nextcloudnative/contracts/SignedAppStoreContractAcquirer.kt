@@ -14,8 +14,6 @@ import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
-import org.snakeyaml.engine.v2.api.Load
-import org.snakeyaml.engine.v2.api.LoadSettings
 import org.w3c.dom.Element
 import org.xml.sax.EntityResolver
 import org.xml.sax.SAXException
@@ -842,39 +840,6 @@ private fun resolveJsonPointer(root: JSONObject, pointer: String): Any? {
     return value
 }
 
-internal fun parseYamlObject(source: String): JSONObject? {
-    val settings = LoadSettings.builder()
-        .setLabel("OpenAPI contract")
-        .setAllowDuplicateKeys(false)
-        .setMaxAliasesForCollections(MAX_YAML_ALIASES)
-        .setCodePointLimit(MAX_SELECTED_FILE_BYTES.toInt())
-        .build()
-    val loaded = Load(settings).loadFromString(source) ?: return null
-    return yamlToJson(loaded, 0, intArrayOf(0)) as? JSONObject
-}
-
-private fun yamlToJson(value: Any?, depth: Int, nodes: IntArray): Any {
-    check(depth <= MAX_YAML_DEPTH) { "The OpenAPI YAML is nested too deeply." }
-    nodes[0] += 1
-    check(nodes[0] <= MAX_YAML_NODES) { "The OpenAPI YAML has too many values." }
-    return when (value) {
-        null -> JSONObject.NULL
-        is Map<*, *> -> JSONObject().also { result ->
-            value.forEach { (key, child) ->
-                check(key is String || key is Number || key is Boolean) {
-                    "OpenAPI YAML object keys must be scalar values."
-                }
-                result.put(key.toString(), yamlToJson(child, depth + 1, nodes))
-            }
-        }
-        is Iterable<*> -> JSONArray().also { result ->
-            value.forEach { child -> result.put(yamlToJson(child, depth + 1, nodes)) }
-        }
-        is String, is Number, is Boolean -> value
-        else -> value.toString()
-    }
-}
-
 internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
     check(!infoXml.contains("<!DOCTYPE", ignoreCase = true)) { "DOCTYPE is not allowed in app metadata." }
     check(!infoXml.contains("<!ENTITY", ignoreCase = true)) { "Entities are not allowed in app metadata." }
@@ -1051,15 +1016,12 @@ private fun URI.effectivePort(): Int = when {
 private const val TAR_BLOCK_BYTES = 512
 private const val MAX_TAR_ENTRY_BYTES = 128L * 1024L * 1024L
 private const val MAX_TAR_UNCOMPRESSED_BYTES = 256L * 1024L * 1024L
-private const val MAX_SELECTED_FILE_BYTES = 16L * 1024L * 1024L
+internal const val MAX_SELECTED_FILE_BYTES = 16L * 1024L * 1024L
 private const val MAX_STATIC_METADATA_FILE_BYTES = 1L * 1024L * 1024L
 private const val MAX_SELECTED_ARCHIVE_FILES = 320
 private const val MAX_OPEN_API_CANDIDATES = 64
 private const val MAX_EXTERNAL_SCHEMA_DOCUMENTS = 16
 private const val MAX_EXTERNAL_REFERENCE_DEPTH = 24
-private const val MAX_YAML_ALIASES = 32
-private const val MAX_YAML_DEPTH = 100
-private const val MAX_YAML_NODES = 250_000
 private val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
 private val GITHUB_REPOSITORY_COMPONENT = Regex("[A-Za-z0-9_.-]+")
 private val SAFE_REPOSITORY_PATH_SEGMENT = Regex("[A-Za-z0-9_.-]+")
