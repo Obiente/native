@@ -23,6 +23,25 @@ enum class AppStoreContractFailureKind {
     Unexpected,
 }
 
+/** Why the App Store boundary completed normally without a verified contract. */
+enum class AppStoreContractUnavailableReason {
+    /** The App Store lists no release for the installed or a patch-compatible version. */
+    NoMatchingRelease,
+
+    /** The linked source refused or rate limited the last fallback request, so a contract may exist. */
+    SourceTemporarilyUnavailable,
+
+    /** Matching releases were inspected and none provides a usable contract or safe read routes. */
+    NoUsableContract,
+}
+
+/** Result of [NextcloudPlatformServices.acquireSignedOpenApiContract]. Failures are thrown instead. */
+sealed interface AppStoreContractAcquisition {
+    data class Acquired(val contract: AcquiredOpenApiContract) : AppStoreContractAcquisition
+
+    data class Unavailable(val reason: AppStoreContractUnavailableReason) : AppStoreContractAcquisition
+}
+
 /**
  * The only failure [NextcloudPlatformServices.acquireSignedOpenApiContract] reports.
  *
@@ -37,8 +56,10 @@ class AppStoreContractAcquisitionException(
 /** Why discovery fell back to app metadata. Verified and persisted contracts carry no reason. */
 @Serializable
 enum class DynamicContractFallbackReason {
-    /** No same-origin or App Store source provides a verified contract for this version. */
+    /** Matching releases were inspected and none provides a verified contract for this version. */
     NoVerifiedContract,
+    NoMatchingRelease,
+    SourceTemporarilyUnavailable,
     VersionUnavailable,
     AppStoreUnreachable,
     AppStoreUnavailable,
@@ -57,6 +78,13 @@ internal fun AppStoreContractFailureKind.fallbackReason(): DynamicContractFallba
     -> DynamicContractFallbackReason.ClientFault
 }
 
+internal fun AppStoreContractUnavailableReason.fallbackReason(): DynamicContractFallbackReason = when (this) {
+    AppStoreContractUnavailableReason.NoMatchingRelease -> DynamicContractFallbackReason.NoMatchingRelease
+    AppStoreContractUnavailableReason.SourceTemporarilyUnavailable ->
+        DynamicContractFallbackReason.SourceTemporarilyUnavailable
+    AppStoreContractUnavailableReason.NoUsableContract -> DynamicContractFallbackReason.NoVerifiedContract
+}
+
 /** Classifies a failure from the platform acquisition boundary without reading exception text. */
 internal fun Throwable.appStoreContractFailureKind(): AppStoreContractFailureKind =
     (this as? AppStoreContractAcquisitionException)?.kind ?: AppStoreContractFailureKind.Unexpected
@@ -66,6 +94,16 @@ internal fun DynamicDescriptorDiscovery.withFallback(
     reason: DynamicContractFallbackReason,
     diagnostic: String,
 ): DynamicDescriptorDiscovery = copy(diagnostics = diagnostics + diagnostic, fallbackReason = reason)
+
+/** Keeps the metadata fallback when the App Store boundary completed without a contract. */
+internal fun DynamicDescriptorDiscovery.withUnavailable(
+    reason: AppStoreContractUnavailableReason,
+    appId: String,
+    coreVersion: String,
+): DynamicDescriptorDiscovery = withFallback(
+    reason.fallbackReason(),
+    "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
+)
 
 /** Shown when discovery itself fails before producing even a metadata fallback. */
 internal const val DYNAMIC_DISCOVERY_FAILURE_MESSAGE = "Could not check this app's native API. Try again."
@@ -88,6 +126,18 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "Neither the server nor the signed App Store release for this app version provides an API " +
             "contract or safe read routes. Only app details are shown.",
         "Check again",
+    )
+    DynamicContractFallbackReason.NoMatchingRelease -> DynamicContractFallbackNotice(
+        "No matching App Store release",
+        "The Nextcloud App Store lists no signed release for this app version, so its API cannot be " +
+            "verified. Only app details are shown.",
+        "Check again",
+    )
+    DynamicContractFallbackReason.SourceTemporarilyUnavailable -> DynamicContractFallbackNotice(
+        "App source busy",
+        "The app's linked source refused or limited requests, so its API contract could not be checked " +
+            "yet. Try again later.",
+        "Try again",
     )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(
         "App version not confirmed",

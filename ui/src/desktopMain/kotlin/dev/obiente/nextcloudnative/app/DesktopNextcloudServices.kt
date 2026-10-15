@@ -5035,10 +5035,10 @@ class DesktopNextcloudServices(
         appId: String,
         serverVersion: String,
         installedAppVersion: String?,
-    ): AcquiredOpenApiContract? = withContext(Dispatchers.IO) {
+    ): AppStoreContractAcquisition = withContext(Dispatchers.IO) {
         acquireAppStoreContract(
             ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
-            contractAcquirer::acquire,
+            contractAcquirer::acquireOutcome,
         )
     }
 

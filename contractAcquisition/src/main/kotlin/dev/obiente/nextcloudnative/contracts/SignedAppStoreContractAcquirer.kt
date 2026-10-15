@@ -32,7 +32,7 @@ class SignedAppStoreContractAcquirer(
 ) {
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
-        ConcurrentHashMap<ContractAcquisitionRequest, CompletableFuture<VerifiedOpenApiContract?>>()
+        ConcurrentHashMap<ContractAcquisitionRequest, CompletableFuture<ContractAcquisitionOutcome>>()
 
     init {
         if (requireHttps) {
@@ -48,8 +48,12 @@ class SignedAppStoreContractAcquirer(
         }
     }
 
-    fun acquire(request: ContractAcquisitionRequest): VerifiedOpenApiContract? {
-        val owner = CompletableFuture<VerifiedOpenApiContract?>()
+    /** Returns the verified contract, or null for any [ContractAcquisitionOutcome.Unavailable] reason. */
+    fun acquire(request: ContractAcquisitionRequest): VerifiedOpenApiContract? =
+        (acquireOutcome(request) as? ContractAcquisitionOutcome.Acquired)?.contract
+
+    fun acquireOutcome(request: ContractAcquisitionRequest): ContractAcquisitionOutcome {
+        val owner = CompletableFuture<ContractAcquisitionOutcome>()
         val existing = inFlightAcquisitions.putIfAbsent(request, owner)
         if (existing != null) {
             return try {
@@ -71,16 +75,16 @@ class SignedAppStoreContractAcquirer(
         }
     }
 
-    private fun acquireUncoalesced(request: ContractAcquisitionRequest): VerifiedOpenApiContract? {
+    private fun acquireUncoalesced(request: ContractAcquisitionRequest): ContractAcquisitionOutcome {
         requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
         request.installedAppVersion?.let { version ->
             requireValidRequest(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
         }
-        verifiedContracts[request]?.let { return it }
+        verifiedContracts[request]?.let { return ContractAcquisitionOutcome.Acquired(it) }
         verifiedContractCache.load(request)?.let { cached ->
             verifiedContracts[request] = cached
-            return cached
+            return ContractAcquisitionOutcome.Acquired(cached)
         }
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
@@ -100,7 +104,8 @@ class SignedAppStoreContractAcquirer(
             installedVersion = request.installedAppVersion,
         ).filterNot { candidate -> candidate.version == exactRelease?.version }
         val releases = listOfNotNull(exactRelease) + compatibleReleases
-        if (releases.isEmpty()) return null
+        if (releases.isEmpty()) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.NoMatchingRelease)
+        val attempt = ContractAcquisitionAttempt()
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
         val verifiedRouteFallbacks = mutableListOf<Pair<AppStoreRelease, VerifiedPackageContract>>()
@@ -128,6 +133,7 @@ class SignedAppStoreContractAcquirer(
                     release = release,
                     installedAppVersion = request.installedAppVersion,
                     exact = release.version == request.installedAppVersion,
+                    attempt = attempt,
                 )?.let { linkedContract ->
                     return cacheContract(
                         request,
@@ -142,11 +148,11 @@ class SignedAppStoreContractAcquirer(
 
         for (release in missingPackageContracts) {
             val exact = release.version == request.installedAppVersion
-            acquireGitHubTagContract(release, request.installedAppVersion, exact)?.let { contract ->
+            acquireGitHubTagContract(release, request.installedAppVersion, exact, attempt)?.let { contract ->
                 return cacheContract(request, contract)
             }
         }
-        val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return null
+        val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return attempt.unavailable()
         return cacheContract(request, verified.asPackageContract(request, release))
     }
 
@@ -173,15 +179,16 @@ class SignedAppStoreContractAcquirer(
     private fun cacheContract(
         request: ContractAcquisitionRequest,
         contract: VerifiedOpenApiContract,
-    ): VerifiedOpenApiContract = contract.also {
-        verifiedContracts[request] = it
-        runCatching { verifiedContractCache.store(request, it) }
+    ): ContractAcquisitionOutcome = ContractAcquisitionOutcome.Acquired(contract).also {
+        verifiedContracts[request] = contract
+        runCatching { verifiedContractCache.store(request, contract) }
     }
 
     private fun acquireGitHubTagContract(
         release: AppStoreRelease,
         installedAppVersion: String?,
         exact: Boolean,
+        attempt: ContractAcquisitionAttempt,
     ): VerifiedOpenApiContract? {
         release.githubSources.forEach sourceLoop@ { source ->
             val sourceRoot = "${rawGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}/${source.tag}"
@@ -227,7 +234,7 @@ class SignedAppStoreContractAcquirer(
                         parseOpenApiCandidate(fileName, contractBytes)?.copy(sourceUrl = specUrl)
                     }
                 }
-            } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot))
+            } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot, attempt))
             selectOpenApiCandidate(contracts, release.appId)
                 ?.let { selected ->
                 val bundled = bundleGitHubSchemaReferences(sourceRoot, selected)
@@ -256,6 +263,7 @@ class SignedAppStoreContractAcquirer(
         source: GitHubSourceReference,
         release: AppStoreRelease,
         sourceRoot: String,
+        attempt: ContractAcquisitionAttempt,
     ): OpenApiCandidate? {
         val archiveUrl = "${codeloadGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}" +
             "/tar.gz/refs/tags/${source.tag}"
@@ -264,6 +272,8 @@ class SignedAppStoreContractAcquirer(
             expectedBaseUrl = codeloadGitHubBaseUrl,
             maximumBytes = MAX_ARCHIVE_BYTES,
             recoverableStatusCodes = setOf(403, 429),
+            // The archive is the last exact-tag fallback; a refusal here leaves the outcome unknown.
+            onRecoverableStatus = attempt::markSourceTemporarilyUnavailable,
         ) ?: return null
         val extracted = try {
             extractOpenApiContract(archive, release)
@@ -395,11 +405,13 @@ class SignedAppStoreContractAcquirer(
         maximumBytes: Long,
         accept: String = "application/octet-stream",
         recoverableStatusCodes: Set<Int> = emptySet(),
+        onRecoverableStatus: () -> Unit = {},
     ): ByteArray? {
         requireSecureUrl(url)
         val response = execute(Request.Builder().url(url).header("Accept", accept).get().build())
         return response.use { githubResponse ->
-            if (githubResponse.code == 404 || githubResponse.code in recoverableStatusCodes) return@use null
+            if (githubResponse.code == 404) return@use null
+            if (githubResponse.code in recoverableStatusCodes) return@use null.also { onRecoverableStatus() }
             requireSuccessfulSource(githubResponse) {
                 "Loading an exact-tag GitHub contract resource failed (HTTP ${githubResponse.code})."
             }

@@ -47,14 +47,34 @@ class DynamicContractFallbackDiscoveryTest {
     }
 
     @Test
-    fun missingContractUnavailableVersionAndInvalidContractEachHaveTheirOwnReason() = runBlocking {
-        assertEquals(DynamicContractFallbackReason.NoVerifiedContract, discover { null }.fallbackReason)
+    fun everyNoContractOutcomeHasItsOwnReasonAndCopy() = runBlocking {
+        val expected = mapOf(
+            AppStoreContractUnavailableReason.NoMatchingRelease to DynamicContractFallbackReason.NoMatchingRelease,
+            AppStoreContractUnavailableReason.SourceTemporarilyUnavailable to
+                DynamicContractFallbackReason.SourceTemporarilyUnavailable,
+            AppStoreContractUnavailableReason.NoUsableContract to DynamicContractFallbackReason.NoVerifiedContract,
+        )
+        assertEquals(AppStoreContractUnavailableReason.entries.toSet(), expected.keys)
+        for ((unavailable, reason) in expected) {
+            val discovery = discover { AppStoreContractAcquisition.Unavailable(unavailable) }
+            assertEquals(DynamicDescriptorAcquisition.MetadataFallback, discovery.acquisition)
+            assertEquals(reason, discovery.fallbackReason)
+            assertTrue(unavailable.name in discovery.diagnostics.last())
+            assertTrue("metadata-only" in discovery.toContractInfo(null).diagnosticCodes)
+        }
+        val throttled = DynamicContractFallbackReason.SourceTemporarilyUnavailable.fallbackNotice()
+        assertEquals("Try again", throttled.actionLabel)
+        assertEquals("Check again", DynamicContractFallbackReason.NoMatchingRelease.fallbackNotice().actionLabel)
+    }
+
+    @Test
+    fun unavailableVersionAndInvalidContractEachHaveTheirOwnReason() = runBlocking {
         var acquisitions = 0
-        val noVersion = discover(serverVersion = null) { acquisitions += 1; null }
+        val noVersion = discover(serverVersion = null) { acquisitions += 1; AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract) }
         assertEquals(DynamicContractFallbackReason.VersionUnavailable, noVersion.fallbackReason)
         assertEquals(0, acquisitions)
         for (document in listOf("not json", "[]", """{"openapi":"3.0.3","paths":{"/apps/example/items":"""")) {
-            val invalid = discover { contract(document) }
+            val invalid = discover { AppStoreContractAcquisition.Acquired(contract(document)) }
             assertEquals(DynamicContractFallbackReason.UnsupportedContract, invalid.fallbackReason)
             assertNoPrivateText(invalid)
         }
@@ -68,7 +88,7 @@ class DynamicContractFallbackDiscoveryTest {
 
     @Test
     fun fallbackReasonIsNeverPersistedAndLegacyEntriesDecodeWithoutIt() = runBlocking {
-        val fallback = discover { null }
+        val fallback = discover { AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract) }
         assertNull(encodePersistedDynamicDiscovery(fallback))
         val verified = fallback.copy(acquisition = DynamicDescriptorAcquisition.StaticAppAsset, fallbackReason = null)
         // Entries written before the field existed have the same shape as entries without a reason.
@@ -101,7 +121,7 @@ class DynamicContractFallbackDiscoveryTest {
 
     private suspend fun discover(
         serverVersion: String? = "34.0.3",
-        acquire: suspend () -> AcquiredOpenApiContract?,
+        acquire: suspend () -> AppStoreContractAcquisition,
     ): DynamicDescriptorDiscovery = discoverDynamicAppDescriptor(
         services = services(acquire),
         session = session,
@@ -122,7 +142,7 @@ class DynamicContractFallbackDiscoveryTest {
     )
 
     /** Only same-origin probes and the App Store boundary are available; every probe is a miss. */
-    private fun services(acquire: suspend () -> AcquiredOpenApiContract?): NextcloudPlatformServices {
+    private fun services(acquire: suspend () -> AppStoreContractAcquisition): NextcloudPlatformServices {
         val unavailable = Proxy.newProxyInstance(
             NextcloudPlatformServices::class.java.classLoader,
             arrayOf(NextcloudPlatformServices::class.java),
@@ -138,7 +158,7 @@ class DynamicContractFallbackDiscoveryTest {
                 appId: String,
                 serverVersion: String,
                 installedAppVersion: String?,
-            ): AcquiredOpenApiContract? = acquire()
+            ): AppStoreContractAcquisition = acquire()
         }
     }
 }

@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
+import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequestException
 import dev.obiente.nextcloudnative.contracts.ContractSourceHttpException
 import dev.obiente.nextcloudnative.contracts.ContractSourceVerificationException
@@ -13,7 +15,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class JvmAppStoreContractAcquisitionTest {
@@ -35,7 +36,10 @@ class JvmAppStoreContractAcquisitionTest {
                 VerifiedContractKind.VerifiedReadRoutes to AcquiredContractKind.VerifiedReadRoutes,
                 VerifiedContractKind.OpenApiWithVerifiedReadRoutes to AcquiredContractKind.OpenApiWithVerifiedReadRoutes,
             )) {
-                val acquired = requireNotNull(acquireAppStoreContract(request) { verified(source, kind) })
+                val outcome = acquireAppStoreContract(request) {
+                    ContractAcquisitionOutcome.Acquired(verified(source, kind))
+                }
+                val acquired = (outcome as AppStoreContractAcquisition.Acquired).contract
                 assertEquals(expectedSource, acquired.sourceKind)
                 assertEquals(expectedKind, acquired.contractKind)
                 assertEquals("1.0.1", acquired.appVersion)
@@ -43,7 +47,17 @@ class JvmAppStoreContractAcquisitionTest {
                 assertEquals("https://fixture.invalid/example.tar.gz#openapi.json", acquired.sourceUrl)
             }
         }
-        assertNull(acquireAppStoreContract(request) { null })
+        for ((reason, expected) in listOf(
+            ContractUnavailableReason.NoMatchingRelease to AppStoreContractUnavailableReason.NoMatchingRelease,
+            ContractUnavailableReason.SourceTemporarilyUnavailable to
+                AppStoreContractUnavailableReason.SourceTemporarilyUnavailable,
+            ContractUnavailableReason.NoUsableContract to AppStoreContractUnavailableReason.NoUsableContract,
+        )) {
+            assertEquals(
+                AppStoreContractAcquisition.Unavailable(expected),
+                acquireAppStoreContract(request) { ContractAcquisitionOutcome.Unavailable(reason) },
+            )
+        }
     }
 
     @Test

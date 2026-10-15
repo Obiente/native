@@ -184,7 +184,10 @@ keeps the metadata-only descriptor and records a typed reason in
 [`DynamicContractFallback.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractFallback.kt).
 The fallback card derives its title, explanation, and action from that reason:
 
-- no verified contract exists for the installed version;
+- the inspected releases provide no verified contract for the installed version;
+- the App Store lists no release matching the installed version;
+- the app's linked source refused or rate limited the last fallback request
+  (HTTP 403 or 429), so a contract may still exist;
 - the server or app version could not be confirmed;
 - the App Store could not be reached, or did not provide the release;
 - the package or its source failed verification;
@@ -202,6 +205,13 @@ acquisition code cannot initialize on a runtime, for example because the
 Android ICU engine rejects a regular expression, the result is a client-fault
 fallback, not an exception class name. Diagnostics and product copy never
 contain exception text, and a fallback reason is never persisted.
+
+A completed acquisition without a contract is a typed outcome, not a bare
+`null`.
+[`ContractAcquisitionOutcome.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionOutcome.kt)
+separates no matching release, a temporarily unavailable linked source, and
+releases inspected without a usable contract, and the shared JVM boundary
+carries that reason to the fallback card.
 
 ## Read failures
 
@@ -242,9 +252,15 @@ bodies, invalid text, and deeply nested JSON.
 - Host placeholders are parsed without a brace regular expression. The `ui`
   build checks `commonMain`. `tools/check-kotlin-architecture.sh` checks the
   shared `ui` source sets compiled for Android, the contract module, and every
-  `androidApp` source set except JVM unit tests. An Android instrumented test
-  initializes every top-level contract-module class and exercises host
-  rejection on the Android runtime.
+  `androidApp` source set except JVM unit tests.
+- `AppOwnedOpenApiAndroidInstrumentedTest` initializes every top-level
+  contract-module class, exercises host rejection, the real catalog path with
+  a failing cache, and YAML parsing on the Android runtime. CI does not run
+  instrumented tests; run it with the emulator workflow in
+  [CONTRIBUTING.md](CONTRIBUTING.md). The JVM unit test
+  `ContractModuleInitializationTest` loads every facade and fails when one is
+  missing from the instrumented list. JVM loading does not prove ART or ICU
+  compatibility.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are rejected,
   not ignored. An absent override inherits the base; an explicit empty array

@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionFailureKind
+import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
+import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
@@ -18,9 +20,9 @@ import kotlinx.coroutines.CancellationException
  */
 fun acquireAppStoreContract(
     request: ContractAcquisitionRequest,
-    acquire: (ContractAcquisitionRequest) -> VerifiedOpenApiContract?,
-): AcquiredOpenApiContract? {
-    val contract = try {
+    acquire: (ContractAcquisitionRequest) -> ContractAcquisitionOutcome,
+): AppStoreContractAcquisition {
+    val outcome = try {
         acquire(request)
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -29,7 +31,17 @@ fun acquireAppStoreContract(
     } catch (failure: LinkageError) {
         throw AppStoreContractAcquisitionException(AppStoreContractFailureKind.RuntimeIncompatible, failure)
     }
-    return contract?.toAcquiredOpenApiContract()
+    return when (outcome) {
+        is ContractAcquisitionOutcome.Acquired -> AppStoreContractAcquisition.Acquired(outcome.contract.toAcquiredOpenApiContract())
+        is ContractAcquisitionOutcome.Unavailable -> AppStoreContractAcquisition.Unavailable(outcome.reason.toAppStoreReason())
+    }
+}
+
+private fun ContractUnavailableReason.toAppStoreReason(): AppStoreContractUnavailableReason = when (this) {
+    ContractUnavailableReason.NoMatchingRelease -> AppStoreContractUnavailableReason.NoMatchingRelease
+    ContractUnavailableReason.SourceTemporarilyUnavailable ->
+        AppStoreContractUnavailableReason.SourceTemporarilyUnavailable
+    ContractUnavailableReason.NoUsableContract -> AppStoreContractUnavailableReason.NoUsableContract
 }
 
 private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFailureKind = when (this) {

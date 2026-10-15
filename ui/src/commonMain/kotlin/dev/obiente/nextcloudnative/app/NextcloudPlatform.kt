@@ -1443,7 +1443,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         appId: String,
         serverVersion: String,
         installedAppVersion: String?,
-    ): AcquiredOpenApiContract?
+    ): AppStoreContractAcquisition
 
     suspend fun listActivities(session: NextcloudSession, limit: Int = DEFAULT_ACTIVITY_LIMIT): List<NextcloudActivity>
 

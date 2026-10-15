@@ -13,7 +13,7 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
-import dev.obiente.nextcloudnative.app.AcquiredOpenApiContract
+import dev.obiente.nextcloudnative.app.AppStoreContractAcquisition
 import dev.obiente.nextcloudnative.app.acquireAppStoreContract
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
@@ -2960,10 +2960,10 @@ internal class AndroidNextcloudServices(
         appId: String,
         serverVersion: String,
         installedAppVersion: String?,
-    ): AcquiredOpenApiContract? = withContext(Dispatchers.IO) {
+    ): AppStoreContractAcquisition = withContext(Dispatchers.IO) {
         acquireAppStoreContract(
             ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
-            contractAcquirer::acquire,
+            contractAcquirer::acquireOutcome,
         )
     }
 

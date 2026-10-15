@@ -156,18 +156,18 @@ suspend fun discoverDynamicAppDescriptor(
             "Finding a verified app package",
         ),
     )
-    val acquired = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic) {
+    val acquisition = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic,
+        available = { it is AppStoreContractAcquisition.Acquired }) {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
         // Only the typed kind enters diagnostics and copy; exception text and class names stay local.
         val kind = failure.appStoreContractFailureKind()
         return sameOrigin.withFallback(kind.fallbackReason(), "App Store contract acquisition failed: ${kind.name}.")
-    } ?: return sameOrigin.withFallback(
-        DynamicContractFallbackReason.NoVerifiedContract,
-        "No exact or patch-compatible App Store source yielded a usable API contract or " +
-            "verified static read routes for $contractAppId on Nextcloud $coreVersion. " +
-            "Only app metadata is available.",
-    )
+    }
+    val acquired = when (acquisition) {
+        is AppStoreContractAcquisition.Acquired -> acquisition.contract
+        is AppStoreContractAcquisition.Unavailable -> return sameOrigin.withUnavailable(acquisition.reason, contractAppId, coreVersion)
+    }
     val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = observeDynamicDiscoveryStage(DynamicDiscoveryStage.ContractParsing, services::recordSupportDiagnostic) {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
