@@ -42,6 +42,7 @@ private fun ContractUnavailableReason.toAppStoreReason(): AppStoreContractUnavai
     ContractUnavailableReason.SourceTemporarilyUnavailable ->
         AppStoreContractUnavailableReason.SourceTemporarilyUnavailable
     ContractUnavailableReason.NoUsableContract -> AppStoreContractUnavailableReason.NoUsableContract
+    ContractUnavailableReason.MalformedSource -> AppStoreContractUnavailableReason.MalformedSource
 }
 
 private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFailureKind = when (this) {

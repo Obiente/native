@@ -53,6 +53,7 @@ class DynamicContractFallbackDiscoveryTest {
             AppStoreContractUnavailableReason.SourceTemporarilyUnavailable to
                 DynamicContractFallbackReason.SourceTemporarilyUnavailable,
             AppStoreContractUnavailableReason.NoUsableContract to DynamicContractFallbackReason.NoVerifiedContract,
+            AppStoreContractUnavailableReason.MalformedSource to DynamicContractFallbackReason.MalformedSource,
         )
         assertEquals(AppStoreContractUnavailableReason.entries.toSet(), expected.keys)
         for ((unavailable, reason) in expected) {
@@ -65,6 +66,8 @@ class DynamicContractFallbackDiscoveryTest {
         val throttled = DynamicContractFallbackReason.SourceTemporarilyUnavailable.fallbackNotice()
         assertEquals("Try again", throttled.actionLabel)
         assertEquals("Check again", DynamicContractFallbackReason.NoMatchingRelease.fallbackNotice().actionLabel)
+        val malformed = DynamicContractFallbackReason.MalformedSource.fallbackNotice()
+        assertFalse("lists no" in malformed.message, malformed.message)
     }
 
     @Test

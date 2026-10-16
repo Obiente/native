@@ -33,6 +33,9 @@ enum class AppStoreContractUnavailableReason {
 
     /** Matching releases were inspected and none provides a usable contract or safe read routes. */
     NoUsableContract,
+
+    /** The catalog lists the app, but the entry that would be selected lacks data needed to verify it. */
+    MalformedSource,
 }
 
 /** Result of [NextcloudPlatformServices.acquireSignedOpenApiContract]. Failures are thrown instead. */
@@ -60,6 +63,7 @@ enum class DynamicContractFallbackReason {
     NoVerifiedContract,
     NoMatchingRelease,
     SourceTemporarilyUnavailable,
+    MalformedSource,
     VersionUnavailable,
     AppStoreUnreachable,
     AppStoreUnavailable,
@@ -83,6 +87,7 @@ internal fun AppStoreContractUnavailableReason.fallbackReason(): DynamicContract
     AppStoreContractUnavailableReason.SourceTemporarilyUnavailable ->
         DynamicContractFallbackReason.SourceTemporarilyUnavailable
     AppStoreContractUnavailableReason.NoUsableContract -> DynamicContractFallbackReason.NoVerifiedContract
+    AppStoreContractUnavailableReason.MalformedSource -> DynamicContractFallbackReason.MalformedSource
 }
 
 /** Classifies a failure from the platform acquisition boundary without reading exception text. */
@@ -138,6 +143,12 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "The app's linked source refused or limited requests, so its API contract could not be checked " +
             "yet. Try again later.",
         "Try again",
+    )
+    DynamicContractFallbackReason.MalformedSource -> DynamicContractFallbackNotice(
+        "App Store entry incomplete",
+        "The Nextcloud App Store entry for this app version is missing data needed to verify its signed " +
+            "release, so no native view is offered. Only app details are shown.",
+        "Check again",
     )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(
         "App version not confirmed",

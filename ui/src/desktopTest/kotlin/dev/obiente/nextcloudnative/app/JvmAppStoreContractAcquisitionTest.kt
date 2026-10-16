@@ -52,6 +52,7 @@ class JvmAppStoreContractAcquisitionTest {
             ContractUnavailableReason.SourceTemporarilyUnavailable to
                 AppStoreContractUnavailableReason.SourceTemporarilyUnavailable,
             ContractUnavailableReason.NoUsableContract to AppStoreContractUnavailableReason.NoUsableContract,
+            ContractUnavailableReason.MalformedSource to AppStoreContractUnavailableReason.MalformedSource,
         )) {
             assertEquals(
                 AppStoreContractAcquisition.Unavailable(expected),

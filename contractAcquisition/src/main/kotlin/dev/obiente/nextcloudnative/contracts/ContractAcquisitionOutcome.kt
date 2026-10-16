@@ -13,6 +13,12 @@ enum class ContractUnavailableReason {
 
     /** Matching releases were inspected and none provides a usable contract or safe read routes. */
     NoUsableContract,
+
+    /**
+     * The catalog lists the app, but an entry that would have been selected lacks a required value
+     * such as its certificate, download, signature, or signature digest, so it cannot be verified.
+     */
+    MalformedSource,
 }
 
 /** The typed result of [SignedAppStoreContractAcquirer.acquireOutcome]. Failures are thrown instead. */

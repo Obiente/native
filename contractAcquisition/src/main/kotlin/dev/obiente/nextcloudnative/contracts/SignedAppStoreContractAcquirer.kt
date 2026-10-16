@@ -88,23 +88,22 @@ class SignedAppStoreContractAcquirer(
         }
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
-        val platformReleases = fetchCatalogReleases(compatibleCatalogUrl, request.appId)
+        val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId)
+        val platformReleases = platformCatalog.releases
         val exactPlatformRelease = request.installedAppVersion?.let { installed ->
             platformReleases.firstOrNull { release -> release.version == installed }
         }
-        val exactRelease = if (request.installedAppVersion != null && exactPlatformRelease == null) {
-            val allReleasesUrl = "${appStoreBaseUrl.trimEnd('/')}/apps.json"
-            fetchCatalogReleases(allReleasesUrl, request.appId)
-                .firstOrNull { release -> release.version == request.installedAppVersion }
-        } else {
-            exactPlatformRelease
+        val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
+            fetchCatalogReleases("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId)
         }
+        val exactRelease = exactPlatformRelease
+            ?: allCatalog?.releases?.firstOrNull { release -> release.version == request.installedAppVersion }
         val compatibleReleases = compatibleReleaseCandidates(
             releases = platformReleases,
             installedVersion = request.installedAppVersion,
         ).filterNot { candidate -> candidate.version == exactRelease?.version }
         val releases = listOfNotNull(exactRelease) + compatibleReleases
-        if (releases.isEmpty()) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.NoMatchingRelease)
+        if (releases.isEmpty()) return unmatchedReleaseOutcome(request.installedAppVersion, platformCatalog, allCatalog)
         val attempt = ContractAcquisitionAttempt()
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
@@ -424,7 +423,7 @@ class SignedAppStoreContractAcquirer(
     private fun fetchCatalogReleases(
         catalogUrl: String,
         appId: String,
-    ): List<AppStoreRelease> {
+    ): CatalogReleases {
         requireSecureUrl(catalogUrl)
         catalogCache.load(catalogUrl)?.let { cached ->
             return parseReleases(

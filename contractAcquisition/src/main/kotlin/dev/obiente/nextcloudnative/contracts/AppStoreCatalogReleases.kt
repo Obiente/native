@@ -4,6 +4,37 @@ import java.net.URI
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Which required catalog value made an entry for the requested app unusable. */
+internal enum class MalformedCatalogField { Releases, Entry, Version, Certificate, Download, Signature, SignatureDigest }
+
+/** A catalog entry for the requested app that parsing dropped. A null version could not be read. */
+internal data class MalformedCatalogEntry(val version: String?, val field: MalformedCatalogField)
+
+/** Usable releases of one app in one catalog, plus the entries that were present but malformed. */
+internal data class CatalogReleases(
+    val releases: List<AppStoreRelease>,
+    val malformed: List<MalformedCatalogEntry> = emptyList(),
+)
+
+/**
+ * Explains an empty release selection. A dropped entry that would have been selected, or one whose
+ * version cannot be read, means the catalog is malformed for this app rather than lacking a release.
+ * Compatible candidates come only from the platform catalog; the full catalog supplies exact matches.
+ */
+internal fun unmatchedReleaseOutcome(
+    installedVersion: String?,
+    platformCatalog: CatalogReleases,
+    allCatalog: CatalogReleases?,
+): ContractAcquisitionOutcome.Unavailable {
+    fun MalformedCatalogEntry.isExact(): Boolean = version == null || version == installedVersion
+    val malformedMatch = platformCatalog.malformed.any { entry ->
+        entry.isExact() || isCompatibleReleaseVersion(requireNotNull(entry.version), installedVersion)
+    } || allCatalog?.malformed.orEmpty().any { entry -> entry.isExact() }
+    return ContractAcquisitionOutcome.Unavailable(
+        if (malformedMatch) ContractUnavailableReason.MalformedSource else ContractUnavailableReason.NoMatchingRelease,
+    )
+}
+
 internal fun selectRelease(
     catalogJson: String,
     request: ContractAcquisitionRequest,
@@ -15,7 +46,7 @@ internal fun selectRelease(
         appId = request.appId,
         catalogUrl = catalogUrl,
         requireOfficialGitHubHost = requireOfficialGitHubHost,
-    ).filter { release ->
+    ).releases.filter { release ->
         request.installedAppVersion != null || !release.version.isRecognizedPrerelease()
     }.filter { release ->
         request.installedAppVersion == null || release.version == request.installedAppVersion
@@ -30,24 +61,43 @@ internal fun parseReleases(
     appId: String,
     catalogUrl: String,
     requireOfficialGitHubHost: Boolean,
-): List<AppStoreRelease> {
+): CatalogReleases {
     val apps = JSONArray(catalogJson)
     val app = (0 until apps.length())
         .asSequence()
         .mapNotNull(apps::optJSONObject)
         .firstOrNull { candidate -> candidate.optString("id") == appId }
-        ?: return emptyList()
-    val certificate = app.optString("certificate").takeIf(String::isNotBlank) ?: return emptyList()
-    val releases = app.optJSONArray("releases") ?: return emptyList()
-    return (0 until releases.length())
+        ?: return CatalogReleases(emptyList())
+    val releases = app.optJSONArray("releases")
+        ?: return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Releases)))
+    val certificate = app.optString("certificate").takeIf(String::isNotBlank)
+    val malformed = mutableListOf<MalformedCatalogEntry>()
+    val parsed = (0 until releases.length())
         .asSequence()
-        .mapNotNull(releases::optJSONObject)
+        .mapNotNull { index ->
+            releases.optJSONObject(index).also { release ->
+                if (release == null) malformed += MalformedCatalogEntry(null, MalformedCatalogField.Entry)
+            }
+        }
         .filter { release -> !release.optBoolean("isNightly", false) }
         .mapNotNull { release ->
-            val version = release.optString("version").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val download = release.optString("download").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val signature = release.optString("signature").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val digest = release.optString("signatureDigest").takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val version = release.optString("version").takeIf(String::isNotBlank)
+            val download = release.optString("download").takeIf(String::isNotBlank)
+            val signature = release.optString("signature").takeIf(String::isNotBlank)
+            val digest = release.optString("signatureDigest").takeIf(String::isNotBlank)
+            if (version == null || certificate == null || download == null || signature == null || digest == null) {
+                malformed += MalformedCatalogEntry(
+                    version = version,
+                    field = when {
+                        version == null -> MalformedCatalogField.Version
+                        certificate == null -> MalformedCatalogField.Certificate
+                        download == null -> MalformedCatalogField.Download
+                        signature == null -> MalformedCatalogField.Signature
+                        else -> MalformedCatalogField.SignatureDigest
+                    },
+                )
+                return@mapNotNull null
+            }
             AppStoreRelease(
                 appId = appId,
                 version = version,
@@ -66,6 +116,7 @@ internal fun parseReleases(
             )
         }
         .toList()
+    return CatalogReleases(parsed, malformed.toList())
 }
 
 private data class ParsedVersion(
@@ -107,22 +158,24 @@ internal fun compatibleReleaseCandidates(
     releases: List<AppStoreRelease>,
     installedVersion: String?,
 ): List<AppStoreRelease> {
-    if (installedVersion == null) {
-        return releases
-            .filterNot { release -> release.version.isRecognizedPrerelease() }
-            .sortedWith { left, right -> compareSemanticVersions(right.version, left.version) }
+    val compatible = releases.filter { release -> isCompatibleReleaseVersion(release.version, installedVersion) }
+    return if (installedVersion == null) {
+        compatible.sortedWith { left, right -> compareSemanticVersions(right.version, left.version) }
+    } else {
+        compatible.sortedWith { left, right -> compareCompatibility(left.version, right.version, installedVersion) }
     }
-    val installed = parseVersion(installedVersion) ?: return emptyList()
-    if (installed.numeric.size < 2 || installedVersion.isRecognizedPrerelease()) return emptyList()
-    return releases
-        .filterNot { release -> release.version.isRecognizedPrerelease() }
-        .filter { release ->
-            val candidate = parseVersion(release.version)
-            candidate != null && candidate.numeric.size >= 2 &&
-                candidate.numeric[0] == installed.numeric[0] &&
-                candidate.numeric[1] == installed.numeric[1]
-        }
-        .sortedWith { left, right -> compareCompatibility(left.version, right.version, installedVersion) }
+}
+
+/** A non-prerelease with the installed major and minor version, or any non-prerelease when unknown. */
+private fun isCompatibleReleaseVersion(version: String, installedVersion: String?): Boolean {
+    if (version.isRecognizedPrerelease()) return false
+    if (installedVersion == null) return true
+    val installed = parseVersion(installedVersion) ?: return false
+    if (installed.numeric.size < 2 || installedVersion.isRecognizedPrerelease()) return false
+    val candidate = parseVersion(version) ?: return false
+    return candidate.numeric.size >= 2 &&
+        candidate.numeric[0] == installed.numeric[0] &&
+        candidate.numeric[1] == installed.numeric[1]
 }
 
 private fun compareCompatibility(left: String, right: String, installed: String): Int {

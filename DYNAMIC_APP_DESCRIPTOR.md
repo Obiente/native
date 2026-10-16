@@ -186,6 +186,9 @@ The fallback card derives its title, explanation, and action from that reason:
 
 - the inspected releases provide no verified contract for the installed version;
 - the App Store lists no release matching the installed version;
+- the App Store lists the app, but the entry that would be selected lacks a
+  required value such as its certificate, download, signature, or signature
+  digest;
 - the app's linked source refused or rate limited the last fallback request
   (HTTP 403 or 429), so a contract may still exist;
 - the server or app version could not be confirmed;
@@ -209,9 +212,12 @@ contain exception text, and a fallback reason is never persisted.
 A completed acquisition without a contract is a typed outcome, not a bare
 `null`.
 [`ContractAcquisitionOutcome.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionOutcome.kt)
-separates no matching release, a temporarily unavailable linked source, and
-releases inspected without a usable contract, and the shared JVM boundary
-carries that reason to the fallback card.
+separates no matching release, a malformed catalog entry, a temporarily
+unavailable linked source, and releases inspected without a usable contract,
+and the shared JVM boundary carries that reason to the fallback card. Catalog
+parsing records which required value made each dropped entry unusable. A
+dropped entry counts only when it would have been selected: the exact installed
+version, a patch-compatible release, or an entry whose version cannot be read.
 
 ## Read failures
 
