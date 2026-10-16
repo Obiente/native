@@ -55,7 +55,8 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
         // Initialize each packaged top-level facade and companion owner on ART and ICU. The JVM
         // unit test ContractModuleInitializationTest fails when a facade is missing from this list.
         listOf(
-            "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "ContractAcquisitionFailureKt",
+            "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "AppStoreCatalogReleasesKt",
+            "ContractAcquisitionFailureKt",
             "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "SignedAppStoreContractAcquirerKt",
             "StaticPhpParametersKt", "StaticRouteContractKt", "TarArchivePathKt", "VerifiedChoresContractKt",
             "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt", "SignedAppStoreContractAcquirer",
