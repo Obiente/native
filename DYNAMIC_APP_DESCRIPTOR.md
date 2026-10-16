@@ -191,6 +191,7 @@ The fallback card derives its title, explanation, and action from that reason:
   digest;
 - the app's linked source refused or rate limited the last fallback request
   (HTTP 403 or 429), so a contract may still exist;
+- the server's own API catalog or contract probe was inconclusive;
 - the server or app version could not be confirmed;
 - the App Store could not be reached, or did not provide the release;
 - the package or its source failed verification;
@@ -218,6 +219,15 @@ and the shared JVM boundary carries that reason to the fallback card. Catalog
 parsing records which required value made each dropped entry unusable. A
 dropped entry counts only when it would have been selected: the exact installed
 version, a patch-compatible release, or an entry whose version cannot be read.
+
+[`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
+records the first inconclusive same-origin probe as a typed failure: no
+response, a 5xx status or unreadable success body, or HTTP 429. A 404, another
+definitive status, or an empty or non-advertising OCS API Viewer catalog is
+absence and records nothing. When the App Store then completes without a
+contract, an inconclusive server probe takes precedence over every App Store
+no-contract reason and the card offers a retry. A definitive server absence
+keeps the App Store reason. Diagnostics record both sources either way.
 
 ## Read failures
 

@@ -64,6 +64,9 @@ enum class DynamicContractFallbackReason {
     NoMatchingRelease,
     SourceTemporarilyUnavailable,
     MalformedSource,
+
+    /** The same-origin server probe was inconclusive and the App Store yielded no contract. */
+    ServerProbeInconclusive,
     VersionUnavailable,
     AppStoreUnreachable,
     AppStoreUnavailable,
@@ -100,13 +103,19 @@ internal fun DynamicDescriptorDiscovery.withFallback(
     diagnostic: String,
 ): DynamicDescriptorDiscovery = copy(diagnostics = diagnostics + diagnostic, fallbackReason = reason)
 
-/** Keeps the metadata fallback when the App Store boundary completed without a contract. */
+/**
+ * Keeps the metadata fallback when the App Store boundary completed without a contract.
+ *
+ * Precedence: an inconclusive same-origin probe wins over every App Store no-contract reason,
+ * because the server may still offer a contract and checking again can help. A definitive server
+ * absence leaves the App Store reason in charge. Diagnostics keep both sources.
+ */
 internal fun DynamicDescriptorDiscovery.withUnavailable(
     reason: AppStoreContractUnavailableReason,
     appId: String,
     coreVersion: String,
 ): DynamicDescriptorDiscovery = withFallback(
-    reason.fallbackReason(),
+    fallbackReason.takeIf { it == DynamicContractFallbackReason.ServerProbeInconclusive } ?: reason.fallbackReason(),
     "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
 )
 
@@ -149,6 +158,12 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "The Nextcloud App Store entry for this app version is missing data needed to verify its signed " +
             "release, so no native view is offered. Only app details are shown.",
         "Check again",
+    )
+    DynamicContractFallbackReason.ServerProbeInconclusive -> DynamicContractFallbackNotice(
+        "Server not checked",
+        "The server's API catalog did not respond, returned an error, or limited requests, and the App " +
+            "Store offered no verified contract. Check the connection and try again.",
+        "Try again",
     )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(
         "App version not confirmed",

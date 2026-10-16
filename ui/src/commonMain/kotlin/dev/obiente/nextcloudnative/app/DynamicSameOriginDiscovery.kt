@@ -12,6 +12,35 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/** Why a same-origin catalog or contract probe could not prove that the server offers no contract. */
+enum class DynamicServerProbeFailure {
+    /** The request produced no HTTP response. */
+    NoResponse,
+
+    /** The server answered with a 5xx status or an unreadable success body. */
+    ServerError,
+
+    /** The server rate limited the request (HTTP 429). */
+    Throttled,
+}
+
+/** Keeps the first inconclusive probe; a definitive answer such as 404 never records anything. */
+private class DynamicServerProbe {
+    var failure: DynamicServerProbeFailure? = null
+        private set
+
+    fun record(failure: DynamicServerProbeFailure) {
+        if (this.failure == null) this.failure = failure
+    }
+
+    fun record(response: NextcloudApiResponse) {
+        when {
+            response.status == 429 -> record(DynamicServerProbeFailure.Throttled)
+            response.status in 500..599 -> record(DynamicServerProbeFailure.ServerError)
+        }
+    }
+}
+
 internal suspend fun discoverDynamicAppDescriptor(
     serverUrl: String,
     app: NextcloudAppEntry,
@@ -31,6 +60,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     val identity = AppIdentity(app.id, app.name, "server-installed")
     val compiler = DynamicAppDescriptorCompiler()
     val diagnostics = mutableListOf<String>()
+    val probe = DynamicServerProbe()
 
     onProgress(
         DynamicDescriptorDiscoveryProgress(
@@ -38,7 +68,7 @@ internal suspend fun discoverDynamicAppDescriptor(
             "Checking the server API catalog",
         ),
     )
-    val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics)
+    val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics, probe)
     viewerSpecs.forEach { specId ->
         onProgress(
             DynamicDescriptorDiscoveryProgress(
@@ -49,15 +79,18 @@ internal suspend fun discoverDynamicAppDescriptor(
         val path = "$OCS_API_VIEWER_SPEC_PATH/${specId.encodeUrlComponent()}"
         val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(path)) }
             .onFailure { failure ->
+                probe.record(DynamicServerProbeFailure.NoResponse)
                 diagnostics += "OCS API Viewer could not load $specId: ${failure.message ?: "request failed"}."
             }
             .getOrNull() ?: return@forEach
         if (response.status !in 200..299) {
+            probe.record(response)
             diagnostics += "OCS API Viewer could not load $specId (HTTP ${response.status})."
             return@forEach
         }
         val document = response.parseOpenApiDocument()
         if (document == null) {
+            probe.record(DynamicServerProbeFailure.ServerError)
             diagnostics += "OCS API Viewer returned an invalid OpenAPI JSON body for $specId${response.contentTypeDiagnostic()}."
             return@forEach
         }
@@ -96,8 +129,9 @@ internal suspend fun discoverDynamicAppDescriptor(
     staticCandidates.forEach { path ->
         val response = runCatchingPreservingCancellation {
             execute(dynamicDiscoveryRequest(path))
-        }.getOrNull() ?: return@forEach
+        }.onFailure { probe.record(DynamicServerProbeFailure.NoResponse) }.getOrNull() ?: return@forEach
         if (response.status !in 200..299 || response.contentType?.contains("json", ignoreCase = true) != true) {
+            probe.record(response)
             return@forEach
         }
         val document = response.parseOpenApiDocument() ?: return@forEach
@@ -119,6 +153,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     }
 
     diagnostics += "No valid static OpenAPI document was found in the app's advertised asset locations."
+    probe.failure?.let { failure -> diagnostics += "The server API probe was inconclusive: ${failure.name}." }
 
     onProgress(
         DynamicDescriptorDiscoveryProgress(
@@ -136,6 +171,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         sourcePath = null,
         acquisition = DynamicDescriptorAcquisition.MetadataFallback,
         diagnostics = diagnostics,
+        fallbackReason = probe.failure?.let { DynamicContractFallbackReason.ServerProbeInconclusive },
     )
 }
 
@@ -143,9 +179,11 @@ private suspend fun discoverOfficialViewerSpecIds(
     appId: String,
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     diagnostics: MutableList<String>,
+    probe: DynamicServerProbe,
 ): List<String> {
     val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(OCS_API_VIEWER_CATALOG_PATH)) }
         .onFailure { failure ->
+            probe.record(DynamicServerProbeFailure.NoResponse)
             diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint: " +
                 (failure.message ?: "request failed") + "."
         }
@@ -155,12 +193,14 @@ private suspend fun discoverOfficialViewerSpecIds(
         return emptyList()
     }
     if (response.status !in 200..299) {
+        probe.record(response)
         diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint (HTTP ${response.status})."
         return emptyList()
     }
     val catalog = runCatchingPreservingCancellation { dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonArray }
         .getOrNull()
     if (catalog == null) {
+        probe.record(DynamicServerProbeFailure.ServerError)
         diagnostics += "OCS API Viewer returned an invalid app catalog${response.contentTypeDiagnostic()}."
         return emptyList()
     }
