@@ -155,10 +155,24 @@ internal fun Throwable.appStoreContractFailureKind(): AppStoreContractFailureKin
 internal fun DynamicDescriptorDiscovery.withFallback(
     reason: DynamicContractFallbackReason,
     diagnostic: String,
+    code: DynamicDiagnosticCode? = null,
 ): DynamicDescriptorDiscovery = copy(
     diagnostics = diagnostics + diagnostic,
+    diagnosticCodes = diagnosticCodes + listOfNotNull(code),
     fallbackReason = fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: reason,
 )
+
+/** Keeps the metadata fallback after a typed or unexpected App Store acquisition failure. */
+internal fun DynamicDescriptorDiscovery.withAcquisitionFailure(kind: AppStoreContractFailureKind): DynamicDescriptorDiscovery =
+    withFallback(
+        kind.fallbackReason(),
+        "App Store contract acquisition failed: ${kind.name}.",
+        DynamicDiagnosticCode.AppStoreAcquisitionFailed,
+    )
+
+/** Keeps the metadata fallback when an acquired contract cannot be parsed or compiled. */
+internal fun DynamicDescriptorDiscovery.withUnusableAcquiredContract(diagnostic: String): DynamicDescriptorDiscovery =
+    withFallback(DynamicContractFallbackReason.UnsupportedContract, diagnostic, DynamicDiagnosticCode.ContractInvalid)
 
 /** Keeps the metadata fallback when the App Store boundary completed without a contract. */
 internal fun DynamicDescriptorDiscovery.withUnavailable(
@@ -168,6 +182,7 @@ internal fun DynamicDescriptorDiscovery.withUnavailable(
 ): DynamicDescriptorDiscovery = withFallback(
     reason.fallbackReason(),
     "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
+    DynamicDiagnosticCode.MetadataOnly,
 )
 
 /** Keeps the metadata fallback when no App Store release can be selected without a server version. */

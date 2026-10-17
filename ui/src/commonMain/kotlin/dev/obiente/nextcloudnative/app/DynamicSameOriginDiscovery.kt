@@ -71,6 +71,12 @@ private fun DynamicServerProbeFailure.diagnostic(): String = when {
     else -> "The server API probe was not authorized: $name."
 }
 
+private fun DynamicServerProbeFailure.diagnosticCode(): DynamicDiagnosticCode = when {
+    isInconclusive() -> DynamicDiagnosticCode.ServerProbeInconclusive
+    this == DynamicServerProbeFailure.UnsupportedContract -> DynamicDiagnosticCode.ServerContractUnsupported
+    else -> DynamicDiagnosticCode.ServerProbeAccessDenied
+}
+
 private fun DynamicServerProbeFailure.fallbackReason(): DynamicContractFallbackReason = when (this) {
     DynamicServerProbeFailure.AuthenticationRequired -> DynamicContractFallbackReason.ServerAuthenticationRequired
     DynamicServerProbeFailure.PermissionDenied -> DynamicContractFallbackReason.ServerPermissionDenied
@@ -97,6 +103,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     val identity = AppIdentity(app.id, app.name, "server-installed")
     val compiler = DynamicAppDescriptorCompiler()
     val diagnostics = mutableListOf<String>()
+    val codes = mutableListOf<DynamicDiagnosticCode>()
     val probe = DynamicServerProbe()
 
     onProgress(
@@ -105,7 +112,7 @@ internal suspend fun discoverDynamicAppDescriptor(
             "Checking the server API catalog",
         ),
     )
-    val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics, probe)
+    val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics, codes, probe)
     viewerSpecs.forEach { specId ->
         onProgress(
             DynamicDescriptorDiscoveryProgress(
@@ -128,6 +135,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         val document = response.parseOpenApiDocument()
         if (document == null) {
             probe.record(response.contractBodyFailure())
+            codes += DynamicDiagnosticCode.ContractInvalid
             diagnostics += "OCS API Viewer returned an invalid OpenAPI JSON body for $specId${response.contentTypeDiagnostic()}."
             return@forEach
         }
@@ -149,6 +157,7 @@ internal suspend fun discoverDynamicAppDescriptor(
             sourcePath = path,
             acquisition = DynamicDescriptorAcquisition.OcsApiViewer,
             diagnostics = diagnostics,
+            diagnosticCodes = codes,
         )
     }
 
@@ -192,11 +201,16 @@ internal suspend fun discoverDynamicAppDescriptor(
             sourcePath = path,
             acquisition = DynamicDescriptorAcquisition.StaticAppAsset,
             diagnostics = diagnostics,
+            diagnosticCodes = codes,
         )
     }
 
     diagnostics += "No valid static OpenAPI document was found in the app's advertised asset locations."
-    probe.failure?.let { failure -> diagnostics += failure.diagnostic() }
+    codes += DynamicDiagnosticCode.StaticContractUnavailable
+    probe.failure?.let { failure ->
+        diagnostics += failure.diagnostic()
+        codes += failure.diagnosticCode()
+    }
 
     onProgress(
         DynamicDescriptorDiscoveryProgress(
@@ -214,6 +228,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         sourcePath = null,
         acquisition = DynamicDescriptorAcquisition.MetadataFallback,
         diagnostics = diagnostics,
+        diagnosticCodes = codes,
         fallbackReason = probe.failure?.fallbackReason(),
     )
 }
@@ -222,6 +237,7 @@ private suspend fun discoverOfficialViewerSpecIds(
     appId: String,
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     diagnostics: MutableList<String>,
+    codes: MutableList<DynamicDiagnosticCode>,
     probe: DynamicServerProbe,
 ): List<String> {
     val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(OCS_API_VIEWER_CATALOG_PATH)) }
@@ -232,6 +248,7 @@ private suspend fun discoverOfficialViewerSpecIds(
         }
         .getOrNull() ?: return emptyList()
     if (response.status == 404) {
+        codes += DynamicDiagnosticCode.ApiViewerUnavailable
         diagnostics += "OCS API Viewer is not installed or enabled for this user (HTTP 404 at $OCS_API_VIEWER_CATALOG_PATH)."
         return emptyList()
     }

@@ -177,6 +177,11 @@ or request URL. Cancellation propagates without a failure event, and a recorder
 failure never discards a usable contract. An unverified app version keeps
 writes disabled without showing a permanent refresh spinner.
 
+The contract information dialog shows stable diagnostic codes, such as
+`server-probe-inconclusive` or `signed-package-imported`. Discovery records
+them as typed `DynamicDiagnosticCode` events, and import codes derive from the
+typed acquisition kind, so rewording a diagnostic message never changes a code.
+
 ## Metadata fallback reasons
 
 When no same-origin or App Store source yields a verified contract, discovery

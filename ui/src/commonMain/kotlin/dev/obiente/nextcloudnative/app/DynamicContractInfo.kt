@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicChildCandidateStatus
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.explainDynamicChildNavigation
+import kotlinx.serialization.Serializable
 
 data class DynamicContractInfo(
     val acquisition: String,
@@ -31,7 +32,8 @@ fun DynamicDescriptorDiscovery.toContractInfo(
     acquisition = acquisition.safeLabel(),
     appVersion = descriptor.app.version.safeVersion(),
     sourceSpecFile = sourcePath.safeSpecFilename(),
-    diagnosticCodes = diagnostics.mapNotNull(String::safeDiagnosticCode).distinct(),
+    // Codes come from typed discovery events and the acquisition kind, never from diagnostic prose.
+    diagnosticCodes = (diagnosticCodes + acquisition.importDiagnosticCodes()).map(DynamicDiagnosticCode::code).distinct(),
     resourceIds = descriptor.resources.map { it.id.safeContractId() },
     layoutIds = descriptor.layouts.map { it.id.safeContractId() },
     linkIds = descriptor.links.map { it.id.safeContractId() },
@@ -81,25 +83,37 @@ private fun String.safeContractId(): String {
     return safe.takeIf(String::isNotBlank) ?: "Unavailable"
 }
 
-private fun String.safeDiagnosticCode(): String? = when {
-    contains("viewer", ignoreCase = true) && contains("not installed", ignoreCase = true) ->
-        "api-viewer-unavailable"
-    contains("static OpenAPI", ignoreCase = true) -> "static-contract-unavailable"
-    contains("App Store contract acquisition failed", ignoreCase = true) -> "app-store-acquisition-failed"
-    contains("server API probe was inconclusive", ignoreCase = true) -> "server-probe-inconclusive"
-    contains("server API probe was not authorized", ignoreCase = true) -> "server-probe-access-denied"
-    contains("server API probe found an unsupported contract", ignoreCase = true) -> "server-contract-unsupported"
-    contains("derived", ignoreCase = true) && contains("read-only endpoints", ignoreCase = true) ->
-        "verified-static-read-routes"
-    contains("verified read", ignoreCase = true) && contains("fallback routes", ignoreCase = true) ->
-        "verified-read-fallbacks"
-    contains("signed App Store package", ignoreCase = true) -> "signed-package-imported"
-    contains("GitHub release tag", ignoreCase = true) -> "linked-source-tag-imported"
-    contains("invalid OpenAPI", ignoreCase = true) || contains("could not be compiled", ignoreCase = true) ->
-        "contract-invalid"
-    contains("metadata-only", ignoreCase = true) ||
-        contains("Only app metadata is available", ignoreCase = true) -> "metadata-only"
-    else -> null
+/** Stable support codes for discovery events. The code strings are a public diagnostic contract. */
+@Serializable
+enum class DynamicDiagnosticCode(val code: String) {
+    ApiViewerUnavailable("api-viewer-unavailable"),
+    StaticContractUnavailable("static-contract-unavailable"),
+    AppStoreAcquisitionFailed("app-store-acquisition-failed"),
+    ServerProbeInconclusive("server-probe-inconclusive"),
+    ServerProbeAccessDenied("server-probe-access-denied"),
+    ServerContractUnsupported("server-contract-unsupported"),
+    VerifiedStaticReadRoutes("verified-static-read-routes"),
+    VerifiedReadFallbacks("verified-read-fallbacks"),
+    SignedPackageImported("signed-package-imported"),
+    LinkedSourceTagImported("linked-source-tag-imported"),
+    ContractInvalid("contract-invalid"),
+    MetadataOnly("metadata-only"),
+}
+
+/** The import a verified App Store contract records, derived from its typed acquisition kind. */
+internal fun DynamicDescriptorAcquisition.importDiagnosticCodes(): List<DynamicDiagnosticCode> = when (this) {
+    DynamicDescriptorAcquisition.SignedAppStorePackage -> listOf(DynamicDiagnosticCode.SignedPackageImported)
+    DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag -> listOf(DynamicDiagnosticCode.LinkedSourceTagImported)
+    DynamicDescriptorAcquisition.SignedAppStoreStaticRoutes,
+    DynamicDescriptorAcquisition.AppStoreLinkedStaticRoutes,
+    -> listOf(DynamicDiagnosticCode.VerifiedStaticReadRoutes)
+    DynamicDescriptorAcquisition.SignedAppStoreMergedContract,
+    DynamicDescriptorAcquisition.AppStoreLinkedMergedContract,
+    -> listOf(DynamicDiagnosticCode.VerifiedReadFallbacks)
+    DynamicDescriptorAcquisition.OcsApiViewer,
+    DynamicDescriptorAcquisition.StaticAppAsset,
+    DynamicDescriptorAcquisition.MetadataFallback,
+    -> emptyList()
 }
 
 internal fun DynamicContractInfo.countSummary(): String =

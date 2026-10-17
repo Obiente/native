@@ -30,6 +30,7 @@ fun encodePersistedDynamicDiscovery(discovery: DynamicDescriptorDiscovery): Stri
             ),
         ),
         diagnostics = emptyList(),
+        diagnosticCodes = emptyList(),
     )
     val encoded = persistedDynamicDiscoveryJson.encodeToString(bounded)
     return encoded.takeIf { value -> value.encodeToByteArray().size <= MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES }

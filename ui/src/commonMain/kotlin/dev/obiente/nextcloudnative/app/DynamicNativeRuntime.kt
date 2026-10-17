@@ -69,6 +69,7 @@ data class DynamicDescriptorDiscovery(
     val sourcePath: String?,
     val acquisition: DynamicDescriptorAcquisition,
     val diagnostics: List<String> = emptyList(),
+    val diagnosticCodes: List<DynamicDiagnosticCode> = emptyList(),
     val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
     val fallbackReason: DynamicContractFallbackReason? = null,
 )
@@ -158,8 +159,7 @@ suspend fun discoverDynamicAppDescriptor(
         services.acquireSignedOpenApiContract(AppStoreContractRequest(contractAppId, coreVersion, installedVersion))
     }.getOrElse { failure ->
         // Only the typed kind enters diagnostics and copy; exception text and class names stay local.
-        val kind = failure.appStoreContractFailureKind()
-        return sameOrigin.withFallback(kind.fallbackReason(), "App Store contract acquisition failed: ${kind.name}.")
+        return sameOrigin.withAcquisitionFailure(failure.appStoreContractFailureKind())
     }
     val acquired = when (acquisition) {
         is AppStoreContractAcquisition.Acquired -> acquisition.contract
@@ -168,8 +168,7 @@ suspend fun discoverDynamicAppDescriptor(
     val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = observeDynamicDiscoveryStage(DynamicDiscoveryStage.ContractParsing, services::recordSupportDiagnostic) {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
-    }.getOrNull() ?: return sameOrigin.withFallback(
-        DynamicContractFallbackReason.UnsupportedContract,
+    }.getOrNull() ?: return sameOrigin.withUnusableAcquiredContract(
         "The acquired App Store contract contained invalid JSON.",
     )
     val verifiedReadRouteCount = (document["x-nextcloud-native-verified-read-route-count"] as? JsonPrimitive)
@@ -216,8 +215,7 @@ suspend fun discoverDynamicAppDescriptor(
             ),
         ).requireValid()
     }.getOrElse {
-        return sameOrigin.withFallback(
-            DynamicContractFallbackReason.UnsupportedContract,
+        return sameOrigin.withUnusableAcquiredContract(
             "The acquired App Store contract could not be compiled into a native read surface.",
         )
     }
@@ -241,6 +239,7 @@ suspend fun discoverDynamicAppDescriptor(
                 DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag
             else -> DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag
         },
+        diagnosticCodes = sameOrigin.diagnosticCodes,
         diagnostics = sameOrigin.diagnostics +
             acquired.successDiagnostic(
                 app = app,
