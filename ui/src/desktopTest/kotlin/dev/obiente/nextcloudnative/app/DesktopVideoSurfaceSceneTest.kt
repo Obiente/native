@@ -85,6 +85,67 @@ class DesktopVideoSurfaceSceneTest {
     }
 
     @Test
+    fun `system media controls see the video and drive playback and the viewer`() {
+        val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
+        val published = Collections.synchronizedList(mutableListOf<SystemMediaSnapshot>())
+        var send: ((SystemMediaCommand) -> Unit)? = null
+        var nexts = 0
+        val factory: DesktopSystemMediaControlsFactory = { _, onCommand ->
+            send = onCommand
+            recordingControls(published)
+        }
+        val media = NativeVideoSystemMedia(title = "clip.mp4", onPrevious = null, onNext = { nexts += 1 })
+        nativeSceneTest(800, 600, content = { Surface(engine, systemMedia = media, systemMediaControls = factory) }) {
+            settleUntil { published.isNotEmpty() }
+            assertEquals(SystemMediaSnapshot("clip.mp4", playing = true, canPrevious = false, canNext = true), published.last())
+
+            val command = requireNotNull(send)
+            command(SystemMediaCommand.Play)
+            command(SystemMediaCommand.Next)
+            command(SystemMediaCommand.Previous)
+            command(SystemMediaCommand.TogglePlayPause)
+            command(SystemMediaCommand.Stop)
+            settleUntil { engine.commands.size >= 3 && nexts == 1 }
+
+            assertEquals(1, nexts, "Next moves the viewer; Previous is unavailable and does nothing.")
+            assertEquals(
+                listOf<NativeVideoTransportCommand>(
+                    NativeVideoTransportCommand.Play,
+                    NativeVideoTransportCommand.TogglePlayback,
+                    NativeVideoTransportCommand.Pause,
+                ),
+                engine.commands,
+            )
+        }
+    }
+
+    @Test
+    fun `a media key can resume playback while the window stays hidden`() {
+        val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
+        var send: ((SystemMediaCommand) -> Unit)? = null
+        val factory: DesktopSystemMediaControlsFactory = { _, onCommand ->
+            send = onCommand
+            recordingControls(Collections.synchronizedList(mutableListOf()))
+        }
+        val window = MutableStateFlow(false)
+        nativeSceneTest(800, 600, content = {
+            Surface(engine, window = window, systemMedia = NativeVideoSystemMedia("clip.mp4"), systemMediaControls = factory)
+        }) {
+            settleUntil { engine.commands.isNotEmpty() && send != null }
+            assertEquals(listOf<NativeVideoTransportCommand>(NativeVideoTransportCommand.Pause), engine.commands, "Autoplay while hidden pauses once.")
+
+            requireNotNull(send)(SystemMediaCommand.Play)
+            settleUntil { engine.commands.size >= 2 }
+            settle()
+            assertEquals(
+                listOf<NativeVideoTransportCommand>(NativeVideoTransportCommand.Pause, NativeVideoTransportCommand.Play),
+                engine.commands,
+                "The user's play from the media controls is not paused again.",
+            )
+        }
+    }
+
+    @Test
     fun `outcomes reach the viewer and leaving releases the engine`() {
         val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
         val events = Collections.synchronizedList(mutableListOf<String>())
@@ -115,6 +176,8 @@ class DesktopVideoSurfaceSceneTest {
         onControls: (Boolean) -> Unit = {},
         hideAfter: Long = 300L,
         window: MutableStateFlow<Boolean> = MutableStateFlow(true),
+        systemMedia: NativeVideoSystemMedia? = null,
+        systemMediaControls: DesktopSystemMediaControlsFactory = { _, _ -> UnavailableDesktopSystemMediaControls },
     ) = CompositionLocalProvider(LocalAppWindowVisibility provides window) {
         DesktopVideoSurface(
             engine = engine,
@@ -124,7 +187,17 @@ class DesktopVideoSurfaceSceneTest {
             onControlsVisibilityChanged = onControls,
             modifier = Modifier.fillMaxSize(),
             controlsHideDelayMillis = hideAfter,
+            systemMedia = systemMedia,
+            systemMediaControls = systemMediaControls,
         )
+    }
+
+    private fun recordingControls(published: MutableList<SystemMediaSnapshot>) = object : DesktopSystemMediaControls {
+        override fun update(snapshot: SystemMediaSnapshot) {
+            published += snapshot
+        }
+
+        override fun close() = Unit
     }
 
     private fun keyDown(key: Key) = KeyEvent(key, KeyEventType.KeyDown)

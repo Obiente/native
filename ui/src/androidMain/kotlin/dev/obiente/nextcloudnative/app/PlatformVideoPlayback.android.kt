@@ -29,6 +29,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -63,6 +64,7 @@ internal actual fun PlatformNativeVideoPlayer(
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
     onControlsVisibilityChanged: (Boolean) -> Unit,
+    systemMedia: NativeVideoSystemMedia,
 ) {
     // Transport controls sit above the gesture navigation area; the picture stays centered.
     val playerModifier = modifier.navigationBarsPadding()
@@ -85,6 +87,7 @@ internal actual fun PlatformNativeVideoPlayer(
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
             onControlsVisibilityChanged = onControlsVisibilityChanged,
+            systemMedia = systemMedia,
             modifier = playerModifier,
         )
     }
@@ -99,9 +102,11 @@ private fun Media3VideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     onControlsVisibilityChanged: (Boolean) -> Unit,
+    systemMedia: NativeVideoSystemMedia,
     modifier: Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val currentSystemMedia = rememberUpdatedState(systemMedia)
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnFailure = rememberUpdatedState(onFailure)
@@ -116,6 +121,7 @@ private fun Media3VideoPlayer(
             session = session,
             userId = userId,
             source = source,
+            title = systemMedia.title,
             onPlaybackEnded = { currentOnPlaybackEnded.value() },
             onFailure = { failure -> currentOnFailure.value(failure) },
             reportIsPlaying = { isPlaying -> playing = isPlaying },
@@ -126,7 +132,19 @@ private fun Media3VideoPlayer(
         // the user instead, because the earlier ON_STOP is not replayed to the observer.
         created.playWhenReady = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         player = created
+        // Full videos appear in the system media controls; a Live Photo's motion does not.
+        val sessionAttachment = (source as? NativeVideoPlaybackSource.DavFile)?.let {
+            AndroidViewerVideoSessionBridge.attach(
+                context = context.applicationContext,
+                player = AndroidViewerVideoSessionPlayer(
+                    player = created,
+                    previous = { currentSystemMedia.value.onPrevious },
+                    next = { currentSystemMedia.value.onNext },
+                ),
+            )
+        }
         onDispose {
+            sessionAttachment?.let(AndroidViewerVideoSessionBridge::detach)
             player = null
             created.release()
         }
@@ -175,6 +193,7 @@ private fun createMedia3VideoPlayer(
     session: NextcloudSession,
     userId: String,
     source: NativeVideoPlaybackSource,
+    title: String,
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     reportIsPlaying: (Boolean) -> Unit,
@@ -208,6 +227,7 @@ private fun createMedia3VideoPlayer(
     val item = MediaItem.Builder()
         .setMediaId(mediaId)
         .setUri(uri)
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(title.takeIf(String::isNotBlank)).build())
         .apply {
             if (source is NativeVideoPlaybackSource.DavFile) {
                 setMimeType(source.file.mimeType)

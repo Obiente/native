@@ -70,7 +70,10 @@ internal data class NativeVideoTransportState(
 internal sealed interface NativeVideoTransportCommand {
     data object TogglePlayback : NativeVideoTransportCommand
 
-    /** Pauses only; sent by the host when the player stops being visible. */
+    /** Plays only, as the system media controls' play button asks. */
+    data object Play : NativeVideoTransportCommand
+
+    /** Pauses only; sent when the player stops being visible or by the system media controls. */
     data object Pause : NativeVideoTransportCommand
     data class SeekTo(val positionMillis: Long) : NativeVideoTransportCommand
     data class SeekBy(val deltaMillis: Long) : NativeVideoTransportCommand

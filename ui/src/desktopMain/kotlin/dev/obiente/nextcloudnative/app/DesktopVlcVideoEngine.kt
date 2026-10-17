@@ -129,12 +129,12 @@ internal class DesktopVlcVideoEngine(
         when (command) {
             NativeVideoTransportCommand.TogglePlayback -> when (mutableState.value.status) {
                 NativeVideoTransportStatus.Playing -> active.controls().setPause(true)
-                NativeVideoTransportStatus.Ended -> {
-                    mutableState.update { it.copy(status = NativeVideoTransportStatus.Loading, positionMillis = 0L) }
-                    // A rejected reopen produces no later event, so it must not leave a spinner.
-                    val replayStarted = media?.let { active.media().play(it) } ?: false
-                    if (!replayStarted) fail(NativeVideoPlaybackFailure.MalformedMedia)
-                }
+                NativeVideoTransportStatus.Ended -> replay(active)
+                NativeVideoTransportStatus.Paused, NativeVideoTransportStatus.Loading -> active.controls().play()
+            }
+            NativeVideoTransportCommand.Play -> when (mutableState.value.status) {
+                NativeVideoTransportStatus.Playing -> Unit
+                NativeVideoTransportStatus.Ended -> replay(active)
                 NativeVideoTransportStatus.Paused, NativeVideoTransportStatus.Loading -> active.controls().play()
             }
             NativeVideoTransportCommand.Pause ->
@@ -152,6 +152,13 @@ internal class DesktopVlcVideoEngine(
                 mutableState.update { it.copy(volumePercent = volume, muted = if (volume > 0) false else it.muted) }
             }
         }
+    }
+
+    /** Engine thread. A rejected reopen produces no later event, so it must not leave a spinner. */
+    private fun replay(active: EmbeddedMediaPlayer) {
+        mutableState.update { it.copy(status = NativeVideoTransportStatus.Loading, positionMillis = 0L) }
+        val replayStarted = media?.let { active.media().play(it) } ?: false
+        if (!replayStarted) fail(NativeVideoPlaybackFailure.MalformedMedia)
     }
 
     override fun release() {

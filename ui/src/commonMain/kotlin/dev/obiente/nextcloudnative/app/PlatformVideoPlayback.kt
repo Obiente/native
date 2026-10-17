@@ -346,10 +346,22 @@ private fun NativeVideoFormatSummary?.safeDescription(): String {
 }
 
 /**
+ * What the operating system's media controls (notification, lock screen, headset and media keys)
+ * show and do for the playing video. Previous and next move through the viewer's own sequence and
+ * are null when there is no neighbor or navigation is blocked.
+ */
+internal class NativeVideoSystemMedia(
+    val title: String = "",
+    val onPrevious: (() -> Unit)? = null,
+    val onNext: (() -> Unit)? = null,
+)
+
+/**
  * Plays [source] inside the viewer canvas and starts as soon as it is ready.
  *
  * [onControlsVisibilityChanged] reports when the platform transport controls appear or auto-hide,
- * so the viewer chrome can follow them during immersive playback.
+ * so the viewer chrome can follow them during immersive playback. [systemMedia] publishes the
+ * video to the operating system's media controls where the platform supports them.
  */
 @Composable
 internal expect fun PlatformNativeVideoPlayer(
@@ -362,4 +374,28 @@ internal expect fun PlatformNativeVideoPlayer(
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier = Modifier,
     onControlsVisibilityChanged: (Boolean) -> Unit = {},
+    systemMedia: NativeVideoSystemMedia = NativeVideoSystemMedia(),
 )
+
+internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+): Boolean =
+    nativePlaybackAvailable &&
+        mediaAssetFormat() == MediaAssetFormat.Video &&
+        hasAuthoritativeMediaDavAccess(userId)
+
+internal fun NextcloudFile.nativeVideoPlaybackSource(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+    livePhotoSource: MemoriesLivePhotoSource?,
+    motionPlaying: Boolean,
+): NativeVideoPlaybackSource? {
+    if (!nativePlaybackAvailable) return null
+    if (motionPlaying && livePhotoSource != null && livePhotoSource.fileId == fileId) {
+        return NativeVideoPlaybackSource.MemoriesLivePhoto(livePhotoSource)
+    }
+    return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
+        ?.let { NativeVideoPlaybackSource.DavFile(it) }
+}
+

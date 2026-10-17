@@ -382,7 +382,10 @@ private fun launchDesktopProcess(arguments: Array<String>) {
             window.background = java.awt.Color(background.toArgb(), true)
             window.minimumSize = java.awt.Dimension(960, 640)
         }
-        CompositionLocalProvider(LocalAppWindowVisibility provides administrationWindowVisibility) {
+        CompositionLocalProvider(
+            LocalAppWindowVisibility provides administrationWindowVisibility,
+            dev.obiente.nextcloudnative.app.LocalDesktopWindow provides window,
+        ) {
         Box(Modifier.fillMaxSize().background(background)) {
             NextcloudNativeApp(
                 services = services,

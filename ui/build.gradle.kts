@@ -167,6 +167,8 @@ tasks.withType<Test>().configureEach {
     }
     // Scene tests must not depend on whether the build machine has VLC installed.
     systemProperty("dev.obiente.nextcloudnative.libvlc", "disabled")
+    // Nor may they register with the host's system media controls.
+    systemProperty("dev.obiente.nextcloudnative.systemmedia", "disabled")
 }
 
 kotlin {

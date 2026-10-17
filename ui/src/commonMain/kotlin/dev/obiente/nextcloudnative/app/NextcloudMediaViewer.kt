@@ -580,6 +580,11 @@ internal fun NextcloudMediaViewer(
                 },
                 onControlsVisibilityChanged = { visible -> chromeVisible = visible },
                 modifier = mediaCanvasModifier,
+                systemMedia = NativeVideoSystemMedia(
+                    title = selected.name,
+                    onPrevious = (::selectPrevious).takeIf { !navigationBlocked && canGoPrevious },
+                    onNext = (::selectNext).takeIf { !navigationBlocked && canGoNext },
+                ),
             )
         } else when (val state = previewState) {
             MediaPreviewState.Loading -> CircularProgressIndicator(
@@ -1035,28 +1040,6 @@ internal fun canEditMediaPreview(
 
 internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
     originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()
-
-internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
-    userId: String,
-    nativePlaybackAvailable: Boolean,
-): Boolean =
-    nativePlaybackAvailable &&
-        mediaAssetFormat() == MediaAssetFormat.Video &&
-        hasAuthoritativeMediaDavAccess(userId)
-
-internal fun NextcloudFile.nativeVideoPlaybackSource(
-    userId: String,
-    nativePlaybackAvailable: Boolean,
-    livePhotoSource: MemoriesLivePhotoSource?,
-    motionPlaying: Boolean,
-): NativeVideoPlaybackSource? {
-    if (!nativePlaybackAvailable) return null
-    if (motionPlaying && livePhotoSource != null && livePhotoSource.fileId == fileId) {
-        return NativeVideoPlaybackSource.MemoriesLivePhoto(livePhotoSource)
-    }
-    return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
-        ?.let { NativeVideoPlaybackSource.DavFile(it) }
-}
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

@@ -430,10 +430,32 @@ packaging may have changed.
   including a rotated clip checked by drawn pixel colors. It runs only where
   libVLC is installed or bundled, so it is skipped on the standard Linux CI
   runner.
+- The playing video is published to the operating system's media controls
+  (`DesktopSystemMediaControls.kt`), with its title, play and pause, and
+  previous and next through the viewer's own sequence. Windows uses the system
+  media transport controls through their WinRT ABI with JNA
+  (`WindowsSystemMediaControls.kt`), Linux exports MPRIS 2 on the session bus
+  (`LinuxMprisSystemMediaControls.kt`), and macOS uses Now Playing and the
+  remote command center through the Objective-C runtime
+  (`MacOsSystemMediaControls.kt`). Each runs on its own thread and is dropped
+  without affecting playback when the service is unavailable. Hiding the window
+  pauses playback once; a later play from the media controls keeps playing in
+  the background.
+- The Android viewer's Media3 player is published through
+  `AndroidViewerVideoSessionService`, a `MediaSessionService` that provides the
+  media notification, lock-screen, Bluetooth, and headset controls, with
+  previous and next mapped to the viewer's sequence. A Live Photo's motion is
+  not published on either platform.
 - Evidence boundary: on Windows, the bundled copy was staged and played in a
-  local build. macOS staging (`hdiutil` extraction of the pinned DMG) is
-  present in source but has not run outside CI. System media controls,
-  subtitles, and audio-track selection are not implemented.
+  local build, and a local check through the system media session manager saw
+  the published title, state, and enabled previous and next, and delivered a
+  toggle back as a pause. MPRIS is covered against an embedded D-Bus daemon on
+  Linux hosts. The macOS integration is exercised only by
+  `DesktopSystemMediaPlatformTest` in the Intel macOS CI job, and macOS
+  staging (`hdiutil` extraction of the pinned DMG) has not run outside CI. The
+  Android session is compiled and its skip-command rules are unit-tested, but
+  it has not been checked on a device. Subtitles and audio-track selection are
+  not implemented.
 
 ## Platform delivery rule
 

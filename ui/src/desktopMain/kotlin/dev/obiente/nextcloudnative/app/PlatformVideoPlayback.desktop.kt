@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 
 // Snapshot state written by the discovery thread: composition never loads native libraries,
@@ -60,6 +61,7 @@ internal actual fun PlatformNativeVideoPlayer(
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
     onControlsVisibilityChanged: (Boolean) -> Unit,
+    systemMedia: NativeVideoSystemMedia,
 ) {
     val currentOnFailure by rememberUpdatedState(onFailure)
     if (rangeSource == null) {
@@ -79,6 +81,8 @@ internal actual fun PlatformNativeVideoPlayer(
         onFailure = onFailure,
         onControlsVisibilityChanged = onControlsVisibilityChanged,
         modifier = modifier,
+        // A Live Photo's motion is too short to publish to the system media controls.
+        systemMedia = systemMedia.takeIf { source is NativeVideoPlaybackSource.DavFile },
     )
 }
 
@@ -96,6 +100,8 @@ internal fun DesktopVideoSurface(
     onControlsVisibilityChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     controlsHideDelayMillis: Long = DESKTOP_VIDEO_CONTROLS_HIDE_DELAY_MILLIS,
+    systemMedia: NativeVideoSystemMedia? = null,
+    systemMediaControls: DesktopSystemMediaControlsFactory = platformDesktopSystemMediaControls,
 ) {
     val currentOnPlaybackEnded by rememberUpdatedState(onPlaybackEnded)
     val currentOnFailure by rememberUpdatedState(onFailure)
@@ -117,11 +123,25 @@ internal fun DesktopVideoSurface(
     var interaction by remember(engine) { mutableIntStateOf(0) }
     var controlsVisible by remember(engine) { mutableStateOf(true) }
     val playing = state.status == NativeVideoTransportStatus.Playing
-    // A hidden or minimized window keeps this composition alive, and there are no system media
-    // controls, so playback pauses, including playback that started while the window was hidden.
-    LaunchedEffect(engine, windowVisible, playing) {
-        if (!windowVisible && playing) engine.command(NativeVideoTransportCommand.Pause)
+    // Hiding or minimizing the window keeps this composition alive, so playback pauses then, and
+    // playback that starts on its own while hidden pauses once. A later play from the system media
+    // controls or a media key is the user's choice and keeps playing in the background.
+    var previouslyVisible by remember(engine) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(engine, windowVisible) {
+        val becameHidden = previouslyVisible == true && !windowVisible
+        previouslyVisible = windowVisible
+        if (becameHidden && engine.state.value.status == NativeVideoTransportStatus.Playing) {
+            engine.command(NativeVideoTransportCommand.Pause)
+        }
     }
+    var autoplayChecked by remember(engine) { mutableStateOf(false) }
+    LaunchedEffect(engine, playing) {
+        if (playing && !autoplayChecked) {
+            autoplayChecked = true
+            if (!windowVisible) engine.command(NativeVideoTransportCommand.Pause)
+        }
+    }
+    DesktopSystemMediaEffect(engine, state, systemMedia, systemMediaControls)
     LaunchedEffect(engine, playing, interaction) {
         controlsVisible = true
         if (playing) {
@@ -191,3 +211,47 @@ private fun NativeVideoTransportState.accessibleDescription(): String = buildStr
 
 internal const val DESKTOP_VIDEO_SURFACE_TEST_TAG = "desktop-video-surface"
 private const val DESKTOP_VIDEO_CONTROLS_HIDE_DELAY_MILLIS = 3_000L
+
+/**
+ * Publishes the playing video to the operating system's media controls and routes their
+ * commands back on the UI thread: play and pause to [engine], previous and next to the viewer.
+ */
+@Composable
+private fun DesktopSystemMediaEffect(
+    engine: DesktopVideoEngine,
+    state: NativeVideoTransportState,
+    systemMedia: NativeVideoSystemMedia?,
+    factory: DesktopSystemMediaControlsFactory,
+) {
+    if (systemMedia == null) return
+    val window = LocalDesktopWindow.current
+    val currentSystemMedia by rememberUpdatedState(systemMedia)
+    val commands = remember(engine) { Channel<SystemMediaCommand>(capacity = Channel.BUFFERED) }
+    var session by remember(engine) { mutableStateOf<DesktopSystemMediaSession?>(null) }
+    DisposableEffect(engine, window, factory) {
+        val opened = DesktopSystemMediaSession(window, factory) { command -> commands.trySend(command) }
+        session = opened
+        onDispose {
+            session = null
+            opened.close()
+        }
+    }
+    LaunchedEffect(engine) {
+        for (command in commands) {
+            when (command) {
+                SystemMediaCommand.Play -> engine.command(NativeVideoTransportCommand.Play)
+                SystemMediaCommand.Pause, SystemMediaCommand.Stop -> engine.command(NativeVideoTransportCommand.Pause)
+                SystemMediaCommand.TogglePlayPause -> engine.command(NativeVideoTransportCommand.TogglePlayback)
+                SystemMediaCommand.Next -> currentSystemMedia.onNext?.invoke()
+                SystemMediaCommand.Previous -> currentSystemMedia.onPrevious?.invoke()
+            }
+        }
+    }
+    val snapshot = SystemMediaSnapshot(
+        title = systemMedia.title,
+        playing = state.status == NativeVideoTransportStatus.Playing,
+        canPrevious = systemMedia.onPrevious != null,
+        canNext = systemMedia.onNext != null,
+    )
+    LaunchedEffect(session, snapshot) { session?.update(snapshot) }
+}
