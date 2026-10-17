@@ -262,10 +262,20 @@ private suspend fun discoverOfficialViewerSpecIds(
         diagnostics += "OCS API Viewer returned an invalid app catalog${response.contentTypeDiagnostic()}."
         return emptyList()
     }
-    val appEntry = catalog
-        .mapNotNull { it as? JsonObject }
-        .firstOrNull { entry -> (entry["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content == appId }
+    // An element that is not an object, or has no string `id`, may have been this app, as in App Store catalogs.
+    val identified = catalog.mapNotNull { element -> (element as? JsonObject)?.takeIf { it.viewerAppId() != null } }
+    val appEntry = identified.firstOrNull { entry -> entry.viewerAppId() == appId }
     if (appEntry == null) {
+        val unidentified = catalog.size - identified.size
+        if (unidentified > 0) {
+            probe.record(DynamicServerProbeFailure.UnreadableResponse)
+            diagnostics += if (unidentified == catalog.size) {
+                "OCS API Viewer returned an unreadable app catalog (stage: catalog, no readable app ID)."
+            } else {
+                "OCS API Viewer listed entries without a readable app ID, so $appId may be unlisted or unreadable."
+            }
+            return emptyList()
+        }
         diagnostics += "OCS API Viewer does not advertise an OpenAPI specification for $appId."
         return emptyList()
     }
@@ -286,6 +296,8 @@ private suspend fun discoverOfficialViewerSpecIds(
     }
     return specs
 }
+
+private fun JsonObject.viewerAppId(): String? = (get("id") as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun dynamicDiscoveryRequest(path: String): NextcloudApiRequest = NextcloudApiRequest(
     method = NextcloudApiMethod.GET,

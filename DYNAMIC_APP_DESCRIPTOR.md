@@ -321,8 +321,10 @@ diagnostic records which of the two applied, with no path or exception text.
 
 Results are ordered per app, server version, and installed version by
 [`ContractPublicationFence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractPublicationFence.kt).
-Each acquisition takes a generation when it starts. A generation that has not
-been superseded ends as follows:
+Each acquisition takes a generation in the same step that registers it as in
+flight, so a later refresh or invalidation always sees it as started; a caller
+that joins an acquisition already in flight takes none. A generation that has
+not been superseded ends as follows:
 
 | Ending | Effect on older generations |
 | --- | --- |
@@ -363,13 +365,17 @@ wins among equals:
    JSON or declares no OpenAPI version (`UnreadableResponse`). An OCS API
    Viewer entry for the app whose spec list is missing, not an array, or has a
    malformed identifier with no usable one left is also `UnreadableResponse`;
-   usable identifiers beside malformed ones are still read.
+   usable identifiers beside malformed ones are still read. When the catalog
+   does not list the app, an element that is not an object or has no string
+   `id` may have been the app, as in App Store catalogs, so it is also
+   `UnreadableResponse`; such elements beside the app's entry are ignored.
 4. `UnsupportedContract`: a JSON contract that declares a version other than
    OpenAPI 3, such as Swagger 2, or an OpenAPI 3 contract that cannot be
    compiled.
 
 A 404, another definitive status, a non-JSON response at a static contract
-location, an empty or non-advertising OCS API Viewer catalog, or a well-formed
+location, an empty OCS API Viewer catalog or one whose entries all name other
+apps by a string `id`, or a well-formed
 spec list that is empty or names only other apps is absence and
 records nothing. Every App Store path that ends without a usable contract goes
 through one precedence point: no release can be selected because the server
