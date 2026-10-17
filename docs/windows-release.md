@@ -205,6 +205,18 @@ A file edited during the upload stays dirty and is uploaded again against the
 new revision, at most three times in one writeback before it reports a failed
 writeback. If the exclusive handle is unavailable, for example because another
 application has the file open, the commit is retried without uploading again.
+If recording the new revision fails after the server accepted the upload, only
+that update is retried, so the retry never uploads against the superseded
+revision. Both retries are held in memory; after a restart, a placeholder whose
+revision was not recorded is uploaded against its old revision and rejected by
+the server.
+
+Until a blocked commit completes, the placeholder identity holds the uploaded
+size, while the close-completion callback reports the size from the last
+in-sync point. The close callback therefore does not require the two sizes to
+match; hydration still does. On a local Windows 11 sync root, the close
+notification that a blocking application sends when it releases the file
+completes the pending commit.
 An application that restores an earlier last-write time while keeping the same
 size can defeat the stamp; this is an accepted limit of the guard.
 
@@ -224,7 +236,9 @@ root. They cover:
 
 - an edit made while disconnected, written back at the next start;
 - a size-changing edit made while connected;
-- an edit made during an upload.
+- an edit made during an upload;
+- a commit blocked by another process's open handle, which completes when that
+  handle closes, followed by a later edit.
 
 Each case must end with the placeholder in sync at the server's revision.
 `WindowsCloudFilesProviderTest` covers the remaining recovery and writeback

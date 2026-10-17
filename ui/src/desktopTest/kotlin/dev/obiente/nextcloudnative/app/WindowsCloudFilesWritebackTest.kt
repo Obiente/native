@@ -76,6 +76,21 @@ class WindowsCloudFilesWritebackTest {
     }
 
     @Test
+    fun `a failed revision update after an accepted upload is retried without uploading again`() = withFile { local ->
+        val fixture = Fixture(local)
+        fixture.revisionFailures = 1
+
+        assertFailsWith<WindowsCloudFilesOperationException> { fixture.writeback.writeBack(local, fixture.original) }
+        // The placeholder still holds the superseded revision; uploading against it would be rejected.
+        assertEquals(fixture.original, fixture.placeholderIdentity())
+
+        fixture.writeback.writeBack(local, fixture.placeholderIdentity())
+
+        assertEquals(listOf<String?>(ORIGINAL), fixture.backend.revisions)
+        assertEquals(listOf("revision:\"server-1\"", "in-sync"), fixture.events)
+    }
+
+    @Test
     fun `a pending commit is dropped once the placeholder holds another revision`() = withFile { local ->
         val fixture = Fixture(local)
         fixture.commitFailures = 1
@@ -133,6 +148,7 @@ class WindowsCloudFilesWritebackTest {
         val backend = RevisionedServer()
         val events = mutableListOf<String>()
         var commitFailures = 0
+        var revisionFailures = 0
         private var placeholder = original
         private val fake = WindowsCloudFilesProviderTest.FakeApi().apply {
             seed(local, WindowsCloudPlaceholderState.Dirty, original)
@@ -152,6 +168,10 @@ class WindowsCloudFilesWritebackTest {
         }
         val writeback = WindowsCloudFilesWriteback(api, backend, {}) { path, uploaded ->
             check(path == local)
+            if (revisionFailures > 0) {
+                revisionFailures -= 1
+                throw WindowsCloudFilesOperationException("open for update", SHARING_VIOLATION)
+            }
             events += "revision:${uploaded.remoteRevision}"
             placeholder = uploaded
             recordRevision

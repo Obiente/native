@@ -906,7 +906,8 @@ internal class WindowsCloudFilesProvider(
 
     override fun closed(info: WindowsCloudCallbackInfo, deleted: Boolean) {
         if (callbacksPaused.get() || deleted || info.fileIdentity == null) return
-        val identity = runCatching { requireIdentity(info, expectDirectory = null) }.getOrNull() ?: return
+        // After a blocked commit Windows still reports the last in-sync size; only hydration needs it.
+        val identity = runCatching { requireIdentity(info, null, recordedSize = false) }.getOrNull() ?: return
         if (identity.directory) return
         val localPath = root.resolve(identity.path.replace('/', File.separatorChar)).normalize()
         if (!localPath.startsWith(root) || !Files.exists(localPath)) return
@@ -1847,13 +1848,14 @@ internal class WindowsCloudFilesProvider(
     private fun requireIdentity(
         info: WindowsCloudCallbackInfo,
         expectDirectory: Boolean?,
+        recordedSize: Boolean = true,
     ): WindowsCloudFileIdentity {
         val bytes = requireNotNull(info.fileIdentity) { "The Cloud Files callback has no identity." }
         val identity = WindowsCloudFileIdentityCodec.decode(bytes)
         require(identity.accountId == backend.accountId) { "The Cloud Files callback belongs to another account." }
         requireWindowsCloudCallbackPath(root, info.normalizedPath, identity.path)
         if (expectDirectory != null) require(identity.directory == expectDirectory)
-        require(identity.size == info.fileSize || identity.directory) { "The Cloud Files callback size is stale." }
+        require(!recordedSize || identity.size == info.fileSize || identity.directory) { "The Cloud Files callback size is stale." }
         knownIdentities[identity.path] = identity
         return identity
     }

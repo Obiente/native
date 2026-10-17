@@ -52,7 +52,8 @@ internal fun WindowsCloudFilesApi.markInSyncWhenStampMatches(
  * accepts the upload, the placeholder receives the new revision while it stays dirty, which is
  * correct whether or not the local file changed. It is marked in sync only while an exclusive
  * handle proves the stamp is unchanged. A file edited meanwhile stays dirty and uploads again
- * against the new revision. A commit that cannot get its handle is retried without uploading again.
+ * against the new revision. A placeholder update or commit that fails after the server accepted the
+ * upload is retried without uploading again, so the retry never reuses the superseded revision.
  */
 internal class WindowsCloudFilesWriteback(
     private val api: WindowsCloudFilesApi,
@@ -61,6 +62,7 @@ internal class WindowsCloudFilesWriteback(
     private val recordUploadedRevision: (Path, WindowsCloudFileIdentity) -> Boolean,
 ) {
     private data class PendingCommit(
+        val base: WindowsCloudFileIdentity,
         val uploaded: WindowsCloudFileIdentity,
         val stamp: WindowsCloudLocalContentStamp,
     )
@@ -76,15 +78,21 @@ internal class WindowsCloudFilesWriteback(
         repeat(MAX_UPLOADS_PER_WRITEBACK) {
             // A queued writeback may find an earlier one already committed the same content.
             if (api.placeholderState(local) != WindowsCloudPlaceholderState.Dirty) return
-            val pending = pendingCommits[target.path]?.takeIf { it.uploaded == target } ?: upload(local, target) ?: return
-            when (api.markInSyncIfUnchanged(local, pending.stamp)) {
+            val pending = pendingCommits[target.path]
+            val accepted = when (target) {
+                pending?.uploaded -> pending
+                // The server accepted this upload, but recording its revision failed: retry only that.
+                pending?.base -> pending?.takeIf { recordUploadedRevision(local, it.uploaded) }
+                else -> upload(local, target)
+            } ?: return handOverToRootRecovery(target.path)
+            when (api.markInSyncIfUnchanged(local, accepted.stamp)) {
                 WindowsCloudInSyncCommit.Committed -> {
-                    pendingCommits.remove(target.path, pending)
+                    pendingCommits.remove(target.path, accepted)
                     return
                 }
                 WindowsCloudInSyncCommit.LocalChanged -> {
-                    pendingCommits.remove(target.path, pending)
-                    target = pending.uploaded
+                    pendingCommits.remove(target.path, accepted)
+                    target = accepted.uploaded
                 }
             }
         }
@@ -93,14 +101,20 @@ internal class WindowsCloudFilesWriteback(
 
     fun clear() = pendingCommits.clear()
 
+    /** A corrupt placeholder update scheduled root recovery, which rebuilds from the server. */
+    private fun handOverToRootRecovery(path: String) {
+        pendingCommits.remove(path)
+    }
+
     /** Returns null when a corrupt placeholder update handed the commit to root recovery. */
     private fun upload(local: Path, current: WindowsCloudFileIdentity): PendingCommit? {
         pendingCommits.remove(current.path)
         val stamp = api.localContentStamp(local)
         val uploaded = backend.upload(current.path, local.toFile(), current.remoteRevision)
         recordIdentity(uploaded)
-        if (!recordUploadedRevision(local, uploaded)) return null
-        return PendingCommit(uploaded, stamp).also { pendingCommits[current.path] = it }
+        // Recorded before the placeholder update, which can fail after the server accepted the upload.
+        val pending = PendingCommit(current, uploaded, stamp).also { pendingCommits[current.path] = it }
+        return pending.takeIf { recordUploadedRevision(local, uploaded) }
     }
 
     private companion object {
