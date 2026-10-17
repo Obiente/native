@@ -4,4 +4,4 @@ pull: 512
 platforms: windows
 user-facing: yes
 
-Windows Cloud Files now starts on large photo libraries: paths over 260 characters no longer stop it, and the startup scan of very large folders no longer times out.
+Windows Cloud Files no longer fails to start, pausing every download, when a folder path is longer than 260 characters. Startup recovery now also finds local edits stored in deeply nested folders.
