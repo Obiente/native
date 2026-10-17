@@ -13,9 +13,9 @@ class AppStoreCatalogRetryTest {
     @Test
     fun theFirstDiscoveryUsesTheCachedCatalogAndAnExplicitRetryRefreshesIt() = runBlocking {
         for ((attempt, expected) in listOf(
-            0 to AppStoreCatalogPolicy.UseCache,
-            1 to AppStoreCatalogPolicy.RefreshCatalog,
-            3 to AppStoreCatalogPolicy.RefreshCatalog,
+            0 to AppStoreCachePolicy.UseCache,
+            1 to AppStoreCachePolicy.Refresh,
+            3 to AppStoreCachePolicy.Refresh,
         )) {
             val requests = mutableListOf<AppStoreContractRequest>()
             discoverDynamicAppDescriptor(
@@ -34,13 +34,50 @@ class AppStoreCatalogRetryTest {
     }
 
     @Test
+    fun anUnusableAcquiredContractDiscardsExactlyThatCachedContract() = runBlocking {
+        for (attempt in listOf(0, 2)) {
+            val requests = mutableListOf<AppStoreContractRequest>()
+            val discovery = discoverDynamicAppDescriptor(
+                services = services(requests, AppStoreContractAcquisition.Acquired(unreadableContract())).forDiscoveryAttempt(attempt),
+                session = session,
+                app = app,
+                serverVersion = "34.0.3",
+                installedAppVersionHint = "1.0.0",
+            )
+            assertEquals(DynamicContractFallbackReason.UnsupportedContract, discovery.fallbackReason)
+            val first = if (attempt == 0) AppStoreCachePolicy.UseCache else AppStoreCachePolicy.Refresh
+            // A retry decorator never turns the discard request into a refresh.
+            assertEquals(
+                listOf(first, AppStoreCachePolicy.DiscardCachedContract),
+                requests.map(AppStoreContractRequest::cachePolicy),
+                "attempt $attempt",
+            )
+            assertEquals(setOf(AppStoreContractRequest("example", "34.0.3", "1.0.0")), requests.map { it.copy(cachePolicy = AppStoreCachePolicy.UseCache) }.toSet())
+        }
+    }
+
+    @Test
     fun theCachedPolicyKeepsTheOriginalServices() {
         val services = services(mutableListOf())
         assertSame(services, services.forDiscoveryAttempt(0))
-        assertSame(services, services.withAppStoreCatalogPolicy(AppStoreCatalogPolicy.UseCache))
+        assertSame(services, services.withAppStoreCachePolicy(AppStoreCachePolicy.UseCache))
     }
 
-    private fun services(requests: MutableList<AppStoreContractRequest>): NextcloudPlatformServices {
+    private fun unreadableContract() = AcquiredOpenApiContract(
+        appId = "example",
+        appVersion = "1.0.0",
+        contractVersion = "1.0.0",
+        specFile = "openapi.json",
+        document = "not json",
+        packageUrl = "https://fixture.invalid/example.tar.gz",
+        sourceUrl = "https://fixture.invalid/example.tar.gz#openapi.json",
+        sourceKind = AcquiredOpenApiContractSourceKind.SignedAppPackage,
+    )
+
+    private fun services(
+        requests: MutableList<AppStoreContractRequest>,
+        result: AppStoreContractAcquisition = AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoMatchingRelease),
+    ): NextcloudPlatformServices {
         val unavailable = Proxy.newProxyInstance(
             NextcloudPlatformServices::class.java.classLoader,
             arrayOf(NextcloudPlatformServices::class.java),
@@ -53,7 +90,7 @@ class AppStoreCatalogRetryTest {
 
             override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition {
                 requests += request
-                return AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoMatchingRelease)
+                return result
             }
         }
     }

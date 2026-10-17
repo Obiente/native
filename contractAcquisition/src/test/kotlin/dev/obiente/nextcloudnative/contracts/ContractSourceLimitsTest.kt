@@ -22,9 +22,9 @@ class ContractSourceLimitsTest {
             server.start()
             val acquirer = acquirer(server)
             server.enqueue(MockResponse(body = "[unreadable"))
-            assertEquals(unavailable(ContractUnavailableReason.MalformedSource), acquirer.acquireOutcome(unversioned(), CatalogPolicy.Refresh))
+            assertEquals(unavailable(ContractUnavailableReason.UnreadableCatalog), acquirer.acquireOutcome(unversioned(), AcquisitionCachePolicy.Refresh))
             repeat(3) {
-                assertEquals(unavailable(ContractUnavailableReason.RecentlyChecked), acquirer.acquireOutcome(unversioned(), CatalogPolicy.Refresh))
+                assertEquals(unavailable(ContractUnavailableReason.RecentlyChecked), acquirer.acquireOutcome(unversioned(), AcquisitionCachePolicy.Refresh))
             }
             assertEquals(1, server.requestCount)
         }
@@ -42,9 +42,9 @@ class ContractSourceLimitsTest {
                 assertEquals(unavailable(ContractUnavailableReason.NoMatchingRelease), acquirer.acquireOutcome(unversioned()))
                 now += 7L * 60L * 60L * 1_000L
                 server.enqueue(MockResponse(code = 503, body = "unavailable"))
-                assertFailsWith<ContractSourceHttpException> { acquirer.acquireOutcome(unversioned(), CatalogPolicy.Refresh) }
+                assertFailsWith<ContractSourceHttpException> { acquirer.acquireOutcome(unversioned(), AcquisitionCachePolicy.Refresh) }
                 repeat(2) {
-                    assertEquals(unavailable(ContractUnavailableReason.RecentlyChecked), acquirer.acquireOutcome(unversioned(), CatalogPolicy.Refresh))
+                    assertEquals(unavailable(ContractUnavailableReason.RecentlyChecked), acquirer.acquireOutcome(unversioned(), AcquisitionCachePolicy.Refresh))
                 }
                 assertEquals(2, server.requestCount)
             }
@@ -60,7 +60,7 @@ class ContractSourceLimitsTest {
             val acquirer = acquirer(server)
             repeat(3) { server.enqueue(MockResponse(body = "[unreadable")) }
             repeat(3) {
-                assertEquals(unavailable(ContractUnavailableReason.MalformedSource), acquirer.acquireOutcome(unversioned()))
+                assertEquals(unavailable(ContractUnavailableReason.UnreadableCatalog), acquirer.acquireOutcome(unversioned()))
             }
             assertEquals(3, server.requestCount)
         }

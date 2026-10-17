@@ -20,6 +20,9 @@ enum class ContractUnavailableReason {
      */
     MalformedSource,
 
+    /** A catalog document was truncated, empty, not JSON, or not an array, so no entries could be read. */
+    UnreadableCatalog,
+
     /**
      * An explicit retry asked for a fresh catalog inside its refresh window, and no cached copy was
      * available to reuse, so no App Store request was made. See [CatalogRefreshThrottle].
@@ -32,6 +35,22 @@ sealed interface ContractAcquisitionOutcome {
     data class Acquired(val contract: VerifiedOpenApiContract) : ContractAcquisitionOutcome
 
     data class Unavailable(val reason: ContractUnavailableReason) : ContractAcquisitionOutcome
+}
+
+/**
+ * Ends a refresh early when the refresh window refused it. A cached verified contract is served,
+ * because nothing newer can be fetched yet; without one and without a cached catalog, nothing was
+ * read, which is [ContractUnavailableReason.RecentlyChecked]. Returns null to continue normally.
+ */
+internal fun refreshShortcut(
+    catalog: CatalogReleases,
+    cachePolicy: AcquisitionCachePolicy,
+    cached: VerifiedOpenApiContract?,
+): ContractAcquisitionOutcome? = when {
+    cachePolicy != AcquisitionCachePolicy.Refresh || catalog.source == CatalogSource.Downloaded -> null
+    cached != null -> ContractAcquisitionOutcome.Acquired(cached)
+    catalog.source == CatalogSource.RefreshRefused -> ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
+    else -> null
 }
 
 /** Evidence gathered by one uncoalesced acquisition that decides its no-contract reason. */

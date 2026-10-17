@@ -24,7 +24,7 @@ class CatalogRefreshTest {
 
             server.enqueue(MockResponse(body = catalog(server, "4.0.2")))
             server.enqueue(MockResponse(body = "package"))
-            val refreshed = acquirer.acquireOutcome(request(), CatalogPolicy.Refresh)
+            val refreshed = acquirer.acquireOutcome(request(), AcquisitionCachePolicy.Refresh)
             assertEquals("4.0.2", assertIs<ContractAcquisitionOutcome.Acquired>(refreshed).contract.contractVersion)
             assertEquals(4, server.requestCount)
         }
@@ -56,12 +56,12 @@ class CatalogRefreshTest {
                 // Each catalog URL has its own refresh window, so the full catalog is refreshed too.
                 if (failed.code != 503) server.enqueue(MockResponse(body = catalog(server, "5.1.0")))
                 if (failed.code == 503) {
-                    assertFailsWith<ContractSourceHttpException> { acquirer.acquireOutcome(request(), CatalogPolicy.Refresh) }
+                    assertFailsWith<ContractSourceHttpException> { acquirer.acquireOutcome(request(), AcquisitionCachePolicy.Refresh) }
                 } else {
                     // The unreadable platform catalog is not cached and makes the source malformed.
                     assertEquals(
-                        unavailable(ContractUnavailableReason.MalformedSource),
-                        acquirer.acquireOutcome(request(), CatalogPolicy.Refresh),
+                        unavailable(ContractUnavailableReason.UnreadableCatalog),
+                        acquirer.acquireOutcome(request(), AcquisitionCachePolicy.Refresh),
                     )
                 }
                 assertEquals(cached, catalogUrls(server).map { url -> cache.load(url)?.decodeToString() })
@@ -78,12 +78,12 @@ class CatalogRefreshTest {
             repeat(2) { server.enqueue(MockResponse(body = catalog(server, "5.1.0"))) }
             acquirer.acquireOutcome(request())
             repeat(2) { server.enqueue(MockResponse(body = catalog(server, "5.1.0"))) }
-            repeat(5) { acquirer.acquireOutcome(request(), CatalogPolicy.Refresh) }
+            repeat(5) { acquirer.acquireOutcome(request(), AcquisitionCachePolicy.Refresh) }
             assertEquals(4, server.requestCount)
 
             now += CatalogRefreshThrottle.DEFAULT_CATALOG_REFRESH_INTERVAL_MILLIS
             repeat(2) { server.enqueue(MockResponse(body = catalog(server, "5.1.0"))) }
-            acquirer.acquireOutcome(request(), CatalogPolicy.Refresh)
+            acquirer.acquireOutcome(request(), AcquisitionCachePolicy.Refresh)
             assertEquals(6, server.requestCount)
         }
     }

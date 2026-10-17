@@ -122,14 +122,14 @@ internal suspend fun discoverDynamicAppDescriptor(
         )
         val path = "$OCS_API_VIEWER_SPEC_PATH/${specId.encodeUrlComponent()}"
         val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(path)) }
-            .onFailure { failure ->
+            .onFailure {
                 probe.record(DynamicServerProbeFailure.NoResponse)
-                diagnostics += "OCS API Viewer could not load $specId: ${failure.message ?: "request failed"}."
+                diagnostics += "OCS API Viewer could not load $specId (stage: spec, ${DynamicServerProbeFailure.NoResponse.name})."
             }
             .getOrNull() ?: return@forEach
         if (response.status !in 200..299) {
             probe.record(response)
-            diagnostics += "OCS API Viewer could not load $specId (HTTP ${response.status})."
+            diagnostics += "OCS API Viewer could not load $specId (stage: spec, ${response.statusClass()})."
             return@forEach
         }
         val document = response.parseOpenApiDocument()
@@ -147,10 +147,9 @@ internal suspend fun discoverDynamicAppDescriptor(
         )
         val descriptor = runCatchingPreservingCancellation {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
-        }.onFailure { failure ->
+        }.onFailure {
             probe.record(DynamicServerProbeFailure.UnsupportedContract)
-            diagnostics += "OCS API Viewer returned an unusable specification for $specId: " +
-                (failure.message ?: "compilation failed") + "."
+            diagnostics += "OCS API Viewer returned an unusable specification for $specId (stage: compilation)."
         }.getOrNull() ?: return@forEach
         return DynamicDescriptorDiscovery(
             descriptor = descriptor,
@@ -241,20 +240,19 @@ private suspend fun discoverOfficialViewerSpecIds(
     probe: DynamicServerProbe,
 ): List<String> {
     val response = runCatchingPreservingCancellation { execute(dynamicDiscoveryRequest(OCS_API_VIEWER_CATALOG_PATH)) }
-        .onFailure { failure ->
+        .onFailure {
             probe.record(DynamicServerProbeFailure.NoResponse)
-            diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint: " +
-                (failure.message ?: "request failed") + "."
+            diagnostics += "OCS API Viewer is unavailable (stage: catalog, ${DynamicServerProbeFailure.NoResponse.name})."
         }
         .getOrNull() ?: return emptyList()
     if (response.status == 404) {
         codes += DynamicDiagnosticCode.ApiViewerUnavailable
-        diagnostics += "OCS API Viewer is not installed or enabled for this user (HTTP 404 at $OCS_API_VIEWER_CATALOG_PATH)."
+        diagnostics += "OCS API Viewer is not installed or enabled for this user (stage: catalog, HTTP 4xx)."
         return emptyList()
     }
     if (response.status !in 200..299) {
         probe.record(response)
-        diagnostics += "OCS API Viewer is unavailable at its official authenticated endpoint (HTTP ${response.status})."
+        diagnostics += "OCS API Viewer is unavailable (stage: catalog, ${response.statusClass()})."
         return emptyList()
     }
     val catalog = runCatchingPreservingCancellation { dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonArray }
@@ -313,8 +311,15 @@ private fun NextcloudApiResponse.contractBodyFailure(): DynamicServerProbeFailur
     }
 }
 
-private fun NextcloudApiResponse.contentTypeDiagnostic(): String =
-    contentType?.let { " (Content-Type: $it)" } ?: " (without a Content-Type header)"
+/** Only the status class enters diagnostics; exact statuses and header values stay out. */
+private fun NextcloudApiResponse.statusClass(): String = "HTTP ${status / 100}xx"
+
+/** A bounded media-type token; arbitrary server header text never enters diagnostics. */
+private fun NextcloudApiResponse.contentTypeDiagnostic(): String {
+    val mediaType = contentType?.substringBefore(';')?.trim()?.lowercase()
+        ?.takeIf { value -> value.length <= 64 && value.all { it.isLetterOrDigit() || it in "/.+-" } }
+    return " (stage: body, media type ${mediaType ?: "unavailable"})"
+}
 
 private fun compileDynamicDescriptor(
     compiler: DynamicAppDescriptorCompiler,

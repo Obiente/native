@@ -1,10 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
-import dev.obiente.nextcloudnative.contracts.CatalogPolicy
+import dev.obiente.nextcloudnative.contracts.AcquisitionCachePolicy
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionFailureKind
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
+import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
@@ -21,14 +22,27 @@ import kotlinx.coroutines.CancellationException
  */
 fun acquireAppStoreContract(
     request: AppStoreContractRequest,
-    acquire: (ContractAcquisitionRequest, CatalogPolicy) -> ContractAcquisitionOutcome,
+    acquirer: SignedAppStoreContractAcquirer,
 ): AppStoreContractAcquisition {
-    val catalogPolicy = when (request.catalogPolicy) {
-        AppStoreCatalogPolicy.UseCache -> CatalogPolicy.UseCache
-        AppStoreCatalogPolicy.RefreshCatalog -> CatalogPolicy.Refresh
+    if (request.cachePolicy != AppStoreCachePolicy.DiscardCachedContract) {
+        return acquireAppStoreContract(request, acquirer::acquireOutcome)
+    }
+    acquirer.invalidateVerifiedContract(request.toContractAcquisitionRequest())
+    return AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract)
+}
+
+fun acquireAppStoreContract(
+    request: AppStoreContractRequest,
+    acquire: (ContractAcquisitionRequest, AcquisitionCachePolicy) -> ContractAcquisitionOutcome,
+): AppStoreContractAcquisition {
+    val cachePolicy = when (request.cachePolicy) {
+        AppStoreCachePolicy.UseCache -> AcquisitionCachePolicy.UseCache
+        AppStoreCachePolicy.Refresh -> AcquisitionCachePolicy.Refresh
+        AppStoreCachePolicy.DiscardCachedContract ->
+            throw IllegalArgumentException("Discarding a cached contract needs the acquirer, not an acquisition.")
     }
     val outcome = try {
-        acquire(ContractAcquisitionRequest(request.appId, request.serverVersion, request.installedAppVersion), catalogPolicy)
+        acquire(request.toContractAcquisitionRequest(), cachePolicy)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {
@@ -48,8 +62,12 @@ private fun ContractUnavailableReason.toAppStoreReason(): AppStoreContractUnavai
         AppStoreContractUnavailableReason.SourceTemporarilyUnavailable
     ContractUnavailableReason.NoUsableContract -> AppStoreContractUnavailableReason.NoUsableContract
     ContractUnavailableReason.MalformedSource -> AppStoreContractUnavailableReason.MalformedSource
+    ContractUnavailableReason.UnreadableCatalog -> AppStoreContractUnavailableReason.UnreadableCatalog
     ContractUnavailableReason.RecentlyChecked -> AppStoreContractUnavailableReason.RecentlyChecked
 }
+
+private fun AppStoreContractRequest.toContractAcquisitionRequest() =
+    ContractAcquisitionRequest(appId, serverVersion, installedAppVersion)
 
 private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFailureKind = when (this) {
     ContractAcquisitionFailureKind.Network -> AppStoreContractFailureKind.Network

@@ -40,28 +40,42 @@ enum class AppStoreContractUnavailableReason {
     /** The catalog lists the app, but the entry that would be selected lacks data needed to verify it. */
     MalformedSource,
 
+    /** A catalog document could not be read at all, so no entries were available to check. */
+    UnreadableCatalog,
+
     /** An explicit retry fell inside the catalog refresh window and no cached catalog could be reused. */
     RecentlyChecked,
 }
 
 /** Whether App Store acquisition may reuse its cached catalog. Only an explicit user retry refreshes it. */
-enum class AppStoreCatalogPolicy { UseCache, RefreshCatalog }
+enum class AppStoreCachePolicy {
+    UseCache,
+
+    /** Look past cached catalogs and verified contracts; cached copies stay until replaced. */
+    Refresh,
+
+    /** Forget the verified contract cached for this exact request after it proved unusable. */
+    DiscardCachedContract,
+}
 
 /** What discovery asks of [NextcloudPlatformServices.acquireSignedOpenApiContract]. */
 data class AppStoreContractRequest(
     val appId: String,
     val serverVersion: String,
     val installedAppVersion: String?,
-    val catalogPolicy: AppStoreCatalogPolicy = AppStoreCatalogPolicy.UseCache,
+    val cachePolicy: AppStoreCachePolicy = AppStoreCachePolicy.UseCache,
 )
 
 /** Discovery services whose App Store requests use [policy]; every other member delegates unchanged. */
-internal fun NextcloudPlatformServices.withAppStoreCatalogPolicy(policy: AppStoreCatalogPolicy): NextcloudPlatformServices {
-    if (policy == AppStoreCatalogPolicy.UseCache) return this
+internal fun NextcloudPlatformServices.withAppStoreCachePolicy(policy: AppStoreCachePolicy): NextcloudPlatformServices {
+    if (policy == AppStoreCachePolicy.UseCache) return this
     val delegate = this
     return object : NextcloudPlatformServices by delegate {
         override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
-            delegate.acquireSignedOpenApiContract(request.copy(catalogPolicy = policy))
+            // Only a plain acquisition takes the policy; a discard request keeps its own intent.
+            delegate.acquireSignedOpenApiContract(
+                if (request.cachePolicy == AppStoreCachePolicy.UseCache) request.copy(cachePolicy = policy) else request,
+            )
     }
 }
 
@@ -70,7 +84,7 @@ internal fun NextcloudPlatformServices.withAppStoreCatalogPolicy(policy: AppStor
  * explicit retry on that screen asks for a fresh catalog; the platform acquirer bounds how often.
  */
 internal fun NextcloudPlatformServices.forDiscoveryAttempt(attempt: Int): NextcloudPlatformServices =
-    withAppStoreCatalogPolicy(if (attempt > 0) AppStoreCatalogPolicy.RefreshCatalog else AppStoreCatalogPolicy.UseCache)
+    withAppStoreCachePolicy(if (attempt > 0) AppStoreCachePolicy.Refresh else AppStoreCachePolicy.UseCache)
 
 /** Result of [NextcloudPlatformServices.acquireSignedOpenApiContract]. Failures are thrown instead. */
 sealed interface AppStoreContractAcquisition {
@@ -98,6 +112,7 @@ enum class DynamicContractFallbackReason {
     NoMatchingRelease,
     SourceTemporarilyUnavailable,
     MalformedSource,
+    UnreadableCatalog,
     RecentlyChecked,
     SourceUnusable,
 
@@ -134,6 +149,7 @@ internal fun AppStoreContractUnavailableReason.fallbackReason(): DynamicContract
         DynamicContractFallbackReason.SourceTemporarilyUnavailable
     AppStoreContractUnavailableReason.NoUsableContract -> DynamicContractFallbackReason.NoVerifiedContract
     AppStoreContractUnavailableReason.MalformedSource -> DynamicContractFallbackReason.MalformedSource
+    AppStoreContractUnavailableReason.UnreadableCatalog -> DynamicContractFallbackReason.UnreadableCatalog
     AppStoreContractUnavailableReason.RecentlyChecked -> DynamicContractFallbackReason.RecentlyChecked
 }
 
@@ -170,9 +186,28 @@ internal fun DynamicDescriptorDiscovery.withAcquisitionFailure(kind: AppStoreCon
         DynamicDiagnosticCode.AppStoreAcquisitionFailed,
     )
 
-/** Keeps the metadata fallback when an acquired contract cannot be parsed or compiled. */
-internal fun DynamicDescriptorDiscovery.withUnusableAcquiredContract(diagnostic: String): DynamicDescriptorDiscovery =
-    withFallback(DynamicContractFallbackReason.UnsupportedContract, diagnostic, DynamicDiagnosticCode.ContractInvalid)
+/** Which step found an acquired App Store contract unusable. */
+internal enum class UnusableContractStage(val diagnostic: String) {
+    Parsing("The acquired App Store contract contained invalid JSON."),
+    Compilation("The acquired App Store contract could not be compiled into a native read surface."),
+}
+
+/**
+ * Keeps the metadata fallback when an acquired contract cannot be parsed or compiled, and discards the
+ * verified contract cached for exactly this request, so the next automatic discovery acquires it again
+ * instead of serving it until the cache expires. Other cached contracts stay.
+ */
+internal suspend fun DynamicDescriptorDiscovery.withUnusableAcquiredContract(
+    services: NextcloudPlatformServices,
+    request: AppStoreContractRequest,
+    stage: UnusableContractStage,
+): DynamicDescriptorDiscovery {
+    // Invalidation is best effort; the fallback stays truthful even when the cache cannot be cleared.
+    runCatchingPreservingCancellation {
+        services.acquireSignedOpenApiContract(request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract))
+    }
+    return withFallback(DynamicContractFallbackReason.UnsupportedContract, stage.diagnostic, DynamicDiagnosticCode.ContractInvalid)
+}
 
 /** Keeps the metadata fallback when the App Store boundary completed without a contract. */
 internal fun DynamicDescriptorDiscovery.withUnavailable(
@@ -255,6 +290,12 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "Your account does not have permission to read this server's API catalog, which may be limited " +
             "to administrators, and the App Store offered no verified contract. Only app details are shown.",
         "Check again",
+    )
+    DynamicContractFallbackReason.UnreadableCatalog -> DynamicContractFallbackNotice(
+        "App Store catalog unreadable",
+        "The Nextcloud App Store returned a catalog that could not be read, so no app entries were " +
+            "available to check. Try again later.",
+        "Try again",
     )
     DynamicContractFallbackReason.RecentlyChecked -> DynamicContractFallbackNotice(
         "Checked moments ago",

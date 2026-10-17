@@ -35,7 +35,7 @@ class SignedAppStoreContractAcquirer(
 ) {
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
-        ConcurrentHashMap<Pair<ContractAcquisitionRequest, CatalogPolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
+        ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
 
     init {
         if (requireHttps) {
@@ -55,13 +55,13 @@ class SignedAppStoreContractAcquirer(
     fun acquire(request: ContractAcquisitionRequest): VerifiedOpenApiContract? =
         (acquireOutcome(request) as? ContractAcquisitionOutcome.Acquired)?.contract
 
-    /** [catalogPolicy] is [CatalogPolicy.Refresh] only for an explicit user retry; see [CatalogRefreshThrottle]. */
+    /** [cachePolicy] is [AcquisitionCachePolicy.Refresh] only for an explicit user retry; see [CatalogRefreshThrottle]. */
     fun acquireOutcome(
         request: ContractAcquisitionRequest,
-        catalogPolicy: CatalogPolicy = CatalogPolicy.UseCache,
+        cachePolicy: AcquisitionCachePolicy = AcquisitionCachePolicy.UseCache,
     ): ContractAcquisitionOutcome {
         val owner = CompletableFuture<ContractAcquisitionOutcome>()
-        val existing = inFlightAcquisitions.putIfAbsent(request to catalogPolicy, owner)
+        val existing = inFlightAcquisitions.putIfAbsent(request to cachePolicy, owner)
         if (existing != null) {
             return try {
                 existing.get()
@@ -73,41 +73,39 @@ class SignedAppStoreContractAcquirer(
             }
         }
         return try {
-            acquireUncoalesced(request, catalogPolicy).also { acquired -> owner.complete(acquired) }
+            acquireUncoalesced(request, cachePolicy).also { acquired -> owner.complete(acquired) }
         } catch (failure: Throwable) {
             owner.completeExceptionally(failure)
             throw failure
         } finally {
-            inFlightAcquisitions.remove(request to catalogPolicy, owner)
+            inFlightAcquisitions.remove(request to cachePolicy, owner)
         }
     }
 
     private fun acquireUncoalesced(
         request: ContractAcquisitionRequest,
-        catalogPolicy: CatalogPolicy,
+        cachePolicy: AcquisitionCachePolicy,
     ): ContractAcquisitionOutcome {
         requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
         request.installedAppVersion?.let { version ->
             requireValidRequest(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
         }
-        verifiedContracts[request]?.let { return ContractAcquisitionOutcome.Acquired(it) }
-        verifiedContractCache.load(request)?.let { cached ->
-            verifiedContracts[request] = cached
-            return ContractAcquisitionOutcome.Acquired(cached)
-        }
+        val cached = verifiedContracts[request] ?: verifiedContractCache.load(request)?.also { verifiedContracts[request] = it }
+        // A refresh looks past a cached contract, which stays until a newly verified contract replaces it.
+        if (cached != null && cachePolicy == AcquisitionCachePolicy.UseCache) return ContractAcquisitionOutcome.Acquired(cached)
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
-        val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId, catalogPolicy)
-        if (platformCatalog.refreshDenied) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
+        val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId, cachePolicy)
+        refreshShortcut(platformCatalog, cachePolicy, cached)?.let { return it }
         val platformReleases = platformCatalog.releases
         val exactPlatformRelease = request.installedAppVersion?.let { installed ->
             platformReleases.firstOrNull { release -> release.version == installed }
         }
         val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
-            fetchCatalogReleases("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, catalogPolicy)
+            fetchCatalogReleases("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, cachePolicy)
         }
-        if (allCatalog?.refreshDenied == true) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
+        allCatalog?.let { catalog -> refreshShortcut(catalog, cachePolicy, cached)?.let { return it } }
         val exactRelease = exactPlatformRelease
             ?: allCatalog?.releases?.firstOrNull { release -> release.version == request.installedAppVersion }
         val compatibleReleases = compatibleReleaseCandidates(
@@ -181,6 +179,12 @@ class SignedAppStoreContractAcquirer(
         }
         val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return attempt.unavailable()
         return cacheContract(request, verified.asPackageContract(request, release))
+    }
+
+    /** Forgets the verified contract for [request], for example after it proved unusable downstream. */
+    fun invalidateVerifiedContract(request: ContractAcquisitionRequest) {
+        verifiedContracts.remove(request)
+        verifiedContractCache.remove(request)
     }
 
     private fun VerifiedPackageContract.asPackageContract(
@@ -452,16 +456,19 @@ class SignedAppStoreContractAcquirer(
     private fun fetchCatalogReleases(
         catalogUrl: String,
         appId: String,
-        catalogPolicy: CatalogPolicy,
+        cachePolicy: AcquisitionCachePolicy,
     ): CatalogReleases {
         requireSecureUrl(catalogUrl)
         // A refresh only bypasses the cached copy; the copy stays until a readable catalog replaces it.
-        val refreshAllowed = catalogPolicy == CatalogPolicy.Refresh && catalogRefreshThrottle.tryRefresh(catalogUrl)
+        val refreshAllowed = cachePolicy == AcquisitionCachePolicy.Refresh && catalogRefreshThrottle.tryRefresh(catalogUrl)
         catalogCache.load(catalogUrl)?.takeUnless { refreshAllowed }?.let { cached ->
             return parseReleases(cached.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
+                .copy(source = CatalogSource.Cached)
         }
         // A retry inside the refresh window never reaches the App Store, even without a cached copy.
-        if (catalogPolicy == CatalogPolicy.Refresh && !refreshAllowed) return CatalogReleases(emptyList(), refreshDenied = true)
+        if (cachePolicy == AcquisitionCachePolicy.Refresh && !refreshAllowed) {
+            return CatalogReleases(emptyList(), source = CatalogSource.RefreshRefused)
+        }
         val response = execute(Request.Builder().url(catalogUrl).get().build())
         val bytes = response.use { catalogResponse ->
             requireSuccessfulSource(catalogResponse) {

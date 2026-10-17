@@ -198,6 +198,8 @@ The fallback card derives its title, explanation, and action from that reason:
 - the App Store lists the app, but the entry that would be selected lacks a
   required value such as its certificate, download, signature, or signature
   digest;
+- an App Store catalog document could not be read at all, so no entries were
+  available to check;
 - the app's linked source refused or rate limited the last fallback request
   (HTTP 403 or 429), so a contract may still exist;
 - an explicit retry came less than a minute after the previous catalog check
@@ -223,8 +225,14 @@ so a local storage failure is never reported as an unreachable App Store.
 translates them once for both JVM targets. It also catches `LinkageError`. If
 acquisition code cannot initialize on a runtime, for example because the
 Android ICU engine rejects a regular expression, the result is a client-fault
-fallback, not an exception class name. Diagnostics and product copy never
-contain exception text, and a fallback reason is never persisted.
+fallback, not an exception class name. Discovery diagnostics, fallback copy,
+and contract information never contain exception messages, request URLs,
+hosts, paths, header values, or response bodies. Same-origin diagnostics name
+only a stage (catalog, spec, body, or compilation), a typed probe result, an
+HTTP status class such as `HTTP 5xx`, a sanitized spec identifier, and a
+bounded media type. A fallback reason is never persisted. The original
+exception remains only as the cause of the typed acquisition exception, for
+local debugging; it is never written to diagnostics or support reports.
 
 A completed acquisition without a contract is a typed outcome, not a bare
 `null`.
@@ -235,14 +243,15 @@ and the shared JVM boundary carries that reason to the fallback card. Catalog
 parsing records which required value made each dropped entry unusable. A
 dropped entry counts only when it would have been selected: the exact installed
 version, a patch-compatible release, or an entry whose version cannot be read.
-A catalog document that is truncated, empty, not JSON, or not an array is also
-a malformed source; it is never cached, so checking again downloads it again.
+A catalog document that is truncated, empty, not JSON, or not an array is an
+unreadable catalog, a reason of its own, because no entry could be read; it is
+never cached, so checking again downloads it again.
 A corrupt or mismatched App Store-linked source archive yields no candidate,
 like an archive without a contract, instead of an unexpected client fault.
 
 App Store catalogs are cached for six hours. The first discovery of an app
 screen uses the cache. A discovery started by, or after, an explicit retry on
-that screen carries `AppStoreCatalogPolicy.RefreshCatalog` through the platform
+that screen carries `AppStoreCachePolicy.Refresh` through the platform
 boundary to the acquirer, which downloads each catalog again at most once per
 minute per catalog URL. A retry inside that window reuses the cached copy; if
 none is available, for example after a cold start or an expired entry, it makes
@@ -251,6 +260,15 @@ most one App Store request per catalog URL per window. Automatic discovery
 without a cached catalog downloads it normally. A forced download that fails or
 is unreadable leaves the cached catalog in place, because only a readable
 catalog replaces it.
+
+The same policy covers verified contracts. Automatic discovery serves a cached
+verified contract. A refresh looks past it and downloads the package or linked
+contract again; a newly verified contract replaces the cached one, while a
+failed refresh leaves it in place. A refresh refused by the window serves the
+cached contract when one exists. When an acquired contract cannot be parsed or
+compiled, discovery discards the cached contract for exactly that app, server
+version, and installed version, so the next automatic discovery acquires it
+again; other cached contracts stay.
 
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
@@ -296,7 +314,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Verified contract cache | Missing, expired, or unreadable entry | Ignored; acquisition continues |
 | Catalog and package requests | No response; non-success status; redirect away from HTTPS | Network; source unavailable; verification failed |
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
-| Catalog document | Truncated, empty, not JSON, or not an array | Malformed source, never cached |
+| Catalog document | Truncated, empty, not JSON, or not an array | Unreadable catalog, never cached |
 | Catalog entry | Missing value, or a download that is not an HTTP URL | Malformed source when it would be selected |
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
@@ -308,7 +326,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Linked archive request | HTTP 403 or 429 | Source temporarily unavailable |
 | Linked archive content | Corrupt, unsafe path, identity mismatch, malformed or misencoded `info.xml`, size limit | No candidate |
 | Linked JSON or YAML documents | Unreadable | Skipped |
-| Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract |
+| Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract; that cached contract is discarded |
 | Contract module class loading | `LinkageError` | Client fault |
 | Same-origin probes | See the precedence list above | Typed probe result |
 | Remaining unexpected failures | XML parser configuration, internal invariants | Client fault |

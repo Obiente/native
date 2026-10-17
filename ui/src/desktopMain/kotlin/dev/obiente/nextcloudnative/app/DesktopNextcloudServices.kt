@@ -5031,7 +5031,7 @@ class DesktopNextcloudServices(
     }
 
     override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
-        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer::acquireOutcome) }
+        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer) }
 
     override suspend fun listActivities(session: NextcloudSession, limit: Int): List<NextcloudActivity> =
         withContext(Dispatchers.IO) {

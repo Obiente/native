@@ -60,6 +60,12 @@ class MalformedCatalogReleaseTest {
     }
 
     @Test
+    fun `an unreadable catalog document is distinct from a malformed matching entry`() {
+        assertEquals(unavailable(ContractUnavailableReason.UnreadableCatalog), acquireFrom(JSONArray("[]"), raw = "[truncated"))
+        assertEquals(unavailable(ContractUnavailableReason.MalformedSource), acquireFrom(catalog(release("4.0.2", omit = "signature"))))
+    }
+
+    @Test
     fun `an app without a releases list is a malformed source`() {
         val catalog = JSONArray().put(JSONObject().put("id", "cospend").put("certificate", "certificate"))
         assertEquals(unavailable(ContractUnavailableReason.MalformedSource), acquireFrom(catalog))
@@ -98,10 +104,10 @@ class MalformedCatalogReleaseTest {
         }
     }
 
-    private fun acquireFrom(catalog: JSONArray): ContractAcquisitionOutcome = MockWebServer().use { server ->
+    private fun acquireFrom(catalog: JSONArray, raw: String? = null): ContractAcquisitionOutcome = MockWebServer().use { server ->
         server.start()
         // The installed version is absent from the platform catalog, so the full catalog is read too.
-        repeat(2) { server.enqueue(MockResponse(body = catalog.toString())) }
+        repeat(2) { server.enqueue(MockResponse(body = raw ?: catalog.toString())) }
         acquirer(server) { error("No package may be verified.") }.acquireOutcome(request())
     }
 

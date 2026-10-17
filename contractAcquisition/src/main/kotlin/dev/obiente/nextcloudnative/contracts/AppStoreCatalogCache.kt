@@ -27,8 +27,11 @@ internal fun AppStoreCatalogCache.storeBestEffort(url: String, bytes: ByteArray)
     }
 }
 
-/** Whether a catalog read may reuse the cached copy. Only an explicit user retry asks for [Refresh]. */
-enum class CatalogPolicy { UseCache, Refresh }
+/**
+ * Whether acquisition may reuse cached catalogs and verified contracts. Only an explicit user retry
+ * asks for [Refresh]; cached copies stay until a newly verified result replaces them.
+ */
+enum class AcquisitionCachePolicy { UseCache, Refresh }
 
 /**
  * Bounds explicit catalog refreshes to one forced download per catalog URL per interval. A retry

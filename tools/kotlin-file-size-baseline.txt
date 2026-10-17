@@ -8,7 +8,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt|11
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|864
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1801
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckNativeActions.kt|1158
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2225
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2222
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2515
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|960
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1386

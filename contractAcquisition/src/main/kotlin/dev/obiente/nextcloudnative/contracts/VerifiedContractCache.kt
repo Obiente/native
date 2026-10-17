@@ -15,6 +15,9 @@ import org.json.JSONObject
 interface VerifiedContractCache {
     fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract?
     fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract)
+
+    /** Forgets only the contract cached for [request]; other entries stay. */
+    fun remove(request: ContractAcquisitionRequest)
 }
 
 class MemoryVerifiedContractCache : VerifiedContractCache {
@@ -24,6 +27,10 @@ class MemoryVerifiedContractCache : VerifiedContractCache {
 
     override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) {
         entries[request] = contract
+    }
+
+    override fun remove(request: ContractAcquisitionRequest) {
+        entries.remove(request)
     }
 }
 
@@ -73,6 +80,10 @@ class FileVerifiedContractCache(
                 if (temporary.exists()) temporary.delete()
             }
         }
+
+    override fun remove(request: ContractAcquisitionRequest): Unit = synchronized(lock) {
+        cacheFile(request).delete()
+    }
 
     private fun cacheFile(request: ContractAcquisitionRequest): File {
         val identity = listOf(

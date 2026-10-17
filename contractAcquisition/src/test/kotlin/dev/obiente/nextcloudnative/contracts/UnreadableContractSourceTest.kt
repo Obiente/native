@@ -23,7 +23,7 @@ class UnreadableContractSourceTest {
                 repeat(2) { server.enqueue(MockResponse(body = body)) }
                 val cache = RecordingCatalogCache()
                 val outcome = acquirer(server, cache).acquireOutcome(request())
-                assertEquals(ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.MalformedSource), outcome, body)
+                assertEquals(ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.UnreadableCatalog), outcome, body)
                 assertEquals(emptyList(), cache.stored, body)
                 assertEquals(2, server.requestCount, body)
             }

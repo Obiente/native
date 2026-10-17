@@ -74,6 +74,8 @@ class VerifiedContractCacheTest {
                 request: ContractAcquisitionRequest,
                 contract: VerifiedOpenApiContract,
             ) = error("A cache hit must not be stored again.")
+
+            override fun remove(request: ContractAcquisitionRequest) = error("A cache hit must not be removed.")
         }
 
         val loaded = SignedAppStoreContractAcquirer(verifiedContractCache = cache).acquire(request)
@@ -97,6 +99,8 @@ class VerifiedContractCacheTest {
             }
 
             override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = Unit
+
+            override fun remove(request: ContractAcquisitionRequest) = Unit
         }
         val acquirer = SignedAppStoreContractAcquirer(verifiedContractCache = cache)
         val executor = Executors.newFixedThreadPool(4)

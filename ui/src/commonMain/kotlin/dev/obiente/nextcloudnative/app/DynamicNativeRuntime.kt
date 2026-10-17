@@ -154,9 +154,10 @@ suspend fun discoverDynamicAppDescriptor(
             "Finding a verified app package",
         ),
     )
+    val contractRequest = AppStoreContractRequest(contractAppId, coreVersion, installedVersion)
     val acquisition = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic,
         available = { it is AppStoreContractAcquisition.Acquired }) {
-        services.acquireSignedOpenApiContract(AppStoreContractRequest(contractAppId, coreVersion, installedVersion))
+        services.acquireSignedOpenApiContract(contractRequest)
     }.getOrElse { failure ->
         // Only the typed kind enters diagnostics and copy; exception text and class names stay local.
         return sameOrigin.withAcquisitionFailure(failure.appStoreContractFailureKind())
@@ -168,9 +169,7 @@ suspend fun discoverDynamicAppDescriptor(
     val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = observeDynamicDiscoveryStage(DynamicDiscoveryStage.ContractParsing, services::recordSupportDiagnostic) {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
-    }.getOrNull() ?: return sameOrigin.withUnusableAcquiredContract(
-        "The acquired App Store contract contained invalid JSON.",
-    )
+    }.getOrNull() ?: return sameOrigin.withUnusableAcquiredContract(services, contractRequest, UnusableContractStage.Parsing)
     val verifiedReadRouteCount = (document["x-nextcloud-native-verified-read-route-count"] as? JsonPrimitive)
         ?.contentOrNull
         ?.toIntOrNull()
@@ -215,9 +214,7 @@ suspend fun discoverDynamicAppDescriptor(
             ),
         ).requireValid()
     }.getOrElse {
-        return sameOrigin.withUnusableAcquiredContract(
-            "The acquired App Store contract could not be compiled into a native read surface.",
-        )
+        return sameOrigin.withUnusableAcquiredContract(services, contractRequest, UnusableContractStage.Compilation)
     }
     return DynamicDescriptorDiscovery(
         descriptor = descriptor,

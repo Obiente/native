@@ -22,12 +22,20 @@ internal enum class MalformedCatalogField {
 /** A catalog entry for the requested app that parsing dropped. A null version could not be read. */
 internal data class MalformedCatalogEntry(val version: String?, val field: MalformedCatalogField)
 
+/** Where a catalog read came from. */
+internal enum class CatalogSource {
+    Downloaded,
+    Cached,
+
+    /** An explicit retry was refused by the refresh window and no cached copy was available. */
+    RefreshRefused,
+}
+
 /** Usable releases of one app in one catalog, plus the entries that were present but malformed. */
 internal data class CatalogReleases(
     val releases: List<AppStoreRelease>,
     val malformed: List<MalformedCatalogEntry> = emptyList(),
-    /** True when an explicit retry was refused by the refresh window and nothing cached was read. */
-    val refreshDenied: Boolean = false,
+    val source: CatalogSource = CatalogSource.Downloaded,
 ) {
     /** False when the whole document was unreadable; such a document must not be cached. */
     val documentReadable: Boolean get() = malformed.none { entry -> entry.field == MalformedCatalogField.Document }
@@ -43,6 +51,9 @@ internal fun unmatchedReleaseOutcome(
     platformCatalog: CatalogReleases,
     allCatalog: CatalogReleases?,
 ): ContractAcquisitionOutcome.Unavailable {
+    if (!platformCatalog.documentReadable || allCatalog?.documentReadable == false) {
+        return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.UnreadableCatalog)
+    }
     fun MalformedCatalogEntry.isExact(): Boolean = version == null || version == installedVersion
     val malformedMatch = platformCatalog.malformed.any { entry ->
         entry.isExact() || isCompatibleReleaseVersion(requireNotNull(entry.version), installedVersion)

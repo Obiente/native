@@ -56,6 +56,7 @@ class DynamicContractFallbackDiscoveryTest {
             AppStoreContractUnavailableReason.NoUsableContract to DynamicContractFallbackReason.NoVerifiedContract,
             AppStoreContractUnavailableReason.MalformedSource to DynamicContractFallbackReason.MalformedSource,
             AppStoreContractUnavailableReason.RecentlyChecked to DynamicContractFallbackReason.RecentlyChecked,
+            AppStoreContractUnavailableReason.UnreadableCatalog to DynamicContractFallbackReason.UnreadableCatalog,
         )
         assertEquals(AppStoreContractUnavailableReason.entries.toSet(), expected.keys)
         for ((unavailable, reason) in expected) {

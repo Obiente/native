@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
-import dev.obiente.nextcloudnative.contracts.CatalogPolicy
+import dev.obiente.nextcloudnative.contracts.AcquisitionCachePolicy
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
+import dev.obiente.nextcloudnative.contracts.MemoryVerifiedContractCache
+import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequestException
 import dev.obiente.nextcloudnative.contracts.ContractSourceHttpException
 import dev.obiente.nextcloudnative.contracts.ContractSourceTooLargeException
@@ -56,6 +58,7 @@ class JvmAppStoreContractAcquisitionTest {
             ContractUnavailableReason.NoUsableContract to AppStoreContractUnavailableReason.NoUsableContract,
             ContractUnavailableReason.MalformedSource to AppStoreContractUnavailableReason.MalformedSource,
             ContractUnavailableReason.RecentlyChecked to AppStoreContractUnavailableReason.RecentlyChecked,
+            ContractUnavailableReason.UnreadableCatalog to AppStoreContractUnavailableReason.UnreadableCatalog,
         )) {
             assertEquals(
                 AppStoreContractAcquisition.Unavailable(expected),
@@ -108,15 +111,37 @@ class JvmAppStoreContractAcquisitionTest {
     @Test
     fun theRequestAndItsCatalogPolicyCrossTheBoundaryUnchanged() {
         for ((policy, expected) in listOf(
-            AppStoreCatalogPolicy.UseCache to CatalogPolicy.UseCache,
-            AppStoreCatalogPolicy.RefreshCatalog to CatalogPolicy.Refresh,
+            AppStoreCachePolicy.UseCache to AcquisitionCachePolicy.UseCache,
+            AppStoreCachePolicy.Refresh to AcquisitionCachePolicy.Refresh,
         )) {
-            var seen: Pair<ContractAcquisitionRequest, CatalogPolicy>? = null
-            acquireAppStoreContract(request.copy(catalogPolicy = policy)) { contractRequest, catalogPolicy ->
-                seen = contractRequest to catalogPolicy
+            var seen: Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>? = null
+            acquireAppStoreContract(request.copy(cachePolicy = policy)) { contractRequest, cachePolicy ->
+                seen = contractRequest to cachePolicy
                 ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.NoMatchingRelease)
             }
             assertEquals(ContractAcquisitionRequest("example", "34.0.3", "1.0.0") to expected, seen)
+        }
+    }
+
+    @Test
+    fun discardingForgetsOnlyTheExactCachedContract() {
+        val cache = MemoryVerifiedContractCache()
+        val exact = ContractAcquisitionRequest("example", "34.0.3", "1.0.0")
+        val other = ContractAcquisitionRequest("example", "34.0.3", "1.0.1")
+        val contract = verified(OpenApiContractSourceKind.SignedAppPackage, VerifiedContractKind.OpenApi)
+        cache.store(exact, contract)
+        cache.store(other, contract)
+        val outcome = acquireAppStoreContract(
+            request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract),
+            SignedAppStoreContractAcquirer(verifiedContractCache = cache),
+        )
+        assertEquals(AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract), outcome)
+        assertEquals(null, cache.load(exact))
+        assertEquals(contract, cache.load(other))
+        assertFailsWith<IllegalArgumentException> {
+            acquireAppStoreContract(request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract)) { _, _ ->
+                error("A discard must not acquire.")
+            }
         }
     }
 
