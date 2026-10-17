@@ -152,7 +152,7 @@ class SignedAppStoreContractAcquirer(
             } catch (failure: JSONException) {
                 throw failure.asSourceVerificationFailure(request.appId)
             }
-            // A missing bundled trust resource or parser configuration fault is local and propagates.
+            // Missing or unusable bundled trust material, or a parser configuration fault, is local and propagates.
             if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
                 acquireGitHubTagContract(
                     release = release,

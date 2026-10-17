@@ -2,29 +2,31 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.security.GeneralSecurityException
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509CRL
 import java.security.cert.X509Certificate
 import java.util.Base64
+import java.util.Date
 
-class NextcloudAppPackageTrustVerifier(
-    private val trustResourceLoader: (String) -> ByteArray = ::loadBundledTrustResource,
+class NextcloudAppPackageTrustVerifier internal constructor(
+    private val trustResourceLoader: (String) -> ByteArray,
+    private val now: () -> Date,
 ) : AppPackageTrustVerifier {
+    constructor(trustResourceLoader: (String) -> ByteArray = ::loadBundledTrustResource) :
+        this(trustResourceLoader, ::Date)
+
     override fun verifyAndExtract(release: AppStoreRelease, archive: ByteArray): VerifiedPackageContract {
         require(release.signatureDigest.equals("sha512", ignoreCase = true)) {
             "The package uses an unsupported signature digest."
         }
-        val factory = CertificateFactory.getInstance("X.509")
-        val trustedCertificates = factory.generateCertificates(
-            ByteArrayInputStream(trustResourceLoader(ROOT_CERTIFICATES_RESOURCE)),
-        ).map { certificate -> certificate as X509Certificate }
-        check(trustedCertificates.isNotEmpty()) { "The Nextcloud trust bundle is empty." }
-        trustedCertificates.forEach(X509Certificate::checkValidity)
+        // Local trust material is loaded and validated first; only failures after this point concern the package.
+        val (factory, trustedCertificates, crl) = loadTrustMaterial()
         val appCertificate = factory.generateCertificate(
             ByteArrayInputStream(release.certificatePem.encodeToByteArray()),
         ) as X509Certificate
-        appCertificate.checkValidity()
+        appCertificate.checkValidity(now())
         check(appCertificate.subjectCommonName() == release.appId) {
             "The package certificate does not belong to ${release.appId}."
         }
@@ -32,13 +34,6 @@ class NextcloudAppPackageTrustVerifier(
             "The package certificate uses an unsupported key algorithm."
         }
         verifyCertificateChain(appCertificate, trustedCertificates)
-        val crl = factory.generateCRL(
-            ByteArrayInputStream(trustResourceLoader(ROOT_REVOCATION_LIST_RESOURCE)),
-        ) as X509CRL
-        val crlIssuer = trustedCertificates.firstOrNull { certificate ->
-            certificate.subjectX500Principal == crl.issuerX500Principal
-        } ?: error("The CRL issuer is missing from the Nextcloud trust bundle.")
-        crl.verify(crlIssuer.publicKey)
         check(!crl.isRevoked(appCertificate)) { "The package certificate has been revoked." }
         val signature = Signature.getInstance("SHA512withRSA")
         signature.initVerify(appCertificate.publicKey)
@@ -47,6 +42,44 @@ class NextcloudAppPackageTrustVerifier(
         check(signature.verify(signatureBytes)) { "The downloaded app package signature is invalid." }
         return extractOpenApiContract(archive, release)
     }
+
+    /**
+     * Loads and validates the bundled root certificates and revocation list. Any failure here is a
+     * local client fault, thrown as [ContractTrustMaterialInvalidException] or
+     * [ContractTrustResourceMissingException]; it never describes the downloaded package.
+     */
+    private fun loadTrustMaterial(): TrustMaterial {
+        val certificateBytes = trustResourceLoader(ROOT_CERTIFICATES_RESOURCE)
+        val revocationBytes = trustResourceLoader(ROOT_REVOCATION_LIST_RESOURCE)
+        return try {
+            val factory = CertificateFactory.getInstance("X.509")
+            val trusted = factory.generateCertificates(ByteArrayInputStream(certificateBytes))
+                .map { certificate -> certificate as X509Certificate }
+            check(trusted.isNotEmpty()) { "The Nextcloud trust bundle is empty." }
+            val validAt = now()
+            trusted.forEach { certificate -> certificate.checkValidity(validAt) }
+            val crl = factory.generateCRL(ByteArrayInputStream(revocationBytes)) as X509CRL
+            val crlIssuer = trusted.firstOrNull { certificate ->
+                certificate.subjectX500Principal == crl.issuerX500Principal
+            } ?: error("The CRL issuer is missing from the Nextcloud trust bundle.")
+            crl.verify(crlIssuer.publicKey)
+            check(crl.nextUpdate?.after(validAt) != false) { "The bundled Nextcloud revocation list has expired." }
+            TrustMaterial(factory, trusted, crl)
+        } catch (failure: GeneralSecurityException) {
+            throw ContractTrustMaterialInvalidException(failure)
+        } catch (failure: IllegalStateException) {
+            throw ContractTrustMaterialInvalidException(failure)
+        } catch (failure: ClassCastException) {
+            // A resource of the wrong kind, for example a certificate where the revocation list belongs.
+            throw ContractTrustMaterialInvalidException(failure)
+        }
+    }
+
+    private data class TrustMaterial(
+        val factory: CertificateFactory,
+        val trustedCertificates: List<X509Certificate>,
+        val revocationList: X509CRL,
+    )
 }
 
 private fun verifyCertificateChain(

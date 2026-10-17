@@ -49,6 +49,14 @@ class ContractSourceTooLargeException(val limit: Long, message: String) : Illega
  */
 class ContractTrustResourceMissingException(message: String) : RuntimeException(message)
 
+/**
+ * The bundled trust material is present but unusable: corrupt, expired, of an unsupported format,
+ * or inconsistent. Like a missing resource, this is a local client fault that only updating or
+ * repairing the app can fix, so it is never reported as a source verification failure.
+ */
+class ContractTrustMaterialInvalidException(cause: Throwable) :
+    RuntimeException("The bundled Nextcloud trust material is unusable.", cause)
+
 /** A package or source failed verification. The original failure stays available as the cause. */
 class ContractSourceVerificationException(message: String, cause: Throwable? = null) :
     SecurityException(message, cause)
@@ -72,6 +80,7 @@ fun classifyContractAcquisitionFailure(failure: Throwable): ContractAcquisitionF
     is GeneralSecurityException -> ContractAcquisitionFailureKind.VerificationFailed
     is LinkageError -> ContractAcquisitionFailureKind.RuntimeIncompatible
     is ContractTrustResourceMissingException -> ContractAcquisitionFailureKind.RuntimeIncompatible
+    is ContractTrustMaterialInvalidException -> ContractAcquisitionFailureKind.RuntimeIncompatible
     else -> ContractAcquisitionFailureKind.Unexpected
 }
 
