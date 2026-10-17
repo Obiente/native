@@ -63,6 +63,9 @@ internal actual fun PlatformNativeVideoPlayer(
     // Transport controls sit above the gesture navigation area; the picture stays centered.
     val playerModifier = modifier.navigationBarsPadding()
     if (compatibilityPlaybackRequested && rangeSource != null) {
+        // Its Play/Pause control never hides, so the viewer chrome Media3 may have hidden returns.
+        val currentOnControlsVisibilityChanged by rememberUpdatedState(onControlsVisibilityChanged)
+        LaunchedEffect(rangeSource) { currentOnControlsVisibilityChanged(true) }
         LibVlcVideoPlayer(
             source = source,
             rangeSource = rangeSource,

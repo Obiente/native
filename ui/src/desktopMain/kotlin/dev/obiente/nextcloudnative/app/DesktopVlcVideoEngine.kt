@@ -5,10 +5,12 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
 import uk.co.caprica.vlcj.media.VideoOrientation
@@ -29,7 +31,8 @@ internal sealed interface DesktopVideoOutcome {
 /** The playback a desktop video surface drives; the libVLC engine is the production owner. */
 internal interface DesktopVideoEngine {
     val state: StateFlow<NativeVideoTransportState>
-    val outcomes: SharedFlow<DesktopVideoOutcome>
+    /** Each outcome once, including those emitted before collection starts. */
+    val outcomes: Flow<DesktopVideoOutcome>
     val frames: DesktopVideoFrameBuffer
 
     fun start()
@@ -53,8 +56,10 @@ internal class DesktopVlcVideoEngine(
     private val sourceSize = rangeSource.size
     private val mutableState = MutableStateFlow(NativeVideoTransportState())
     override val state: StateFlow<NativeVideoTransportState> = mutableState
-    private val mutableOutcomes = MutableSharedFlow<DesktopVideoOutcome>(extraBufferCapacity = 8)
-    override val outcomes: SharedFlow<DesktopVideoOutcome> = mutableOutcomes
+    // A channel keeps an outcome emitted before the surface starts collecting, such as a fast
+    // start-up failure; the single surface collector receives each outcome once.
+    private val outcomeChannel = Channel<DesktopVideoOutcome>(capacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    override val outcomes: Flow<DesktopVideoOutcome> = outcomeChannel.receiveAsFlow()
     override val frames = DesktopVideoFrameBuffer()
 
     private val rangeCache = NativeVideoRangeCache(
@@ -126,7 +131,9 @@ internal class DesktopVlcVideoEngine(
                 NativeVideoTransportStatus.Playing -> active.controls().setPause(true)
                 NativeVideoTransportStatus.Ended -> {
                     mutableState.update { it.copy(status = NativeVideoTransportStatus.Loading, positionMillis = 0L) }
-                    media?.let { active.media().play(it) }
+                    // A rejected reopen produces no later event, so it must not leave a spinner.
+                    val replayStarted = media?.let { active.media().play(it) } ?: false
+                    if (!replayStarted) fail(NativeVideoPlaybackFailure.MalformedMedia)
                 }
                 NativeVideoTransportStatus.Paused, NativeVideoTransportStatus.Loading -> active.controls().play()
             }
@@ -200,7 +207,7 @@ internal class DesktopVlcVideoEngine(
     private fun fail(failure: NativeVideoPlaybackFailure) {
         if (released) return
         mutableState.update { it.copy(status = NativeVideoTransportStatus.Paused) }
-        mutableOutcomes.tryEmit(DesktopVideoOutcome.Failed(failure))
+        outcomeChannel.trySend(DesktopVideoOutcome.Failed(failure))
     }
 
     /** libVLC event thread: only records state; never calls back into libVLC. */
@@ -211,7 +218,7 @@ internal class DesktopVlcVideoEngine(
 
         override fun finished(mediaPlayer: MediaPlayer) {
             publish { it.copy(status = NativeVideoTransportStatus.Ended, positionMillis = it.durationMillis ?: it.positionMillis) }
-            if (!released) mutableOutcomes.tryEmit(DesktopVideoOutcome.Ended)
+            if (!released) outcomeChannel.trySend(DesktopVideoOutcome.Ended)
         }
 
         override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) =
@@ -257,6 +264,7 @@ internal fun desktopVideoQuarterTurns(orientation: VideoOrientation?): Int = whe
 /** Maps the last range read failure to user-facing playback recovery; no exception text is parsed. */
 internal fun desktopVideoReadFailure(failure: Exception?): NativeVideoPlaybackFailure = when (failure) {
     null -> NativeVideoPlaybackFailure.MalformedMedia
+    is NextcloudFileRangeHttpException -> nativeVideoPlaybackFailureForHttpStatus(failure.status)
     is IOException -> NativeVideoPlaybackFailure.NetworkUnavailable
     else -> NativeVideoPlaybackFailure.Unknown
 }

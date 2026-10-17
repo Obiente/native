@@ -10,6 +10,9 @@ import org.jetbrains.skia.Surface
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -70,6 +73,25 @@ class DesktopVideoFramesTest {
         assertEquals(NativeVideoPlaybackFailure.NetworkUnavailable, desktopVideoReadFailure(IOException()))
         assertEquals(NativeVideoPlaybackFailure.Unknown, desktopVideoReadFailure(IllegalStateException()))
         assertEquals(NativeVideoPlaybackFailure.MalformedMedia, desktopVideoReadFailure(null))
+        assertEquals(NativeVideoPlaybackFailure.AccessDenied, desktopVideoReadFailure(NextcloudFileRangeHttpException(403)))
+        assertEquals(
+            NativeVideoPlaybackFailure.SourceChanged,
+            desktopVideoReadFailure(NextcloudFileRangeHttpException(412)),
+            "A changed ETag asks the user to reopen the current version.",
+        )
+        assertEquals(NativeVideoPlaybackFailure.NetworkUnavailable, desktopVideoReadFailure(NextcloudFileRangeHttpException(503)))
+    }
+
+    @Test
+    fun aStartupFailureEmittedBeforeCollectionIsStillDelivered() = runBlocking<Unit> {
+        val source = NativeVideoRangeSource(size = 4L, readBlock = { _, length -> ByteArray(length) })
+        val engine = DesktopVlcVideoEngine(source, DesktopLibVlcRuntime(enabled = false))
+        engine.start()
+        Thread.sleep(200)
+
+        val outcome = withTimeout(5_000L) { engine.outcomes.first() }
+        assertEquals(DesktopVideoOutcome.Failed(NativeVideoPlaybackFailure.Unknown), outcome)
+        engine.release()
     }
 
     @Test

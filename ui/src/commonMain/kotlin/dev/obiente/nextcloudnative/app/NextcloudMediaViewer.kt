@@ -16,7 +16,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -547,27 +546,14 @@ internal fun NextcloudMediaViewer(
                 null -> null
             }
         }
-        val playbackRangeSource = remember(
-            playbackCompatibilityRangePlan,
-            compatibilityPlaybackRequested,
-            compatibilityPlaybackAttempt,
-            session,
-            userId,
-            services,
-        ) {
-            playbackCompatibilityRangePlan
-                ?.takeIf { compatibilityPlaybackRequested || platformNativeVideoPlaybackUsesRangeSource }
-                ?.let { plan ->
-                    runCatching {
-                        plan.openRangeSource(
-                            services = services,
-                            session = session,
-                            userId = userId,
-                        )
-                    }.getOrNull()
-                }
-        }
-        DisposableEffect(playbackRangeSource) { onDispose { playbackRangeSource?.close() } }
+        val playbackRangeSource = rememberNativeVideoRangeSource(
+            plan = playbackCompatibilityRangePlan,
+            needed = compatibilityPlaybackRequested || platformNativeVideoPlaybackUsesRangeSource,
+            attempt = compatibilityPlaybackAttempt,
+            session = session,
+            userId = userId,
+            services = services,
+        )
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -581,12 +567,15 @@ internal fun NextcloudMediaViewer(
                 onNavigationCancelled = onNavigationCancelled,
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (playbackSource != null && nativeVideoFailure == null) {
+        } else if (
+            playbackSource != null && nativeVideoFailure == null &&
+            playbackRangeSource != NativeVideoRangeSourceSlot.Opening
+        ) {
             PlatformNativeVideoPlayer(
                 session = session,
                 userId = userId,
                 source = playbackSource,
-                rangeSource = playbackRangeSource,
+                rangeSource = playbackRangeSource.sourceOrNull,
                 compatibilityPlaybackRequested = compatibilityPlaybackRequested,
                 onPlaybackEnded = {
                     if (playbackSource.restoresStillAfterPlaybackEnds()) {

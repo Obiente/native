@@ -23,6 +23,19 @@ class NextcloudFileRangeSession(
     override fun close() = closeBlock()
 }
 
+/**
+ * A bounded range read got [status] instead of a partial response, such as 401 or 403 for lost
+ * access or 412 when the pinned ETag no longer matches. It stays an [IllegalStateException] so
+ * existing range readers keep their failure handling.
+ */
+class NextcloudFileRangeHttpException(
+    val status: Int,
+) : IllegalStateException("The server did not honor the bounded file range request (HTTP $status).") {
+    init {
+        require(status in 100..599 && status != 206) { "A range HTTP failure requires a non-206 status." }
+    }
+}
+
 const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
 
 fun requireSafeFileRangeEtag(value: String): String {
