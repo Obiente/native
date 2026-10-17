@@ -2,13 +2,11 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
-import java.util.zip.GZIPInputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -647,119 +645,6 @@ internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
     return requiredElement("id") to requiredElement("version")
 }
 
-private fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
-    val selected = linkedMapOf<String, ByteArray>()
-    GZIPInputStream(ByteArrayInputStream(archive)).use { input ->
-        var totalUncompressed = 0L
-        var pendingLongPath: String? = null
-        while (true) {
-            val header = input.readExactlyOrNull(TAR_BLOCK_BYTES) ?: break
-            if (header.all { byte -> byte == 0.toByte() }) break
-            val name = header.tarText(0, 100)
-            val prefix = header.tarText(345, 155)
-            val headerName = if (prefix.isBlank()) name else "$prefix/$name"
-            val size = header.tarOctal(124, 12)
-            check(size in 0..MAX_TAR_ENTRY_BYTES) { "An app package entry is too large." }
-            totalUncompressed += size
-            check(totalUncompressed <= MAX_TAR_UNCOMPRESSED_BYTES) { "The app package expands beyond the safety limit." }
-            val type = header[156].toInt().toChar()
-            if (type == 'L') {
-                check(size <= MAX_TAR_PATH_BYTES) { "An app package path exceeds the safety limit." }
-                pendingLongPath = decodeTarLongPath(input.readExactly(size.toInt()))
-                val longPathPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(longPathPadding)
-                continue
-            }
-            if (type in TAR_METADATA_TYPES) {
-                input.skipExactly(size)
-                val metadataPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(metadataPadding)
-                continue
-            }
-            val fullName = pendingLongPath ?: headerName
-            pendingLongPath = null
-            if (isCanonicalTarRootDirectory(fullName, type)) {
-                input.skipExactly(size)
-                val rootPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(rootPadding)
-                continue
-            }
-            validateArchivePath(fullName)
-            val staticMetadata = fullName.endsWith("/appinfo/routes.php") ||
-                (fullName.contains("/lib/Controller/") && fullName.endsWith("Controller.php"))
-            val keep = (type == '\u0000' || type == '0') && (
-                fullName.endsWith("/appinfo/info.xml") ||
-                    fullName.substringAfterLast('/').matches(OPEN_API_FILE_PATTERN) ||
-                    staticMetadata
-                )
-            if (keep) {
-                val selectedFileLimit = if (staticMetadata) MAX_STATIC_METADATA_FILE_BYTES else MAX_SELECTED_FILE_BYTES
-                check(size <= selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
-                check(selected.size < MAX_SELECTED_ARCHIVE_FILES) { "The app package has too many contract metadata files." }
-                selected[fullName] = input.readExactly(size.toInt())
-            } else {
-                input.skipExactly(size)
-            }
-            val padding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-            input.skipExactly(padding)
-        }
-        check(pendingLongPath == null) { "The app package ends with an incomplete path record." }
-    }
-    return selected
-}
-
-private fun validateArchivePath(path: String) {
-    require(path.isNotBlank() && !path.startsWith('/') && '\\' !in path) { "The app package contains an unsafe path." }
-    require(path.split('/').none { segment -> segment == "." || segment == ".." }) {
-        "The app package contains a traversing path."
-    }
-}
-
-private fun ByteArray.tarText(offset: Int, length: Int): String =
-    copyOfRange(offset, offset + length).takeWhile { byte -> byte != 0.toByte() }.toByteArray()
-        .decodeToString()
-        .trim()
-
-private fun ByteArray.tarOctal(offset: Int, length: Int): Long {
-    val value = tarText(offset, length).trim().trimStart('0')
-    return if (value.isEmpty()) 0L else value.toLong(8)
-}
-
-private fun InputStream.readExactlyOrNull(length: Int): ByteArray? {
-    val first = read()
-    if (first == -1) return null
-    val result = ByteArray(length)
-    result[0] = first.toByte()
-    var offset = 1
-    while (offset < length) {
-        val read = read(result, offset, length - offset)
-        check(read > 0) { "The app package is truncated." }
-        offset += read
-    }
-    return result
-}
-
-private fun InputStream.readExactly(length: Int): ByteArray {
-    val result = ByteArray(length)
-    var offset = 0
-    while (offset < length) {
-        val read = read(result, offset, length - offset)
-        check(read > 0) { "The app package is truncated." }
-        offset += read
-    }
-    return result
-}
-
-private fun InputStream.skipExactly(length: Long) {
-    var remaining = length
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    while (remaining > 0) {
-        val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-        check(read > 0) { "The app package is truncated." }
-        remaining -= read
-    }
-}
-
 private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
     val responseBody = body
     val declaredLength = responseBody.contentLength()
@@ -786,16 +671,9 @@ private fun URI.effectivePort(): Int = when {
     else -> -1
 }
 
-private const val TAR_BLOCK_BYTES = 512
-private const val MAX_TAR_ENTRY_BYTES = 128L * 1024L * 1024L
-private const val MAX_TAR_UNCOMPRESSED_BYTES = 256L * 1024L * 1024L
 internal const val MAX_SELECTED_FILE_BYTES = 16L * 1024L * 1024L
-private const val MAX_STATIC_METADATA_FILE_BYTES = 1L * 1024L * 1024L
-private const val MAX_SELECTED_ARCHIVE_FILES = 320
 private const val MAX_OPEN_API_CANDIDATES = 64
 private const val MAX_EXTERNAL_SCHEMA_DOCUMENTS = 16
 private const val MAX_EXTERNAL_REFERENCE_DEPTH = 24
-private val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
+internal val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
 private val SAFE_REPOSITORY_PATH_SEGMENT = Regex("[A-Za-z0-9_.-]+")
-private val TAR_METADATA_TYPES = setOf('g', 'x', 'K')
-private const val MAX_TAR_PATH_BYTES = 4_096L

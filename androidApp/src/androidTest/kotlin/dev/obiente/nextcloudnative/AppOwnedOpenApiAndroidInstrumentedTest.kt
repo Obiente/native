@@ -58,6 +58,7 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
             "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "AppStoreCatalogReleasesKt",
             "ContractAcquisitionFailureKt", "LinkedSourceArchiveKt",
             "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "SignedAppStoreContractAcquirerKt",
+            "SignedPackageTarReaderKt",
             "StaticPhpParametersKt", "StaticRouteContractKt", "TarArchivePathKt", "VerifiedChoresContractKt",
             "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt", "SignedAppStoreContractAcquirer",
             "FileAppStoreCatalogCache", "DynamicApiResponseCache", "FileVerifiedContractCache",
