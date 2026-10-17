@@ -75,7 +75,11 @@ class SignedAppStoreContractAcquirer(
         }
         return try {
             val generation = publicationFence.start(request)
-            acquireUncoalesced(request, cachePolicy, generation).also { acquired -> owner.complete(acquired) }
+            // Contracts are published through the fence; a no-contract ending is recorded here.
+            when (val outcome = acquireUncoalesced(request, cachePolicy, generation)) {
+                is ContractAcquisitionOutcome.Unavailable -> publicationFence.complete(request, generation, outcome)
+                is ContractAcquisitionOutcome.Acquired -> outcome
+            }.also { acquired -> owner.complete(acquired) }
         } catch (failure: Throwable) {
             owner.completeExceptionally(failure)
             throw failure
@@ -219,19 +223,16 @@ class SignedAppStoreContractAcquirer(
     )
 
     /**
-     * Publishes [contract] unless an acquisition that started later, or an invalidation, already
-     * superseded [generation]. A superseded caller receives the newer contract when one is published.
+     * Publishes [contract] unless [generation] is superseded. A superseded acquisition never reports
+     * its own rejected contract; it reports the newer accepted result. See [ContractPublicationFence].
      */
     private fun cacheContract(
         request: ContractAcquisitionRequest,
         generation: Long,
         contract: VerifiedOpenApiContract,
-    ): ContractAcquisitionOutcome {
-        val published = publicationFence.publishIfCurrent(request, generation) {
-            verifiedContracts[request] = contract
-            runCatching { verifiedContractCache.store(request, contract) }
-        }
-        return ContractAcquisitionOutcome.Acquired(if (published) contract else verifiedContracts[request] ?: contract)
+    ): ContractAcquisitionOutcome = publicationFence.publish(request, generation, contract) { accepted ->
+        verifiedContracts[request] = accepted
+        runCatching { verifiedContractCache.store(request, accepted) }
     }
 
     private fun acquireGitHubTagContract(

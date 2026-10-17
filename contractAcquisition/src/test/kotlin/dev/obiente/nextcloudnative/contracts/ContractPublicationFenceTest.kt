@@ -11,7 +11,6 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -20,6 +19,15 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 
 class ContractPublicationFenceTest {
+    private companion object {
+        val DEFINITIVE = listOf(
+            ContractUnavailableReason.NoMatchingRelease,
+            ContractUnavailableReason.NoUsableContract,
+            ContractUnavailableReason.MalformedSource,
+        )
+        val TRANSIENT = ContractUnavailableReason.entries - DEFINITIVE.toSet()
+    }
+
     private val request = ContractAcquisitionRequest("cospend", "34.0.3", "4.0.2")
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val cache = MemoryVerifiedContractCache()
@@ -27,6 +35,7 @@ class ContractPublicationFenceTest {
     private val firstEntered = CountDownLatch(1)
     private val releaseFirst = CountDownLatch(1)
     private var firstFails = false
+    private var cancelVerification: Int? = null
     private var now = 50_000_000L
 
     @AfterTest
@@ -36,19 +45,46 @@ class ContractPublicationFenceTest {
     }
 
     @Test
-    fun `generations publish in start order and invalidation fences running acquisitions`() {
+    fun `the fence follows its state table for every kind of ending`() {
         val fence = ContractPublicationFence()
+        val published = mutableListOf<String>()
+        fun publish(generation: Long, version: Int) =
+            fence.publish(request, generation, contract(version)) { published += it.document }
+
+        // A newer contract supersedes an older one, which reports the newer contract.
         val older = fence.start(request)
         val newer = fence.start(request)
-        assertTrue(fence.publishIfCurrent(request, newer) {})
-        assertFalse(fence.publishIfCurrent(request, older) { error("A superseded result must not publish.") })
+        assertEquals(contract(2), acquired(publish(newer, 2)))
+        assertEquals(contract(2), acquired(publish(older, 1)))
+        assertEquals(listOf(document(2)), published)
 
+        // Transient endings and cancellation of a newer generation fence nothing.
+        val waiting = fence.start(request)
+        for (reason in TRANSIENT) {
+            val transient = ContractAcquisitionOutcome.Unavailable(reason)
+            assertEquals(transient, fence.complete(request, fence.start(request), transient))
+        }
+        fence.start(request) // A cancelled generation never reports back.
+        assertEquals(contract(3), acquired(publish(waiting, 3)))
+
+        // A definitive no-contract ending supersedes older generations, which report it.
+        for (reason in DEFINITIVE) {
+            val stale = fence.start(request)
+            val definitive = ContractAcquisitionOutcome.Unavailable(reason)
+            assertEquals(definitive, fence.complete(request, fence.start(request), definitive))
+            assertEquals(definitive, publish(stale, 9))
+            assertEquals(definitive, fence.complete(request, stale, unavailable(ContractUnavailableReason.NoUsableContract)))
+        }
+        assertEquals(listOf(document(2), document(3)), published)
+
+        // Invalidation supersedes every started generation; later ones publish normally.
         val running = fence.start(request)
         fence.invalidate(request) {}
-        assertFalse(fence.publishIfCurrent(request, running) { error("An invalidated result must not publish.") })
-        assertTrue(fence.publishIfCurrent(request, fence.start(request)) {})
+        assertEquals(unavailable(ContractUnavailableReason.NoUsableContract), publish(running, 4))
+        assertEquals(contract(5), acquired(publish(fence.start(request), 5)))
         // Requests are fenced independently.
-        assertTrue(fence.publishIfCurrent(request.copy(installedAppVersion = "4.0.3"), 1) {})
+        assertEquals(contract(6), acquired(fence.publish(request.copy(installedAppVersion = "4.0.3"), 1, contract(6)) {}))
+        assertEquals(listOf(document(2), document(3), document(5)), published)
     }
 
     @Test
@@ -120,13 +156,72 @@ class ContractPublicationFenceTest {
 
             assertEquals(VerifiedContractRemoval.Removed, acquirer.invalidateVerifiedContract(request))
             releaseFirst.countDown()
-            running.get(10, TimeUnit.SECONDS)
+            // The rejected contract is never reported as acquired.
+            assertEquals(unavailable(ContractUnavailableReason.NoUsableContract), running.get(10, TimeUnit.SECONDS))
             assertNull(cache.load(request))
 
             // The next automatic discovery acquires again; the catalog is still cached.
             server.enqueue(MockResponse(body = "package"))
             assertEquals(document(2), document(acquirer.acquireOutcome(request)))
             assertEquals(document(2), cache.load(request)?.document)
+        }
+    }
+
+    @Test
+    fun `a definitive no-contract refresh supersedes an older acquisition`() {
+        MockWebServer().use { server ->
+            server.start()
+            val acquirer = acquirer(server)
+            val stale = startBlockedAcquisition(server, acquirer)
+
+            // Neither refreshed catalog lists the app any more.
+            repeat(2) { server.enqueue(MockResponse(body = "[]")) }
+            val noRelease = unavailable(ContractUnavailableReason.NoMatchingRelease)
+            assertEquals(noRelease, acquirer.acquireOutcome(request, AcquisitionCachePolicy.Refresh))
+            releaseFirst.countDown()
+
+            assertEquals(noRelease, stale.get(10, TimeUnit.SECONDS))
+            assertNull(cache.load(request))
+        }
+    }
+
+    @Test
+    fun `a transient refresh failure leaves an older acquisition free to publish`() {
+        MockWebServer().use { server ->
+            server.start()
+            val acquirer = acquirer(server)
+            val older = startBlockedAcquisition(server, acquirer)
+
+            server.enqueue(MockResponse(code = 503, body = "unavailable"))
+            assertFailsWith<ContractSourceHttpException> { acquirer.acquireOutcome(request, AcquisitionCachePolicy.Refresh) }
+            now += 61_000L
+            // Both catalogs are unreadable, which proves nothing about the contract.
+            repeat(2) { server.enqueue(MockResponse(body = "[truncated")) }
+            assertEquals(
+                unavailable(ContractUnavailableReason.UnreadableCatalog),
+                acquirer.acquireOutcome(request, AcquisitionCachePolicy.Refresh),
+            )
+            releaseFirst.countDown()
+
+            assertEquals(document(1), document(older.get(10, TimeUnit.SECONDS)))
+            assertEquals(document(1), cache.load(request)?.document)
+        }
+    }
+
+    @Test
+    fun `a cancelled newer acquisition leaves an older acquisition free to publish`() {
+        MockWebServer().use { server ->
+            server.start()
+            cancelVerification = 2
+            val acquirer = acquirer(server)
+            val older = startBlockedAcquisition(server, acquirer)
+
+            enqueueCatalogAndPackage(server)
+            assertFailsWith<CancellationException> { acquirer.acquireOutcome(request, AcquisitionCachePolicy.Refresh) }
+            releaseFirst.countDown()
+
+            assertEquals(document(1), document(older.get(10, TimeUnit.SECONDS)))
+            assertEquals(document(1), cache.load(request)?.document)
         }
     }
 
@@ -142,6 +237,23 @@ class ContractPublicationFenceTest {
     }
 
     private fun document(version: Int) = "{\"version\":$version}"
+
+    private fun unavailable(reason: ContractUnavailableReason) = ContractAcquisitionOutcome.Unavailable(reason)
+
+    private fun acquired(outcome: ContractAcquisitionOutcome) = assertIs<ContractAcquisitionOutcome.Acquired>(outcome).contract
+
+    private fun contract(version: Int) = VerifiedOpenApiContract(
+        appId = "cospend",
+        appVersion = "4.0.2",
+        contractVersion = "4.0.2",
+        specFile = "openapi.json",
+        document = document(version),
+        catalogUrl = "https://fixture.invalid/apps.json",
+        packageUrl = "https://fixture.invalid/cospend.tar.gz",
+        sourceUrl = "https://fixture.invalid/cospend.tar.gz#openapi.json",
+        sourceKind = OpenApiContractSourceKind.SignedAppPackage,
+        contractKind = VerifiedContractKind.OpenApi,
+    )
 
     private fun document(outcome: ContractAcquisitionOutcome): String =
         assertIs<ContractAcquisitionOutcome.Acquired>(outcome).contract.document
@@ -166,6 +278,7 @@ class ContractPublicationFenceTest {
                     check(releaseFirst.await(10, TimeUnit.SECONDS)) { "The blocked verification was never released." }
                     if (firstFails) throw CancellationException("synthetic cancellation")
                 }
+                if (call == cancelVerification) throw CancellationException("synthetic cancellation")
                 return VerifiedPackageContract(release.appId, release.version, "openapi.json", document(call))
             }
         },

@@ -285,14 +285,30 @@ life of the process, makes every later read a miss, and each later read or
 store retries the deletion. A `VERIFIED_CONTRACT_DELETION_FAILED` warning
 diagnostic records which of the two applied, with no path or exception text.
 
-Publication of verified contracts is ordered per app, server version, and
-installed version. Each acquisition takes a generation when it starts, and its
-result is published only when no acquisition that started later has already
-published and no invalidation has happened since it started. A slower
-automatic acquisition that began before an explicit retry therefore cannot
-overwrite the retry's result; its caller receives the newer contract instead.
-The ordering is kept in memory for each acquirer and never waits for another
-acquisition, so a cancelled or failed acquisition cannot hold back later ones.
+Results are ordered per app, server version, and installed version by
+[`ContractPublicationFence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractPublicationFence.kt).
+Each acquisition takes a generation when it starts. A generation that has not
+been superseded ends as follows:
+
+| Ending | Effect on older generations |
+| --- | --- |
+| Verified contract | Published; every older generation is superseded |
+| No matching release, no usable contract, or malformed entry | Recorded; every older generation is superseded |
+| Refused linked source, unreadable catalog, throttled retry, source or network fault | None |
+| Cancellation | None |
+| Cached contract served without inspecting releases | None |
+
+An invalidation supersedes every generation already started. A transient
+ending fences nothing because it proves nothing about the contract, so an
+older acquisition that verifies a contract afterwards may still publish it. A
+superseded acquisition never publishes or reports its own result; it reports
+the newest accepted one: the newer contract, the newer no-contract reason, or,
+after an invalidation, no usable contract. A slower automatic acquisition that
+began before an explicit retry therefore cannot overwrite or contradict the
+retry's result. A no-contract result does not remove a previously cached
+contract. The ordering is kept in memory for each acquirer and never waits for
+another acquisition, so a cancelled or failed acquisition cannot hold back
+later ones.
 
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
@@ -346,7 +362,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog document | Truncated, empty, not JSON, or not an array | Unreadable catalog, never cached |
 | Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
 | Exact release after compatible candidates | Exact catalog unreadable or exact entry malformed, and no compatible candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
-| Verified contract publication | The acquisition was superseded by a later one or by an invalidation | Not published; the newer state stays |
+| Verified contract publication | A newer generation published a contract or ended without one definitively, or an invalidation happened | Not published; the newest accepted result is reported |
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
 | Package verification | The package's signature, certificate, chain, revocation, identity, archive structure, or app metadata rejected | Verification failed |

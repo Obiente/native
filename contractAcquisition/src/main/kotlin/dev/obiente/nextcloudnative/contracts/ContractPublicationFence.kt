@@ -1,49 +1,110 @@
 package dev.obiente.nextcloudnative.contracts
 
 /**
- * Orders publication of verified contracts per request, that is per app, server version, and
- * installed version.
+ * Orders the results of acquisitions per request, that is per app, server version, and installed
+ * version, so an older acquisition can never undo what a newer one established.
  *
- * Each acquisition takes a generation when it starts. Its result is published only when its
- * generation is newer than the last publication or invalidation for the same request, so a slower
- * acquisition that started before a refresh cannot overwrite the refresh's result, and one that
- * started before an invalidation cannot bring the invalidated contract back. Bookkeeping is in
- * memory, per acquirer, and never waits for an acquisition, so a cancelled or failed acquisition
- * cannot hold back later ones.
+ * Each key keeps `started` (the newest generation handed out), `fenced` (results from this
+ * generation or older are superseded), and `latest` (the newest accepted result). Both counters
+ * only grow. An acquisition takes generation `g = ++started` when it starts and ends in one row:
+ *
+ * | Event for generation g                         | g > fenced                                  | g <= fenced (superseded)     |
+ * |------------------------------------------------|---------------------------------------------|------------------------------|
+ * | Verified a contract                            | publish; fenced = g; latest = the contract  | not published; return latest |
+ * | Definitive Unavailable                         | fenced = g; latest = that outcome           | return latest                |
+ * | Transient Unavailable, source or network fault | no change; return or throw its own result   | same                         |
+ * | Cancelled                                      | no change; the cancellation propagates      | same                         |
+ * | Served a cached contract without inspecting    | no change                                   | same                         |
+ * | Invalidation (not a generation)                | fenced = started; latest = invalidated      |                              |
+ *
+ * Definitive reasons are evidence about the release: [ContractUnavailableReason.NoMatchingRelease],
+ * [ContractUnavailableReason.NoUsableContract], and [ContractUnavailableReason.MalformedSource].
+ * A transient result, such as a refused linked source, an unreadable catalog, a throttled retry, a
+ * network fault, or a cancellation, proves nothing about the contract, so it fences nothing: an
+ * older acquisition that verifies a contract afterwards may still publish it.
+ *
+ * A superseded acquisition never returns its own result. It returns `latest`: the newer contract,
+ * the newer definitive outcome, or, after an invalidation, Unavailable with
+ * [ContractUnavailableReason.NoUsableContract], because the contract proved unusable.
+ *
+ * Bookkeeping is in memory, per acquirer, under one lock, and never waits for an acquisition, so a
+ * cancelled or failed acquisition cannot hold back later ones. A definitive no-contract result does
+ * not remove a previously cached contract: a refresh that finds nothing keeps the cached one.
  */
 internal class ContractPublicationFence {
-    private class Generations {
-        /** The newest generation handed to an acquisition. */
+    private class State {
         var started = 0L
-
-        /** Results from this generation or older are no longer published. */
         var fenced = 0L
+        var latest: ContractAcquisitionOutcome? = null
     }
 
-    private val generations = HashMap<ContractAcquisitionRequest, Generations>()
+    private val states = HashMap<ContractAcquisitionRequest, State>()
 
     /** Starts an acquisition for [request] and returns its generation. */
-    fun start(request: ContractAcquisitionRequest): Long = synchronized(generations) {
-        generations.getOrPut(request, ::Generations).let { entry -> ++entry.started }
+    fun start(request: ContractAcquisitionRequest): Long = synchronized(states) {
+        states.getOrPut(request, ::State).let { state -> ++state.started }
     }
 
     /**
-     * Runs [publish] and returns true when [generation] is newer than the last publication or
-     * invalidation for [request]. Returns false, without publishing, for a superseded result.
+     * Publishes [contract] with [store] unless [generation] is superseded. Returns the outcome the
+     * acquisition reports: its own contract, or the newer accepted result.
      */
-    fun publishIfCurrent(request: ContractAcquisitionRequest, generation: Long, publish: () -> Unit): Boolean =
-        synchronized(generations) {
-            val entry = generations.getOrPut(request, ::Generations)
-            if (generation <= entry.fenced) return false
-            entry.fenced = generation
-            publish()
-            true
-        }
+    fun publish(
+        request: ContractAcquisitionRequest,
+        generation: Long,
+        contract: VerifiedOpenApiContract,
+        store: (VerifiedOpenApiContract) -> Unit,
+    ): ContractAcquisitionOutcome = synchronized(states) {
+        val state = states.getOrPut(request, ::State)
+        if (generation <= state.fenced) return state.supersededOutcome()
+        store(contract)
+        ContractAcquisitionOutcome.Acquired(contract).also { accepted -> state.accept(generation, accepted) }
+    }
 
-    /** Runs [discard] and fences out every acquisition for [request] that has already started. */
-    fun <T> invalidate(request: ContractAcquisitionRequest, discard: () -> T): T = synchronized(generations) {
-        val entry = generations.getOrPut(request, ::Generations)
-        entry.fenced = maxOf(entry.fenced, entry.started)
+    /**
+     * Records an acquisition that ended without a contract. A definitive outcome fences every older
+     * generation; a transient one changes nothing. Returns the outcome the acquisition reports.
+     */
+    fun complete(
+        request: ContractAcquisitionRequest,
+        generation: Long,
+        outcome: ContractAcquisitionOutcome.Unavailable,
+    ): ContractAcquisitionOutcome = synchronized(states) {
+        if (!outcome.reason.isDefinitive()) return outcome
+        val state = states.getOrPut(request, ::State)
+        if (generation <= state.fenced) return state.supersededOutcome()
+        outcome.also { accepted -> state.accept(generation, accepted) }
+    }
+
+    /** Runs [discard] and supersedes every acquisition for [request] that has already started. */
+    fun <T> invalidate(request: ContractAcquisitionRequest, discard: () -> T): T = synchronized(states) {
+        val state = states.getOrPut(request, ::State)
+        state.fenced = maxOf(state.fenced, state.started)
+        state.latest = INVALIDATED
         discard()
+    }
+
+    private fun State.accept(generation: Long, outcome: ContractAcquisitionOutcome) {
+        fenced = generation
+        latest = outcome
+    }
+
+    /** Only reached after an accepted result or an invalidation, so `latest` is always set. */
+    private fun State.supersededOutcome(): ContractAcquisitionOutcome = checkNotNull(latest)
+
+    /** Whether a no-contract reason is evidence about the release, rather than a failure to look. */
+    private fun ContractUnavailableReason.isDefinitive(): Boolean = when (this) {
+        ContractUnavailableReason.NoMatchingRelease,
+        ContractUnavailableReason.NoUsableContract,
+        ContractUnavailableReason.MalformedSource,
+        -> true
+        ContractUnavailableReason.SourceTemporarilyUnavailable,
+        ContractUnavailableReason.UnreadableCatalog,
+        ContractUnavailableReason.RecentlyChecked,
+        -> false
+    }
+
+    private companion object {
+        val INVALIDATED = ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.NoUsableContract)
     }
 }
