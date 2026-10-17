@@ -43,6 +43,12 @@ class ContractSourceHttpException(val status: Int, message: String) : IllegalSta
  */
 class ContractSourceTooLargeException(val limit: Long, message: String) : IllegalStateException(message)
 
+/**
+ * A trust resource bundled with the app is missing. This is a local packaging fault: retrying the
+ * package check cannot repair it, so it is never reported as a source verification failure.
+ */
+class ContractTrustResourceMissingException(message: String) : RuntimeException(message)
+
 /** A package or source failed verification. The original failure stays available as the cause. */
 class ContractSourceVerificationException(message: String, cause: Throwable? = null) :
     SecurityException(message, cause)
@@ -65,6 +71,7 @@ fun classifyContractAcquisitionFailure(failure: Throwable): ContractAcquisitionF
     is IOException -> ContractAcquisitionFailureKind.Network
     is GeneralSecurityException -> ContractAcquisitionFailureKind.VerificationFailed
     is LinkageError -> ContractAcquisitionFailureKind.RuntimeIncompatible
+    is ContractTrustResourceMissingException -> ContractAcquisitionFailureKind.RuntimeIncompatible
     else -> ContractAcquisitionFailureKind.Unexpected
 }
 

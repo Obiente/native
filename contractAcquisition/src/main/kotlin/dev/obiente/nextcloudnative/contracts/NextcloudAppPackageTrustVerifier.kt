@@ -76,9 +76,9 @@ private fun X509Certificate.subjectCommonName(): String? {
     return Regex("(?:^|,)CN=([^,]+)").find(principal)?.groupValues?.get(1)
 }
 
-private fun loadBundledTrustResource(name: String): ByteArray =
+internal fun loadBundledTrustResource(name: String): ByteArray =
     NextcloudAppPackageTrustVerifier::class.java.classLoader.getResourceAsStream(name)?.use(InputStream::readBytes)
-        ?: error("The bundled Nextcloud trust resource is missing: $name")
+        ?: throw ContractTrustResourceMissingException("The bundled Nextcloud trust resource is missing: $name")
 
 private const val ROOT_CERTIFICATES_RESOURCE = "nextcloud-codesigning/root.crt"
 private const val ROOT_REVOCATION_LIST_RESOURCE = "nextcloud-codesigning/root.crl"

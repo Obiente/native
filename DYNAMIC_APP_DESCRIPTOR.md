@@ -292,6 +292,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
 | Package verification | Signature, certificate, revocation, identity, archive structure, or app metadata rejected | Verification failed |
+| Package verification | Bundled trust resource missing | Client fault (runtime incompatible); retrying cannot repair it |
 | Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |
 | Package OpenAPI JSON or YAML | Unreadable or not OpenAPI 3 | Candidate skipped |
 | Linked metadata, tree, spec, and schema requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; network |

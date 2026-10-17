@@ -2,7 +2,9 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.URI
+import java.security.GeneralSecurityException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
@@ -11,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import org.w3c.dom.Element
 import org.xml.sax.EntityResolver
@@ -133,9 +136,25 @@ class SignedAppStoreContractAcquirer(
             } catch (_: OpenApiContractMissingException) {
                 missingPackageContracts += release
                 continue
-            } catch (failure: Exception) {
+            } catch (failure: GeneralSecurityException) {
+                // Signature, certificate, chain, and revocation failures.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: SecurityException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IllegalStateException) {
+                // Identity, digest, and archive structure checks. Size limits and cancellation pass through.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IllegalArgumentException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IOException) {
+                // A truncated or corrupt archive, or an unsupported metadata encoding.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: SAXException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: JSONException) {
                 throw failure.asSourceVerificationFailure(request.appId)
             }
+            // A missing bundled trust resource or parser configuration fault is local and propagates.
             if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
                 acquireGitHubTagContract(
                     release = release,
