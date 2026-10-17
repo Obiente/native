@@ -22,7 +22,7 @@ private const val ERROR_PATH_NOT_FOUND = 3
 internal const val WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT = 363
 private const val CF_PLACEHOLDER_STATE_PLACEHOLDER = 0x1
 private const val CF_PLACEHOLDER_STATE_IN_SYNC = 0x8
-private const val CF_PLACEHOLDER_STATE_INVALID = -1
+internal const val CF_PLACEHOLDER_STATE_INVALID = -1
 private const val CF_OPEN_FILE_FLAG_EXCLUSIVE = 0x1
 private const val CF_OPEN_FILE_FLAG_WRITE_ACCESS = 0x2
 
@@ -395,26 +395,16 @@ internal class JnaWindowsCloudFilesApi(
         }
         return try {
             findData.read()
-            Native.setLastError(0)
-            val placeholderStateBits = cldApi.CfGetPlaceholderStateFromFindData(findData.pointer)
-            val placeholderStateError = if (placeholderStateBits == CF_PLACEHOLDER_STATE_INVALID) {
-                Native.getLastError()
-            } else {
-                null
-            }
-            windowsCloudPlaceholderInspection(
-                findSucceeded = true,
-                win32Error = placeholderStateError,
-                fileAttributes = findData.dwFileAttributes,
-                reparseTag = findData.dwReserved0,
-                placeholderStateBits = placeholderStateBits,
-            )
+            findData.windowsCloudInspection(cldApi::CfGetPlaceholderStateFromFindData)
         } finally {
             Kernel32.INSTANCE.FindClose(handle)
         }
     }
 
-    override fun localChildren(directory: Path): List<Path> = windowsCloudLocalChildren(directory)
+    override fun localEntries(directory: Path): List<WindowsCloudLocalEntry> =
+        windowsCloudLocalEntries(directory, cldApi::CfGetPlaceholderStateFromFindData)
+
+    override fun localChildren(directory: Path): List<Path> = localEntries(directory).map { it.path }
 
     override fun allocatedBytes(path: Path): Long {
         if (!Files.isRegularFile(path)) return 0L

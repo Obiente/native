@@ -48,6 +48,64 @@ class WindowsCloudFilesStartupTest {
     }
 
     @Test
+    fun `startup recovery uses enumerated metadata instead of inspecting each entry again`() {
+        val root = createTempDirectory("cloud-startup-enumerated-")
+        repeat(3) { index -> Files.createDirectories(root.resolve("Shoot $index").resolve("Day")) }
+        val api = object : WindowsCloudFilesApi by LocalApi() {
+            val inspected = CopyOnWriteArrayList<Path>()
+            override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
+                inspected.add(path)
+                return WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync)
+            }
+            override fun localEntries(directory: Path): List<WindowsCloudLocalEntry> =
+                Files.list(directory).use { it.toList() }.map { child ->
+                    WindowsCloudLocalEntry(child, true, false, false, WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.InSync))
+                }
+        }
+        try {
+            WindowsCloudFilesProvider(root, RootBackend(), api).use { provider ->
+                provider.start()
+                provider.recoverAfterStartup(timeoutSeconds = 5)
+            }
+            // Scanned descendants reuse their enumeration data instead of a per-entry inspection.
+            val scanned = Files.walk(root).use { paths -> paths.filter { it != root && "Remote" !in it.toString() }.toList() }
+            assertEquals(6, scanned.size)
+            assertEquals(emptyList(), api.inspected.filter { it in scanned })
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `traversal rechecks a directory without following links before descending`() {
+        val root = createTempDirectory("cloud-local-tree-stale-")
+        val folder = Files.createDirectory(root.resolve("Shoot"))
+        Files.writeString(folder.resolve("frame.raw"), "synthetic frame")
+        // Simulates a folder replaced after its parent was listed: the cached entry still says
+        // directory, but the path no longer is one when the traversal reaches it.
+        val replaced = Files.writeString(root.resolve("Replaced"), "synthetic file")
+        val api = object : WindowsCloudFilesApi by LocalApi() {
+            val enumerated = CopyOnWriteArrayList<Path>()
+            override fun localEntries(directory: Path): List<WindowsCloudLocalEntry> {
+                enumerated.add(directory)
+                return Files.list(directory).use { it.toList() }.map { child ->
+                    val stale = child == replaced
+                    WindowsCloudLocalEntry(child, stale || Files.isDirectory(child), !stale && Files.isRegularFile(child), false) {
+                        WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Local)
+                    }
+                }
+            }
+        }
+        try {
+            val visited = api.localTree(root).toSet()
+            assertEquals(setOf(root, folder, folder.resolve("frame.raw")), visited)
+            assertEquals(setOf(root, folder), api.enumerated.toSet())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `resident traversal includes nested entries and rejects paths outside the directory`() {
         val root = createTempDirectory("cloud-local-tree-")
         val directory = Files.createDirectory(root.resolve("Notes"))
@@ -69,14 +127,25 @@ class WindowsCloudFilesStartupTest {
 
     @Test
     fun `Windows native local enumeration returns resident children and distinguishes missing directories`() {
-        assumeTrue(System.getProperty("os.name").startsWith("Windows"))
+        assumeTrue(isWindowsDesktop())
         val root = createTempDirectory("cloud-native-list-")
+        val api = JnaWindowsCloudFilesApi(shellRegistrar = PackagedWindowsCloudShellRegistrar(launcherPath = null))
         try {
-            assertEquals(emptyList(), windowsCloudLocalChildren(root))
+            assertEquals(emptyList(), api.localChildren(root))
             val folder = Files.createDirectory(root.resolve("Notes"))
             val file = Files.writeString(root.resolve("draft.txt"), "synthetic draft")
-            assertEquals(setOf(folder, file), windowsCloudLocalChildren(root).toSet())
-            assertFailsWith<WindowsCloudLocalScanException> { windowsCloudLocalChildren(root.resolve("missing")) }
+            assertEquals(setOf(folder, file), api.localChildren(root).toSet())
+            val entries = api.localEntries(root).associateBy { it.path }
+            listOf(folder, file).forEach { path ->
+                val native = entries.getValue(path)
+                val fallback = api.localEntry(path)
+                assertEquals(
+                    listOf(fallback.directory, fallback.regularFile, fallback.symbolicLink, fallback.inspection.state),
+                    listOf(native.directory, native.regularFile, native.symbolicLink, native.inspection.state),
+                )
+            }
+            assertTrue(entries.getValue(folder).directory && entries.getValue(file).regularFile)
+            assertFailsWith<WindowsCloudLocalScanException> { api.localChildren(root.resolve("missing")) }
         } finally {
             root.toFile().deleteRecursively()
         }
@@ -92,9 +161,10 @@ class WindowsCloudFilesStartupTest {
             val raw = Files.write(deep.resolve("synthetic-frame-0001.raw"), ByteArray(4_096) { 1 })
             assertTrue(raw.toAbsolutePath().toString().length > 260)
 
-            assertEquals(listOf(raw), windowsCloudLocalChildren(deep))
             val api = JnaWindowsCloudFilesApi(shellRegistrar = PackagedWindowsCloudShellRegistrar(launcherPath = null))
+            assertEquals(listOf(raw), api.localChildren(deep))
             assertTrue(raw in api.localTree(root).toSet())
+            assertEquals(WindowsCloudPlaceholderEntryState.Local, api.localEntries(deep).single().inspection.state)
             assertEquals(WindowsCloudPlaceholderEntryState.Local, api.inspectPlaceholder(raw).state)
             assertEquals(WindowsCloudPlaceholderEntryState.Local, api.inspectPlaceholder(deep).state)
             assertEquals(4_096L, api.allocatedBytes(raw))
