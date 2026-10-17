@@ -205,6 +205,18 @@ A file edited during the upload stays dirty and is uploaded again against the
 new revision, at most three times in one writeback before it reports a failed
 writeback. If the exclusive handle is unavailable, for example because another
 application has the file open, the commit is retried without uploading again.
+If recording the new revision fails after the server accepted the upload, only
+that update is retried, so the retry never uploads against the superseded
+revision. Both retries are held in memory; after a restart, a placeholder whose
+revision was not recorded is uploaded against its old revision and rejected by
+the server.
+
+Until a blocked commit completes, the placeholder identity holds the uploaded
+size, while the close-completion callback reports the size from the last
+in-sync point. The close callback therefore does not require the two sizes to
+match; hydration still does. On a local Windows 11 sync root, the close
+notification that a blocking application sends when it releases the file
+completes the pending commit.
 An application that restores an earlier last-write time while keeping the same
 size can defeat the stamp; this is an accepted limit of the guard.
 
@@ -224,12 +236,43 @@ root. They cover:
 
 - an edit made while disconnected, written back at the next start;
 - a size-changing edit made while connected;
-- an edit made during an upload.
+- an edit made during an upload;
+- a commit blocked by another process's open handle, which completes when that
+  handle closes, followed by a later edit.
 
 Each case must end with the placeholder in sync at the server's revision.
 `WindowsCloudFilesProviderTest` covers the remaining recovery and writeback
 behavior. These tests do not replace the Explorer and published-MSI acceptance
 checks above.
+
+### Dehydration and storage accounting
+
+**Free up space**, automatic cleanup, and the Virtual files storage summary read
+allocated bytes and dehydrate placeholders through
+[`WindowsCloudDehydration`](../ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudDehydration.kt).
+A connected file placeholder is a cloud reparse point, which Java NIO does not
+report as a regular file, so both operations classify the path from native
+find data with the same rule as the startup enumeration. Allocated bytes come
+from `GetCompressedFileSizeW`: a dehydrated placeholder keeps its logical size
+and allocates no bytes.
+
+Only an unpinned, in-sync file placeholder that allocates bytes is dehydrated,
+so an online-only placeholder costs no native call. As
+[`CfDehydratePlaceholder`](https://learn.microsoft.com/en-us/previous-versions/mt827480(v=vs.85))
+requires, dehydration holds an exclusive `CfOpenFileWithOplock` handle. When
+the oplock cannot be taken (`0x80070020`) or breaks first, or when Windows
+refuses a file that became dirty (`0x80070179`), pinned (`0x80070188`), or open
+in another application (`0x80070187`), the content stays local and counts as
+not freed. Automatic cleanup also keeps a planned file whose known revision,
+pin, sync state, or allocated size changed after planning. Freed totals count
+the bytes each dehydration actually released.
+
+**Last reviewed: 2026-10-17.** On a local Windows 11 sync root,
+`WindowsCloudFilesDehydrationTest` hydrates a synthetic file, observes nonzero
+allocated bytes, frees them through Free up space and through automatic cleanup,
+and reopens the content. It also keeps a dirty edit, a pinned file, and a file
+held open by another process local. This evidence does not cover Explorer's own
+Free up space command or a published MSI.
 
 ## WinGet delivery
 

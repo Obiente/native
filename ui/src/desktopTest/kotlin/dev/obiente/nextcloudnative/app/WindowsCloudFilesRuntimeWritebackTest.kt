@@ -2,25 +2,49 @@ package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Base64
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeBytes
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 
 /**
- * Native writeback of placeholder edits made by another process while the provider is connected.
- * These run only on Windows, against a disposable sync root and a synthetic server.
+ * Writeback of placeholder edits made while the provider is connected. Native cases run only on
+ * Windows, against a disposable sync root and a synthetic server, with edits from another process.
  */
 class WindowsCloudFilesRuntimeWritebackTest {
     @Test
-    fun `native Windows writes back an edit that changes the file size`() = withNativeRoot { root, backend, api ->
+    fun `a close callback reporting the last in-sync size still writes back the edit`() {
+        val root = createTempDirectory("windows-cloud-runtime-size-")
+        try {
+            val backend = WindowsCloudFilesPlaceholderRecoveryTest.RevisionedBackend("edit.txt" to ORIGINAL_BYTES)
+            val local = root.resolve("edit.txt").apply { writeBytes(NEWER_EDIT) }
+            // After a blocked commit the identity carries the uploaded size, not the last in-sync size.
+            val recorded = backend.identity("edit.txt").copy(size = LONGER_EDIT.size.toLong())
+            val api = WindowsCloudFilesProviderTest.FakeApi(expectedConversions = 1).apply {
+                seed(local, WindowsCloudPlaceholderState.Dirty, recorded)
+            }
+            WindowsCloudFilesProvider(root, backend, api).use { provider ->
+                provider.closed(closeInfo(local, recorded, fileSize = ORIGINAL_BYTES.size.toLong()), deleted = false)
+
+                assertTrue(api.awaitConversions())
+                assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
+                assertContentEquals(NEWER_EDIT, backend.content("edit.txt"))
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `native Windows writes back an edit that changes the file size`() = withNativeRoot { root, backend, api, _ ->
         val draft = root.resolve("draft.txt")
         assertContentEquals(ORIGINAL_BYTES, Files.readAllBytes(draft))
 
-        editInPlace(draft, LONGER_EDIT)
+        editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
 
         awaitInSync(api, draft, backend, commits = 1)
         assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
@@ -30,13 +54,13 @@ class WindowsCloudFilesRuntimeWritebackTest {
 
     @Test
     fun `native Windows uploads an edit made during a writeback before marking the file in sync`() =
-        withNativeRoot { root, backend, api ->
+        withNativeRoot { root, backend, api, _ ->
             val draft = root.resolve("draft.txt")
             assertContentEquals(ORIGINAL_BYTES, Files.readAllBytes(draft))
             var edits = 1
-            backend.duringUpload = { if (edits-- > 0) editInPlace(draft, NEWER_EDIT) }
+            backend.duringUpload = { if (edits-- > 0) editInPlaceFromAnotherProcess(draft, NEWER_EDIT) }
 
-            editInPlace(draft, LONGER_EDIT)
+            editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
 
             awaitInSync(api, draft, backend, commits = 2)
             assertEquals(listOf<String?>(ORIGINAL_REVISION, "\"server-1\""), backend.uploadRevisions.distinct())
@@ -44,8 +68,41 @@ class WindowsCloudFilesRuntimeWritebackTest {
             assertContentEquals(NEWER_EDIT, Files.readAllBytes(draft))
         }
 
+    @Test
+    fun `native Windows completes a commit blocked by another application once it closes the file`() =
+        withNativeRoot { root, backend, api, provider ->
+            val draft = root.resolve("draft.txt")
+            assertContentEquals(ORIGINAL_BYTES, Files.readAllBytes(draft))
+
+            // Another application keeps the file open, so the exclusive in-sync commit cannot run.
+            ExternalOpenHandle(draft).use {
+                editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
+                awaitCondition("blocked commit") {
+                    backend.commits == 1 && provider.summary().failedWritebackCount == 1
+                }
+                assertEquals(WindowsCloudPlaceholderState.Dirty, api.placeholderState(draft))
+            }
+
+            // Its close reports the size from the last in-sync point, not the uploaded size, and
+            // completes the pending commit without uploading again.
+            awaitInSync(api, draft, backend, commits = 1)
+            assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
+            assertContentEquals(LONGER_EDIT, backend.content("draft.txt"))
+
+            editInPlaceFromAnotherProcess(draft, NEWER_EDIT)
+
+            awaitInSync(api, draft, backend, commits = 2)
+            assertEquals(listOf<String?>(ORIGINAL_REVISION, "\"server-1\""), backend.uploadRevisions)
+            assertContentEquals(NEWER_EDIT, backend.content("draft.txt"))
+        }
+
     private fun withNativeRoot(
-        block: (Path, WindowsCloudFilesPlaceholderRecoveryTest.RevisionedBackend, JnaWindowsCloudFilesApi) -> Unit,
+        block: (
+            Path,
+            WindowsCloudFilesPlaceholderRecoveryTest.RevisionedBackend,
+            JnaWindowsCloudFilesApi,
+            WindowsCloudFilesProvider,
+        ) -> Unit,
     ) {
         assumeTrue(isWindowsDesktop())
         val root = createTempDirectory("cloud-native-runtime-writeback-")
@@ -55,7 +112,7 @@ class WindowsCloudFilesRuntimeWritebackTest {
         try {
             provider.start()
             provider.recoverAfterStartup(timeoutSeconds = 5)
-            block(root, backend, api)
+            block(root, backend, api, provider)
             assertEquals(0, provider.summary().failedWritebackCount)
         } finally {
             try {
@@ -64,6 +121,14 @@ class WindowsCloudFilesRuntimeWritebackTest {
                 provider.close()
                 root.toFile().deleteRecursively()
             }
+        }
+    }
+
+    private fun awaitCondition(label: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "Timed out waiting for $label." }
+            Thread.sleep(10)
         }
     }
 
@@ -83,24 +148,15 @@ class WindowsCloudFilesRuntimeWritebackTest {
         }
     }
 
-    /**
-     * Overwrites from offset zero without truncating, like an editor saving a longer file. Cloud
-     * Files sends no close notification for I/O by the connected provider's own process, so the
-     * edit runs in a separate process as a real editor would.
-     */
-    private fun editInPlace(path: Path, bytes: ByteArray) {
-        val script = "\$s = [IO.File]::Open(\$env:NATIVE_EDIT_PATH, 'Open', 'Write'); " +
-            "\$b = [Convert]::FromBase64String(\$env:NATIVE_EDIT_BYTES); \$s.Write(\$b, 0, \$b.Length); \$s.Close()"
-        val process = ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-            .redirectErrorStream(true)
-            .apply {
-                environment()["NATIVE_EDIT_PATH"] = path.toAbsolutePath().toString()
-                environment()["NATIVE_EDIT_BYTES"] = Base64.getEncoder().encodeToString(bytes)
-            }
-            .start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0) { "External edit failed: $output" }
-    }
+    private fun closeInfo(local: Path, identity: WindowsCloudFileIdentity, fileSize: Long) = WindowsCloudCallbackInfo(
+        connectionKey = 1L,
+        transferKey = 2L,
+        requestKey = 3L,
+        normalizedPath = local.toString(),
+        fileIdentity = WindowsCloudFileIdentityCodec.encode(identity),
+        fileSize = fileSize,
+        priorityHint = 0,
+    )
 
     private companion object {
         const val ORIGINAL_REVISION = "\"etag-01\""
