@@ -51,6 +51,8 @@ val desktopLibVlcExcludedPluginGroups = listOf(
 )
 
 val desktopLibVlcDownloadDirectory = layout.buildDirectory.dir("libvlc/download")
+val DESKTOP_LIBVLC_CONNECT_TIMEOUT_MILLIS = 30_000
+val DESKTOP_LIBVLC_READ_TIMEOUT_MILLIS = 60_000
 val desktopLibVlcLicenseDirectory = rootProject.layout.projectDirectory.dir("release/third-party/libvlc")
 val desktopAppResourcesDirectory = layout.buildDirectory.dir("generated/desktop-app-resources")
 
@@ -89,7 +91,12 @@ val downloadDesktopLibVlc by tasks.registering {
         val rejected = mutableListOf<String>()
         for ((index, source) in sources.withIndex()) {
             try {
-                URI.create(source).toURL().openStream().use { input ->
+                // Finite timeouts reject a mirror that accepts the connection and then stalls.
+                val connection = URI.create(source).toURL().openConnection().apply {
+                    connectTimeout = DESKTOP_LIBVLC_CONNECT_TIMEOUT_MILLIS
+                    readTimeout = DESKTOP_LIBVLC_READ_TIMEOUT_MILLIS
+                }
+                connection.getInputStream().use { input ->
                     Files.copy(input, partial.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
             } catch (failure: java.io.IOException) {

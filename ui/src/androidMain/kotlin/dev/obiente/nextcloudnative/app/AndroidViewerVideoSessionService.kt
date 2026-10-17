@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
@@ -199,13 +200,16 @@ internal object AndroidCompatibilityVideoSkips {
     private var previous: (() -> ((Boolean) -> Unit)?)? = null
     private var next: (() -> ((Boolean) -> Unit)?)? = null
     private var token = 0L
-    private var wrapped: AndroidViewerVideoSessionPlayer? = null
+
+    // Weak: the service's session keeps its player alive while it runs, and a destroyed service's
+    // player graph must not stay reachable from this process-wide holder.
+    private var wrapped: WeakReference<AndroidViewerVideoSessionPlayer>? = null
 
     fun wrap(player: Player): Player = AndroidViewerVideoSessionPlayer(
         player = player,
         previous = { previous?.invoke() },
         next = { next?.invoke() },
-    ).also { wrapped = it }
+    ).also { wrapped = WeakReference(it) }
 
     fun register(previous: () -> ((Boolean) -> Unit)?, next: () -> ((Boolean) -> Unit)?): Long {
         this.previous = previous
@@ -224,7 +228,7 @@ internal object AndroidCompatibilityVideoSkips {
 
     /** Republishes previous/next after the viewer's neighbors or navigation state changed. */
     fun refresh() {
-        wrapped?.refreshAvailableCommands()
+        wrapped?.get()?.refreshAvailableCommands()
     }
 }
 
