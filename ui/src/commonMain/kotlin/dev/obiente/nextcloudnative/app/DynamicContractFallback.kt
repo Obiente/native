@@ -155,6 +155,16 @@ internal fun DynamicDescriptorDiscovery.withUnavailable(
     "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
 )
 
+/**
+ * Keeps the metadata fallback when no App Store release can be selected without a server version.
+ * A recorded server probe result still explains the outcome better, with the same precedence as
+ * [withUnavailable]; only otherwise does the card report the unconfirmed version.
+ */
+internal fun DynamicDescriptorDiscovery.withVersionUnavailable(): DynamicDescriptorDiscovery = withFallback(
+    fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: DynamicContractFallbackReason.VersionUnavailable,
+    "The server version is unavailable, so an App Store release could not be selected safely.",
+)
+
 private val SERVER_PROBE_FALLBACK_REASONS = setOf(
     DynamicContractFallbackReason.ServerAuthenticationRequired,
     DynamicContractFallbackReason.ServerPermissionDenied,

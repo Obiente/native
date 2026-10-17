@@ -132,10 +132,7 @@ suspend fun discoverDynamicAppDescriptor(
         onProgress = onProgress,
     )
     if (sameOrigin.acquisition != DynamicDescriptorAcquisition.MetadataFallback) return sameOrigin
-    val coreVersion = serverVersion?.coreVersionOrNull() ?: return sameOrigin.withFallback(
-        DynamicContractFallbackReason.VersionUnavailable,
-        "The server version is unavailable, so an App Store release could not be selected safely.",
-    )
+    val coreVersion = serverVersion?.coreVersionOrNull() ?: return sameOrigin.withVersionUnavailable()
     val contractAppId = app.canonicalAppStoreId()
     onProgress(
         DynamicDescriptorDiscoveryProgress(

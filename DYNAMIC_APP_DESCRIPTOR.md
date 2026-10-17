@@ -253,9 +253,10 @@ wins among equals:
 
 A 404, another definitive status, a non-JSON response at a static contract
 location, or an empty or non-advertising OCS API Viewer catalog is absence and
-records nothing. When the App Store then completes without a contract, any
-recorded server result takes precedence over every App Store no-contract
-reason. A definitive server absence keeps the App Store reason. Diagnostics
+records nothing. When the App Store then completes without a contract, or no
+release can be selected because the server version is unavailable, any recorded
+server result takes precedence over the App Store or version reason. A
+definitive server absence keeps the App Store or version reason. Diagnostics
 record both sources either way, and never include request URLs, headers, or
 response bodies.
 

@@ -59,6 +59,21 @@ class DynamicServerProbeFallbackTest {
     }
 
     @Test
+    fun aMissingServerVersionKeepsARecordedServerReason() = runBlocking {
+        for (probe in ServerProbe.entries) {
+            var acquisitions = 0
+            val discovery = discover(probe, serverVersion = null) {
+                acquisitions += 1
+                AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract)
+            }
+            assertEquals(probe.reason ?: DynamicContractFallbackReason.VersionUnavailable, discovery.fallbackReason, probe.name)
+            assertEquals(0, acquisitions, probe.name)
+            assertTrue(discovery.diagnostics.any { "server version is unavailable" in it }, probe.name)
+            assertEquals(if (probe.failure == null) 0 else 1, discovery.diagnostics.count { "server API probe" in it }, probe.name)
+        }
+    }
+
+    @Test
     fun sameOriginDiscoveryRecordsTheTypedProbeResultForEachScenario() = runBlocking {
         for (probe in ServerProbe.entries) {
             val discovery = discoverDynamicAppDescriptor("https://fixture.invalid", app, execute = server(probe))
@@ -158,12 +173,13 @@ class DynamicServerProbeFallbackTest {
 
     private suspend fun discover(
         probe: ServerProbe,
+        serverVersion: String? = "34.0.3",
         acquire: suspend () -> AppStoreContractAcquisition,
     ): DynamicDescriptorDiscovery = discoverDynamicAppDescriptor(
         services = services(server(probe), acquire),
         session = session,
         app = app,
-        serverVersion = "34.0.3",
+        serverVersion = serverVersion,
         installedAppVersionHint = "1.0.0",
     )
 
