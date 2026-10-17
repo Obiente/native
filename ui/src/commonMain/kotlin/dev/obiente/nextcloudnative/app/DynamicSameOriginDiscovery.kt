@@ -264,7 +264,7 @@ private suspend fun discoverOfficialViewerSpecIds(
     }
     val appEntry = catalog
         .mapNotNull { it as? JsonObject }
-        .firstOrNull { entry -> (entry["id"] as? JsonPrimitive)?.contentOrNull == appId }
+        .firstOrNull { entry -> (entry["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content == appId }
     if (appEntry == null) {
         diagnostics += "OCS API Viewer does not advertise an OpenAPI specification for $appId."
         return emptyList()
@@ -296,7 +296,8 @@ private fun dynamicDiscoveryRequest(path: String): NextcloudApiRequest = Nextclo
 private fun NextcloudApiResponse.parseOpenApiDocument(): JsonObject? {
     val document = runCatching { dynamicJson.parseToJsonElement(body.decodeToString()) as? JsonObject }
         .getOrNull() ?: return null
-    val version = (document["openapi"] as? JsonPrimitive)?.contentOrNull
+    // Only a JSON string declares the version; a number such as 3.0 is not coerced into one.
+    val version = (document["openapi"] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content
     return document.takeIf { version?.startsWith("3.") == true }
 }
 

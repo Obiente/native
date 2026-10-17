@@ -243,22 +243,56 @@ and the shared JVM boundary carries that reason to the fallback card. Catalog
 parsing records which required value made each dropped entry unusable. A
 required value must have its exact JSON type: a number, boolean, object, array,
 or `null` where a string belongs, or an `isNightly` that is not a boolean, is
-malformed like a missing value and is never coerced. Contract documents are read
-the same way, so a non-string `openapi` version, operation ID, parameter, or
-reference is ignored, and a non-boolean `required` flag counts as required. A
-dropped entry counts only when it would have been selected: the exact installed
-version, a patch-compatible release, or an entry whose version cannot be read.
+malformed like a missing value and is never coerced.
+
+These readers also require exact JSON types:
+
+- In the acquisition module's contract readers, a non-string `openapi` version,
+  operation ID, parameter name or location, or reference is ignored. A
+  non-boolean `required` flag counts as required.
+- The same-origin probe accepts only a string `openapi` version, so a number
+  such as `3.0` is an unsupported contract. It also matches OCS API Viewer
+  entries by a string `id` only.
+- The descriptor compiler reads string fields only from JSON strings. These
+  include `openapi`, operation IDs, parameter names and locations, schema types
+  and formats, summaries, descriptions, titles, and references.
+
+The descriptor compiler does not yet type-check boolean flags such as
+`required`, `readOnly`, and `nullable`, or the items of string arrays: required
+property lists, tags, `enum` values, and security scopes. Those still accept a
+value of another primitive type and read it as text or as a boolean.
+
 A catalog document that is truncated, empty, not JSON, or not an array is an
-unreadable catalog, a reason of its own, because no entry could be read; it is
-never cached, so checking again downloads it again.
+unreadable catalog, a reason of its own, because no entry could be read. So is
+a non-empty array in which no element is an app object with a string `id`. Such
+a document is never cached, so checking again downloads it again.
 A corrupt or mismatched App Store-linked source archive yields no candidate,
 like an archive without a contract, instead of an unexpected client fault.
-When the exact installed release cannot be inspected and the patch-compatible
-candidates provide no contract, the result keeps the exact release's reason:
-an unreadable catalog or a malformed exact entry outranks `NoUsableContract`,
-which would claim that the matching releases provide no API. A linked source
-that refused or rate limited a request still outranks both, because a contract
-may exist there.
+
+[`ContractAcquisitionEvidence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionEvidence.kt)
+records what one acquisition actually inspected:
+
+- whether each catalog document was readable;
+- the entries dropped as malformed, including a top-level element that is not
+  an object or has a missing or wrong-typed `id` while the app was not found,
+  because that element may have been the app;
+- the candidates inspected, and what each provided;
+- whether a linked source refused a request.
+
+The no-contract reason comes only from that record, in this order:
+
+1. A refused or rate-limited linked source, because a contract may exist there.
+2. An unreadable catalog.
+3. Malformed evidence that could have matched: an entry for the exact version
+   or with an unreadable version, a patch-compatible entry in the platform
+   catalog, an app without a readable release list, or an unidentified
+   top-level element.
+4. No usable contract, only when every candidate that could have matched was
+   inspected.
+5. No matching release, only when the catalogs were fully readable, nothing
+   relevant was dropped, and nothing matched.
+
+A dropped entry for an unrelated version never changes the reason.
 
 App Store catalogs are cached for six hours. The first discovery of an app
 screen uses the cache. A discovery started by, or after, an explicit retry on
@@ -359,14 +393,15 @@ only genuine client faults remain unexpected. Size limits throw
 | Verified contract cache | Missing, expired, or unreadable entry | Ignored; acquisition continues |
 | Catalog and package requests | No response; non-success status; redirect away from HTTPS | Network; source unavailable; verification failed |
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
-| Catalog document | Truncated, empty, not JSON, or not an array | Unreadable catalog, never cached |
+| Catalog document | Truncated, empty, not JSON, not an array, or only elements without a readable app identity | Unreadable catalog, never cached |
+| Catalog app element | Not an object, or an object with a missing or wrong-typed `id`, while the app is not found | Malformed source, not no matching release |
 | Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
-| Exact release after compatible candidates | Exact catalog unreadable or exact entry malformed, and no compatible candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
+| Candidates exhausted | A catalog was unreadable, or an exact, compatible, or unidentified entry was dropped, and no inspected candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
 | Verified contract publication | A newer generation published a contract or ended without one definitively, or an invalidation happened | Not published; the newest accepted result is reported |
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
 | Package verification | The package's signature, certificate, chain, revocation, identity, archive structure, or app metadata rejected | Verification failed |
-| Package verification | Bundled root certificate or revocation list missing, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
+| Package verification | Bundled root certificate or revocation list missing, unreadable, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
 | Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |
 | Package OpenAPI JSON or YAML | Unreadable or not OpenAPI 3 | Candidate skipped |
 | Linked metadata, tree, spec, and schema requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; network |
