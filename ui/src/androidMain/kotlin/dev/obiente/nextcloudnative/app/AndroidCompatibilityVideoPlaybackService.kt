@@ -254,7 +254,7 @@ class AndroidCompatibilityVideoPlaybackService : MediaSessionService() {
                 stopSelf()
             },
         )
-        mediaSession = MediaSession.Builder(this, player)
+        mediaSession = MediaSession.Builder(this, AndroidCompatibilityVideoSkips.wrap(player))
             .setId(COMPATIBILITY_VIDEO_SESSION_ID)
             .build()
         AndroidCompatibilityVideoPlaybackBridge.registerCommandController(commandController)

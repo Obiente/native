@@ -190,6 +190,44 @@ internal class AndroidViewerVideoSessionPlayer(
     override fun hasNextMediaItem(): Boolean = next() != null
 }
 
+/**
+ * The viewer's previous/next for LibVLC compatibility playback, whose service owns its own session.
+ * The service wraps its player once; the viewer registers the current callbacks, fenced by a token
+ * so a replaced video cannot clear a newer one. Main thread.
+ */
+internal object AndroidCompatibilityVideoSkips {
+    private var previous: (() -> ((Boolean) -> Unit)?)? = null
+    private var next: (() -> ((Boolean) -> Unit)?)? = null
+    private var token = 0L
+    private var wrapped: AndroidViewerVideoSessionPlayer? = null
+
+    fun wrap(player: Player): Player = AndroidViewerVideoSessionPlayer(
+        player = player,
+        previous = { previous?.invoke() },
+        next = { next?.invoke() },
+    ).also { wrapped = it }
+
+    fun register(previous: () -> ((Boolean) -> Unit)?, next: () -> ((Boolean) -> Unit)?): Long {
+        this.previous = previous
+        this.next = next
+        token += 1
+        refresh()
+        return token
+    }
+
+    fun unregister(expected: Long) {
+        if (expected != token) return
+        previous = null
+        next = null
+        refresh()
+    }
+
+    /** Republishes previous/next after the viewer's neighbors or navigation state changed. */
+    fun refresh() {
+        wrapped?.refreshAvailableCommands()
+    }
+}
+
 /** The commands the session advertises: the player's own, with previous/next set by the viewer. */
 internal fun viewerVideoSessionCommands(
     base: Player.Commands,

@@ -79,6 +79,23 @@ internal actual fun PlatformNativeVideoPlayer(
         // Its Play/Pause control never hides, so the viewer chrome Media3 may have hidden returns.
         val currentOnControlsVisibilityChanged by rememberUpdatedState(onControlsVisibilityChanged)
         LaunchedEffect(rangeSource) { currentOnControlsVisibilityChanged(true) }
+        // The compatibility service owns this session, so the viewer's previous/next reach it here.
+        val currentSystemMedia by rememberUpdatedState(systemMedia)
+        val publishesSkips = source is NativeVideoPlaybackSource.DavFile
+        DisposableEffect(rangeSource, publishesSkips) {
+            val registration = if (publishesSkips) {
+                AndroidCompatibilityVideoSkips.register(
+                    previous = { currentSystemMedia.onPrevious },
+                    next = { currentSystemMedia.onNext },
+                )
+            } else {
+                null
+            }
+            onDispose { registration?.let(AndroidCompatibilityVideoSkips::unregister) }
+        }
+        val hasPrevious = systemMedia.onPrevious != null
+        val hasNext = systemMedia.onNext != null
+        LaunchedEffect(hasPrevious, hasNext) { AndroidCompatibilityVideoSkips.refresh() }
         LibVlcVideoPlayer(
             source = source,
             rangeSource = rangeSource,
