@@ -109,7 +109,7 @@ class WindowsCloudFilesStartupTest {
             val entries = api.localEntries(root).associateBy { it.path }
             assertEquals(api.localEntry(folder), entries.getValue(folder))
             assertEquals(api.localEntry(file), entries.getValue(file))
-            assertTrue(entries.getValue(folder).directory && entries.getValue(file).regularFile)
+            assertTrue(entries.getValue(folder).directory && entries.getValue(file).file)
             assertFailsWith<WindowsCloudLocalScanException> { api.localChildren(root.resolve("missing")) }
         } finally {
             root.toFile().deleteRecursively()
