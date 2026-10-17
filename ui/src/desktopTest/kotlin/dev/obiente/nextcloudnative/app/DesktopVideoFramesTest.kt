@@ -83,6 +83,14 @@ class DesktopVideoFramesTest {
     }
 
     @Test
+    fun availabilityNeverBlocksAndADisabledRuntimeIsUnavailable() {
+        val runtime = DesktopLibVlcRuntime(enabled = false)
+        assertFalse(runtime.availableOrStartDiscovery())
+        assertFalse(runtime.isAvailable)
+        assertNull(runtime.factoryOrNull())
+    }
+
+    @Test
     fun aStartupFailureEmittedBeforeCollectionIsStillDelivered() = runBlocking<Unit> {
         val source = NativeVideoRangeSource(size = 4L, readBlock = { _, length -> ByteArray(length) })
         val engine = DesktopVlcVideoEngine(source, DesktopLibVlcRuntime(enabled = false))

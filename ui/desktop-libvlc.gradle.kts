@@ -14,6 +14,10 @@ val desktopLibVlcVersion = "3.0.24"
 
 data class DesktopLibVlcArchive(val url: String, val sha256: String, val platform: String) {
     val fileName: String get() = url.substringAfterLast('/')
+
+    /** The same file on VideoLAN's own server, used when mirrors do not match the pin. */
+    val originUrl: String
+        get() = url.replace("https://get.videolan.org/vlc/", "https://download.videolan.org/pub/videolan/vlc/")
 }
 
 val desktopLibVlcHostArchitecture = System.getProperty("os.arch").lowercase()
@@ -77,26 +81,32 @@ val downloadDesktopLibVlc by tasks.registering {
         if (target.isFile && target.sha256() == pinned.sha256) return@doLast
         target.parentFile.mkdirs()
         val partial = File(target.parentFile, "${pinned.fileName}.partial")
-        // VideoLAN redirects to a mirror; retry a transient mirror failure before failing the build.
-        var attempt = 0
-        while (true) {
-            attempt += 1
+        // get.videolan.org redirects to a random mirror, and a mirror can serve a stale or broken
+        // file. Only bytes matching the pin are accepted; after two mirror attempts the VideoLAN
+        // origin server is used.
+        val sources = listOf(pinned.url, pinned.url, pinned.originUrl)
+        val rejected = mutableListOf<String>()
+        for ((index, source) in sources.withIndex()) {
             try {
-                URI.create(pinned.url).toURL().openStream().use { input ->
+                URI.create(source).toURL().openStream().use { input ->
                     Files.copy(input, partial.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
-                break
             } catch (failure: java.io.IOException) {
-                if (attempt >= 3) throw failure
-                Thread.sleep(2_000L * attempt)
+                rejected += "$source: ${failure.javaClass.simpleName}"
+                Thread.sleep(2_000L * (index + 1))
+                continue
             }
-        }
-        val actual = partial.sha256()
-        if (actual != pinned.sha256) {
+            val actual = partial.sha256()
+            if (actual == pinned.sha256) {
+                Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+                return@doLast
+            }
+            rejected += "$source: SHA-256 $actual (${partial.length()} bytes)"
             partial.delete()
-            throw GradleException("${pinned.fileName} has SHA-256 $actual, expected ${pinned.sha256}.")
         }
-        Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        throw GradleException(
+            "No source served ${pinned.fileName} with SHA-256 ${pinned.sha256}:\n" + rejected.joinToString("\n"),
+        )
     }
 }
 

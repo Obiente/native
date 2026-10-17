@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -70,6 +71,20 @@ class DesktopVideoSurfaceSceneTest {
     }
 
     @Test
+    fun `hiding or minimizing the window pauses playback`() {
+        val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
+        val window = MutableStateFlow(true)
+        nativeSceneTest(800, 600, content = { Surface(engine, window = window) }) {
+            settle()
+            assertEquals(emptyList(), engine.commands, "A visible window keeps playing.")
+
+            window.value = false
+            settleUntil { engine.commands.isNotEmpty() }
+            assertEquals(listOf<NativeVideoTransportCommand>(NativeVideoTransportCommand.Pause), engine.commands)
+        }
+    }
+
+    @Test
     fun `outcomes reach the viewer and leaving releases the engine`() {
         val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
         val events = Collections.synchronizedList(mutableListOf<String>())
@@ -99,15 +114,18 @@ class DesktopVideoSurfaceSceneTest {
         onFailure: (NativeVideoPlaybackFailure) -> Unit = {},
         onControls: (Boolean) -> Unit = {},
         hideAfter: Long = 300L,
-    ) = DesktopVideoSurface(
-        engine = engine,
-        title = "clip.mp4",
-        onPlaybackEnded = onEnded,
-        onFailure = onFailure,
-        onControlsVisibilityChanged = onControls,
-        modifier = Modifier.fillMaxSize(),
-        controlsHideDelayMillis = hideAfter,
-    )
+        window: MutableStateFlow<Boolean> = MutableStateFlow(true),
+    ) = CompositionLocalProvider(LocalAppWindowVisibility provides window) {
+        DesktopVideoSurface(
+            engine = engine,
+            title = "clip.mp4",
+            onPlaybackEnded = onEnded,
+            onFailure = onFailure,
+            onControlsVisibilityChanged = onControls,
+            modifier = Modifier.fillMaxSize(),
+            controlsHideDelayMillis = hideAfter,
+        )
+    }
 
     private fun keyDown(key: Key) = KeyEvent(key, KeyEventType.KeyDown)
 

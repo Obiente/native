@@ -41,12 +41,19 @@ internal sealed interface MediaVideoOriginalState {
     data object LookupFailed : MediaVideoOriginalState
 }
 
+/** A video record without Files access, such as a Memories gallery item. */
+internal fun NextcloudFile.isPreviewOnlyVideo(userId: String): Boolean =
+    !isDirectory && mediaAssetFormat() == MediaAssetFormat.Video && !hasAuthoritativeMediaDavAccess(userId)
+
 internal fun NextcloudFile.needsVideoOriginalResolution(userId: String): Boolean =
-    !isDirectory &&
-        mediaAssetFormat() == MediaAssetFormat.Video &&
-        !hasAuthoritativeMediaDavAccess(userId) &&
-        (fileId ?: 0L) > 0L &&
-        userId.isNotBlank()
+    isPreviewOnlyVideo(userId) && (fileId ?: 0L) > 0L && userId.isNotBlank()
+
+/** What the viewer shows before any lookup: a record that cannot be resolved stays preview-only. */
+internal fun NextcloudFile.initialVideoOriginalState(userId: String): MediaVideoOriginalState = when {
+    needsVideoOriginalResolution(userId) -> MediaVideoOriginalState.Resolving
+    isPreviewOnlyVideo(userId) -> MediaVideoOriginalState.PreviewOnly
+    else -> MediaVideoOriginalState.Direct
+}
 
 /**
  * Accepts [candidate] only when it is the same server file, is still a video, and is readable
@@ -76,7 +83,7 @@ internal suspend fun resolveMediaVideoOriginal(
     userId: String,
     lookup: suspend (fileId: Long) -> NextcloudFile?,
 ): MediaVideoOriginalState {
-    if (!selected.needsVideoOriginalResolution(userId)) return MediaVideoOriginalState.Direct
+    if (!selected.needsVideoOriginalResolution(userId)) return selected.initialVideoOriginalState(userId)
     val candidate = try {
         lookup(requireNotNull(selected.fileId))
     } catch (cancelled: CancellationException) {

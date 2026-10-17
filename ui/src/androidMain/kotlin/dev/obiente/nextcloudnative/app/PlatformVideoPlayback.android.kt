@@ -156,8 +156,10 @@ private fun Media3VideoPlayer(
             )
             setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
             prepare()
-            // Opening a video is the request to watch it, as with a Live Photo's motion.
-            playWhenReady = true
+            // Opening a video is the request to watch it, as with a Live Photo's motion. A player
+            // created after the activity stopped (a lookup finished in the background) waits for
+            // the user instead, because the earlier ON_STOP is not replayed to the observer.
+            playWhenReady = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         }
     }
     var playing by remember(player) { mutableStateOf(player.isPlaying) }

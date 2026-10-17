@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.runtime.mutableStateOf
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Path
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
@@ -15,6 +17,8 @@ import uk.co.caprica.vlcj.factory.discovery.provider.DiscoveryDirectoryProvider
  */
 internal class DesktopLibVlcRuntime(private val enabled: Boolean) {
     private val lock = Any()
+    private val discoveryStarted = AtomicBoolean(false)
+    private val discovered = mutableStateOf<Boolean?>(if (enabled) null else false)
     private var factory: MediaPlayerFactory? = null
     private var factoryFailed = false
 
@@ -32,8 +36,27 @@ internal class DesktopLibVlcRuntime(private val enabled: Boolean) {
         }
     }
 
+    /** Blocks on discovery; call only off the UI thread. */
     val isAvailable: Boolean
         get() = libraryDirectory != null
+
+    /**
+     * Whether in-app playback can be offered right now, without blocking. Before discovery has
+     * finished this is false, and the snapshot read recomposes the caller once it completes.
+     */
+    fun availableOrStartDiscovery(): Boolean {
+        val known = discovered.value
+        if (known == null) startDiscovery()
+        return known == true
+    }
+
+    fun startDiscovery() {
+        if (!enabled || !discoveryStarted.compareAndSet(false, true)) return
+        Thread({ discovered.value = isAvailable }, "nc-libvlc-discovery").apply {
+            isDaemon = true
+            start()
+        }
+    }
 
     /** Creating the factory scans libVLC plugins, so it must run off the UI thread. */
     fun factoryOrNull(): MediaPlayerFactory? {
@@ -62,12 +85,7 @@ internal val sharedDesktopLibVlcRuntime = DesktopLibVlcRuntime(
  * Finds libVLC on a background thread at startup so the media viewer never loads native
  * libraries during composition. A slow or failed discovery only delays in-app video.
  */
-fun warmDesktopVideoPlayback() {
-    Thread({ sharedDesktopLibVlcRuntime.isAvailable }, "nc-libvlc-discovery").apply {
-        isDaemon = true
-        start()
-    }
-}
+fun warmDesktopVideoPlayback() = sharedDesktopLibVlcRuntime.startDiscovery()
 
 /** Registered through `META-INF/services` so vlcj checks the bundled copy before system paths. */
 class DesktopBundledLibVlcDirectoryProvider : DiscoveryDirectoryProvider {

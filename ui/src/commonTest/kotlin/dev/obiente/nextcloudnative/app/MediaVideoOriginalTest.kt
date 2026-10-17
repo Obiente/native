@@ -113,6 +113,24 @@ class MediaVideoOriginalTest {
             MediaVideoOriginalState.Direct,
             resolveMediaVideoOriginal(filesVideo, "alice") { error("An authoritative record must not be looked up.") },
         )
+        for (unresolvable in listOf(galleryVideo.copy(fileId = null), galleryVideo.copy(fileId = 0L))) {
+            assertEquals(
+                MediaVideoOriginalState.PreviewOnly,
+                resolveMediaVideoOriginal(unresolvable, "alice") { error("Nothing to look up.") },
+                "A gallery video without a usable file ID explains that only a preview exists.",
+            )
+        }
+    }
+
+    @Test
+    fun theViewerStartsFromAnHonestState() {
+        assertEquals(MediaVideoOriginalState.Resolving, galleryVideo.initialVideoOriginalState("alice"))
+        assertEquals(MediaVideoOriginalState.PreviewOnly, galleryVideo.copy(fileId = null).initialVideoOriginalState("alice"))
+        assertEquals(MediaVideoOriginalState.Direct, filesVideo.initialVideoOriginalState("alice"))
+        assertEquals(
+            MediaVideoOriginalState.Direct,
+            galleryVideo.copy(name = "photo.jpg", mimeType = "image/jpeg").initialVideoOriginalState("alice"),
+        )
     }
 
     @Test

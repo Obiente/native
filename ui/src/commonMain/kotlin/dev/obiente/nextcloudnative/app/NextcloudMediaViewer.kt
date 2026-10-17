@@ -153,13 +153,7 @@ internal fun NextcloudMediaViewer(
     }
     var videoOriginalAttempt by remember(selected.path) { mutableIntStateOf(0) }
     var videoOriginal by remember(selected, userId, session.serverUrl, session.loginName) {
-        mutableStateOf(
-            if (selected.needsVideoOriginalResolution(userId)) {
-                MediaVideoOriginalState.Resolving
-            } else {
-                MediaVideoOriginalState.Direct
-            },
-        )
+        mutableStateOf(selected.initialVideoOriginalState(userId))
     }
     val playbackFile = videoOriginal.playbackFileFor(selected)
     // Survives item changes so swiping through media stays immersive once the user hid controls.

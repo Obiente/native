@@ -36,8 +36,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import kotlinx.coroutines.delay
 
+// Snapshot state written by the discovery thread: composition never loads native libraries,
+// and the viewer recomposes once libVLC has been found.
 internal actual val platformNativeVideoPlaybackAvailable: Boolean
-    get() = sharedDesktopLibVlcRuntime.isAvailable
+    get() = sharedDesktopLibVlcRuntime.availableOrStartDiscovery()
 
 internal actual val platformNativeVideoPlaybackUsesRangeSource: Boolean = true
 
@@ -108,9 +110,15 @@ internal fun DesktopVideoSurface(
         }
     }
     val state by engine.state.collectAsState()
+    val windowVisible by LocalAppWindowVisibility.current.collectAsState()
     var interaction by remember(engine) { mutableIntStateOf(0) }
     var controlsVisible by remember(engine) { mutableStateOf(true) }
     val playing = state.status == NativeVideoTransportStatus.Playing
+    // A hidden or minimized window keeps this composition alive, and there are no system media
+    // controls, so playback pauses, including playback that started while the window was hidden.
+    LaunchedEffect(engine, windowVisible, playing) {
+        if (!windowVisible && playing) engine.command(NativeVideoTransportCommand.Pause)
+    }
     LaunchedEffect(engine, playing, interaction) {
         controlsVisible = true
         if (playing) {

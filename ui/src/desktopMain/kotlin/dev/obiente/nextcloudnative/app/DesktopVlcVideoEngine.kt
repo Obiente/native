@@ -137,6 +137,8 @@ internal class DesktopVlcVideoEngine(
                 }
                 NativeVideoTransportStatus.Paused, NativeVideoTransportStatus.Loading -> active.controls().play()
             }
+            NativeVideoTransportCommand.Pause ->
+                if (mutableState.value.status == NativeVideoTransportStatus.Playing) active.controls().setPause(true)
             is NativeVideoTransportCommand.SeekBy, is NativeVideoTransportCommand.SeekTo ->
                 mutableState.value.seekTargetMillis(command)?.let { target ->
                     active.controls().setTime(target)
