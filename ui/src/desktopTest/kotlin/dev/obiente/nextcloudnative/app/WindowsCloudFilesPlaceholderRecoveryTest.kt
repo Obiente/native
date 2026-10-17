@@ -179,6 +179,7 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
         val root = createTempDirectory("cloud-native-dirty-recovery-")
         val backend = RevisionedBackend("draft.txt" to REMOTE_ORIGINAL)
         val draft = root.resolve("draft.txt")
+        var unregistered = false
         try {
             WindowsCloudFilesProvider(root, backend, nativeApi()).use { provider ->
                 provider.start()
@@ -209,9 +210,16 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
                 assertEquals(backend.identity("draft.txt"), api.placeholderIdentity(draft)?.let(WindowsCloudFileIdentityCodec::decode))
                 assertEquals(0, provider.summary().failedWritebackCount)
             } finally {
-                try { provider.removeSyncRoot() } finally { provider.close() }
+                try {
+                    provider.removeSyncRoot()
+                    unregistered = true
+                } finally {
+                    provider.close()
+                }
             }
         } finally {
+            // The first provider only disconnects, so a failure before the restart must unregister here.
+            if (!unregistered) runCatching { nativeApi().use { api -> api.unregisterSyncRoot(root) } }
             root.toFile().deleteRecursively()
         }
     }
