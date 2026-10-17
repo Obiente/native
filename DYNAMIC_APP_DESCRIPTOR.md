@@ -282,14 +282,17 @@ records what one acquisition actually inspected:
 The no-contract reason comes only from that record, in this order:
 
 1. A refused or rate-limited linked source, because a contract may exist there.
-2. An unreadable catalog.
-3. Malformed evidence that could have matched: an entry for the exact version
+2. A catalog the refresh window refused with no cached copy, so it was not read
+   at all: `RecentlyChecked`. Waiting out the window is the next step, so this
+   ranks above an unreadable catalog.
+3. An unreadable catalog.
+4. Malformed evidence that could have matched: an entry for the exact version
    or with an unreadable version, a patch-compatible entry in the platform
    catalog, an app without a readable release list, or an unidentified
    top-level element.
-4. No usable contract, only when every candidate that could have matched was
+5. No usable contract, only when every candidate that could have matched was
    inspected.
-5. No matching release, only when the catalogs were fully readable, nothing
+6. No matching release, only when the catalogs were fully readable, nothing
    relevant was dropped, and nothing matched.
 
 A dropped entry for an unrelated version never changes the reason.
@@ -300,8 +303,13 @@ that screen carries `AppStoreCachePolicy.Refresh` through the platform
 boundary to the acquirer, which downloads each catalog again at most once per
 minute per catalog URL. A retry inside that window reuses the cached copy; if
 none is available, for example after a cold start or an expired entry, it makes
-no request and reports `RecentlyChecked`. Explicit retries therefore cause at
-most one App Store request per catalog URL per window. Automatic discovery
+no request for that catalog. Explicit retries therefore cause at most one App
+Store request per catalog URL per window. The window is shared across apps and
+versions to protect the App Store, so one catalog can be refused while the other
+is downloaded fresh. A refused catalog is uninspected evidence, never absence:
+candidates from the catalog that was read are still inspected, and only when
+none of them provides a contract does the refused catalog make the result
+`RecentlyChecked`. Automatic discovery
 without a cached catalog downloads it normally. A forced download that fails or
 is unreadable leaves the cached catalog in place, because only a readable
 catalog replaces it.
@@ -309,8 +317,9 @@ catalog replaces it.
 The same policy covers verified contracts. Automatic discovery serves a cached
 verified contract. A refresh looks past it and downloads the package or linked
 contract again; a newly verified contract replaces the cached one, while a
-failed refresh leaves it in place. A refresh refused by the window serves the
-cached contract when one exists. When an acquired contract cannot be parsed or
+failed refresh leaves it in place. When the window refused or served from cache
+any catalog a refresh needed, and no candidate it could inspect provided a
+contract, the refresh serves the cached contract when one exists. When an acquired contract cannot be parsed or
 compiled, discovery discards the cached contract for exactly that app, server
 version, and installed version, so the next automatic discovery acquires it
 again; other cached contracts stay. If the cached file cannot be deleted, an
@@ -405,7 +414,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Candidates exhausted | A catalog was unreadable, or an exact, compatible, or unidentified entry was dropped, and no inspected candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
 | Verified contract publication | A newer generation published a contract or ended without one definitively, or an invalidation happened | Not published; the newest accepted result is reported |
 | Catalog cache write | Local storage failure | Ignored |
-| Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
+| Explicit retry inside the refresh window without a cached copy | None | No request for that catalog; candidates from the other catalog are still inspected, and recently checked only if none provides a contract |
 | Package verification | The package's signature, certificate, chain, revocation, identity, archive structure, or app metadata rejected | Verification failed |
 | Package verification | Bundled root certificate or revocation list missing, unreadable, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
 | Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |

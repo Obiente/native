@@ -38,17 +38,17 @@ sealed interface ContractAcquisitionOutcome {
 }
 
 /**
- * Ends a refresh early when the refresh window refused it. A cached verified contract is served,
- * because nothing newer can be fetched yet; without one and without a cached catalog, nothing was
- * read, which is [ContractUnavailableReason.RecentlyChecked]. Returns null to continue normally.
+ * Serves [cached] when a refresh could not download every catalog it read, because the refresh
+ * window served a catalog from cache or refused it: nothing newer than the cached verified contract
+ * can be established. Returns null when there is no cached contract or every catalog was fresh. A
+ * refused catalog never means absence; without a cached contract it is uninspected evidence, see
+ * [ContractAcquisitionEvidence].
  */
-internal fun refreshShortcut(
-    catalog: CatalogReleases,
+internal fun servedOnLimitedRefresh(
     cachePolicy: AcquisitionCachePolicy,
     cached: VerifiedOpenApiContract?,
-): ContractAcquisitionOutcome? = when {
-    cachePolicy != AcquisitionCachePolicy.Refresh || catalog.source == CatalogSource.Downloaded -> null
-    cached != null -> ContractAcquisitionOutcome.Acquired(cached)
-    catalog.source == CatalogSource.RefreshRefused -> ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
-    else -> null
-}
+    vararg catalogs: CatalogReleases?,
+): ContractAcquisitionOutcome? = cached
+    ?.takeIf { cachePolicy == AcquisitionCachePolicy.Refresh }
+    ?.takeIf { catalogs.any { catalog -> catalog != null && catalog.source != CatalogSource.Downloaded } }
+    ?.let(ContractAcquisitionOutcome::Acquired)
