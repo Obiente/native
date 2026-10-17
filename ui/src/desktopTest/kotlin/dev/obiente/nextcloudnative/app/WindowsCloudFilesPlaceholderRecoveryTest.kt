@@ -174,7 +174,7 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
     }
 
     @Test
-    fun `native Windows startup uploads a placeholder edited while disconnected`() {
+    fun `native Windows startup writes back a placeholder edited while disconnected`() {
         assumeTrue(isWindowsDesktop())
         val root = createTempDirectory("cloud-native-dirty-recovery-")
         val backend = RevisionedBackend("draft.txt" to REMOTE_ORIGINAL)
@@ -200,14 +200,14 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
                 val entry = api.localEntries(root).single { it.path == draft }
                 assertTrue(entry.file)
                 assertTrue(isWindowsCloudFilesReparseTag(requireNotNull(entry.inspection.reparseTag)))
-                awaitCondition { backend.commits == 1 }
+                awaitCondition { api.placeholderState(draft) == WindowsCloudPlaceholderState.InSync }
+                awaitWritebacksSettled(provider)
 
-                assertEquals(ORIGINAL_REVISION, backend.uploadRevisions.first())
-                assertTrue(backend.uploadRevisions.all { it == ORIGINAL_REVISION })
+                assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
                 assertContentEquals(LOCAL_EDIT, backend.content("draft.txt"))
                 assertContentEquals(LOCAL_EDIT, Files.readAllBytes(draft))
-                // Committing the placeholder after the upload is a separate native defect, so the
-                // final in-sync state is not asserted here. See docs/windows-release.md.
+                assertEquals(backend.identity("draft.txt"), api.placeholderIdentity(draft)?.let(WindowsCloudFileIdentityCodec::decode))
+                assertEquals(0, provider.summary().failedWritebackCount)
             } finally {
                 try { provider.removeSyncRoot() } finally { provider.close() }
             }
@@ -281,7 +281,7 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
     }
 
     /** A synthetic server that enforces If-Match revisions like WebDAV PUT. */
-    private class RevisionedBackend(vararg files: Pair<String, ByteArray>) : WindowsCloudFilesBackend {
+    internal class RevisionedBackend(vararg files: Pair<String, ByteArray>) : WindowsCloudFilesBackend {
         override val accountId = "account-01"
         override val displayName = "Synthetic account"
         private val remote = files.associate { (path, bytes) -> path to (ORIGINAL_REVISION to bytes) }.toMutableMap()
@@ -289,6 +289,7 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
         val uploadedPaths = CopyOnWriteArrayList<String>()
         @Volatile var unavailableUploads = 0
         @Volatile var loseNextUploadResponse = false
+        @Volatile var duringUpload: () -> Unit = {}
         @Volatile var commits = 0
             private set
         private var generation = 0
@@ -343,6 +344,7 @@ class WindowsCloudFilesPlaceholderRecoveryTest {
             commits += 1
             uploadedPaths += path
             remote[path] = "\"server-$generation\"" to localFile.readBytes()
+            duringUpload()
             if (loseNextUploadResponse) {
                 loseNextUploadResponse = false
                 throw IOException("Synthetic lost upload response")

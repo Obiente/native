@@ -182,28 +182,54 @@ file enumerates as a plain file without a reparse tag. Placeholder
 classification is therefore meaningful only after connection. The packaged
 launcher's mode has not been measured.
 
-**Last reviewed: 2026-10-17.** Known limitation, which may have changed since:
-on a local Windows 11 sync root, the startup upload of a dirty placeholder
-reached the synthetic server, but the following `CfUpdatePlaceholder` call
-failed with `HRESULT 0x80070006` because it received the protected handle from
-`CfOpenFileWithOplock` instead of a Win32 handle. A Win32 handle obtained from
-the protected handle instead failed with `0x80070179` while
-`CF_UPDATE_FLAG_VERIFY_IN_SYNC` was set, since a dirty file is never in sync.
-The placeholder therefore stays dirty, and later attempts are rejected by the
-original revision guard. Nothing is overwritten, but the item keeps reporting
-a failed writeback after its content reached the server. The same placeholder
-update path serves runtime writeback.
+### Placeholder updates and writeback commit
+
+Placeholder update and in-sync calls take a Win32 handle. Updates open the file
+with `CfOpenFileWithOplock` and borrow its Win32 handle through
+`CfReferenceProtectedHandle` and `CfGetWin32HandleFromProtectedHandle`. Passing
+the protected handle itself fails with `HRESULT 0x80070006`.
+
+A dirty placeholder is never in sync, so writeback cannot use
+`CF_UPDATE_FLAG_VERIFY_IN_SYNC`, which fails with `0x80070179`. The commit in
+[`WindowsCloudFilesWriteback`](../ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesWriteback.kt)
+works in two steps:
+
+1. Before the upload reads the file, it records the size, last-write time, and
+   file ID from an open handle. After the server accepts the ETag-guarded
+   upload, the placeholder receives the new revision without metadata changes
+   and stays dirty.
+2. It marks the file in sync only under an exclusive Cloud Files handle that
+   shows the recorded stamp unchanged.
+
+A file edited during the upload stays dirty and is uploaded again against the
+new revision, at most three times in one writeback before it reports a failed
+writeback. If the exclusive handle is unavailable, for example because another
+application has the file open, the commit is retried without uploading again.
+An application that restores an earlier last-write time while keeping the same
+size can defeat the stamp; this is an accepted limit of the guard.
+
+On a local Windows 11 sync root, Cloud Files sent no close-completion
+notification for writes made by the connected provider's own process. Native
+writeback tests therefore edit files from a separate process, as other
+applications do.
 
 `WindowsCloudFilesStartupTest` covers remote-list scope, resident traversal,
 and native enumeration on Windows. `WindowsCloudFilesPlaceholderRecoveryTest`
 covers startup writeback of dirty file placeholders, including restart, a
 changed server copy, and a lost upload response, with deterministic doubles.
-Its native Windows case edits a hydrated placeholder while the provider is
-disconnected and verifies that the next start finds it and uploads it against
-the original revision. Because of the limitation above, it does not assert the
-final in-sync state. `WindowsCloudFilesProviderTest` covers the remaining
-recovery and writeback behavior. These tests do not replace the Explorer and
-published-MSI acceptance checks above.
+`WindowsCloudFilesWritebackTest` covers the commit protocol.
+`WindowsCloudFilesRuntimeWritebackTest` covers writeback while the provider is
+connected. On Windows, the native cases of these tests use a disposable sync
+root. They cover:
+
+- an edit made while disconnected, written back at the next start;
+- a size-changing edit made while connected;
+- an edit made during an upload.
+
+Each case must end with the placeholder in sync at the server's revision.
+`WindowsCloudFilesProviderTest` covers the remaining recovery and writeback
+behavior. These tests do not replace the Explorer and published-MSI acceptance
+checks above.
 
 ## WinGet delivery
 

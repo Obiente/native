@@ -224,6 +224,9 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     )
     fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder)
     fun markInSync(path: Path)
+    fun localContentStamp(path: Path): WindowsCloudLocalContentStamp = nioWindowsCloudLocalContentStamp(path)
+    fun markInSyncIfUnchanged(path: Path, expected: WindowsCloudLocalContentStamp): WindowsCloudInSyncCommit =
+        markInSyncWhenStampMatches(path, expected)
     fun dehydrate(path: Path): Long
 }
 
@@ -356,6 +359,9 @@ internal class WindowsCloudFilesProvider(
     private val pendingWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val failedWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
+    private val writeback = WindowsCloudFilesWriteback(api, backend, { knownIdentities[it.path] = it }) { local, uploaded ->
+        updatePlaceholderAfterRemoteMutation(local, uploaded, preserveSyncState = true)
+    }
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
     private val accountRemovalPaused = AtomicBoolean(false)
@@ -537,6 +543,7 @@ internal class WindowsCloudFilesProvider(
         pendingWritebacks.clear()
         failedWritebacks.clear()
         writebackAttempts.clear()
+        writeback.clear()
         recordPlaceholderDiagnostic(
             severity = SupportDiagnosticSeverity.Warning,
             operation = "cloud-files.corrupt-root-recovery",
@@ -913,11 +920,7 @@ internal class WindowsCloudFilesProvider(
                     ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
                     ?: knownIdentities[identity.path]
                     ?: identity
-                val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
-                knownIdentities[uploaded.path] = uploaded
-                if (updatePlaceholderAfterRemoteMutation(localPath, uploaded)) {
-                    api.markInSync(localPath)
-                }
+                writeback.writeBack(localPath, current)
             }
         }
     }
@@ -2106,16 +2109,8 @@ internal class WindowsCloudFilesProvider(
                         val current = requireNotNull(api.placeholderIdentity(local)) {
                             "The dirty Windows placeholder has no recoverable identity."
                         }.let(WindowsCloudFileIdentityCodec::decode)
-                        require(
-                            current.accountId == backend.accountId &&
-                                current.path == original.path &&
-                                !current.directory,
-                        ) { "The dirty Windows placeholder identity is not safe to recover." }
-                        val uploaded = backend.upload(current.path, local.toFile(), current.remoteRevision)
-                        knownIdentities[uploaded.path] = uploaded
-                        if (updatePlaceholderAfterRemoteMutation(local, uploaded)) {
-                            api.markInSync(local)
-                        }
+                        require(current.path == original.path) { "The dirty Windows placeholder identity is not safe to recover." }
+                        writeback.writeBack(local, current)
                     }
                 }
             }

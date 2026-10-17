@@ -133,7 +133,7 @@ internal class JnaWindowsCloudFilesApi(
                 placeholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT
                 write()
             }
-            checkHResult(
+            checkWindowsCloudHResult(
                 cldApi.CfRegisterSyncRoot(
                     WString(root.toAbsolutePath().toString()),
                     registration,
@@ -160,7 +160,7 @@ internal class JnaWindowsCloudFilesApi(
         }
         val result = cldApi.CfUnregisterSyncRoot(WString(root.toAbsolutePath().toString()))
         if (isWindowsCloudFilesRootAbsentResult(result, rootMissing = Files.notExists(root))) return
-        checkHResult(result, "unregister the Windows Cloud Files root")
+        checkWindowsCloudHResult(result, "unregister the Windows Cloud Files root")
     }
 
     private fun unregisterCloudFilesRoot(root: Path): Boolean {
@@ -199,7 +199,7 @@ internal class JnaWindowsCloudFilesApi(
             registrations[index].write()
         }
         val key = LongByReference()
-        checkHResult(
+        checkWindowsCloudHResult(
             cldApi.CfConnectSyncRoot(
                 WString(root.toAbsolutePath().toString()),
                 registrations.first().pointer,
@@ -298,7 +298,7 @@ internal class JnaWindowsCloudFilesApi(
                 )
             }
         }
-        checkHResult(result, "create Windows Cloud Files placeholders")
+        checkWindowsCloudHResult(result, "create Windows Cloud Files placeholders")
         check(processed.value == placeholders.size) { "Windows created only some requested placeholders." }
         native.requireSuccessful()
         placeholders.filter { it.directory }.forEach { placeholder ->
@@ -424,10 +424,10 @@ internal class JnaWindowsCloudFilesApi(
     override fun placeholderIdentity(path: Path): ByteArray? {
         if (!Files.exists(path)) return null
         return runCatching {
-            withFileHandle(path, write = false) { handle ->
+            withWindowsFileHandle(path, write = false) { handle ->
                 val buffer = Memory(CF_STANDARD_INFO_BUFFER_BYTES.toLong()).apply { clear() }
                 val returned = IntByReference()
-                checkHResult(
+                checkWindowsCloudHResult(
                     cldApi.CfGetPlaceholderInfo(
                         handle,
                         CF_PLACEHOLDER_INFO_STANDARD,
@@ -455,8 +455,9 @@ internal class JnaWindowsCloudFilesApi(
         preserveSyncState: Boolean,
     ) {
         require(!invalidateContent || !preserveSyncState)
-        withCloudFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
-            val metadata = placeholder.windowsMetadata(fallbackEpochMillis = null)
+        cldApi.withCloudFileHandle(path, write = true, exclusive = invalidateContent) { handle ->
+            // An identity-only update must not resize or retime a locally edited file.
+            val metadata = if (preserveSyncState) null else placeholder.windowsMetadata(fallbackEpochMillis = null)
             val identity = placeholder.identity.nativeMemory()
             val flags = if (preserveSyncState) {
                 0
@@ -465,7 +466,7 @@ internal class JnaWindowsCloudFilesApi(
                     (if (invalidateContent) CF_UPDATE_FLAG_DEHYDRATE else 0) or
                     (if (placeholder.directory) CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION else 0)
             }
-            checkHResult(
+            checkWindowsCloudHResult(
                 cldApi.CfUpdatePlaceholder(
                     handle,
                     metadata,
@@ -484,9 +485,9 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder) {
-        withFileHandle(path, write = true) { handle ->
+        withWindowsFileHandle(path, write = true) { handle ->
             val identity = placeholder.identity.nativeMemory()
-            checkHResult(
+            checkWindowsCloudHResult(
                 cldApi.CfConvertToPlaceholder(
                     handle,
                     identity,
@@ -502,19 +503,35 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun markInSync(path: Path) {
-        withFileHandle(path, write = true) { handle ->
-            checkHResult(
+        withWindowsFileHandle(path, write = true) { handle ->
+            checkWindowsCloudHResult(
                 cldApi.CfSetInSyncState(handle, CF_IN_SYNC_STATE_IN_SYNC, 0, null),
                 "mark a Windows Cloud Files placeholder in sync",
             )
         }
     }
 
+    override fun localContentStamp(path: Path): WindowsCloudLocalContentStamp =
+        withWindowsFileHandle(path, write = false, block = ::windowsCloudLocalContentStamp)
+
+    override fun markInSyncIfUnchanged(
+        path: Path,
+        expected: WindowsCloudLocalContentStamp,
+    ): WindowsCloudInSyncCommit = cldApi.withCloudFileHandle(path, write = true, exclusive = true) { handle ->
+        // The exclusive handle keeps writers out between this check and the in-sync update.
+        if (windowsCloudLocalContentStamp(handle) != expected) return@withCloudFileHandle WindowsCloudInSyncCommit.LocalChanged
+        checkWindowsCloudHResult(
+            cldApi.CfSetInSyncState(handle, CF_IN_SYNC_STATE_IN_SYNC, 0, null),
+            "mark an unchanged Windows Cloud Files placeholder in sync",
+        )
+        WindowsCloudInSyncCommit.Committed
+    }
+
     override fun dehydrate(path: Path): Long {
         if (!Files.isRegularFile(path)) return 0L
         val size = Files.size(path)
-        withFileHandle(path, write = true) { handle ->
-            checkHResult(
+        withWindowsFileHandle(path, write = true) { handle ->
+            checkWindowsCloudHResult(
                 cldApi.CfDehydratePlaceholder(handle, 0L, -1L, 0, null),
                 "dehydrate a Windows Cloud Files placeholder",
             )
@@ -600,7 +617,7 @@ internal class JnaWindowsCloudFilesApi(
             fill(this)
         }
         try {
-            checkHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
+            checkWindowsCloudHResult(cldApi.CfExecute(operation, parameters), "complete a Windows Cloud Files callback")
         } catch (failure: Throwable) {
             recordCallbackFailure("operation $operationType: ${failure.message ?: failure.javaClass.simpleName}")
             throw failure
@@ -609,52 +626,6 @@ internal class JnaWindowsCloudFilesApi(
 
     private fun recordCallbackFailure(message: String) {
         if (callbackFailures.size < MAX_RECORDED_CALLBACK_FAILURES) callbackFailures.add(message)
-    }
-
-    private inline fun <T> withFileHandle(
-        path: Path,
-        write: Boolean,
-        exclusive: Boolean = false,
-        block: (WinNT.HANDLE) -> T,
-    ): T {
-        val handle = Kernel32.INSTANCE.CreateFile(
-            path.toWindowsWin32Path(),
-            if (write) WinNT.GENERIC_WRITE else WinNT.FILE_READ_ATTRIBUTES,
-            if (exclusive) 0 else WinNT.FILE_SHARE_READ or WinNT.FILE_SHARE_WRITE or WinNT.FILE_SHARE_DELETE,
-            null,
-            WinNT.OPEN_EXISTING,
-            WinNT.FILE_FLAG_BACKUP_SEMANTICS,
-            null,
-        )
-        check(handle != WinBase.INVALID_HANDLE_VALUE) { "Could not open the Windows Cloud Files placeholder." }
-        return try {
-            block(handle)
-        } finally {
-            Kernel32.INSTANCE.CloseHandle(handle)
-        }
-    }
-
-    /**
-     * Cloud Files updates use a protected handle so Explorer can break the oplock cleanly instead
-     * of racing a background CreateFile call with a transient sharing violation.
-     */
-    private inline fun <T> withCloudFileHandle(
-        path: Path,
-        write: Boolean,
-        exclusive: Boolean = false,
-        block: (WinNT.HANDLE) -> T,
-    ): T {
-        val handle = WinNT.HANDLEByReference()
-        val flags = windowsCloudOpenFileFlags(write, exclusive)
-        checkHResult(
-            cldApi.CfOpenFileWithOplock(WString(path.toWindowsWin32Path()), flags, handle),
-            "open a Windows Cloud Files placeholder for update",
-        )
-        return try {
-            block(handle.value)
-        } finally {
-            cldApi.CfCloseHandle(handle.value)
-        }
     }
 
     private inline fun <T> withFindData(path: Path, fallback: T, block: (WinBase.WIN32_FIND_DATA) -> T): T {
@@ -670,9 +641,6 @@ internal class JnaWindowsCloudFilesApi(
         }
     }
 
-    private fun checkHResult(result: Int, operation: String) {
-        if (result < 0) throw WindowsCloudFilesOperationException(operation, result)
-    }
 
     private data class CallbackLifetime(
         val callbacks: List<CldCallback>,
@@ -871,6 +839,9 @@ internal interface CldApi : StdCallLibrary {
     fun CfGetPlaceholderStateFromFindData(findData: Pointer): Int
     fun CfOpenFileWithOplock(path: WString, flags: Int, protectedHandle: WinNT.HANDLEByReference): Int
     fun CfCloseHandle(protectedHandle: WinNT.HANDLE)
+    fun CfReferenceProtectedHandle(protectedHandle: WinNT.HANDLE): Byte
+    fun CfReleaseProtectedHandle(protectedHandle: WinNT.HANDLE)
+    fun CfGetWin32HandleFromProtectedHandle(protectedHandle: WinNT.HANDLE): WinNT.HANDLE
     fun CfGetPlaceholderInfo(
         handle: WinNT.HANDLE,
         infoClass: Int,
