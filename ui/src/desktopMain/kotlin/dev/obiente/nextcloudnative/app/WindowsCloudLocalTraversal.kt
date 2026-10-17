@@ -22,14 +22,28 @@ private const val IO_REPARSE_TAG_CLOUD_MASK = 0x0000F000
  * for every child. Carrying them avoids a second FindFirstFile and several stat calls per entry,
  * which made recovery of a large photo library exceed its startup deadline.
  */
-internal data class WindowsCloudLocalEntry(
+internal class WindowsCloudLocalEntry(
     val path: Path,
     val directory: Boolean,
     /** A plain file or a Cloud Files file placeholder; never a link, device or foreign reparse point. */
     val file: Boolean,
     val symbolicLink: Boolean,
-    val inspection: WindowsCloudPlaceholderInspection,
-)
+    inspect: () -> WindowsCloudPlaceholderInspection,
+) {
+    constructor(
+        path: Path,
+        directory: Boolean,
+        file: Boolean,
+        symbolicLink: Boolean,
+        inspection: WindowsCloudPlaceholderInspection,
+    ) : this(path, directory, file, symbolicLink, { inspection })
+
+    /**
+     * Native entries carry this from the enumeration. The Files-based fallback reads it on first
+     * use, so a traversal that only needs directories never inspects placeholders.
+     */
+    val inspection: WindowsCloudPlaceholderInspection by lazy(inspect)
+}
 
 /**
  * Classifies links and directories like Java NIO with NOFOLLOW_LINKS.
@@ -68,7 +82,7 @@ internal fun WindowsCloudFilesApi.localEntry(path: Path): WindowsCloudLocalEntry
         directory = attributes.isDirectory,
         file = attributes.isRegularFile,
         symbolicLink = attributes.isSymbolicLink,
-        inspection = inspectPlaceholder(path),
+        inspect = { inspectPlaceholder(path) },
     )
 }
 
@@ -131,7 +145,12 @@ internal fun windowsCloudLocalEntries(
     }
 }
 
-/** Lazy traversal closes each native enumeration before visiting children and never follows symlinks. */
+/**
+ * Lazy traversal closes each native enumeration before visiting children and never follows
+ * symlinks. Enumerated metadata can be stale, so a directory is re-checked without following
+ * links immediately before descent; otherwise a folder swapped for a link after its parent was
+ * listed would expose the link target through lexically contained paths.
+ */
 internal fun WindowsCloudFilesApi.localEntryTree(root: Path): Sequence<WindowsCloudLocalEntry> = sequence {
     if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return@sequence
     val rootEntry = localEntry(root)
@@ -142,6 +161,7 @@ internal fun WindowsCloudFilesApi.localEntryTree(root: Path): Sequence<WindowsCl
         check(!Thread.currentThread().isInterrupted) { "Local Cloud Files scan interrupted." }
         val entry = pending.removeLast()
         if (entry.symbolicLink) continue
+        if (entry.directory && entry !== rootEntry && !isUnlinkedDirectory(entry.path)) continue
         yield(entry)
         if (entry.directory) {
             val parent = entry.path.toAbsolutePath().normalize()
@@ -152,6 +172,8 @@ internal fun WindowsCloudFilesApi.localEntryTree(root: Path): Sequence<WindowsCl
         }
     }
 }
+
+private fun isUnlinkedDirectory(path: Path): Boolean = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
 
 internal fun WindowsCloudFilesApi.localTree(root: Path): Sequence<Path> = localEntryTree(root).map { it.path }
 
