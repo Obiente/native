@@ -6,7 +6,8 @@ package dev.obiente.nextcloudnative.contracts
  *
  * Each key keeps `started` (the newest generation handed out), `fenced` (results from this
  * generation or older are superseded), and `latest` (the newest accepted result). Both counters
- * only grow. An acquisition takes generation `g = ++started` when it starts and ends in one row:
+ * only grow. An acquisition takes generation `g = ++started` in the same locked step that registers
+ * it as in flight ([startIfRegistered]); a caller joining it takes none. It ends in one row:
  *
  * | Event for generation g                         | g > fenced                                  | g <= fenced (superseded)     |
  * |------------------------------------------------|---------------------------------------------|------------------------------|
@@ -41,7 +42,16 @@ internal class ContractPublicationFence {
     private val states = HashMap<ContractAcquisitionRequest, State>()
 
     /** Starts an acquisition for [request] and returns its generation. */
-    fun start(request: ContractAcquisitionRequest): Long = synchronized(states) {
+    fun start(request: ContractAcquisitionRequest): Long = checkNotNull(startIfRegistered(request) { true })
+
+    /**
+     * Runs [register] under the fence lock and, when it registers a new acquisition, starts its
+     * generation in the same step. Returns null when [register] joined an existing acquisition,
+     * which takes no generation. No refresh or invalidation can observe a registered acquisition
+     * whose generation has not started yet.
+     */
+    fun startIfRegistered(request: ContractAcquisitionRequest, register: () -> Boolean): Long? = synchronized(states) {
+        if (!register()) return null
         states.getOrPut(request, ::State).let { state -> ++state.started }
     }
 

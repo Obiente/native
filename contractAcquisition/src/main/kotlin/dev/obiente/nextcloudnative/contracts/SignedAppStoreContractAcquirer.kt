@@ -38,6 +38,10 @@ class SignedAppStoreContractAcquirer(
         ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
     private val publicationFence = ContractPublicationFence()
 
+    /** Test seam: runs after an acquisition is registered and its generation started. */
+    @Volatile
+    internal var afterRegistration: (ContractAcquisitionRequest, Long) -> Unit = { _, _ -> }
+
     init {
         if (requireHttps) {
             require(rawGitHubBaseUrl.trimEnd('/') == OFFICIAL_RAW_GITHUB_BASE_URL) {
@@ -62,10 +66,15 @@ class SignedAppStoreContractAcquirer(
         cachePolicy: AcquisitionCachePolicy = AcquisitionCachePolicy.UseCache,
     ): ContractAcquisitionOutcome {
         val owner = CompletableFuture<ContractAcquisitionOutcome>()
-        val existing = inFlightAcquisitions.putIfAbsent(request to cachePolicy, owner)
-        if (existing != null) {
+        var existing: CompletableFuture<ContractAcquisitionOutcome>? = null
+        // Registration and the generation are one step, so a later refresh or invalidation always sees it.
+        val generation = publicationFence.startIfRegistered(request) {
+            existing = inFlightAcquisitions.putIfAbsent(request to cachePolicy, owner)
+            existing == null
+        }
+        if (generation == null) {
             return try {
-                existing.get()
+                checkNotNull(existing).get()
             } catch (failure: ExecutionException) {
                 throw failure.cause ?: failure
             } catch (failure: InterruptedException) {
@@ -74,7 +83,7 @@ class SignedAppStoreContractAcquirer(
             }
         }
         return try {
-            val generation = publicationFence.start(request)
+            afterRegistration(request, generation)
             // Contracts are published through the fence; a no-contract ending is recorded here.
             when (val outcome = acquireUncoalesced(request, cachePolicy, generation)) {
                 is ContractAcquisitionOutcome.Unavailable -> publicationFence.complete(request, generation, outcome)
