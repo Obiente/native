@@ -623,11 +623,11 @@ internal fun NextcloudMediaViewer(
 
         if (!editing) {
             if (
-                livePhotoSource != null &&
-                !motionPlaying &&
-                showChrome &&
+                livePhotoSource != null && !motionPlaying && showChrome &&
                 previewState is MediaPreviewState.Ready &&
-                platformNativeVideoPlaybackAvailable
+                platformNativeVideoPlaybackAvailable &&
+                // A range-reading player can only play motion once its pinned plan has resolved.
+                (!platformNativeVideoPlaybackUsesRangeSource || livePhotoCompatibilityRangePlan != null)
             ) {
                 Button(
                     onClick = {
