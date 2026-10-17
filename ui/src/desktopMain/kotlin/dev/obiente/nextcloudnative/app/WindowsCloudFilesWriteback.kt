@@ -69,6 +69,19 @@ internal class WindowsCloudFilesWriteback(
 
     private val pendingCommits = ConcurrentHashMap<String, PendingCommit>()
 
+    /**
+     * Writes back the dirty placeholder for [path] using the identity it currently holds, which a
+     * previous writeback may have advanced. Only a missing or unreadable identity uses [fallback].
+     */
+    fun writeBack(local: Path, path: String, fallback: WindowsCloudFileIdentity? = null) {
+        val current = api.placeholderIdentity(local)
+            ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
+            ?.takeIf { it.accountId == backend.accountId && it.path == path && !it.directory }
+            ?: fallback
+            ?: error("The dirty Windows placeholder has no recoverable identity.")
+        writeBack(local, current)
+    }
+
     /** Runs inside the path operation for [current]'s path; [current] is the placeholder identity. */
     fun writeBack(local: Path, current: WindowsCloudFileIdentity) {
         require(current.accountId == backend.accountId && !current.directory) {

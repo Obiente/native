@@ -126,6 +126,24 @@ class WindowsCloudFilesWritebackTest {
     }
 
     @Test
+    fun `a path writeback uses the identity the placeholder holds`() = withFile { local ->
+        val fixture = Fixture(local)
+
+        fixture.writeback.writeBack(local, "edit.txt", fallback = fixture.original.copy(remoteRevision = "\"stale\""))
+
+        assertEquals(listOf<String?>(ORIGINAL), fixture.backend.revisions)
+    }
+
+    @Test
+    fun `a path writeback without a matching identity or fallback uploads nothing`() = withFile { local ->
+        val fixture = Fixture(local)
+
+        assertFailsWith<IllegalStateException> { fixture.writeback.writeBack(local, "other.txt") }
+
+        assertEquals(emptyList(), fixture.backend.revisions)
+    }
+
+    @Test
     fun `a directory identity is never written back`() = withFile { local ->
         val fixture = Fixture(local)
         assertFailsWith<IllegalArgumentException> {

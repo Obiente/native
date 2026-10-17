@@ -916,12 +916,7 @@ internal class WindowsCloudFilesProvider(
             if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
             pendingWritebacks += identity.path
             submitPathOperation(identity.path) {
-                val current = api.placeholderIdentity(localPath)
-                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
-                    ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
-                    ?: knownIdentities[identity.path]
-                    ?: identity
-                writeback.writeBack(localPath, current)
+                writeback.writeBack(localPath, identity.path, fallback = knownIdentities[identity.path] ?: identity)
             }
         }
     }
@@ -2108,11 +2103,7 @@ internal class WindowsCloudFilesProvider(
                         deferredWhenPaused = { if (!runtimeStopping.get()) deferredLocalChanges.add(local) },
                         allowWhilePaused = allowWhilePaused,
                     ) {
-                        val current = requireNotNull(api.placeholderIdentity(local)) {
-                            "The dirty Windows placeholder has no recoverable identity."
-                        }.let(WindowsCloudFileIdentityCodec::decode)
-                        require(current.path == original.path) { "The dirty Windows placeholder identity is not safe to recover." }
-                        writeback.writeBack(local, current)
+                        writeback.writeBack(local, original.path)
                     }
                 }
             }
