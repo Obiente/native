@@ -48,6 +48,7 @@ private fun ContractUnavailableReason.toAppStoreReason(): AppStoreContractUnavai
         AppStoreContractUnavailableReason.SourceTemporarilyUnavailable
     ContractUnavailableReason.NoUsableContract -> AppStoreContractUnavailableReason.NoUsableContract
     ContractUnavailableReason.MalformedSource -> AppStoreContractUnavailableReason.MalformedSource
+    ContractUnavailableReason.RecentlyChecked -> AppStoreContractUnavailableReason.RecentlyChecked
 }
 
 private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFailureKind = when (this) {
@@ -55,6 +56,7 @@ private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFai
     ContractAcquisitionFailureKind.SourceUnavailable -> AppStoreContractFailureKind.SourceUnavailable
     ContractAcquisitionFailureKind.VerificationFailed -> AppStoreContractFailureKind.VerificationFailed
     ContractAcquisitionFailureKind.InvalidRequest -> AppStoreContractFailureKind.InvalidRequest
+    ContractAcquisitionFailureKind.SourceUnusable -> AppStoreContractFailureKind.SourceUnusable
     ContractAcquisitionFailureKind.RuntimeIncompatible -> AppStoreContractFailureKind.RuntimeIncompatible
     ContractAcquisitionFailureKind.Unexpected -> AppStoreContractFailureKind.Unexpected
 }

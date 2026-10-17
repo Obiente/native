@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequestException
 import dev.obiente.nextcloudnative.contracts.ContractSourceHttpException
+import dev.obiente.nextcloudnative.contracts.ContractSourceTooLargeException
 import dev.obiente.nextcloudnative.contracts.ContractSourceVerificationException
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
@@ -54,6 +55,7 @@ class JvmAppStoreContractAcquisitionTest {
                 AppStoreContractUnavailableReason.SourceTemporarilyUnavailable,
             ContractUnavailableReason.NoUsableContract to AppStoreContractUnavailableReason.NoUsableContract,
             ContractUnavailableReason.MalformedSource to AppStoreContractUnavailableReason.MalformedSource,
+            ContractUnavailableReason.RecentlyChecked to AppStoreContractUnavailableReason.RecentlyChecked,
         )) {
             assertEquals(
                 AppStoreContractAcquisition.Unavailable(expected),
@@ -69,6 +71,7 @@ class JvmAppStoreContractAcquisitionTest {
             ContractSourceHttpException(503, "synthetic") to AppStoreContractFailureKind.SourceUnavailable,
             ContractSourceVerificationException("synthetic") to AppStoreContractFailureKind.VerificationFailed,
             ContractAcquisitionRequestException("synthetic") to AppStoreContractFailureKind.InvalidRequest,
+            ContractSourceTooLargeException(1, "synthetic") to AppStoreContractFailureKind.SourceUnusable,
             IllegalStateException("synthetic") to AppStoreContractFailureKind.Unexpected,
         )) {
             val typed = assertFailsWith<AppStoreContractAcquisitionException> {

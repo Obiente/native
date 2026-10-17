@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.contracts
 
 import java.net.URI
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -25,6 +26,8 @@ internal data class MalformedCatalogEntry(val version: String?, val field: Malfo
 internal data class CatalogReleases(
     val releases: List<AppStoreRelease>,
     val malformed: List<MalformedCatalogEntry> = emptyList(),
+    /** True when an explicit retry was refused by the refresh window and nothing cached was read. */
+    val refreshDenied: Boolean = false,
 ) {
     /** False when the whole document was unreadable; such a document must not be cached. */
     val documentReadable: Boolean get() = malformed.none { entry -> entry.field == MalformedCatalogField.Document }
@@ -101,7 +104,8 @@ internal fun parseReleases(
         .filter { release -> !release.optBoolean("isNightly", false) }
         .mapNotNull { release ->
             val version = release.optString("version").takeIf(String::isNotBlank)
-            val download = release.optString("download").takeIf(String::isNotBlank)
+            // A download value that is not a valid HTTP URL is malformed catalog data, like a missing one.
+            val download = release.optString("download").takeIf { value -> value.toHttpUrlOrNull() != null }
             val signature = release.optString("signature").takeIf(String::isNotBlank)
             val digest = release.optString("signatureDigest").takeIf(String::isNotBlank)
             if (version == null || certificate == null || download == null || signature == null || digest == null) {

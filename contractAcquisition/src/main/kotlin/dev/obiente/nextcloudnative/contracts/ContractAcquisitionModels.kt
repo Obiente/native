@@ -63,3 +63,11 @@ data class VerifiedPackageContract(
     val document: String,
     val contractKind: VerifiedContractKind = VerifiedContractKind.OpenApi,
 )
+
+/** Byte limits for remote contract sources. Production uses the defaults; tests may lower them. */
+data class ContractResponseLimits(
+    val catalogBytes: Long = 32L * 1024L * 1024L,
+    val archiveBytes: Long = 64L * 1024L * 1024L,
+    val appInfoBytes: Long = 512L * 1024L,
+    val githubTreeBytes: Long = 8L * 1024L * 1024L,
+)

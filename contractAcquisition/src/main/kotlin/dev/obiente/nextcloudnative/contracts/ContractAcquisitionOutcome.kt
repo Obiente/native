@@ -19,6 +19,12 @@ enum class ContractUnavailableReason {
      * such as its certificate, download, signature, or signature digest, so it cannot be verified.
      */
     MalformedSource,
+
+    /**
+     * An explicit retry asked for a fresh catalog inside its refresh window, and no cached copy was
+     * available to reuse, so no App Store request was made. See [CatalogRefreshThrottle].
+     */
+    RecentlyChecked,
 }
 
 /** The typed result of [SignedAppStoreContractAcquirer.acquireOutcome]. Failures are thrown instead. */

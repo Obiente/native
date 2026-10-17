@@ -38,6 +38,16 @@ class MalformedCatalogReleaseTest {
     }
 
     @Test
+    fun `a download value that is not an HTTP URL is malformed catalog data`() {
+        for (download in listOf("not a url", "ftp://fixture.invalid/c.tar.gz", "https://exa mple.invalid/c.tar.gz")) {
+            val catalog = catalog(release("4.0.2").put("download", download))
+            val parsed = parseReleases(catalog.toString(), "cospend", "https://fixture.invalid/apps.json", false)
+            assertEquals(listOf(MalformedCatalogEntry("4.0.2", MalformedCatalogField.Download)), parsed.malformed, download)
+            assertEquals(unavailable(ContractUnavailableReason.MalformedSource), acquireFrom(catalog), download)
+        }
+    }
+
+    @Test
     fun `a matching release missing any required value is a malformed source`() {
         for (field in listOf("download", "signature", "signatureDigest", "version", "certificate")) {
             val catalog = if (field == "certificate") {

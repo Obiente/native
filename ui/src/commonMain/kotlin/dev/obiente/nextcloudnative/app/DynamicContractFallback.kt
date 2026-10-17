@@ -16,6 +16,9 @@ enum class AppStoreContractFailureKind {
     /** The app ID or version reported by the server cannot select a release safely. */
     InvalidRequest,
 
+    /** A source returned data that cannot be used, such as a response over its size limit. */
+    SourceUnusable,
+
     /** Contract acquisition code could not load or initialize on this runtime. */
     RuntimeIncompatible,
 
@@ -36,6 +39,9 @@ enum class AppStoreContractUnavailableReason {
 
     /** The catalog lists the app, but the entry that would be selected lacks data needed to verify it. */
     MalformedSource,
+
+    /** An explicit retry fell inside the catalog refresh window and no cached catalog could be reused. */
+    RecentlyChecked,
 }
 
 /** Whether App Store acquisition may reuse its cached catalog. Only an explicit user retry refreshes it. */
@@ -92,6 +98,8 @@ enum class DynamicContractFallbackReason {
     NoMatchingRelease,
     SourceTemporarilyUnavailable,
     MalformedSource,
+    RecentlyChecked,
+    SourceUnusable,
 
     /** The same-origin server probe was inconclusive and the App Store yielded no contract. */
     ServerProbeInconclusive,
@@ -114,6 +122,7 @@ internal fun AppStoreContractFailureKind.fallbackReason(): DynamicContractFallba
     AppStoreContractFailureKind.SourceUnavailable -> DynamicContractFallbackReason.AppStoreUnavailable
     AppStoreContractFailureKind.VerificationFailed -> DynamicContractFallbackReason.VerificationFailed
     AppStoreContractFailureKind.InvalidRequest -> DynamicContractFallbackReason.VersionUnavailable
+    AppStoreContractFailureKind.SourceUnusable -> DynamicContractFallbackReason.SourceUnusable
     AppStoreContractFailureKind.RuntimeIncompatible,
     AppStoreContractFailureKind.Unexpected,
     -> DynamicContractFallbackReason.ClientFault
@@ -125,43 +134,45 @@ internal fun AppStoreContractUnavailableReason.fallbackReason(): DynamicContract
         DynamicContractFallbackReason.SourceTemporarilyUnavailable
     AppStoreContractUnavailableReason.NoUsableContract -> DynamicContractFallbackReason.NoVerifiedContract
     AppStoreContractUnavailableReason.MalformedSource -> DynamicContractFallbackReason.MalformedSource
+    AppStoreContractUnavailableReason.RecentlyChecked -> DynamicContractFallbackReason.RecentlyChecked
 }
 
 /** Classifies a failure from the platform acquisition boundary without reading exception text. */
 internal fun Throwable.appStoreContractFailureKind(): AppStoreContractFailureKind =
     (this as? AppStoreContractAcquisitionException)?.kind ?: AppStoreContractFailureKind.Unexpected
 
-/** Keeps the metadata fallback and records why no verified contract replaced it. */
+/**
+ * Keeps the metadata fallback and records why no verified contract replaced it.
+ *
+ * This is the single precedence point for every App Store path that ends without a usable contract:
+ * no release selected, no contract, a typed or unexpected acquisition failure, or an acquired contract
+ * that cannot be parsed or compiled. Any recorded same-origin probe result wins over the App Store
+ * reason, because the server may still offer a contract, or offers one that explains the outcome
+ * better. Among probe results, access problems come first, then inconclusive results, then an
+ * unsupported contract (see [DynamicServerProbeFailure]). A definitive server absence leaves the App
+ * Store reason in charge. Diagnostics always keep both sources.
+ */
 internal fun DynamicDescriptorDiscovery.withFallback(
     reason: DynamicContractFallbackReason,
     diagnostic: String,
-): DynamicDescriptorDiscovery = copy(diagnostics = diagnostics + diagnostic, fallbackReason = reason)
+): DynamicDescriptorDiscovery = copy(
+    diagnostics = diagnostics + diagnostic,
+    fallbackReason = fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: reason,
+)
 
-/**
- * Keeps the metadata fallback when the App Store boundary completed without a contract.
- *
- * Precedence: any same-origin probe result wins over every App Store no-contract reason, because
- * the server may still offer a contract, or offers one that explains the outcome better. Among probe
- * results, access problems come first, then inconclusive results, then an unsupported contract
- * (see [DynamicServerProbeFailure]). A definitive server absence leaves the App Store reason in
- * charge. Diagnostics keep both sources.
- */
+/** Keeps the metadata fallback when the App Store boundary completed without a contract. */
 internal fun DynamicDescriptorDiscovery.withUnavailable(
     reason: AppStoreContractUnavailableReason,
     appId: String,
     coreVersion: String,
 ): DynamicDescriptorDiscovery = withFallback(
-    fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: reason.fallbackReason(),
+    reason.fallbackReason(),
     "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
 )
 
-/**
- * Keeps the metadata fallback when no App Store release can be selected without a server version.
- * A recorded server probe result still explains the outcome better, with the same precedence as
- * [withUnavailable]; only otherwise does the card report the unconfirmed version.
- */
+/** Keeps the metadata fallback when no App Store release can be selected without a server version. */
 internal fun DynamicDescriptorDiscovery.withVersionUnavailable(): DynamicDescriptorDiscovery = withFallback(
-    fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: DynamicContractFallbackReason.VersionUnavailable,
+    DynamicContractFallbackReason.VersionUnavailable,
     "The server version is unavailable, so an App Store release could not be selected safely.",
 )
 
@@ -228,6 +239,18 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "Server API not permitted",
         "Your account does not have permission to read this server's API catalog, which may be limited " +
             "to administrators, and the App Store offered no verified contract. Only app details are shown.",
+        "Check again",
+    )
+    DynamicContractFallbackReason.RecentlyChecked -> DynamicContractFallbackNotice(
+        "Checked moments ago",
+        "nati.ve checked the App Store for this app less than a minute ago and has no saved catalog to " +
+            "reuse. Wait a minute, then try again.",
+        "Try again",
+    )
+    DynamicContractFallbackReason.SourceUnusable -> DynamicContractFallbackNotice(
+        "App Store data unusable",
+        "The Nextcloud App Store returned data this version cannot use, such as a response over its size " +
+            "limit, so no native view is offered. Only app details are shown.",
         "Check again",
     )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(

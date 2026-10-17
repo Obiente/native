@@ -59,6 +59,27 @@ class DynamicServerProbeFallbackTest {
     }
 
     @Test
+    fun aTypedAcquisitionFailureKeepsARecordedServerReasonAndBothDiagnostics() = runBlocking {
+        for (probe in ServerProbe.entries) {
+            for (kind in AppStoreContractFailureKind.entries) {
+                val discovery = discover(probe) { throw AppStoreContractAcquisitionException(kind) }
+                val label = "$probe x $kind"
+                assertEquals(probe.reason ?: kind.fallbackReason(), discovery.fallbackReason, label)
+                assertTrue("App Store contract acquisition failed: ${kind.name}." in discovery.diagnostics, label)
+                assertEquals(if (probe.failure == null) 0 else 1, discovery.diagnostics.count { "server API probe" in it }, label)
+            }
+        }
+    }
+
+    @Test
+    fun anAcquiredButUnusableContractKeepsARecordedServerReason() = runBlocking {
+        for (probe in ServerProbe.entries) {
+            val discovery = discover(probe) { AppStoreContractAcquisition.Acquired(unreadableContract()) }
+            assertEquals(probe.reason ?: DynamicContractFallbackReason.UnsupportedContract, discovery.fallbackReason, probe.name)
+        }
+    }
+
+    @Test
     fun aMissingServerVersionKeepsARecordedServerReason() = runBlocking {
         for (probe in ServerProbe.entries) {
             var acquisitions = 0
@@ -154,6 +175,17 @@ class DynamicServerProbeFallbackTest {
             discoverDynamicAppDescriptor("https://fixture.invalid", app, execute = { throw cancelled })
         })
     }
+
+    private fun unreadableContract() = AcquiredOpenApiContract(
+        appId = "example",
+        appVersion = "1.0.0",
+        contractVersion = "1.0.0",
+        specFile = "openapi.json",
+        document = "not json",
+        packageUrl = "https://fixture.invalid/example.tar.gz",
+        sourceUrl = "https://fixture.invalid/example.tar.gz#openapi.json",
+        sourceKind = AcquiredOpenApiContractSourceKind.SignedAppPackage,
+    )
 
     private fun server(probe: ServerProbe): suspend (NextcloudApiRequest) -> NextcloudApiResponse = { request ->
         val viewer = request.relativePath.contains("ocs_api_viewer")

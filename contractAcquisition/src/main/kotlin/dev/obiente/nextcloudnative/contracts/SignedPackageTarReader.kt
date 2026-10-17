@@ -16,12 +16,13 @@ internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
             val prefix = header.tarText(345, 155)
             val headerName = if (prefix.isBlank()) name else "$prefix/$name"
             val size = header.tarOctal(124, 12)
-            check(size in 0..MAX_TAR_ENTRY_BYTES) { "An app package entry is too large." }
+            check(size >= 0) { "An app package entry has an invalid size." }
+            requireWithinLimit(size, MAX_TAR_ENTRY_BYTES) { "An app package entry is too large." }
             totalUncompressed += size
-            check(totalUncompressed <= MAX_TAR_UNCOMPRESSED_BYTES) { "The app package expands beyond the safety limit." }
+            requireWithinLimit(totalUncompressed, MAX_TAR_UNCOMPRESSED_BYTES) { "The app package expands beyond the safety limit." }
             val type = header[156].toInt().toChar()
             if (type == 'L') {
-                check(size <= MAX_TAR_PATH_BYTES) { "An app package path exceeds the safety limit." }
+                requireWithinLimit(size, MAX_TAR_PATH_BYTES) { "An app package path exceeds the safety limit." }
                 pendingLongPath = decodeTarLongPath(input.readExactly(size.toInt()))
                 val longPathPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
                 input.skipExactly(longPathPadding)
@@ -51,8 +52,10 @@ internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
                 )
             if (keep) {
                 val selectedFileLimit = if (staticMetadata) MAX_STATIC_METADATA_FILE_BYTES else MAX_SELECTED_FILE_BYTES
-                check(size <= selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
-                check(selected.size < MAX_SELECTED_ARCHIVE_FILES) { "The app package has too many contract metadata files." }
+                requireWithinLimit(size, selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
+                requireWithinLimit(selected.size + 1L, MAX_SELECTED_ARCHIVE_FILES.toLong()) {
+                    "The app package has too many contract metadata files."
+                }
                 selected[fullName] = input.readExactly(size.toInt())
             } else {
                 input.skipExactly(size)
@@ -63,6 +66,10 @@ internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
         check(pendingLongPath == null) { "The app package ends with an incomplete path record." }
     }
     return selected
+}
+
+private inline fun requireWithinLimit(value: Long, limit: Long, message: () -> String) {
+    if (value > limit) throw ContractSourceTooLargeException(limit, message())
 }
 
 private fun validateArchivePath(path: String) {

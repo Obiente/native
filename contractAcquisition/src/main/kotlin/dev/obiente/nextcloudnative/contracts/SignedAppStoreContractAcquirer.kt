@@ -28,6 +28,7 @@ class SignedAppStoreContractAcquirer(
     private val githubApiBaseUrl: String = OFFICIAL_GITHUB_API_BASE_URL,
     private val codeloadGitHubBaseUrl: String = OFFICIAL_CODELOAD_GITHUB_BASE_URL,
     private val catalogRefreshThrottle: CatalogRefreshThrottle = CatalogRefreshThrottle(),
+    private val responseLimits: ContractResponseLimits = ContractResponseLimits(),
 ) {
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
@@ -95,6 +96,7 @@ class SignedAppStoreContractAcquirer(
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
         val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId, catalogPolicy)
+        if (platformCatalog.refreshDenied) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
         val platformReleases = platformCatalog.releases
         val exactPlatformRelease = request.installedAppVersion?.let { installed ->
             platformReleases.firstOrNull { release -> release.version == installed }
@@ -102,6 +104,7 @@ class SignedAppStoreContractAcquirer(
         val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
             fetchCatalogReleases("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, catalogPolicy)
         }
+        if (allCatalog?.refreshDenied == true) return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
         val exactRelease = exactPlatformRelease
             ?: allCatalog?.releases?.firstOrNull { release -> release.version == request.installedAppVersion }
         val compatibleReleases = compatibleReleaseCandidates(
@@ -123,7 +126,7 @@ class SignedAppStoreContractAcquirer(
                 requireSuccessfulSource(response) {
                     "Downloading the signed ${request.appId} package failed (HTTP ${response.code})."
                 }
-                response.readBodyLimited(MAX_ARCHIVE_BYTES)
+                response.readBodyLimited(responseLimits.archiveBytes)
             } ?: continue
             val verified = try {
                 trustVerifier.verifyAndExtract(release, archive)
@@ -201,7 +204,7 @@ class SignedAppStoreContractAcquirer(
             val infoXml = fetchOptionalGitHubResource(
                 url = infoUrl,
                 expectedBaseUrl = rawGitHubBaseUrl,
-                maximumBytes = MAX_APP_INFO_BYTES,
+                maximumBytes = responseLimits.appInfoBytes,
             )?.decodeToString() ?: return@sourceLoop
             val identity = runCatching { parseAppInfoIdentity(infoXml) }.getOrNull() ?: return@sourceLoop
             if (identity.first != release.appId || identity.second != release.version) return@sourceLoop
@@ -211,7 +214,7 @@ class SignedAppStoreContractAcquirer(
             val treeBytes = fetchOptionalGitHubResource(
                 url = treeUrl,
                 expectedBaseUrl = githubApiBaseUrl,
-                maximumBytes = MAX_GITHUB_TREE_BYTES,
+                maximumBytes = responseLimits.githubTreeBytes,
                 accept = "application/vnd.github+json",
                 recoverableStatusCodes = setOf(403, 429),
             )
@@ -275,7 +278,7 @@ class SignedAppStoreContractAcquirer(
         val archive = fetchOptionalGitHubResource(
             url = archiveUrl,
             expectedBaseUrl = codeloadGitHubBaseUrl,
-            maximumBytes = MAX_ARCHIVE_BYTES,
+            maximumBytes = responseLimits.archiveBytes,
             recoverableStatusCodes = setOf(403, 429),
             // The archive is the last exact-tag fallback; a refusal here leaves the outcome unknown.
             onRecoverableStatus = attempt::markSourceTemporarilyUnavailable,
@@ -418,7 +421,12 @@ class SignedAppStoreContractAcquirer(
             }
             requireSecureResponse(githubResponse)
             requireExpectedOrigin(githubResponse, expectedBaseUrl)
-            githubResponse.readBodyLimited(maximumBytes)
+            // An oversized linked resource is unusable, like a missing one; the lower-trust fallback moves on.
+            try {
+                githubResponse.readBodyLimited(maximumBytes)
+            } catch (_: ContractSourceTooLargeException) {
+                null
+            }
         }
     }
 
@@ -429,17 +437,19 @@ class SignedAppStoreContractAcquirer(
     ): CatalogReleases {
         requireSecureUrl(catalogUrl)
         // A refresh only bypasses the cached copy; the copy stays until a readable catalog replaces it.
-        val bypassCache = catalogPolicy == CatalogPolicy.Refresh && catalogRefreshThrottle.tryRefresh(catalogUrl)
-        catalogCache.load(catalogUrl)?.takeUnless { bypassCache }?.let { cached ->
+        val refreshAllowed = catalogPolicy == CatalogPolicy.Refresh && catalogRefreshThrottle.tryRefresh(catalogUrl)
+        catalogCache.load(catalogUrl)?.takeUnless { refreshAllowed }?.let { cached ->
             return parseReleases(cached.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
         }
+        // A retry inside the refresh window never reaches the App Store, even without a cached copy.
+        if (catalogPolicy == CatalogPolicy.Refresh && !refreshAllowed) return CatalogReleases(emptyList(), refreshDenied = true)
         val response = execute(Request.Builder().url(catalogUrl).get().build())
         val bytes = response.use { catalogResponse ->
             requireSuccessfulSource(catalogResponse) {
                 "Loading the Nextcloud App Store catalog failed (HTTP ${catalogResponse.code})."
             }
             requireSecureResponse(catalogResponse)
-            catalogResponse.readBodyLimited(MAX_CATALOG_BYTES)
+            catalogResponse.readBodyLimited(responseLimits.catalogBytes)
         }
         // An unreadable document is not cached, so checking again downloads the catalog again.
         return parseReleases(bytes.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
@@ -471,10 +481,6 @@ class SignedAppStoreContractAcquirer(
         const val OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com"
         const val OFFICIAL_GITHUB_API_BASE_URL = "https://api.github.com"
         const val OFFICIAL_CODELOAD_GITHUB_BASE_URL = "https://codeload.github.com"
-        private const val MAX_CATALOG_BYTES = 32L * 1024L * 1024L
-        private const val MAX_ARCHIVE_BYTES = 64L * 1024L * 1024L
-        private const val MAX_APP_INFO_BYTES = 512L * 1024L
-        private const val MAX_GITHUB_TREE_BYTES = 8L * 1024L * 1024L
         private val APP_ID_PATTERN = Regex("[A-Za-z0-9_.-]+")
         private val APP_VERSION_PATTERN = Regex("[0-9A-Za-z][0-9A-Za-z.+_-]*")
     }
@@ -654,7 +660,7 @@ internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
 private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
     val responseBody = body
     val declaredLength = responseBody.contentLength()
-    check(declaredLength < 0 || declaredLength <= maximumBytes) { "The response is too large." }
+    if (declaredLength > maximumBytes) throw ContractSourceTooLargeException(maximumBytes, "The response is too large.")
     return responseBody.byteStream().use { input ->
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -663,7 +669,7 @@ private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
             val read = input.read(buffer)
             if (read == -1) break
             total += read
-            check(total <= maximumBytes) { "The response is too large." }
+            if (total > maximumBytes) throw ContractSourceTooLargeException(maximumBytes, "The response is too large.")
             output.write(buffer, 0, read)
         }
         output.toByteArray()

@@ -191,6 +191,10 @@ The fallback card derives its title, explanation, and action from that reason:
   digest;
 - the app's linked source refused or rate limited the last fallback request
   (HTTP 403 or 429), so a contract may still exist;
+- an explicit retry came less than a minute after the previous catalog check
+  and no saved catalog could be reused;
+- the App Store returned data this version cannot use, such as a response over
+  its size limit;
 - the server's own API catalog or contract probe was inconclusive;
 - the server rejected the account's credentials, or the account may not read
   the server's API catalog, during that probe;
@@ -231,9 +235,13 @@ App Store catalogs are cached for six hours. The first discovery of an app
 screen uses the cache. A discovery started by, or after, an explicit retry on
 that screen carries `AppStoreCatalogPolicy.RefreshCatalog` through the platform
 boundary to the acquirer, which downloads each catalog again at most once per
-minute per catalog URL; retries inside that window reuse the cached copy. A
-forced download that fails or is unreadable leaves the cached catalog in place,
-because only a readable catalog replaces it.
+minute per catalog URL. A retry inside that window reuses the cached copy; if
+none is available, for example after a cold start or an expired entry, it makes
+no request and reports `RecentlyChecked`. Explicit retries therefore cause at
+most one App Store request per catalog URL per window. Automatic discovery
+without a cached catalog downloads it normally. A forced download that fails or
+is unreadable leaves the cached catalog in place, because only a readable
+catalog replaces it.
 
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
@@ -257,12 +265,43 @@ wins among equals:
 A 404, another definitive status, a non-JSON response at a static contract
 location, an empty or non-advertising OCS API Viewer catalog, or a well-formed
 spec list that is empty or names only other apps is absence and
-records nothing. When the App Store then completes without a contract, or no
-release can be selected because the server version is unavailable, any recorded
-server result takes precedence over the App Store or version reason. A
+records nothing. Every App Store path that ends without a usable contract goes
+through one precedence point: no release can be selected because the server
+version is unavailable, no release or contract exists, acquisition fails with a
+typed or unexpected failure, or an acquired contract cannot be parsed or
+compiled. Any recorded server result takes precedence over that reason. A
 definitive server absence keeps the App Store or version reason. Diagnostics
 record both sources either way, and never include request URLs, headers, or
 response bodies.
+
+### Failure classification
+
+Every failure caused by remote or source data maps to a typed source outcome,
+every network failure maps to a network or temporarily unavailable outcome, and
+only genuine client faults remain unexpected. Size limits throw
+`ContractSourceTooLargeException`, a source failure.
+
+| Site | Failure | Classification |
+| --- | --- | --- |
+| Request validation | Malformed app ID, server version, or installed version | Invalid request, shown as an unconfirmed version |
+| Verified contract cache | Missing, expired, or unreadable entry | Ignored; acquisition continues |
+| Catalog and package requests | No response; non-success status; redirect away from HTTPS | Network; source unavailable; verification failed |
+| Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
+| Catalog document | Truncated, empty, not JSON, or not an array | Malformed source, never cached |
+| Catalog entry | Missing value, or a download that is not an HTTP URL | Malformed source when it would be selected |
+| Catalog cache write | Local storage failure | Ignored |
+| Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
+| Package verification | Signature, certificate, revocation, identity, archive structure, or app metadata rejected | Verification failed |
+| Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |
+| Package OpenAPI JSON or YAML | Unreadable or not OpenAPI 3 | Candidate skipped |
+| Linked metadata, tree, spec, and schema requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; network |
+| Linked archive request | HTTP 403 or 429 | Source temporarily unavailable |
+| Linked archive content | Corrupt, unsafe path, identity mismatch, malformed or misencoded `info.xml`, size limit | No candidate |
+| Linked JSON or YAML documents | Unreadable | Skipped |
+| Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract |
+| Contract module class loading | `LinkageError` | Client fault |
+| Same-origin probes | See the precedence list above | Typed probe result |
+| Remaining unexpected failures | XML parser configuration, internal invariants | Client fault |
 
 ## Read failures
 

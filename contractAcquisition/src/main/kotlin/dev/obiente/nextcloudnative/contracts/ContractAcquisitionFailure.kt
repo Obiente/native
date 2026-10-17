@@ -24,6 +24,9 @@ enum class ContractAcquisitionFailureKind {
     /** The server-reported app ID or version cannot select a release safely. */
     InvalidRequest,
 
+    /** A source returned data that cannot be used, such as a response over its size limit. */
+    SourceUnusable,
+
     /** This runtime could not load or initialize acquisition code. */
     RuntimeIncompatible,
 
@@ -33,6 +36,12 @@ enum class ContractAcquisitionFailureKind {
 
 /** A contract source answered, but not with the requested resource. */
 class ContractSourceHttpException(val status: Int, message: String) : IllegalStateException(message)
+
+/**
+ * A response or archive exceeded a declared, streamed, or expanded size or count limit. The remote
+ * source, not the client, is at fault.
+ */
+class ContractSourceTooLargeException(val limit: Long, message: String) : IllegalStateException(message)
 
 /** A package or source failed verification. The original failure stays available as the cause. */
 class ContractSourceVerificationException(message: String, cause: Throwable? = null) :
@@ -50,6 +59,7 @@ class ContractAcquisitionRequestException(message: String) : IllegalArgumentExce
  */
 fun classifyContractAcquisitionFailure(failure: Throwable): ContractAcquisitionFailureKind = when (failure) {
     is ContractSourceHttpException -> ContractAcquisitionFailureKind.SourceUnavailable
+    is ContractSourceTooLargeException -> ContractAcquisitionFailureKind.SourceUnusable
     is ContractSourceVerificationException -> ContractAcquisitionFailureKind.VerificationFailed
     is ContractAcquisitionRequestException -> ContractAcquisitionFailureKind.InvalidRequest
     is IOException -> ContractAcquisitionFailureKind.Network
@@ -76,6 +86,8 @@ internal inline fun requireSuccessfulSource(response: Response, message: () -> S
  */
 internal fun Exception.asSourceVerificationFailure(appId: String): RuntimeException = when (this) {
     is CancellationException -> this
+    // An oversized package is unusable source data rather than a failed signature or identity check.
+    is ContractSourceTooLargeException -> this
     is ContractSourceVerificationException -> this
     else -> ContractSourceVerificationException("The signed $appId package was rejected.", this)
 }
