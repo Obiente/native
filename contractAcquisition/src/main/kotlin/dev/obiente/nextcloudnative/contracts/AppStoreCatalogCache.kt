@@ -2,11 +2,61 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 interface AppStoreCatalogCache {
     fun load(url: String): ByteArray?
     fun store(url: String, bytes: ByteArray)
+}
+
+/**
+ * Publishes a downloaded catalog without letting local storage decide the acquisition result.
+ *
+ * The catalog bytes are already in memory, so a read-only cache directory or a full disk only
+ * costs a later re-download. Like verified-contract caching, publication is best effort; a local
+ * write failure must never be reported as an unreachable App Store.
+ */
+internal fun AppStoreCatalogCache.storeBestEffort(url: String, bytes: ByteArray) {
+    try {
+        store(url, bytes)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The next acquisition downloads the catalog again.
+    }
+}
+
+/**
+ * Whether acquisition may reuse cached catalogs and verified contracts. Only an explicit user retry
+ * asks for [Refresh]; cached copies stay until a newly verified result replaces them.
+ */
+enum class AcquisitionCachePolicy { UseCache, Refresh }
+
+/**
+ * Bounds explicit catalog refreshes to one forced download per catalog URL per interval. A retry
+ * inside the window reuses the cached catalog, so repeated presses cannot hammer the App Store.
+ * A forced download counts even when it fails.
+ */
+class CatalogRefreshThrottle(
+    private val intervalMillis: Long = DEFAULT_CATALOG_REFRESH_INTERVAL_MILLIS,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) {
+    private val lastRefresh = ConcurrentHashMap<String, Long>()
+
+    /** Returns true, and starts a new window, when [url] may be downloaded again now. */
+    fun tryRefresh(url: String): Boolean {
+        val now = nowMillis()
+        var allowed = false
+        lastRefresh.compute(url) { _, previous ->
+            if (previous == null || now - previous !in 0 until intervalMillis) now.also { allowed = true } else previous
+        }
+        return allowed
+    }
+
+    companion object {
+        const val DEFAULT_CATALOG_REFRESH_INTERVAL_MILLIS = 60_000L
+    }
 }
 
 class MemoryAppStoreCatalogCache : AppStoreCatalogCache {
