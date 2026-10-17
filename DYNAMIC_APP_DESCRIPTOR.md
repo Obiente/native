@@ -253,6 +253,12 @@ unreadable catalog, a reason of its own, because no entry could be read; it is
 never cached, so checking again downloads it again.
 A corrupt or mismatched App Store-linked source archive yields no candidate,
 like an archive without a contract, instead of an unexpected client fault.
+When the exact installed release cannot be inspected and the patch-compatible
+candidates provide no contract, the result keeps the exact release's reason:
+an unreadable catalog or a malformed exact entry outranks `NoUsableContract`,
+which would claim that the matching releases provide no API. A linked source
+that refused or rate limited a request still outranks both, because a contract
+may exist there.
 
 App Store catalogs are cached for six hours. The first discovery of an app
 screen uses the cache. A discovery started by, or after, an explicit retry on
@@ -279,15 +285,29 @@ life of the process, makes every later read a miss, and each later read or
 store retries the deletion. A `VERIFIED_CONTRACT_DELETION_FAILED` warning
 diagnostic records which of the two applied, with no path or exception text.
 
+Publication of verified contracts is ordered per app, server version, and
+installed version. Each acquisition takes a generation when it starts, and its
+result is published only when no acquisition that started later has already
+published and no invalidation has happened since it started. A slower
+automatic acquisition that began before an explicit retry therefore cannot
+overwrite the retry's result; its caller receives the newer contract instead.
+The ordering is kept in memory for each acquirer and never waits for another
+acquisition, so a cancelled or failed acquisition cannot hold back later ones.
+
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
 When probes disagree, the highest-precedence result wins, and the first one
 wins among equals:
 
 1. HTTP 401 (`AuthenticationRequired`): the card asks the person to sign in
-   again.
+   again and offers no retry, because checking again would resend the rejected
+   credentials. The app has no reauthentication within a session, so the card
+   names the way to sign in again: Settings, Account, then Sign out and revoke
+   access.
 2. HTTP 403 (`PermissionDenied`): the account may not read the catalog, which
-   may be limited to administrators.
+   may be limited to administrators. Its Check again action stays, and the card
+   says that checking again helps only after an administrator grants access or
+   the App Store adds a release.
 3. Inconclusive results that a retry may resolve: no response, a 5xx status,
    HTTP 429, or a successful catalog or contract response that is not readable
    JSON or declares no OpenAPI version (`UnreadableResponse`). An OCS API
@@ -325,10 +345,12 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
 | Catalog document | Truncated, empty, not JSON, or not an array | Unreadable catalog, never cached |
 | Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
+| Exact release after compatible candidates | Exact catalog unreadable or exact entry malformed, and no compatible candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
+| Verified contract publication | The acquisition was superseded by a later one or by an invalidation | Not published; the newer state stays |
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
-| Package verification | Signature, certificate, revocation, identity, archive structure, or app metadata rejected | Verification failed |
-| Package verification | Bundled trust resource missing | Client fault (runtime incompatible); retrying cannot repair it |
+| Package verification | The package's signature, certificate, chain, revocation, identity, archive structure, or app metadata rejected | Verification failed |
+| Package verification | Bundled root certificate or revocation list missing, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
 | Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |
 | Package OpenAPI JSON or YAML | Unreadable or not OpenAPI 3 | Candidate skipped |
 | Linked metadata, tree, spec, and schema requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; network |
