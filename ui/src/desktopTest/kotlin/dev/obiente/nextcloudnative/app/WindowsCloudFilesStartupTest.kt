@@ -82,6 +82,27 @@ class WindowsCloudFilesStartupTest {
         }
     }
 
+    @Test
+    fun `Windows native calls handle paths beyond MAX_PATH`() {
+        assumeTrue(isWindowsDesktop())
+        val root = createTempDirectory("cloud-native-long-")
+        try {
+            val deep = (1..6).fold(root) { parent, level -> parent.resolve("Synthetic shoot folder level $level".padEnd(48, 'x')) }
+            Files.createDirectories(deep)
+            val raw = Files.write(deep.resolve("synthetic-frame-0001.raw"), ByteArray(4_096) { 1 })
+            assertTrue(raw.toAbsolutePath().toString().length > 260)
+
+            assertEquals(listOf(raw), windowsCloudLocalChildren(deep))
+            val api = JnaWindowsCloudFilesApi(shellRegistrar = PackagedWindowsCloudShellRegistrar(launcherPath = null))
+            assertTrue(raw in api.localTree(root).toSet())
+            assertEquals(WindowsCloudPlaceholderEntryState.Local, api.inspectPlaceholder(raw).state)
+            assertEquals(WindowsCloudPlaceholderEntryState.Local, api.inspectPlaceholder(deep).state)
+            assertEquals(4_096L, api.allocatedBytes(raw))
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private class RootBackend : WindowsCloudFilesBackend {
         override val accountId = "synthetic-account"
         override val displayName = "Synthetic account"

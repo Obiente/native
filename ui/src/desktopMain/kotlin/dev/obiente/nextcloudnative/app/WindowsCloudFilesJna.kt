@@ -227,7 +227,7 @@ internal class JnaWindowsCloudFilesApi(
         val native = NativePlaceholderArray(placeholders)
         val processed = IntByReference()
         val result = cldApi.CfCreatePlaceholders(
-            WString(baseDirectory.toAbsolutePath().toString()),
+            WString(baseDirectory.toWindowsWin32Path()),
             native.firstPointer,
             placeholders.size,
             CF_CREATE_FLAG_STOP_ON_ERROR,
@@ -386,7 +386,7 @@ internal class JnaWindowsCloudFilesApi(
     override fun inspectPlaceholder(path: Path): WindowsCloudPlaceholderInspection {
         val findData = WinBase.WIN32_FIND_DATA()
         Native.setLastError(0)
-        val handle = Kernel32.INSTANCE.FindFirstFile(path.toAbsolutePath().toString(), findData.pointer)
+        val handle = Kernel32.INSTANCE.FindFirstFile(path.toWindowsWin32Path(), findData.pointer)
         if (WinBase.INVALID_HANDLE_VALUE == handle) {
             return windowsCloudPlaceholderInspection(
                 findSucceeded = false,
@@ -419,7 +419,7 @@ internal class JnaWindowsCloudFilesApi(
     override fun allocatedBytes(path: Path): Long {
         if (!Files.isRegularFile(path)) return 0L
         val high = IntByReference()
-        val low = kernelFiles.GetCompressedFileSizeW(WString(path.toAbsolutePath().toString()), high)
+        val low = kernelFiles.GetCompressedFileSizeW(WString(path.toWindowsWin32Path()), high)
         if (low == -1 && Native.getLastError() != 0) return 0L
         return ((high.value.toLong() and 0xffff_ffffL) shl 32) or (low.toLong() and 0xffff_ffffL)
     }
@@ -628,7 +628,7 @@ internal class JnaWindowsCloudFilesApi(
         block: (WinNT.HANDLE) -> T,
     ): T {
         val handle = Kernel32.INSTANCE.CreateFile(
-            path.toAbsolutePath().toString(),
+            path.toWindowsWin32Path(),
             if (write) WinNT.GENERIC_WRITE else WinNT.FILE_READ_ATTRIBUTES,
             if (exclusive) 0 else WinNT.FILE_SHARE_READ or WinNT.FILE_SHARE_WRITE or WinNT.FILE_SHARE_DELETE,
             null,
@@ -657,7 +657,7 @@ internal class JnaWindowsCloudFilesApi(
         val handle = WinNT.HANDLEByReference()
         val flags = windowsCloudOpenFileFlags(write, exclusive)
         checkHResult(
-            cldApi.CfOpenFileWithOplock(WString(path.toAbsolutePath().toString()), flags, handle),
+            cldApi.CfOpenFileWithOplock(WString(path.toWindowsWin32Path()), flags, handle),
             "open a Windows Cloud Files placeholder for update",
         )
         return try {
@@ -670,7 +670,7 @@ internal class JnaWindowsCloudFilesApi(
     private inline fun <T> withFindData(path: Path, fallback: T, block: (WinBase.WIN32_FIND_DATA) -> T): T {
         if (!Files.exists(path)) return fallback
         val findData = WinBase.WIN32_FIND_DATA()
-        val handle = Kernel32.INSTANCE.FindFirstFile(path.toAbsolutePath().toString(), findData.pointer)
+        val handle = Kernel32.INSTANCE.FindFirstFile(path.toWindowsWin32Path(), findData.pointer)
         if (WinBase.INVALID_HANDLE_VALUE == handle) return fallback
         return try {
             findData.read()
