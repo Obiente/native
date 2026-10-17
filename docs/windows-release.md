@@ -165,10 +165,45 @@ Ordinary startup recovers identities and dirty edits from resident placeholders;
 it does not prefetch the complete remote namespace. Explicit corrupt-root repair
 and legacy migration retain their separate reconciliation gates.
 
+Every file placeholder is a reparse point with an `IO_REPARSE_TAG_CLOUD*` tag,
+which Java NIO reports as neither a regular file nor a directory. The
+enumeration therefore treats a non-directory entry as a file when it has no
+reparse point or a Cloud Files reparse tag. Symbolic links, devices, and other
+reparse points remain excluded. A dirty file placeholder found at startup is
+uploaded with the revision recorded in its placeholder identity. A changed
+server copy or an ambiguous earlier upload is rejected by that revision, so the
+placeholder stays dirty and its failed writeback stays visible instead of
+being overwritten or marked in sync.
+
+In the desktop test JVM, whose process placeholder compatibility mode is
+`PHCM_DISGUISE_PLACEHOLDER`, placeholders enumerate with their cloud reparse tag
+only while that process is the connected provider. Before it connects, the same
+file enumerates as a plain file without a reparse tag. Placeholder
+classification is therefore meaningful only after connection. The packaged
+launcher's mode has not been measured.
+
+**Last reviewed: 2026-10-17.** Known limitation, which may have changed since:
+on a local Windows 11 sync root, the startup upload of a dirty placeholder
+reached the synthetic server, but the following `CfUpdatePlaceholder` call
+failed with `HRESULT 0x80070006` because it received the protected handle from
+`CfOpenFileWithOplock` instead of a Win32 handle. A Win32 handle obtained from
+the protected handle instead failed with `0x80070179` while
+`CF_UPDATE_FLAG_VERIFY_IN_SYNC` was set, since a dirty file is never in sync.
+The placeholder therefore stays dirty, and later attempts are rejected by the
+original revision guard. Nothing is overwritten, but the item keeps reporting
+a failed writeback after its content reached the server. The same placeholder
+update path serves runtime writeback.
+
 `WindowsCloudFilesStartupTest` covers remote-list scope, resident traversal,
-and native enumeration on Windows. `WindowsCloudFilesProviderTest` covers the
-existing recovery and writeback behavior. These tests do not replace the
-Explorer and published-MSI acceptance checks above.
+and native enumeration on Windows. `WindowsCloudFilesPlaceholderRecoveryTest`
+covers startup writeback of dirty file placeholders, including restart, a
+changed server copy, and a lost upload response, with deterministic doubles.
+Its native Windows case edits a hydrated placeholder while the provider is
+disconnected and verifies that the next start finds it and uploads it against
+the original revision. Because of the limitation above, it does not assert the
+final in-sync state. `WindowsCloudFilesProviderTest` covers the remaining
+recovery and writeback behavior. These tests do not replace the Explorer and
+published-MSI acceptance checks above.
 
 ## WinGet delivery
 

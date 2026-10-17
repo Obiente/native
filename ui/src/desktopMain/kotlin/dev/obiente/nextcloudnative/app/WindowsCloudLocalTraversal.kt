@@ -12,6 +12,9 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 
+private const val IO_REPARSE_TAG_CLOUD = 0x9000001A.toInt()
+private const val IO_REPARSE_TAG_CLOUD_MASK = 0x0000F000
+
 /**
  * One resident entry with the metadata the startup scan needs.
  *
@@ -22,33 +25,48 @@ import java.nio.file.attribute.BasicFileAttributes
 internal data class WindowsCloudLocalEntry(
     val path: Path,
     val directory: Boolean,
-    val regularFile: Boolean,
+    /** A plain file or a Cloud Files file placeholder; never a link, device or foreign reparse point. */
+    val file: Boolean,
     val symbolicLink: Boolean,
     val inspection: WindowsCloudPlaceholderInspection,
 )
 
-/** Classifies like Java NIO with NOFOLLOW_LINKS so native and Files-based scans agree exactly. */
+/**
+ * Classifies links and directories like Java NIO with NOFOLLOW_LINKS.
+ *
+ * Java NIO reports every non-link reparse point as "other", and every Cloud Files file
+ * placeholder carries a cloud reparse tag. Those placeholders are the files this provider owns,
+ * so a cloud tag keeps an entry a file while any other reparse tag or a device does not.
+ */
 internal fun windowsCloudLocalEntry(
     path: Path,
     fileAttributes: Int,
     reparseTag: Int,
     inspection: WindowsCloudPlaceholderInspection,
 ): WindowsCloudLocalEntry {
-    val symbolicLink = fileAttributes and WinNT.FILE_ATTRIBUTE_REPARSE_POINT != 0 &&
-        reparseTag == WinNT.IO_REPARSE_TAG_SYMLINK
+    val reparsePoint = fileAttributes and WinNT.FILE_ATTRIBUTE_REPARSE_POINT != 0
+    val symbolicLink = reparsePoint && reparseTag == WinNT.IO_REPARSE_TAG_SYMLINK
     val directory = !symbolicLink && fileAttributes and WinNT.FILE_ATTRIBUTE_DIRECTORY != 0
-    val other = !symbolicLink &&
-        fileAttributes and (WinNT.FILE_ATTRIBUTE_DEVICE or WinNT.FILE_ATTRIBUTE_REPARSE_POINT) != 0
-    return WindowsCloudLocalEntry(path, directory, !symbolicLink && !directory && !other, symbolicLink, inspection)
+    val file = !symbolicLink && !directory &&
+        fileAttributes and WinNT.FILE_ATTRIBUTE_DEVICE == 0 &&
+        (!reparsePoint || isWindowsCloudFilesReparseTag(reparseTag))
+    return WindowsCloudLocalEntry(path, directory, file, symbolicLink, inspection)
 }
 
-/** Builds an entry from Java NIO attributes; used for the root and by non-native test doubles. */
+/** IO_REPARSE_TAG_CLOUD through IO_REPARSE_TAG_CLOUD_F differ only in IO_REPARSE_TAG_CLOUD_MASK. */
+internal fun isWindowsCloudFilesReparseTag(reparseTag: Int): Boolean =
+    reparseTag and IO_REPARSE_TAG_CLOUD_MASK.inv() == IO_REPARSE_TAG_CLOUD
+
+/**
+ * Builds an entry from Java NIO attributes; used for the root and by non-native test doubles.
+ * NIO cannot read reparse tags, so only the native enumeration recognizes file placeholders.
+ */
 internal fun WindowsCloudFilesApi.localEntry(path: Path): WindowsCloudLocalEntry {
     val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
     return WindowsCloudLocalEntry(
         path = path,
         directory = attributes.isDirectory,
-        regularFile = attributes.isRegularFile,
+        file = attributes.isRegularFile,
         symbolicLink = attributes.isSymbolicLink,
         inspection = inspectPlaceholder(path),
     )

@@ -2086,7 +2086,7 @@ internal class WindowsCloudFilesProvider(
                         inspection.state == WindowsCloudPlaceholderEntryState.Local
                     ) return@forEach
                     val directory = entry.directory
-                    if (!directory && !entry.regularFile) return@forEach
+                    if (!directory && !entry.file) return@forEach
                     val original = api.placeholderIdentity(local)
                         ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
                         ?.takeIf { identity ->
