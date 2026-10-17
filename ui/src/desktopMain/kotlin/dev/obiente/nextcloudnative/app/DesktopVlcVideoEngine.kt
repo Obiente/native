@@ -166,15 +166,25 @@ internal class DesktopVlcVideoEngine(
         released = true
         try {
             executor.execute {
-                player?.let { active ->
-                    active.controls().stop()
-                    active.release()
+                // Each step runs even if an earlier one throws, as libVLC may after a native failure.
+                val active = player
+                try {
+                    active?.controls()?.stop()
+                } catch (_: RuntimeException) {
+                    // Stopping failed; releasing below still frees the native player.
+                } finally {
+                    try {
+                        active?.release()
+                    } catch (_: RuntimeException) {
+                        // Nothing further can be released for this player.
+                    } finally {
+                        player = null
+                        media = null
+                        bufferFormatCallback = null
+                        renderCallback = null
+                        frames.close()
+                    }
                 }
-                player = null
-                media = null
-                bufferFormatCallback = null
-                renderCallback = null
-                frames.close()
             }
         } catch (_: RejectedExecutionException) {
             frames.close()

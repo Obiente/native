@@ -92,8 +92,22 @@ internal object AndroidViewerVideoSessionBridge {
         current = player
         listener?.invoke(player)
         // Starting on every attachment keeps the service started even if a stop was pending.
-        context.startService(Intent(context, AndroidViewerVideoSessionService::class.java))
+        startService(context)
         return token
+    }
+
+    /** Starts the service for an attached player whose earlier start was refused in the background. */
+    fun ensureStarted(context: Context) {
+        if (current != null) startService(context)
+    }
+
+    private fun startService(context: Context) {
+        try {
+            context.startService(Intent(context, AndroidViewerVideoSessionService::class.java))
+        } catch (_: IllegalStateException) {
+            // Android refuses service starts while the app is in the background; the viewer
+            // retries from ensureStarted when its activity starts again.
+        }
     }
 
     fun detach(attachment: Long) {

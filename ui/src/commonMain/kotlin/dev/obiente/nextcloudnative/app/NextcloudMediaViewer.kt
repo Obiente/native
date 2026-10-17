@@ -699,7 +699,7 @@ internal fun NextcloudMediaViewer(
                         nativeVideoFailure = null
                     },
                     onOpenExternal = ::openInMediaApp,
-                    onShowStillPhoto = { motionPlaying = false; nativeVideoFailure = null },
+                    onShowStillPhoto = { motionPlaying = false; nativeVideoFailure = null; chromeVisible = true },
                     modifier = Modifier
                         .align(if (motionOnly) Alignment.BottomCenter else Alignment.Center)
                         .padding(

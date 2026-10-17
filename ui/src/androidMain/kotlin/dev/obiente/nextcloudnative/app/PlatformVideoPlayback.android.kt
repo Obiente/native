@@ -161,7 +161,12 @@ private fun Media3VideoPlayer(
     val active = player
     DisposableEffect(active, lifecycleOwner) {
         val lifecycleObserver = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) active?.pause()
+            when (event) {
+                Lifecycle.Event.ON_STOP -> active?.pause()
+                // A player that attached while the app was in the background gets its session now.
+                Lifecycle.Event.ON_START -> AndroidViewerVideoSessionBridge.ensureStarted(context.applicationContext)
+                else -> Unit
+            }
         }
         lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
         onDispose { lifecycleOwner.lifecycle.removeObserver(lifecycleObserver) }
