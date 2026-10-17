@@ -4,4 +4,4 @@ pull: 518
 platforms: windows
 user-facing: yes
 
-Windows Cloud Files now frees space from downloaded files when you choose Free up space or when automatic cleanup runs, and the storage summary counts downloaded files, instead of reporting nothing to free. Edited, pinned, and open files are still kept on the computer.
+Windows Cloud Files Free up space, automatic cleanup, and the storage summary now count and free downloaded files instead of finding nothing. Edited, pinned, and open files stay on the computer.

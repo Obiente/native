@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import com.sun.jna.Native
+import com.sun.jna.WString
+import com.sun.jna.ptr.IntByReference
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -51,8 +54,7 @@ class WindowsCloudFilesDehydrationTest {
         withNativeRoot { root, _, api, provider ->
             val photo = root.resolve("photo.bin")
             assertContentEquals(CONTENT, Files.readAllBytes(photo))
-            val allocated = api.allocatedBytes(photo)
-            assertTrue(allocated > 0L, "A hydrated placeholder reported no allocated bytes.")
+            val allocated = awaitAllocated(api, photo)
             provider.summary().let { summary ->
                 assertEquals(1, summary.hydratedFileCount)
                 assertEquals(allocated, summary.cachedBytes)
@@ -65,7 +67,7 @@ class WindowsCloudFilesDehydrationTest {
             assertEquals(WindowsCloudPlaceholderState.InSync, api.placeholderState(photo))
             assertEquals(0L, provider.summary().cachedBytes)
             assertContentEquals(CONTENT, Files.readAllBytes(photo))
-            assertEquals(allocated, api.allocatedBytes(photo))
+            assertEquals(allocated, awaitAllocated(api, photo))
         }
 
     @Test
@@ -73,8 +75,7 @@ class WindowsCloudFilesDehydrationTest {
         withNativeRoot { root, _, api, provider ->
             val photo = root.resolve("photo.bin")
             assertContentEquals(CONTENT, Files.readAllBytes(photo))
-            val allocated = api.allocatedBytes(photo)
-            assertTrue(allocated > 0L)
+            val allocated = awaitAllocated(api, photo)
             val policy = VirtualFileCachePolicy(maximumCacheBytes = 1L, minimumFreeSpaceBytes = 0L, unusedFileAgeMillis = null)
 
             assertEquals(allocated, provider.enforcePolicy(policy))
@@ -95,9 +96,8 @@ class WindowsCloudFilesDehydrationTest {
             // The server stays unavailable, so the edit remains the only copy.
             backend.unavailableUploads = Int.MAX_VALUE
             editInPlaceFromAnotherProcess(draft, EDIT)
-            awaitCondition("dirty draft") { api.placeholderState(draft) == WindowsCloudPlaceholderState.Dirty }
-            val allocated = listOf(draft, pinned, open).associateWith(api::allocatedBytes)
-            assertTrue(allocated.values.all { it > 0L }, "Hydrated placeholders reported no allocated bytes: $allocated")
+            awaitCondition({ "dirty draft" }) { api.placeholderState(draft) == WindowsCloudPlaceholderState.Dirty }
+            val allocated = listOf(draft, pinned, open).associateWith { awaitAllocated(api, it) }
 
             // An application that denies write sharing keeps the file open; Windows reports it in use.
             ExternalOpenHandle(open, share = "Read").use {
@@ -148,10 +148,30 @@ class WindowsCloudFilesDehydrationTest {
         }
     }
 
-    private fun awaitCondition(label: String, condition: () -> Boolean) {
+    /**
+     * Waits, within a bound, until a hydrated file reports its whole size as allocated. Reading the
+     * content does not guarantee that a single allocation sample already includes every cluster.
+     */
+    private fun awaitAllocated(api: JnaWindowsCloudFilesApi, path: Path): Long {
+        awaitCondition({ "allocated bytes of ${path.fileName}: ${allocationDiagnostics(api, path)}" }) {
+            api.allocatedBytes(path) >= CONTENT.size
+        }
+        return api.allocatedBytes(path)
+    }
+
+    private fun allocationDiagnostics(api: JnaWindowsCloudFilesApi, path: Path): String {
+        val high = IntByReference()
+        val low = Native.load("kernel32", KernelFileApi::class.java)
+            .GetCompressedFileSizeW(WString(path.toWindowsWin32Path()), high)
+        val error = Native.getLastError()
+        return "reported=${api.allocatedBytes(path)}, raw=$low/${high.value}, error=$error, " +
+            "pinned=${api.isPinned(path)}, inspection=${api.inspectPlaceholder(path)}"
+    }
+
+    private fun awaitCondition(label: () -> String, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
         while (!condition()) {
-            check(System.nanoTime() < deadline) { "Timed out waiting for $label." }
+            check(System.nanoTime() < deadline) { "Timed out waiting for ${label()}." }
             Thread.sleep(10)
         }
     }
