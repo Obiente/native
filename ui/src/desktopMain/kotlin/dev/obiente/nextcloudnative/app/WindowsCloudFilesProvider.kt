@@ -211,6 +211,7 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
         }
     }
     fun localChildren(directory: Path): List<Path> = Files.list(directory).use { it.toList() }
+    fun localEntries(directory: Path): List<WindowsCloudLocalEntry> = localChildEntries(directory)
     fun allocatedBytes(path: Path): Long
     fun lastAccessedAtEpochMillis(path: Path): Long
     fun isPinned(path: Path): Boolean
@@ -1959,9 +1960,7 @@ internal class WindowsCloudFilesProvider(
     private fun startLocalWatcher() {
         val watcher = root.fileSystem.newWatchService()
         watchService = watcher
-        api.localTree(root).let { paths ->
-            paths.filter(Files::isDirectory).forEach { directory -> directory.registerForWindowsCloudChanges(watcher) }
-        }
+        api.localEntryTree(root).filter { it.directory }.forEach { it.path.registerForWindowsCloudChanges(watcher) }
         watcherThread = Thread({
             while (!Thread.currentThread().isInterrupted) {
                 val key = try {
@@ -1982,10 +1981,8 @@ internal class WindowsCloudFilesProvider(
                             !Files.isSymbolicLink(child)
                         ) {
                             runCatching {
-                                api.localTree(child).let { descendants ->
-                                    descendants.filter { path -> Files.isDirectory(path) && !Files.isSymbolicLink(path) }
-                                        .forEach { descendant -> descendant.registerForWindowsCloudChanges(watcher) }
-                                }
+                                api.localEntryTree(child).filter { it.directory }
+                                    .forEach { descendant -> descendant.path.registerForWindowsCloudChanges(watcher) }
                             }
                         }
                         if (event.kind() != StandardWatchEventKinds.ENTRY_DELETE) scheduleLocalChange(child)
@@ -2024,14 +2021,13 @@ internal class WindowsCloudFilesProvider(
 
     private fun recoverUnmanagedLocalEntries(failClosed: Boolean = false) {
         val recover = {
-            val unmanaged = api.localTree(root).let { paths ->
-                paths.filter { path -> path != root && Files.exists(path) }
-                    .filter { path ->
-                        inspectPlaceholderForRecovery(path).state == WindowsCloudPlaceholderEntryState.Local
-                    }
-                    .sortedBy { it.nameCount }
-                    .toList()
-            }
+            val unmanaged = api.localEntryTree(root).filter { entry -> entry.path != root }
+                .filter { entry ->
+                    checkRecoveryInspection(entry.path, entry.inspection).state == WindowsCloudPlaceholderEntryState.Local
+                }
+                .map { it.path }
+                .sortedBy { it.nameCount }
+                .toList()
             unmanaged.forEach { path ->
                 val relative = root.toAbsolutePath().normalize().relativize(path.toAbsolutePath().normalize())
                     .joinToString("/") { it.toString() }.windowsCloudPath()
@@ -2080,16 +2076,17 @@ internal class WindowsCloudFilesProvider(
         allowWhilePaused: Boolean = false,
     ) {
         val recover = {
-            api.localTree(root).let { paths ->
-                paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
-                    val inspection = inspectPlaceholderForRecovery(local)
+            api.localEntryTree(root).let { entries ->
+                entries.filter { entry -> entry.path != root }.forEach { entry ->
+                    val local = entry.path
+                    val inspection = checkRecoveryInspection(local, entry.inspection)
                     val state = inspection.placeholderState
                     if (
                         inspection.state == WindowsCloudPlaceholderEntryState.Missing ||
                         inspection.state == WindowsCloudPlaceholderEntryState.Local
                     ) return@forEach
-                    val directory = Files.isDirectory(local, LinkOption.NOFOLLOW_LINKS)
-                    if (!directory && !Files.isRegularFile(local, LinkOption.NOFOLLOW_LINKS)) return@forEach
+                    val directory = entry.directory
+                    if (!directory && !entry.regularFile) return@forEach
                     val original = api.placeholderIdentity(local)
                         ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
                         ?.takeIf { identity ->
@@ -2136,8 +2133,10 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
-    private fun inspectPlaceholderForRecovery(path: Path): WindowsCloudPlaceholderInspection {
-        val inspection = api.inspectPlaceholder(path)
+    private fun checkRecoveryInspection(
+        path: Path,
+        inspection: WindowsCloudPlaceholderInspection,
+    ): WindowsCloudPlaceholderInspection {
         when (inspection.state) {
             WindowsCloudPlaceholderEntryState.Corrupt -> throw corruptPlaceholder(
                 identity = null,
