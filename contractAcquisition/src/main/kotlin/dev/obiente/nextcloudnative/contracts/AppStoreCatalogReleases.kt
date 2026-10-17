@@ -2,10 +2,21 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.net.URI
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 /** Which required catalog value made an entry for the requested app unusable. */
-internal enum class MalformedCatalogField { Releases, Entry, Version, Certificate, Download, Signature, SignatureDigest }
+internal enum class MalformedCatalogField {
+    /** The catalog document itself is not a readable JSON array. */
+    Document,
+    Releases,
+    Entry,
+    Version,
+    Certificate,
+    Download,
+    Signature,
+    SignatureDigest,
+}
 
 /** A catalog entry for the requested app that parsing dropped. A null version could not be read. */
 internal data class MalformedCatalogEntry(val version: String?, val field: MalformedCatalogField)
@@ -14,7 +25,10 @@ internal data class MalformedCatalogEntry(val version: String?, val field: Malfo
 internal data class CatalogReleases(
     val releases: List<AppStoreRelease>,
     val malformed: List<MalformedCatalogEntry> = emptyList(),
-)
+) {
+    /** False when the whole document was unreadable; such a document must not be cached. */
+    val documentReadable: Boolean get() = malformed.none { entry -> entry.field == MalformedCatalogField.Document }
+}
 
 /**
  * Explains an empty release selection. A dropped entry that would have been selected, or one whose
@@ -62,7 +76,12 @@ internal fun parseReleases(
     catalogUrl: String,
     requireOfficialGitHubHost: Boolean,
 ): CatalogReleases {
-    val apps = JSONArray(catalogJson)
+    // A truncated, empty, non-JSON, or non-array document is malformed source data, not a client fault.
+    val apps = try {
+        JSONArray(catalogJson)
+    } catch (_: JSONException) {
+        return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Document)))
+    }
     val app = (0 until apps.length())
         .asSequence()
         .mapNotNull(apps::optJSONObject)

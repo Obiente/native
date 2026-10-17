@@ -274,11 +274,7 @@ class SignedAppStoreContractAcquirer(
             // The archive is the last exact-tag fallback; a refusal here leaves the outcome unknown.
             onRecoverableStatus = attempt::markSourceTemporarilyUnavailable,
         ) ?: return null
-        val extracted = try {
-            extractOpenApiContract(archive, release)
-        } catch (_: OpenApiContractMissingException) {
-            return null
-        }
+        val extracted = extractLinkedSourceContractOrNull(archive, release) ?: return null
         return OpenApiCandidate(
             path = extracted.specFile,
             document = extracted.document,
@@ -441,13 +437,9 @@ class SignedAppStoreContractAcquirer(
             requireSecureResponse(catalogResponse)
             catalogResponse.readBodyLimited(MAX_CATALOG_BYTES)
         }
-        catalogCache.storeBestEffort(catalogUrl, bytes)
-        return parseReleases(
-            bytes.decodeToString(),
-            appId,
-            catalogUrl,
-            requireOfficialGitHubHost = requireHttps,
-        )
+        // An unreadable document is not cached, so checking again downloads the catalog again.
+        return parseReleases(bytes.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
+            .also { parsed -> if (parsed.documentReadable) catalogCache.storeBestEffort(catalogUrl, bytes) }
     }
 
     private fun execute(request: Request): Response = httpClient.newCall(request).execute()

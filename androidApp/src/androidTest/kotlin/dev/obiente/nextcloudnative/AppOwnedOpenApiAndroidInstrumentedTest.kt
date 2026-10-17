@@ -56,7 +56,7 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
         // unit test ContractModuleInitializationTest fails when a facade is missing from this list.
         listOf(
             "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "AppStoreCatalogReleasesKt",
-            "ContractAcquisitionFailureKt",
+            "ContractAcquisitionFailureKt", "LinkedSourceArchiveKt",
             "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "SignedAppStoreContractAcquirerKt",
             "StaticPhpParametersKt", "StaticRouteContractKt", "TarArchivePathKt", "VerifiedChoresContractKt",
             "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt", "SignedAppStoreContractAcquirer",
