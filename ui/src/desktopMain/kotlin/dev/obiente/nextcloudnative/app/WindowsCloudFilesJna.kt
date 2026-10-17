@@ -406,13 +406,8 @@ internal class JnaWindowsCloudFilesApi(
 
     override fun localChildren(directory: Path): List<Path> = localEntries(directory).map { it.path }
 
-    override fun allocatedBytes(path: Path): Long {
-        if (!Files.isRegularFile(path)) return 0L
-        val high = IntByReference()
-        val low = kernelFiles.GetCompressedFileSizeW(WString(path.toWindowsWin32Path()), high)
-        if (low == -1 && Native.getLastError() != 0) return 0L
-        return ((high.value.toLong() and 0xffff_ffffL) shl 32) or (low.toLong() and 0xffff_ffffL)
-    }
+    override fun allocatedBytes(path: Path): Long =
+        if (withFindData(path, false) { localEntry(path, it).file }) kernelFiles.allocatedFileBytes(path) else 0L
 
     override fun lastAccessedAtEpochMillis(path: Path): Long =
         withFindData(path, 0L) { findData -> findData.ftLastAccessTime.toTime().coerceAtLeast(0L) }
@@ -528,16 +523,17 @@ internal class JnaWindowsCloudFilesApi(
     }
 
     override fun dehydrate(path: Path): Long {
-        if (!Files.isRegularFile(path)) return 0L
-        val size = Files.size(path)
-        withWindowsFileHandle(path, write = true) { handle ->
-            checkWindowsCloudHResult(
-                cldApi.CfDehydratePlaceholder(handle, 0L, -1L, 0, null),
-                "dehydrate a Windows Cloud Files placeholder",
-            )
-        }
-        return size
+        if (!withFindData(path, false) { windowsCloudDehydratable(localEntry(path, it), it.dwFileAttributes) }) return 0L
+        val allocated = kernelFiles.allocatedFileBytes(path)
+        // Attribute access suffices, so an application that denies write sharing is reported as in use.
+        val result = withWindowsFileHandle(path, write = false) { cldApi.CfDehydratePlaceholder(it, 0L, -1L, 0, null) }
+        if (isWindowsCloudDehydrationRefusedResult(result)) return 0L
+        checkWindowsCloudHResult(result, "dehydrate a Windows Cloud Files placeholder")
+        return allocated
     }
+
+    private fun localEntry(path: Path, findData: WinBase.WIN32_FIND_DATA): WindowsCloudLocalEntry =
+        findData.windowsCloudLocalEntry(path, cldApi::CfGetPlaceholderStateFromFindData)
 
     override fun close() {
         callbacksByConnection.keys.toList().forEach { key -> runCatching { disconnect(key) } }

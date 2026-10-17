@@ -109,6 +109,13 @@ internal fun WinBase.WIN32_FIND_DATA.windowsCloudInspection(
     )
 }
 
+/** Classifies one native find-data record; see [windowsCloudLocalEntry]. */
+internal fun WinBase.WIN32_FIND_DATA.windowsCloudLocalEntry(
+    path: Path,
+    placeholderState: (Pointer) -> Int,
+): WindowsCloudLocalEntry =
+    windowsCloudLocalEntry(path, dwFileAttributes, dwReserved0, windowsCloudInspection(placeholderState))
+
 /**
  * Enumerates resident children with their find data in one native call, without asking Cloud
  * Files to populate remote folders.
@@ -132,10 +139,7 @@ internal fun windowsCloudLocalEntries(
             do {
                 data.read()
                 val name = Native.toString(data.cFileName)
-                if (name != "." && name != "..") {
-                    val inspection = data.windowsCloudInspection(placeholderState)
-                    add(windowsCloudLocalEntry(directory.resolve(name), data.dwFileAttributes, data.dwReserved0, inspection))
-                }
+                if (name != "." && name != "..") add(data.windowsCloudLocalEntry(directory.resolve(name), placeholderState))
             } while (Kernel32.INSTANCE.FindNextFile(handle, data.pointer))
             val error = Native.getLastError()
             if (error != 18) throw WindowsCloudLocalScanException(error)

@@ -227,6 +227,7 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     fun localContentStamp(path: Path): WindowsCloudLocalContentStamp = nioWindowsCloudLocalContentStamp(path)
     fun markInSyncIfUnchanged(path: Path, expected: WindowsCloudLocalContentStamp): WindowsCloudInSyncCommit =
         markInSyncWhenStampMatches(path, expected)
+    /** Returns the bytes released, or 0 when the entry is not an unpinned in-sync file or Windows kept it. */
     fun dehydrate(path: Path): Long
 }
 
@@ -1042,9 +1043,7 @@ internal class WindowsCloudFilesProvider(
                 if (requestedBytes > 0L && freed >= requestedBytes) return@forEach
                 val path = localPath(identity)
                 if (path.startsWith(root) && api.placeholderState(path) == WindowsCloudPlaceholderState.InSync) {
-                    val allocated = api.allocatedBytes(path)
-                    api.dehydrate(path)
-                    freed += allocated
+                    freed += api.dehydrate(path)
                 }
             }
         return freed
@@ -1092,8 +1091,7 @@ internal class WindowsCloudFilesProvider(
                 api.placeholderState(path) == WindowsCloudPlaceholderState.InSync &&
                 api.allocatedBytes(path) == eviction.sizeBytes
             ) {
-                api.dehydrate(path)
-                freed += eviction.sizeBytes
+                freed += api.dehydrate(path)
             }
         }
         return freed

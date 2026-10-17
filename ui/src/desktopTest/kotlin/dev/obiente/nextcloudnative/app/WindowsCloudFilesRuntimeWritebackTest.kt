@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Base64
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeBytes
@@ -45,7 +44,7 @@ class WindowsCloudFilesRuntimeWritebackTest {
         val draft = root.resolve("draft.txt")
         assertContentEquals(ORIGINAL_BYTES, Files.readAllBytes(draft))
 
-        editInPlace(draft, LONGER_EDIT)
+        editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
 
         awaitInSync(api, draft, backend, commits = 1)
         assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
@@ -59,9 +58,9 @@ class WindowsCloudFilesRuntimeWritebackTest {
             val draft = root.resolve("draft.txt")
             assertContentEquals(ORIGINAL_BYTES, Files.readAllBytes(draft))
             var edits = 1
-            backend.duringUpload = { if (edits-- > 0) editInPlace(draft, NEWER_EDIT) }
+            backend.duringUpload = { if (edits-- > 0) editInPlaceFromAnotherProcess(draft, NEWER_EDIT) }
 
-            editInPlace(draft, LONGER_EDIT)
+            editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
 
             awaitInSync(api, draft, backend, commits = 2)
             assertEquals(listOf<String?>(ORIGINAL_REVISION, "\"server-1\""), backend.uploadRevisions.distinct())
@@ -77,7 +76,7 @@ class WindowsCloudFilesRuntimeWritebackTest {
 
             // Another application keeps the file open, so the exclusive in-sync commit cannot run.
             ExternalOpenHandle(draft).use {
-                editInPlace(draft, LONGER_EDIT)
+                editInPlaceFromAnotherProcess(draft, LONGER_EDIT)
                 awaitCondition("blocked commit") {
                     backend.commits == 1 && provider.summary().failedWritebackCount == 1
                 }
@@ -90,7 +89,7 @@ class WindowsCloudFilesRuntimeWritebackTest {
             assertEquals(listOf<String?>(ORIGINAL_REVISION), backend.uploadRevisions)
             assertContentEquals(LONGER_EDIT, backend.content("draft.txt"))
 
-            editInPlace(draft, NEWER_EDIT)
+            editInPlaceFromAnotherProcess(draft, NEWER_EDIT)
 
             awaitInSync(api, draft, backend, commits = 2)
             assertEquals(listOf<String?>(ORIGINAL_REVISION, "\"server-1\""), backend.uploadRevisions)
@@ -133,27 +132,6 @@ class WindowsCloudFilesRuntimeWritebackTest {
         }
     }
 
-    /** Holds a shared read handle in another process until closed, as an open document would. */
-    private class ExternalOpenHandle(path: Path) : AutoCloseable {
-        private val process = ProcessBuilder(
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-            "\$s = [IO.File]::Open(\$env:NATIVE_HOLD_PATH, 'Open', 'Read', 'ReadWrite'); " +
-                "[Console]::Out.WriteLine('open'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); \$s.Close()",
-        ).redirectErrorStream(true)
-            .apply { environment()["NATIVE_HOLD_PATH"] = path.toAbsolutePath().toString() }
-            .start()
-
-        init {
-            val ready = process.inputStream.bufferedReader().readLine()
-            check(ready == "open") { "The external handle did not open: $ready" }
-        }
-
-        override fun close() {
-            process.outputStream.bufferedWriter().use { it.write("close"); it.newLine() }
-            check(process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0) { "The external handle did not close." }
-        }
-    }
-
     private fun awaitInSync(
         api: WindowsCloudFilesApi,
         path: Path,
@@ -168,25 +146,6 @@ class WindowsCloudFilesRuntimeWritebackTest {
             }
             Thread.sleep(10)
         }
-    }
-
-    /**
-     * Overwrites from offset zero without truncating, like an editor saving a longer file. Cloud
-     * Files sends no close notification for I/O by the connected provider's own process, so the
-     * edit runs in a separate process as a real editor would.
-     */
-    private fun editInPlace(path: Path, bytes: ByteArray) {
-        val script = "\$s = [IO.File]::Open(\$env:NATIVE_EDIT_PATH, 'Open', 'Write', 'ReadWrite');" +
-            "\$b = [Convert]::FromBase64String(\$env:NATIVE_EDIT_BYTES); \$s.Write(\$b, 0, \$b.Length); \$s.Close()"
-        val process = ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-            .redirectErrorStream(true)
-            .apply {
-                environment()["NATIVE_EDIT_PATH"] = path.toAbsolutePath().toString()
-                environment()["NATIVE_EDIT_BYTES"] = Base64.getEncoder().encodeToString(bytes)
-            }
-            .start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0) { "External edit failed: $output" }
     }
 
     private fun closeInfo(local: Path, identity: WindowsCloudFileIdentity, fileSize: Long) = WindowsCloudCallbackInfo(

@@ -245,6 +245,32 @@ Each case must end with the placeholder in sync at the server's revision.
 behavior. These tests do not replace the Explorer and published-MSI acceptance
 checks above.
 
+### Dehydration and storage accounting
+
+**Free up space**, automatic cleanup, and the Virtual files storage summary read
+allocated bytes and dehydrate placeholders through
+[`WindowsCloudDehydration`](../ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudDehydration.kt).
+A connected file placeholder is a cloud reparse point, which Java NIO does not
+report as a regular file, so both operations classify the path from native
+find data with the same rule as the startup enumeration. Allocated bytes come
+from `GetCompressedFileSizeW`: a dehydrated placeholder keeps its logical size
+and allocates no bytes.
+
+Only an unpinned, in-sync file placeholder is dehydrated. Windows also refuses
+the call when the file became dirty (`0x80070179`), pinned (`0x80070188`), or
+open in another application (`0x80070187`) after that check; the content stays
+local and counts as not freed. Dehydration opens the file for attribute access
+only, so an application that denies write sharing produces the in-use refusal
+rather than a sharing violation. Freed totals count the bytes each dehydration
+actually released.
+
+**Last reviewed: 2026-10-17.** On a local Windows 11 sync root,
+`WindowsCloudFilesDehydrationTest` hydrates a synthetic file, observes nonzero
+allocated bytes, frees them through Free up space and through automatic cleanup,
+and reopens the content. It also keeps a dirty edit, a pinned file, and a file
+held open by another process local. This evidence does not cover Explorer's own
+Free up space command or a published MSI.
+
 ## WinGet delivery
 
 `tools/create-winget-manifests.ps1` generates a three-file WinGet manifest from
