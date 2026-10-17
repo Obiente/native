@@ -15,7 +15,7 @@ import java.nio.file.Path
 internal fun windowsCloudLocalChildren(directory: Path): List<Path> {
     val data = WinBase.WIN32_FIND_DATA()
     val handle = LocalDirectoryApi.instance.FindFirstFileExW(
-        WString(directory.toAbsolutePath().toString().trimEnd('\\', '/') + "\\*"),
+        WString(directory.toWindowsWin32Path().trimEnd('\\') + "\\*"),
         1, data.pointer, 0, null, 4, // FindExInfoBasic, FindExSearchNameMatch, ON_DISK_ENTRIES_ONLY
     )
     if (handle == WinBase.INVALID_HANDLE_VALUE) {
