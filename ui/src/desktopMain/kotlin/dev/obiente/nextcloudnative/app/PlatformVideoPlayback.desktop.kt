@@ -16,6 +16,7 @@ internal actual fun PlatformNativeVideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
 ) {
     Box(modifier)
 }

@@ -2,8 +2,10 @@ package dev.obiente.nextcloudnative.app
 
 import android.util.Base64
 import android.content.Intent
+import android.view.View
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,14 +53,17 @@ internal actual fun PlatformNativeVideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
 ) {
+    // Transport controls sit above the gesture navigation area; the picture stays centered.
+    val playerModifier = modifier.navigationBarsPadding()
     if (compatibilityPlaybackRequested && rangeSource != null) {
         LibVlcVideoPlayer(
             source = source,
             rangeSource = rangeSource,
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
-            modifier = modifier,
+            modifier = playerModifier,
         )
     } else {
         Media3VideoPlayer(
@@ -67,7 +72,8 @@ internal actual fun PlatformNativeVideoPlayer(
             source = source,
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
-            modifier = modifier,
+            onControlsVisibilityChanged = onControlsVisibilityChanged,
+            modifier = playerModifier,
         )
     }
 }
@@ -80,12 +86,14 @@ private fun Media3VideoPlayer(
     source: NativeVideoPlaybackSource,
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
     modifier: Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnFailure = rememberUpdatedState(onFailure)
+    val currentOnControlsVisibilityChanged = rememberUpdatedState(onControlsVisibilityChanged)
     val player = remember(session.serverUrl, session.loginName, userId, source) {
         val authorization = Base64.encodeToString(
             "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
@@ -140,7 +148,8 @@ private fun Media3VideoPlayer(
             )
             setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
             prepare()
-            playWhenReady = source is NativeVideoPlaybackSource.MemoriesLivePhoto
+            // Opening a video is the request to watch it, as with a Live Photo's motion.
+            playWhenReady = true
         }
     }
     var playing by remember(player) { mutableStateOf(player.isPlaying) }
@@ -168,6 +177,14 @@ private fun Media3VideoPlayer(
             PlayerView(viewContext).apply {
                 this.player = player
                 useController = true
+                // The viewer owns previous/next media; one-item players would show dead buttons.
+                setShowPreviousButton(false)
+                setShowNextButton(false)
+                setControllerVisibilityListener(
+                    PlayerView.ControllerVisibilityListener { visibility ->
+                        currentOnControlsVisibilityChanged.value(visibility == View.VISIBLE)
+                    },
+                )
                 keepScreenOn = playing
             }
         },

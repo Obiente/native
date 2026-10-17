@@ -333,6 +333,12 @@ private fun NativeVideoFormatSummary?.safeDescription(): String {
     return "$formatName$dimensions"
 }
 
+/**
+ * Plays [source] inside the viewer canvas and starts as soon as it is ready.
+ *
+ * [onControlsVisibilityChanged] reports when the platform transport controls appear or auto-hide,
+ * so the viewer chrome can follow them during immersive playback.
+ */
 @Composable
 internal expect fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
@@ -343,4 +349,5 @@ internal expect fun PlatformNativeVideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier = Modifier,
+    onControlsVisibilityChanged: (Boolean) -> Unit = {},
 )
