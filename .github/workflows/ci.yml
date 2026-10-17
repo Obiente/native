@@ -310,6 +310,8 @@ jobs:
               - "tools/repackage-msi-with-uninstall-cleanup.ps1"
               - "tools/verify-windows-package.ps1"
               - "ui/build.gradle.kts"
+              - "ui/desktop-libvlc.gradle.kts"
+              - "release/third-party/libvlc/**"
               - "ui/src/jvmMain/**"
               - "ui/src/jvmTest/**"
               - "ui/src/commonMain/**"

@@ -56,6 +56,50 @@ class DesktopSystemMediaControlsTest {
     }
 
     @Test
+    fun aReplacedSessionClosesBeforeItsReplacementOpens() {
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        fun factory(name: String): DesktopSystemMediaControlsFactory = { _, _ ->
+            events += "open:$name"
+            object : DesktopSystemMediaControls {
+                override fun update(snapshot: SystemMediaSnapshot) {
+                    events += "update:$name"
+                }
+
+                override fun close() {
+                    events += "close:$name"
+                }
+            }
+        }
+        val first = DesktopSystemMediaSession(null, factory("old")) {}
+        first.update(snapshot)
+        waitFor { events.size >= 2 }
+        first.close()
+        val second = DesktopSystemMediaSession(null, factory("new")) {}
+        second.update(snapshot)
+        waitFor { events.size >= 5 }
+        second.close()
+        waitFor { events.size >= 6 }
+
+        assertEquals(
+            listOf("open:old", "update:old", "close:old", "open:new", "update:new", "close:new"),
+            events,
+            "The old integration can never undo what the new video published.",
+        )
+    }
+
+    @Test
+    fun aSessionClosedBeforeItOpenedNeverOpens() {
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val session = DesktopSystemMediaSession(null, { _, _ ->
+            events += "open"
+            UnavailableDesktopSystemMediaControls
+        }) {}
+        session.close()
+        Thread.sleep(200)
+        assertEquals(emptyList(), events, "A video left before its controls opened publishes nothing.")
+    }
+
+    @Test
     fun aFailingIntegrationNeverBreaksTheSession() {
         val throwingOpen = DesktopSystemMediaSession(null, { _, _ -> error("synthetic unavailable bus") }) {}
         throwingOpen.update(snapshot)

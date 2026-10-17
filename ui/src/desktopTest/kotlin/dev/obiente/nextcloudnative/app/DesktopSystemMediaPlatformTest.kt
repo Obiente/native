@@ -7,10 +7,12 @@ import javax.swing.JFrame
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.freedesktop.dbus.bin.EmbeddedDBusDaemon
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.exceptions.DBusExecutionException
 import org.freedesktop.dbus.interfaces.Properties
 import org.junit.Assume.assumeTrue
 
@@ -49,6 +51,9 @@ class DesktopSystemMediaPlatformTest {
                 assertEquals(true, properties.Get<Boolean>(MPRIS_PLAYER_INTERFACE, "CanGoPrevious"))
                 assertEquals(false, properties.Get<Boolean>(MPRIS_PLAYER_INTERFACE, "CanGoNext"))
                 assertEquals("nati.ve", properties.Get<String>(MPRIS_ROOT_INTERFACE, "Identity"))
+                assertFailsWith<DBusExecutionException>("A volume write the player cannot honor is refused.") {
+                    properties.Set(MPRIS_PLAYER_INTERFACE, "Volume", 0.5)
+                }
                 player.PlayPause()
                 player.Previous()
                 player.Next()

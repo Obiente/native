@@ -4,6 +4,7 @@ import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.errors.PropertyReadOnly
 import org.freedesktop.dbus.exceptions.DBusException
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
@@ -155,7 +156,10 @@ internal class LinuxMprisPlayer(
     override fun <A : Any?> Get(interfaceName: String, propertyName: String): A =
         requireNotNull(GetAll(interfaceName)[propertyName]) { "Unknown MPRIS property: $propertyName" }.value as A
 
-    override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) = Unit
+    /** Volume and rate stay with the in-window controls, so writes are refused, not ignored. */
+    override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) {
+        throw PropertyReadOnly("nati.ve controls $propertyName in its own player.")
+    }
 
     override fun GetAll(interfaceName: String): Map<String, Variant<*>> = when (interfaceName) {
         MPRIS_ROOT_INTERFACE -> mapOf(

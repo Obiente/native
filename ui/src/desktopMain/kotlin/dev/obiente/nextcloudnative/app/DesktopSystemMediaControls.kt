@@ -50,17 +50,20 @@ internal val platformDesktopSystemMediaControls: DesktopSystemMediaControlsFacto
 }
 
 /**
- * Owns one integration on a dedicated thread, so native calls, D-Bus round trips, and COM
- * activation never run on the UI thread. Only the newest snapshot is published.
+ * Owns one integration off the UI thread, so native calls, D-Bus round trips, and COM activation
+ * never block it. Only the newest snapshot is published.
+ *
+ * Every session shares one thread. When the viewer replaces a video, the old session's close is
+ * queued before the new session opens, so tearing down the old integration can never disable the
+ * window's Windows controls or clear the process-wide macOS Now Playing entry after the new video
+ * published them.
  */
 internal class DesktopSystemMediaSession(
     window: Window?,
     factory: DesktopSystemMediaControlsFactory,
     onCommand: (SystemMediaCommand) -> Unit,
 ) : AutoCloseable {
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "nc-system-media").apply { isDaemon = true }
-    }
+    private val executor: ExecutorService = sharedSystemMediaExecutor
 
     @Volatile
     private var closed = false
@@ -97,9 +100,8 @@ internal class DesktopSystemMediaSession(
         try {
             executor.execute { closeQuietly(controls) }
         } catch (_: RejectedExecutionException) {
-            // Already shut down.
+            // The shared thread is never shut down; nothing else can reject.
         }
-        executor.shutdown()
     }
 
     private fun submit(block: () -> Unit) {
@@ -130,6 +132,10 @@ internal class DesktopSystemMediaSession(
             // Best effort: the integration is already unusable.
         }
     }
+}
+
+private val sharedSystemMediaExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+    Thread(task, "nc-system-media").apply { isDaemon = true }
 }
 
 /** The desktop window that hosts the app, for integrations bound to a window handle. */
