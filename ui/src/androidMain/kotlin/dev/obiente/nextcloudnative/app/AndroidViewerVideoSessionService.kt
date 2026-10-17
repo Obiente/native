@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
@@ -22,6 +24,11 @@ import java.util.concurrent.CopyOnWriteArraySet
 class AndroidViewerVideoSessionService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private val onPlayer: (Player?) -> Unit = { player -> show(player) }
+    private val handler = Handler(Looper.getMainLooper())
+
+    // Navigating disposes the old video before the next one attaches, so stopping waits briefly
+    // and is cancelled when a replacement arrives in time.
+    private val stopWhenUnused = Runnable { if (mediaSession == null) stopSelf() }
 
     override fun onCreate() {
         super.onCreate()
@@ -36,6 +43,7 @@ class AndroidViewerVideoSessionService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(stopWhenUnused)
         AndroidViewerVideoSessionBridge.unbind(onPlayer)
         releaseSession()
         super.onDestroy()
@@ -43,8 +51,9 @@ class AndroidViewerVideoSessionService : MediaSessionService() {
 
     private fun show(player: Player?) {
         releaseSession()
+        handler.removeCallbacks(stopWhenUnused)
         if (player == null) {
-            stopSelf()
+            handler.postDelayed(stopWhenUnused, VIEWER_VIDEO_SESSION_STOP_DELAY_MILLIS)
             return
         }
         mediaSession = MediaSession.Builder(this, player)
@@ -82,7 +91,8 @@ internal object AndroidViewerVideoSessionBridge {
         token += 1
         current = player
         listener?.invoke(player)
-            ?: context.startService(Intent(context, AndroidViewerVideoSessionService::class.java))
+        // Starting on every attachment keeps the service started even if a stop was pending.
+        context.startService(Intent(context, AndroidViewerVideoSessionService::class.java))
         return token
     }
 
@@ -184,3 +194,4 @@ internal fun viewerVideoSkipCommands(hasPrevious: Boolean, hasNext: Boolean): Vi
 }
 
 private const val VIEWER_VIDEO_SESSION_ID = "nati.ve.viewer-video"
+private const val VIEWER_VIDEO_SESSION_STOP_DELAY_MILLIS = 2_000L

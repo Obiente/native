@@ -280,12 +280,22 @@ class LivePhotosTest {
             reference = NextcloudLivePhotoReference("self__trailer"),
             etag = "generation-1",
         )
-        val davSource = NativeVideoPlaybackSource.DavFile(still)
+        val davSource = NativeVideoPlaybackSource.DavFile(still.copy(etag = null))
         val memoriesSource = NativeVideoPlaybackSource.MemoriesLivePhoto(live)
 
         assertEquals(
             mapOf("Authorization" to authorization),
             davSource.authenticatedRequestProperties(authorization),
+        )
+        assertEquals(
+            mapOf("Authorization" to authorization, "If-Match" to "\"generation-7\""),
+            NativeVideoPlaybackSource.DavFile(still.copy(etag = "generation-7")).authenticatedRequestProperties(authorization),
+            "A DAV stream is pinned to the selected version.",
+        )
+        assertEquals(
+            mapOf("Authorization" to authorization),
+            NativeVideoPlaybackSource.DavFile(still.copy(etag = "W/\"weak\"")).authenticatedRequestProperties(authorization),
+            "A weak or unsafe ETag is not sent as a strong precondition.",
         )
         assertEquals(
             mapOf(

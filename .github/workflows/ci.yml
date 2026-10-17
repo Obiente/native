@@ -445,6 +445,8 @@ jobs:
               - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/MacOsKeychain*.kt"
               - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopMacOsLoginPersistenceTest.kt"
               - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopSecretStoreTest.kt"
+              - "ui/desktop-libvlc.gradle.kts"
+              - "release/third-party/libvlc/**"
               - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/MacOsSystemMediaControls.kt"
               - "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopSystemMediaControls.kt"
               - "ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopSystemMediaPlatformTest.kt"

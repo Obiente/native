@@ -192,12 +192,20 @@ private data class CachedVideoRange(
 private const val DEFAULT_VIDEO_READ_AHEAD_BYTES = 1_024 * 1_024
 private const val DEFAULT_VIDEO_CACHED_RANGE_COUNT = 2
 
+/**
+ * Request headers for streaming [this] source. A DAV file is pinned to its selected ETag, so a
+ * seek or reconnect after the server file was replaced fails with 412 (reported as a changed
+ * source) instead of mixing ranges from two versions.
+ */
 internal fun NativeVideoPlaybackSource.authenticatedRequestProperties(
     authorization: String,
 ): Map<String, String> = buildMap {
     put("Authorization", authorization)
-    if (this@authenticatedRequestProperties is NativeVideoPlaybackSource.MemoriesLivePhoto) {
-        put("OCS-APIRequest", "true")
+    when (val source = this@authenticatedRequestProperties) {
+        is NativeVideoPlaybackSource.MemoriesLivePhoto -> put("OCS-APIRequest", "true")
+        is NativeVideoPlaybackSource.DavFile -> source.file.etag
+            ?.let { etag -> runCatching { requireSafeFileRangeEtag(etag) }.getOrNull() }
+            ?.let { pinned -> put("If-Match", pinned) }
     }
 }
 
@@ -231,6 +239,11 @@ internal sealed interface NativeVideoPlaybackFailure {
         override val format: NativeVideoFormatSummary?,
     ) : NativeVideoPlaybackFailure
 
+    /** The player cannot read the file's container, though another player may. */
+    data object ContainerUnsupported : NativeVideoPlaybackFailure {
+        override val format: NativeVideoFormatSummary? = null
+    }
+
     data object NetworkUnavailable : NativeVideoPlaybackFailure {
         override val format: NativeVideoFormatSummary? = null
     }
@@ -257,6 +270,7 @@ internal fun NativeVideoPlaybackFailure.canUseSoftwareFallback(): Boolean = when
     is NativeVideoPlaybackFailure.FormatUnsupported,
     is NativeVideoPlaybackFailure.DecoderInitializationFailed,
     is NativeVideoPlaybackFailure.DecodeFailed,
+    NativeVideoPlaybackFailure.ContainerUnsupported,
     -> true
     NativeVideoPlaybackFailure.NetworkUnavailable,
     NativeVideoPlaybackFailure.AccessDenied,
@@ -298,6 +312,7 @@ internal fun NativeVideoPlaybackFailure.userTitle(): String = when (this) {
     is NativeVideoPlaybackFailure.DecoderInitializationFailed,
     is NativeVideoPlaybackFailure.DecodeFailed,
     -> "Video playback stopped"
+    NativeVideoPlaybackFailure.ContainerUnsupported -> "This video's file format is not supported"
     NativeVideoPlaybackFailure.NetworkUnavailable -> "The video is temporarily unavailable"
     NativeVideoPlaybackFailure.AccessDenied -> "This video cannot be accessed"
     NativeVideoPlaybackFailure.SourceChanged -> "The video changed on the server"
@@ -316,6 +331,8 @@ internal fun NativeVideoPlaybackFailure.userDetail(): String = when (this) {
         "The device could not start a compatible video decoder."
     is NativeVideoPlaybackFailure.DecodeFailed ->
         "The decoder could not finish reading this ${format.safeDescription()} stream."
+    NativeVideoPlaybackFailure.ContainerUnsupported ->
+        "The built-in player cannot read this file's container. The original file is unchanged."
     NativeVideoPlaybackFailure.NetworkUnavailable ->
         "Check the connection to Nextcloud, then try again."
     NativeVideoPlaybackFailure.AccessDenied ->

@@ -1,12 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 
 /** The seekable source a video player reads from, once the viewer has committed to showing it. */
 internal sealed interface NativeVideoRangeSourceSlot {
@@ -23,10 +27,12 @@ internal sealed interface NativeVideoRangeSourceSlot {
 }
 
 /**
- * Opens a range session for [plan] only after composition commits and closes it on disposal.
+ * Opens a range session for [plan] only after composition commits and closes it when the viewer
+ * leaves or the inputs change.
  *
- * Opening registers an account resource, so it must never run in a `remember` initializer: an
- * abandoned composition would leave the session registered with nothing to close it.
+ * Opening registers an account resource and can wait for an account operation lock, so it never
+ * runs in a `remember` initializer or on the UI thread. The open itself is not cancellable, so a
+ * session that finishes opening after the viewer left is closed instead of leaked.
  */
 @Composable
 internal fun rememberNativeVideoRangeSource(
@@ -41,13 +47,23 @@ internal fun rememberNativeVideoRangeSource(
     var slot by remember(wanted, attempt, session, userId, services) {
         mutableStateOf(if (wanted == null) NativeVideoRangeSourceSlot.Unavailable else NativeVideoRangeSourceSlot.Opening)
     }
-    DisposableEffect(wanted, attempt, session, userId, services) {
-        val opened = wanted?.let { openOrNull(it, services, session, userId) }
-        slot = opened?.let(NativeVideoRangeSourceSlot::Open) ?: NativeVideoRangeSourceSlot.Unavailable
-        onDispose { opened?.close() }
+    LaunchedEffect(wanted, attempt, session, userId, services) {
+        if (wanted == null) return@LaunchedEffect
+        val opened = withContext(NonCancellable + videoRangeOpenDispatcher) {
+            openOrNull(wanted, services, session, userId)
+        }
+        try {
+            slot = opened?.let(NativeVideoRangeSourceSlot::Open) ?: NativeVideoRangeSourceSlot.Unavailable
+            awaitCancellation()
+        } finally {
+            opened?.close()
+        }
     }
     return slot
 }
+
+/** Where blocking range-session opens run: the platform's IO pool. */
+internal expect val videoRangeOpenDispatcher: CoroutineDispatcher
 
 private fun openOrNull(
     plan: NativeVideoCompatibilityRangePlan,

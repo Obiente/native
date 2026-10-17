@@ -73,25 +73,33 @@ internal class WindowsSystemMediaControls private constructor(
             interop.release()
             if (obtained.failed()) return null
             val smtc = controls.value ?: return null
-            val updater = smtc.outPointer(SMTC_DISPLAY_UPDATER) ?: return null.also { smtc.release() }
-            val video = run {
+            var updater: Pointer? = null
+            var video: Pointer? = null
+            var target: Long? = null
+            var opened = false
+            try {
+                updater = smtc.outPointer(SMTC_DISPLAY_UPDATER) ?: return null
                 updater.com(DISPLAY_SET_TYPE, MEDIA_PLAYBACK_TYPE_VIDEO).requireSuccess()
-                updater.outPointer(DISPLAY_VIDEO_PROPERTIES)
-            } ?: return null.also { updater.release(); smtc.release() }
-            smtc.com(SMTC_SET_IS_ENABLED, true.abi()).requireSuccess()
-            smtc.com(SMTC_SET_IS_PLAY_ENABLED, true.abi()).requireSuccess()
-            smtc.com(SMTC_SET_IS_PAUSE_ENABLED, true.abi()).requireSuccess()
-            smtc.com(SMTC_SET_IS_STOP_ENABLED, false.abi()).requireSuccess()
-            val target = WindowsSmtcButtonHandler.setTarget(onCommand)
-            val token = LongByReference()
-            if (smtc.com(SMTC_ADD_BUTTON_PRESSED, WindowsSmtcButtonHandler.instance, token).failed()) {
-                WindowsSmtcButtonHandler.clearTarget(target)
-                video.release()
-                updater.release()
-                smtc.release()
-                return null
+                video = updater.outPointer(DISPLAY_VIDEO_PROPERTIES) ?: return null
+                smtc.com(SMTC_SET_IS_ENABLED, true.abi()).requireSuccess()
+                smtc.com(SMTC_SET_IS_PLAY_ENABLED, true.abi()).requireSuccess()
+                smtc.com(SMTC_SET_IS_PAUSE_ENABLED, true.abi()).requireSuccess()
+                smtc.com(SMTC_SET_IS_STOP_ENABLED, false.abi()).requireSuccess()
+                target = WindowsSmtcButtonHandler.setTarget(onCommand)
+                val token = LongByReference()
+                if (smtc.com(SMTC_ADD_BUTTON_PRESSED, WindowsSmtcButtonHandler.instance, token).failed()) return null
+                opened = true
+                return WindowsSystemMediaControls(smtc, updater, video, token.value, target)
+            } finally {
+                // Any failed step leaves nothing enabled, registered, or referenced.
+                if (!opened) {
+                    target?.let(WindowsSmtcButtonHandler::clearTarget)
+                    smtc.com(SMTC_SET_IS_ENABLED, false.abi())
+                    video?.release()
+                    updater?.release()
+                    smtc.release()
+                }
             }
-            return WindowsSystemMediaControls(smtc, updater, video, token.value, target)
         }
     }
 }

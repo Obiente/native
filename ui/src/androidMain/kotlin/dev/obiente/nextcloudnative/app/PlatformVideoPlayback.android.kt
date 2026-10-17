@@ -409,6 +409,8 @@ private fun PlaybackException.toNativeVideoPlaybackFailure(): NativeVideoPlaybac
             nativeVideoPlaybackFailureForHttpStatus(httpResponseCodeOrNull() ?: -1)
         PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
             NativeVideoPlaybackFailure.SourceChanged
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+            NativeVideoPlaybackFailure.ContainerUnsupported
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
         PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
         -> NativeVideoPlaybackFailure.MalformedMedia
