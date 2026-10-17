@@ -83,6 +83,13 @@ credential store and single-instance lock as an installed nati.ve. If an
 installed copy is already running, the new launch only brings that window to
 the front. Quit the installed app first, and sign in with a test account.
 
+On Windows and macOS, the first `:ui:run`, `:ui:createDistributable`, or
+desktop packaging task downloads VideoLAN's pinned VLC release (about 60 to
+85 MB) into `ui/build/libvlc/download`, checks its SHA-256, and stages libVLC
+for in-app video playback. Later builds reuse the verified download. On Linux,
+install your distribution's `vlc` packages to play videos in the app. See
+[desktop video playback](PLATFORMS.md#desktop-video-playback).
+
 ### Run tests
 
 ```bash
