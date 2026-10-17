@@ -43,6 +43,11 @@ elif ! sed -n '/^Depends:/p' "$control" |
     grep -Eq '^libsecret-tools([[:space:](]|$)'; then
     sed -i '/^Depends:/ s/$/, libsecret-tools/' "$control"
 fi
+# In-app video uses the distribution's libVLC. A recommendation keeps installs working where it
+# is unavailable; the viewer then hands videos to another app.
+if ! grep -q '^Recommends:' "$control"; then
+    sed -i '/^Description:/i Recommends: libvlc5, vlc-plugin-base' "$control"
+fi
 if grep -q '^Homepage:' "$control"; then
     sed -i 's|^Homepage:.*|Homepage: https://nati.ve/|' "$control"
 else
@@ -76,6 +81,9 @@ install -D -m 0644 "$icon" \
 dpkg-deb --build --root-owner-group "$root" "$rebuilt"
 mv -- "$rebuilt" "${packages[0]}"
 dependencies="$(dpkg-deb --field "${packages[0]}" Depends)"
+recommendations="$(dpkg-deb --field "${packages[0]}" Recommends)"
+grep -Eq '(^|,)[[:space:]]*libvlc5([[:space:],]|$)' <<<"$recommendations"
+grep -Eq '(^|,)[[:space:]]*vlc-plugin-base([[:space:],]|$)' <<<"$recommendations"
 printf '%s\n' "$dependencies" |
     tr ',' '\n' |
     sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |

@@ -20,6 +20,8 @@ Autoreq: 0
 %if "xPACKAGE_DEFAULT_DEPENDENCIES" != "x" || "xPACKAGE_CUSTOM_DEPENDENCIES" != "x"
 Requires: PACKAGE_DEFAULT_DEPENDENCIES PACKAGE_CUSTOM_DEPENDENCIES
 %endif
+# In-app video uses whichever installed package provides libVLC; installs succeed without it.
+Recommends: libvlc.so.5()(64bit)
 
 %define __jar_repack %{nil}
 %define package_filelist %{_tmppath}/%{name}.files

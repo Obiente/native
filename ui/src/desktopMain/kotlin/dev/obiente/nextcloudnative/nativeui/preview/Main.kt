@@ -132,6 +132,7 @@ private fun launchDesktopProcess(arguments: Array<String>) {
     }
     val supportDiagnostics = createDesktopSupportDiagnostics(supportDiagnosticsRoot)
     installDesktopUncaughtDiagnosticHandler(supportDiagnostics)
+    dev.obiente.nextcloudnative.app.warmDesktopVideoPlayback()
     singleInstance.use {
     application {
     val themePreference = remember { mutableStateOf(ThemePreference.System) }

@@ -5,6 +5,12 @@ import androidx.compose.ui.Modifier
 
 internal expect val platformNativeVideoPlaybackAvailable: Boolean
 
+/** True when [PlatformNativeVideoPlayer] reads every source through a [NativeVideoRangeSource]. */
+internal expect val platformNativeVideoPlaybackUsesRangeSource: Boolean
+
+/** True when a separate software player can retry after the default player fails. */
+internal expect val platformVideoCompatibilityPlaybackAvailable: Boolean
+
 internal sealed interface NativeVideoPlaybackSource {
     data class DavFile(val file: NextcloudFile) : NativeVideoPlaybackSource
 

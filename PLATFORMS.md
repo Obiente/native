@@ -35,7 +35,7 @@ modules (`settings.gradle.kts`); the Rust crate is built separately.
 | `ui/src/commonMain` | Platform-neutral models, policies, repositories, the dynamic descriptor compiler (`nativeui/model`), the native renderer (`nativeui/runtime`), and Compose screens. The `NextcloudPlatformServices` interface is declared here. |
 | `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
 | `ui/src/androidMain` | Android `actual` implementations used by the shared UI, such as audio and video playback services, image decoding, back handling, the embedded Office editor, and server certificate trust. |
-| `ui/src/desktopMain` | The complete desktop platform: `DesktopNextcloudServices`, secret stores, the desktop sync engine and its SQLite stores, Linux FUSE virtual files, Windows Cloud Files, tray integration, and packaging resources. |
+| `ui/src/desktopMain` | The complete desktop platform: `DesktopNextcloudServices`, secret stores, the desktop sync engine and its SQLite stores, Linux FUSE virtual files, Windows Cloud Files, tray integration, in-app video playback through vlcj and libVLC, and packaging resources. |
 | `androidApp/src/main` | The Android application: `MainActivity`, `AndroidNextcloudServices`, Keystore-backed credentials, WorkManager workers, `NextcloudDocumentsProvider`, folder sync, media backup, and share-target activities. |
 | `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. Both `androidApp` and the desktop target depend on it; `commonMain` does not. |
 | `src/` (Rust crate) | The reference schema and descriptor compiler, plus the Windows Explorer shell registrar binary that the desktop Windows package bundles. The Rust compiler is not linked into the app. |
@@ -393,6 +393,47 @@ guarantees, not claims about a published installer; the code may have changed.
   behavior. No test establishes behavior inside a Flatpak or other sandbox.
 - User-facing guidance is in
   [sign-in diagnostics](docs/login-diagnostics.md#server-certificates-and-private-certificate-authorities).
+
+### Desktop video playback
+
+**Last reviewed: 2026-10-17.** These are source, deterministic-test, and local
+build observations, not claims about a published installer; the code and
+packaging may have changed.
+
+- The media viewer plays videos in the window through vlcj 4 and libVLC 3
+  (`DesktopVlcVideoEngine.kt`). libVLC never receives a URL or credentials: it
+  reads through libVLC callback media backed by the app's own size- and
+  ETag-pinned range session, so a server file that changes mid-playback fails
+  the read instead of mixing versions. Frames are copied into Compose and
+  drawn there, so the viewer chrome and transport controls overlay the video.
+- The transport controls (`NativeVideoTransportControls.kt`) offer play and
+  pause, seeking, time, mute, and volume. They hide while playing and return on
+  pointer movement. A click toggles playback. Space or K plays and pauses, J
+  and L seek 10 seconds, and M mutes. Arrow keys keep moving between media
+  items.
+- libVLC is found once per process (`DesktopLibVlcRuntime.kt`). A copy bundled
+  in the package is preferred over a system VLC. Windows and macOS packages
+  stage VideoLAN's VLC 3.0.24 release libraries and playback plugins, pinned
+  by SHA-256 in `ui/desktop-libvlc.gradle.kts`, with libVLC's license and a
+  source link in the packaged `libvlc` folder. Linux packages do not bundle
+  libVLC: the DEB recommends `libvlc5` and `vlc-plugin-base`, and the RPM
+  recommends any package that provides `libvlc.so.5`. Without libVLC the
+  viewer keeps its "Play video" button, which opens the file in the default
+  video app.
+- Decoder padding is cropped, non-square pixels are scaled, and container
+  rotation is applied exactly once. libVLC 3 rotates callback output itself,
+  and the frame geometry detects that from the buffer shape instead of turning
+  the picture again.
+- `DesktopVideoFramesTest`, `DesktopVideoSurfaceSceneTest`, and
+  `NativeVideoTransportTest` cover these rules with a scripted engine.
+  `DesktopLibVlcPlaybackTest` plays synthetic clips through real libVLC,
+  including a rotated clip checked by drawn pixel colors. It runs only where
+  libVLC is installed or bundled, so it is skipped on the standard Linux CI
+  runner.
+- Evidence boundary: on Windows, the bundled copy was staged and played in a
+  local build. macOS staging (`hdiutil` extraction of the pinned DMG) is
+  present in source but has not run outside CI. System media controls,
+  subtitles, and audio-track selection are not implemented.
 
 ## Platform delivery rule
 

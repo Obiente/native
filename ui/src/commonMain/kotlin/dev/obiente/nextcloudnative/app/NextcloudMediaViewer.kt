@@ -556,7 +556,7 @@ internal fun NextcloudMediaViewer(
             services,
         ) {
             playbackCompatibilityRangePlan
-                ?.takeIf { compatibilityPlaybackRequested }
+                ?.takeIf { compatibilityPlaybackRequested || platformNativeVideoPlaybackUsesRangeSource }
                 ?.let { plan ->
                     runCatching {
                         plan.openRangeSource(
@@ -692,7 +692,7 @@ internal fun NextcloudMediaViewer(
                     playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto
                 val actions = nativeVideoFailureActionPolicy(
                     failure = failure,
-                    compatibilityAvailable = playbackCompatibilityRangePlan != null,
+                    compatibilityAvailable = platformVideoCompatibilityPlaybackAvailable && playbackCompatibilityRangePlan != null,
                     motionOnly = motionOnly,
                 )
                 NativeVideoFailureOverlay(
