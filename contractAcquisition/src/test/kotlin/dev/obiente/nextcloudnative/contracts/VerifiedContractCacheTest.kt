@@ -100,7 +100,7 @@ class VerifiedContractCacheTest {
 
             override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = Unit
 
-            override fun remove(request: ContractAcquisitionRequest) = Unit
+            override fun remove(request: ContractAcquisitionRequest) = VerifiedContractRemoval.Removed
         }
         val acquirer = SignedAppStoreContractAcquirer(verifiedContractCache = cache)
         val executor = Executors.newFixedThreadPool(4)

@@ -2957,7 +2957,7 @@ internal class AndroidNextcloudServices(
     }
 
     override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
-        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer) }
+        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer, ::recordSupportDiagnostic) }
 
     override suspend fun listActivities(
         session: NextcloudSession,

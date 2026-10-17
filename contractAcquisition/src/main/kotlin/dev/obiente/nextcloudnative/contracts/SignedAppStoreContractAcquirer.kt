@@ -182,9 +182,9 @@ class SignedAppStoreContractAcquirer(
     }
 
     /** Forgets the verified contract for [request], for example after it proved unusable downstream. */
-    fun invalidateVerifiedContract(request: ContractAcquisitionRequest) {
+    fun invalidateVerifiedContract(request: ContractAcquisitionRequest): VerifiedContractRemoval {
         verifiedContracts.remove(request)
-        verifiedContractCache.remove(request)
+        return verifiedContractCache.remove(request)
     }
 
     private fun VerifiedPackageContract.asPackageContract(

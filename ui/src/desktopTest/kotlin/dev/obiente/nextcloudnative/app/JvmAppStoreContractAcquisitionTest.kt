@@ -11,7 +11,9 @@ import dev.obiente.nextcloudnative.contracts.ContractSourceHttpException
 import dev.obiente.nextcloudnative.contracts.ContractSourceTooLargeException
 import dev.obiente.nextcloudnative.contracts.ContractSourceVerificationException
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
+import dev.obiente.nextcloudnative.contracts.VerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
+import dev.obiente.nextcloudnative.contracts.VerifiedContractRemoval
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
 import java.net.SocketTimeoutException
 import kotlinx.coroutines.CancellationException
@@ -131,17 +133,44 @@ class JvmAppStoreContractAcquisitionTest {
         val contract = verified(OpenApiContractSourceKind.SignedAppPackage, VerifiedContractKind.OpenApi)
         cache.store(exact, contract)
         cache.store(other, contract)
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
         val outcome = acquireAppStoreContract(
             request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract),
             SignedAppStoreContractAcquirer(verifiedContractCache = cache),
+            diagnostics::add,
         )
         assertEquals(AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract), outcome)
+        assertEquals(emptyList<SupportDiagnosticEventDraft>(), diagnostics)
         assertEquals(null, cache.load(exact))
         assertEquals(contract, cache.load(other))
         assertFailsWith<IllegalArgumentException> {
             acquireAppStoreContract(request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract)) { _, _ ->
                 error("A discard must not acquire.")
             }
+        }
+    }
+
+    @Test
+    fun anUndeletableCachedContractIsRecordedAsATypedDiagnostic() {
+        for (removal in listOf(VerifiedContractRemoval.MarkedInvalid, VerifiedContractRemoval.InvalidatedForProcess)) {
+            val cache = object : VerifiedContractCache {
+                override fun load(request: ContractAcquisitionRequest) = null
+                override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = Unit
+                override fun remove(request: ContractAcquisitionRequest) = removal
+            }
+            val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+            val outcome = acquireAppStoreContract(
+                request.copy(cachePolicy = AppStoreCachePolicy.DiscardCachedContract),
+                SignedAppStoreContractAcquirer(verifiedContractCache = cache),
+                diagnostics::add,
+            )
+            assertEquals(AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract), outcome)
+            val diagnostic = diagnostics.single()
+            assertEquals(SupportDiagnosticComponent.Cache, diagnostic.component)
+            assertEquals("VERIFIED_CONTRACT_DELETION_FAILED", diagnostic.code)
+            assertEquals(listOf(SupportDiagnosticFieldDraft("removal", removal.name)), diagnostic.fields)
+            assertEquals(null, diagnostic.message)
+            assertEquals(null, diagnostic.exception)
         }
     }
 

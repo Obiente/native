@@ -268,7 +268,11 @@ failed refresh leaves it in place. A refresh refused by the window serves the
 cached contract when one exists. When an acquired contract cannot be parsed or
 compiled, discovery discards the cached contract for exactly that app, server
 version, and installed version, so the next automatic discovery acquires it
-again; other cached contracts stay.
+again; other cached contracts stay. If the cached file cannot be deleted, an
+invalidation marker beside it, or, when that also fails, a record kept for the
+life of the process, makes every later read a miss, and each later read or
+store retries the deletion. A `VERIFIED_CONTRACT_DELETION_FAILED` warning
+diagnostic records which of the two applied, with no path or exception text.
 
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
@@ -332,6 +336,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Remaining unexpected failures | XML parser configuration, internal invariants | Client fault |
 
 ## Read failures
+| Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
 
 [`DynamicReadFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReadFailure.kt)
 classifies unsuccessful HTTP reads as authentication, permission, missing

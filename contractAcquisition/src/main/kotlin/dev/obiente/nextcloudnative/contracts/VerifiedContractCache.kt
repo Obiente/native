@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.contracts
 
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
@@ -16,8 +17,26 @@ interface VerifiedContractCache {
     fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract?
     fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract)
 
-    /** Forgets only the contract cached for [request]; other entries stay. */
-    fun remove(request: ContractAcquisitionRequest)
+    /**
+     * Forgets only the contract cached for [request]; other entries stay. A discarded entry is never
+     * served again, even when it cannot be deleted; the result says how that was ensured.
+     */
+    fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval
+}
+
+/** How a cached verified contract was discarded. Bounded and typed, for local diagnostics. */
+enum class VerifiedContractRemoval {
+    /** The entry was deleted, or nothing was cached. */
+    Removed,
+
+    /** The entry could not be deleted; an invalidation marker beside it makes every read a miss. */
+    MarkedInvalid,
+
+    /**
+     * Neither deletion nor the marker succeeded; reads in this process treat the entry as a miss,
+     * and deletion is retried on each later read or store.
+     */
+    InvalidatedForProcess,
 }
 
 class MemoryVerifiedContractCache : VerifiedContractCache {
@@ -29,8 +48,9 @@ class MemoryVerifiedContractCache : VerifiedContractCache {
         entries[request] = contract
     }
 
-    override fun remove(request: ContractAcquisitionRequest) {
+    override fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval {
         entries.remove(request)
+        return VerifiedContractRemoval.Removed
     }
 }
 
@@ -42,12 +62,23 @@ class MemoryVerifiedContractCache : VerifiedContractCache {
  * deterministic. Entries expire after seven days and are keyed with SHA-256 rather than exposing
  * app or version details in filenames.
  */
-class FileVerifiedContractCache(
+class FileVerifiedContractCache internal constructor(
     private val directory: File,
-    private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val nowMillis: () -> Long,
+    private val files: VerifiedContractFileOperations,
 ) : VerifiedContractCache {
+    constructor(directory: File, nowMillis: () -> Long = System::currentTimeMillis) :
+        this(directory, nowMillis, VerifiedContractFileOperations.Default)
+
+    /** Entries whose deletion failed while this cache was in use; guarded by [lock]. */
+    private val invalidatedForProcess = mutableSetOf<String>()
+
     override fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract? = synchronized(lock) {
         val file = cacheFile(request)
+        if (isInvalidated(file)) {
+            discard(file)
+            return null
+        }
         if (!file.isFile || nowMillis() - file.lastModified() !in 0..MAX_CACHE_AGE_MILLIS) return null
         if (file.length() !in 1..MAX_CONTRACT_CACHE_BYTES) return null
         runCatching {
@@ -73,17 +104,46 @@ class FileVerifiedContractCache(
                     output.write(bytes)
                     output.flush()
                 }
-                check(!target.exists() || target.delete()) { "Could not replace the cached verified contract." }
+                check(!target.exists() || files.delete(target)) { "Could not replace the cached verified contract." }
                 check(temporary.renameTo(target)) { "Could not publish the cached verified contract." }
                 check(target.setLastModified(nowMillis())) { "Could not timestamp the cached verified contract." }
+                // A newly verified contract supersedes an earlier invalidation of the same entry.
+                clearInvalidation(target)
             } finally {
                 if (temporary.exists()) temporary.delete()
             }
         }
 
-    override fun remove(request: ContractAcquisitionRequest): Unit = synchronized(lock) {
-        cacheFile(request).delete()
+    override fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval = synchronized(lock) {
+        val file = cacheFile(request)
+        if (discard(file)) return VerifiedContractRemoval.Removed
+        // Deletion failed, so the entry must not be served again until it is gone.
+        invalidatedForProcess += file.absolutePath
+        val marker = invalidationMarker(file)
+        if (marker.exists() || files.createMarker(marker)) {
+            VerifiedContractRemoval.MarkedInvalid
+        } else {
+            VerifiedContractRemoval.InvalidatedForProcess
+        }
     }
+
+    private fun isInvalidated(file: File): Boolean =
+        file.absolutePath in invalidatedForProcess || invalidationMarker(file).exists()
+
+    /** Deletes [file] and then any invalidation of it. Returns false while the entry still exists. */
+    private fun discard(file: File): Boolean {
+        if (file.exists() && !files.delete(file)) return false
+        clearInvalidation(file)
+        return true
+    }
+
+    /** The process record stays while a marker cannot be removed, so the entry remains a miss. */
+    private fun clearInvalidation(file: File) {
+        val marker = invalidationMarker(file)
+        if (!marker.exists() || files.delete(marker)) invalidatedForProcess -= file.absolutePath
+    }
+
+    private fun invalidationMarker(file: File): File = File(file.parentFile, "${file.name}$INVALIDATION_SUFFIX")
 
     private fun cacheFile(request: ContractAcquisitionRequest): File {
         val identity = listOf(
@@ -99,9 +159,32 @@ class FileVerifiedContractCache(
 
     private companion object {
         val lock = Any()
+        const val INVALIDATION_SUFFIX = ".invalid"
         const val CACHE_FORMAT_VERSION = "4"
         const val MAX_CONTRACT_CACHE_BYTES = 32L * 1024L * 1024L
         const val MAX_CACHE_AGE_MILLIS = 7L * 24L * 60L * 60L * 1_000L
+    }
+}
+
+/** File operations that can fail without throwing; a seam for deletion failures in tests. */
+internal interface VerifiedContractFileOperations {
+    fun delete(file: File): Boolean
+    fun createMarker(file: File): Boolean
+
+    object Default : VerifiedContractFileOperations {
+        override fun delete(file: File): Boolean = try {
+            file.delete()
+        } catch (_: SecurityException) {
+            false
+        }
+
+        override fun createMarker(file: File): Boolean = try {
+            file.createNewFile() || file.isFile
+        } catch (_: IOException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
     }
 }
 

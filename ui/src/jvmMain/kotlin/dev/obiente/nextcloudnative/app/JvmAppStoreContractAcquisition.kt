@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
+import dev.obiente.nextcloudnative.contracts.VerifiedContractRemoval
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
@@ -23,13 +24,25 @@ import kotlinx.coroutines.CancellationException
 fun acquireAppStoreContract(
     request: AppStoreContractRequest,
     acquirer: SignedAppStoreContractAcquirer,
+    onDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
 ): AppStoreContractAcquisition {
     if (request.cachePolicy != AppStoreCachePolicy.DiscardCachedContract) {
         return acquireAppStoreContract(request, acquirer::acquireOutcome)
     }
-    acquirer.invalidateVerifiedContract(request.toContractAcquisitionRequest())
+    val removal = acquirer.invalidateVerifiedContract(request.toContractAcquisitionRequest())
+    if (removal != VerifiedContractRemoval.Removed) onDiagnostic(verifiedContractDeletionFailure(removal))
     return AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract)
 }
+
+/** A cached contract that could not be deleted stays invalidated; only the typed removal is recorded. */
+private fun verifiedContractDeletionFailure(removal: VerifiedContractRemoval) = SupportDiagnosticEventDraft(
+    severity = SupportDiagnosticSeverity.Warning,
+    component = SupportDiagnosticComponent.Cache,
+    operation = "contract.cache.discard",
+    outcome = "deletion_failed",
+    code = "VERIFIED_CONTRACT_DELETION_FAILED",
+    fields = listOf(SupportDiagnosticFieldDraft("removal", removal.name)),
+)
 
 fun acquireAppStoreContract(
     request: AppStoreContractRequest,
