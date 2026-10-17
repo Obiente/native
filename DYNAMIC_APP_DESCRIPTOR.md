@@ -192,10 +192,13 @@ The fallback card derives its title, explanation, and action from that reason:
 - the app's linked source refused or rate limited the last fallback request
   (HTTP 403 or 429), so a contract may still exist;
 - the server's own API catalog or contract probe was inconclusive;
+- the server rejected the account's credentials, or the account may not read
+  the server's API catalog, during that probe;
+- the server or App Store offered a contract that cannot be shown natively,
+  such as a Swagger 2 document;
 - the server or app version could not be confirmed;
 - the App Store could not be reached, or did not provide the release;
 - the package or its source failed verification;
-- the verified contract cannot be shown natively yet;
 - the client could not complete the check.
 
 [`ContractAcquisitionFailure.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractAcquisitionFailure.kt)
@@ -225,13 +228,28 @@ A corrupt or mismatched App Store-linked source archive yields no candidate,
 like an archive without a contract, instead of an unexpected client fault.
 
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
-records the first inconclusive same-origin probe as a typed failure: no
-response, a 5xx status or unreadable success body, or HTTP 429. A 404, another
-definitive status, or an empty or non-advertising OCS API Viewer catalog is
-absence and records nothing. When the App Store then completes without a
-contract, an inconclusive server probe takes precedence over every App Store
-no-contract reason and the card offers a retry. A definitive server absence
-keeps the App Store reason. Diagnostics record both sources either way.
+records same-origin probe results as typed `DynamicServerProbeFailure` values.
+When probes disagree, the highest-precedence result wins, and the first one
+wins among equals:
+
+1. HTTP 401 (`AuthenticationRequired`): the card asks the person to sign in
+   again.
+2. HTTP 403 (`PermissionDenied`): the account may not read the catalog, which
+   may be limited to administrators.
+3. Inconclusive results that a retry may resolve: no response, a 5xx status,
+   HTTP 429, or a successful catalog or contract response that is not readable
+   JSON or declares no OpenAPI version (`UnreadableResponse`).
+4. `UnsupportedContract`: a JSON contract that declares a version other than
+   OpenAPI 3, such as Swagger 2, or an OpenAPI 3 contract that cannot be
+   compiled.
+
+A 404, another definitive status, a non-JSON response at a static contract
+location, or an empty or non-advertising OCS API Viewer catalog is absence and
+records nothing. When the App Store then completes without a contract, any
+recorded server result takes precedence over every App Store no-contract
+reason. A definitive server absence keeps the App Store reason. Diagnostics
+record both sources either way, and never include request URLs, headers, or
+response bodies.
 
 ## Read failures
 

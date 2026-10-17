@@ -12,33 +12,70 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-/** Why a same-origin catalog or contract probe could not prove that the server offers no contract. */
-enum class DynamicServerProbeFailure {
-    /** The request produced no HTTP response. */
-    NoResponse,
+/**
+ * Why a same-origin catalog or contract probe could not prove that the server offers no contract.
+ *
+ * [rank] orders results when probes disagree: access problems first, because signing in or gaining
+ * permission can change every other answer; then inconclusive results that a retry may resolve;
+ * then a definitive but unusable contract. A definitive absence, such as 404, records nothing.
+ */
+enum class DynamicServerProbeFailure(internal val rank: Int) {
+    /** The server rejected the account's credentials (HTTP 401). */
+    AuthenticationRequired(0),
 
-    /** The server answered with a 5xx status or an unreadable success body. */
-    ServerError,
+    /** The account may not read the catalog or contract, for example an administrator-only endpoint (HTTP 403). */
+    PermissionDenied(1),
+
+    /** The request produced no HTTP response. */
+    NoResponse(2),
+
+    /** The server answered with a 5xx status. */
+    ServerError(2),
 
     /** The server rate limited the request (HTTP 429). */
-    Throttled,
+    Throttled(2),
+
+    /** A successful catalog or contract response was not readable JSON or carried no OpenAPI version. */
+    UnreadableResponse(2),
+
+    /** The server offered a contract that is not OpenAPI 3, such as Swagger 2, or that cannot be compiled. */
+    UnsupportedContract(3),
+    ;
+
+    internal fun isInconclusive(): Boolean = rank == 2
 }
 
-/** Keeps the first inconclusive probe; a definitive answer such as 404 never records anything. */
+/** Keeps the highest-precedence probe result; among equal ranks the first result wins. */
 private class DynamicServerProbe {
     var failure: DynamicServerProbeFailure? = null
         private set
 
     fun record(failure: DynamicServerProbeFailure) {
-        if (this.failure == null) this.failure = failure
+        if (this.failure.let { current -> current == null || failure.rank < current.rank }) this.failure = failure
     }
 
     fun record(response: NextcloudApiResponse) {
         when {
+            response.status == 401 -> record(DynamicServerProbeFailure.AuthenticationRequired)
+            response.status == 403 -> record(DynamicServerProbeFailure.PermissionDenied)
             response.status == 429 -> record(DynamicServerProbeFailure.Throttled)
             response.status in 500..599 -> record(DynamicServerProbeFailure.ServerError)
         }
     }
+}
+
+/** Diagnostic text and contract-info code derive from the typed result, never from response content. */
+private fun DynamicServerProbeFailure.diagnostic(): String = when {
+    isInconclusive() -> "The server API probe was inconclusive: $name."
+    this == DynamicServerProbeFailure.UnsupportedContract -> "The server API probe found an unsupported contract."
+    else -> "The server API probe was not authorized: $name."
+}
+
+private fun DynamicServerProbeFailure.fallbackReason(): DynamicContractFallbackReason = when (this) {
+    DynamicServerProbeFailure.AuthenticationRequired -> DynamicContractFallbackReason.ServerAuthenticationRequired
+    DynamicServerProbeFailure.PermissionDenied -> DynamicContractFallbackReason.ServerPermissionDenied
+    DynamicServerProbeFailure.UnsupportedContract -> DynamicContractFallbackReason.UnsupportedContract
+    else -> DynamicContractFallbackReason.ServerProbeInconclusive
 }
 
 internal suspend fun discoverDynamicAppDescriptor(
@@ -90,7 +127,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         }
         val document = response.parseOpenApiDocument()
         if (document == null) {
-            probe.record(DynamicServerProbeFailure.ServerError)
+            probe.record(response.contractBodyFailure())
             diagnostics += "OCS API Viewer returned an invalid OpenAPI JSON body for $specId${response.contentTypeDiagnostic()}."
             return@forEach
         }
@@ -103,6 +140,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         val descriptor = runCatchingPreservingCancellation {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.onFailure { failure ->
+            probe.record(DynamicServerProbeFailure.UnsupportedContract)
             diagnostics += "OCS API Viewer returned an unusable specification for $specId: " +
                 (failure.message ?: "compilation failed") + "."
         }.getOrNull() ?: return@forEach
@@ -134,7 +172,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             probe.record(response)
             return@forEach
         }
-        val document = response.parseOpenApiDocument() ?: return@forEach
+        // A JSON response at a contract location is evidence; only a non-JSON response is absence.
+        val document = response.parseOpenApiDocument()
+        if (document == null) {
+            probe.record(response.contractBodyFailure())
+            return@forEach
+        }
         onProgress(
             DynamicDescriptorDiscoveryProgress(
                 DynamicDescriptorDiscoveryPhase.NativeWorkspace,
@@ -143,7 +186,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         )
         val descriptor = runCatchingPreservingCancellation {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
-        }.getOrNull() ?: return@forEach
+        }.onFailure { probe.record(DynamicServerProbeFailure.UnsupportedContract) }.getOrNull() ?: return@forEach
         return DynamicDescriptorDiscovery(
             descriptor = descriptor,
             sourcePath = path,
@@ -153,7 +196,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     }
 
     diagnostics += "No valid static OpenAPI document was found in the app's advertised asset locations."
-    probe.failure?.let { failure -> diagnostics += "The server API probe was inconclusive: ${failure.name}." }
+    probe.failure?.let { failure -> diagnostics += failure.diagnostic() }
 
     onProgress(
         DynamicDescriptorDiscoveryProgress(
@@ -171,7 +214,7 @@ internal suspend fun discoverDynamicAppDescriptor(
         sourcePath = null,
         acquisition = DynamicDescriptorAcquisition.MetadataFallback,
         diagnostics = diagnostics,
-        fallbackReason = probe.failure?.let { DynamicContractFallbackReason.ServerProbeInconclusive },
+        fallbackReason = probe.failure?.fallbackReason(),
     )
 }
 
@@ -200,7 +243,7 @@ private suspend fun discoverOfficialViewerSpecIds(
     val catalog = runCatchingPreservingCancellation { dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonArray }
         .getOrNull()
     if (catalog == null) {
-        probe.record(DynamicServerProbeFailure.ServerError)
+        probe.record(DynamicServerProbeFailure.UnreadableResponse)
         diagnostics += "OCS API Viewer returned an invalid app catalog${response.contentTypeDiagnostic()}."
         return emptyList()
     }
@@ -234,6 +277,17 @@ private fun NextcloudApiResponse.parseOpenApiDocument(): JsonObject? {
         .getOrNull() ?: return null
     val version = (document["openapi"] as? JsonPrimitive)?.contentOrNull
     return document.takeIf { version?.startsWith("3.") == true }
+}
+
+/** Classifies a successful contract body that [parseOpenApiDocument] rejected. */
+private fun NextcloudApiResponse.contractBodyFailure(): DynamicServerProbeFailure {
+    val root = runCatching { dynamicJson.parseToJsonElement(body.decodeToString()) as? JsonObject }.getOrNull()
+    val declaredVersion = (root?.get("openapi") ?: root?.get("swagger")) as? JsonPrimitive
+    return if (declaredVersion?.contentOrNull != null) {
+        DynamicServerProbeFailure.UnsupportedContract
+    } else {
+        DynamicServerProbeFailure.UnreadableResponse
+    }
 }
 
 private fun NextcloudApiResponse.contentTypeDiagnostic(): String =

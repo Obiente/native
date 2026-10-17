@@ -87,6 +87,8 @@ private fun String.safeDiagnosticCode(): String? = when {
     contains("static OpenAPI", ignoreCase = true) -> "static-contract-unavailable"
     contains("App Store contract acquisition failed", ignoreCase = true) -> "app-store-acquisition-failed"
     contains("server API probe was inconclusive", ignoreCase = true) -> "server-probe-inconclusive"
+    contains("server API probe was not authorized", ignoreCase = true) -> "server-probe-access-denied"
+    contains("server API probe found an unsupported contract", ignoreCase = true) -> "server-contract-unsupported"
     contains("derived", ignoreCase = true) && contains("read-only endpoints", ignoreCase = true) ->
         "verified-static-read-routes"
     contains("verified read", ignoreCase = true) && contains("fallback routes", ignoreCase = true) ->

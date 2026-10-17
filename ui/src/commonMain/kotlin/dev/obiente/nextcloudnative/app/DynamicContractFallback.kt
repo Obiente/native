@@ -67,6 +67,12 @@ enum class DynamicContractFallbackReason {
 
     /** The same-origin server probe was inconclusive and the App Store yielded no contract. */
     ServerProbeInconclusive,
+
+    /** The server rejected the account's credentials during the probe (HTTP 401). */
+    ServerAuthenticationRequired,
+
+    /** The account may not read the server's API catalog or contract (HTTP 403). */
+    ServerPermissionDenied,
     VersionUnavailable,
     AppStoreUnreachable,
     AppStoreUnavailable,
@@ -106,17 +112,26 @@ internal fun DynamicDescriptorDiscovery.withFallback(
 /**
  * Keeps the metadata fallback when the App Store boundary completed without a contract.
  *
- * Precedence: an inconclusive same-origin probe wins over every App Store no-contract reason,
- * because the server may still offer a contract and checking again can help. A definitive server
- * absence leaves the App Store reason in charge. Diagnostics keep both sources.
+ * Precedence: any same-origin probe result wins over every App Store no-contract reason, because
+ * the server may still offer a contract, or offers one that explains the outcome better. Among probe
+ * results, access problems come first, then inconclusive results, then an unsupported contract
+ * (see [DynamicServerProbeFailure]). A definitive server absence leaves the App Store reason in
+ * charge. Diagnostics keep both sources.
  */
 internal fun DynamicDescriptorDiscovery.withUnavailable(
     reason: AppStoreContractUnavailableReason,
     appId: String,
     coreVersion: String,
 ): DynamicDescriptorDiscovery = withFallback(
-    fallbackReason.takeIf { it == DynamicContractFallbackReason.ServerProbeInconclusive } ?: reason.fallbackReason(),
+    fallbackReason.takeIf { it in SERVER_PROBE_FALLBACK_REASONS } ?: reason.fallbackReason(),
     "No App Store contract for $appId on Nextcloud $coreVersion: ${reason.name}. Only app metadata is available.",
+)
+
+private val SERVER_PROBE_FALLBACK_REASONS = setOf(
+    DynamicContractFallbackReason.ServerAuthenticationRequired,
+    DynamicContractFallbackReason.ServerPermissionDenied,
+    DynamicContractFallbackReason.ServerProbeInconclusive,
+    DynamicContractFallbackReason.UnsupportedContract,
 )
 
 /** Shown when discovery itself fails before producing even a metadata fallback. */
@@ -165,6 +180,18 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
             "Store offered no verified contract. Check the connection and try again.",
         "Try again",
     )
+    DynamicContractFallbackReason.ServerAuthenticationRequired -> DynamicContractFallbackNotice(
+        "Sign in again",
+        "The server did not accept this account while checking for this app's API, and the App Store " +
+            "offered no verified contract. Sign in again to continue.",
+        "Try again",
+    )
+    DynamicContractFallbackReason.ServerPermissionDenied -> DynamicContractFallbackNotice(
+        "Server API not permitted",
+        "Your account does not have permission to read this server's API catalog, which may be limited " +
+            "to administrators, and the App Store offered no verified contract. Only app details are shown.",
+        "Check again",
+    )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(
         "App version not confirmed",
         "The server or app version could not be confirmed, so no matching signed App Store release " +
@@ -190,7 +217,7 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     )
     DynamicContractFallbackReason.UnsupportedContract -> DynamicContractFallbackNotice(
         "API contract not supported",
-        "This app's verified API contract cannot be shown as a native view yet. Only app details are shown.",
+        "This app's API contract cannot be shown as a native view yet. Only app details are shown.",
         "Check again",
     )
     DynamicContractFallbackReason.ClientFault -> DynamicContractFallbackNotice(
