@@ -52,27 +52,3 @@ internal fun refreshShortcut(
     catalog.source == CatalogSource.RefreshRefused -> ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.RecentlyChecked)
     else -> null
 }
-
-/** Evidence gathered by one uncoalesced acquisition that decides its no-contract reason. */
-/**
- * Records what inspecting candidate releases found. When no candidate provides a contract, a
- * temporarily unavailable linked source wins, because a contract may still exist; then an exact
- * installed release that could not be inspected ([exactReleaseUninspected]); and only then
- * [ContractUnavailableReason.NoUsableContract], which claims the inspected releases provide no API.
- */
-internal class ContractAcquisitionAttempt(private val exactReleaseUninspected: ContractUnavailableReason? = null) {
-    var sourceTemporarilyUnavailable: Boolean = false
-        private set
-
-    fun markSourceTemporarilyUnavailable() {
-        sourceTemporarilyUnavailable = true
-    }
-
-    fun unavailable(): ContractAcquisitionOutcome.Unavailable = ContractAcquisitionOutcome.Unavailable(
-        when {
-            sourceTemporarilyUnavailable -> ContractUnavailableReason.SourceTemporarilyUnavailable
-            exactReleaseUninspected != null -> exactReleaseUninspected
-            else -> ContractUnavailableReason.NoUsableContract
-        },
-    )
-}

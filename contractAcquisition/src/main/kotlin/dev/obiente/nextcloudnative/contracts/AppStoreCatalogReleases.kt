@@ -8,8 +8,17 @@ import org.json.JSONObject
 
 /** Which required catalog value made an entry for the requested app unusable. */
 internal enum class MalformedCatalogField {
-    /** The catalog document itself is not a readable JSON array. */
+    /**
+     * The catalog document itself is not a readable JSON array, or it is a non-empty array in
+     * which no element is an app object with a readable `id`.
+     */
     Document,
+
+    /**
+     * The app was not found, and some top-level element is not an object or has a missing or
+     * wrong-typed `id`, so it may have been the requested app.
+     */
+    App,
     Releases,
     Entry,
     Version,
@@ -48,47 +57,6 @@ internal data class CatalogReleases(
     val documentReadable: Boolean get() = malformed.none { entry -> entry.field == MalformedCatalogField.Document }
 }
 
-/**
- * Explains an empty release selection. A dropped entry that would have been selected, or one whose
- * version cannot be read, means the catalog is malformed for this app rather than lacking a release.
- * Compatible candidates come only from the platform catalog; the full catalog supplies exact matches.
- */
-internal fun unmatchedReleaseOutcome(
-    installedVersion: String?,
-    platformCatalog: CatalogReleases,
-    allCatalog: CatalogReleases?,
-): ContractAcquisitionOutcome.Unavailable {
-    if (!platformCatalog.documentReadable || allCatalog?.documentReadable == false) {
-        return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.UnreadableCatalog)
-    }
-    fun MalformedCatalogEntry.isExact(): Boolean = version == null || version == installedVersion
-    val malformedMatch = platformCatalog.malformed.any { entry ->
-        entry.isExact() || isCompatibleReleaseVersion(requireNotNull(entry.version), installedVersion)
-    } || allCatalog?.malformed.orEmpty().any { entry -> entry.isExact() }
-    return ContractAcquisitionOutcome.Unavailable(
-        if (malformedMatch) ContractUnavailableReason.MalformedSource else ContractUnavailableReason.NoMatchingRelease,
-    )
-}
-
-/**
- * Why the exact installed release could not be inspected: its catalog was unreadable, or an entry
- * that may be the exact release was malformed. Null when the catalogs were readable and simply do
- * not list it.
- */
-internal fun uninspectedExactReleaseReason(
-    installedVersion: String?,
-    platformCatalog: CatalogReleases,
-    allCatalog: CatalogReleases?,
-): ContractUnavailableReason? {
-    if (installedVersion == null) return null
-    if (!platformCatalog.documentReadable || allCatalog?.documentReadable == false) {
-        return ContractUnavailableReason.UnreadableCatalog
-    }
-    val malformedExact = (platformCatalog.malformed + allCatalog?.malformed.orEmpty())
-        .any { entry -> entry.version == null || entry.version == installedVersion }
-    return if (malformedExact) ContractUnavailableReason.MalformedSource else null
-}
-
 internal fun selectRelease(
     catalogJson: String,
     request: ContractAcquisitionRequest,
@@ -122,11 +90,22 @@ internal fun parseReleases(
     } catch (_: JSONException) {
         return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Document)))
     }
-    val app = (0 until apps.length())
-        .asSequence()
-        .mapNotNull(apps::optJSONObject)
+    var unidentified = 0
+    val app = (0 until apps.length()).asSequence()
+        .mapNotNull { index ->
+            apps.optJSONObject(index)?.takeIf { candidate -> candidate.stringValue("id") != null }
+                .also { identified -> if (identified == null) unidentified += 1 }
+        }
         .firstOrNull { candidate -> candidate.stringValue("id") == appId }
-        ?: return CatalogReleases(emptyList())
+    if (app == null) {
+        // An element whose identity cannot be read may have been the requested app, so absence is unproven.
+        val field = when (unidentified) {
+            0 -> return CatalogReleases(emptyList())
+            apps.length() -> MalformedCatalogField.Document
+            else -> MalformedCatalogField.App
+        }
+        return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, field)))
+    }
     val releases = app.optJSONArray("releases")
         ?: return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Releases)))
     val certificate = app.stringValue("certificate")?.takeIf(String::isNotBlank)
@@ -231,7 +210,7 @@ internal fun compatibleReleaseCandidates(
 }
 
 /** A non-prerelease with the installed major and minor version, or any non-prerelease when unknown. */
-private fun isCompatibleReleaseVersion(version: String, installedVersion: String?): Boolean {
+internal fun isCompatibleReleaseVersion(version: String, installedVersion: String?): Boolean {
     if (version.isRecognizedPrerelease()) return false
     if (installedVersion == null) return true
     val installed = parseVersion(installedVersion) ?: return false

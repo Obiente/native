@@ -120,11 +120,9 @@ class SignedAppStoreContractAcquirer(
             installedVersion = request.installedAppVersion,
         ).filterNot { candidate -> candidate.version == exactRelease?.version }
         val releases = listOfNotNull(exactRelease) + compatibleReleases
-        if (releases.isEmpty()) return unmatchedReleaseOutcome(request.installedAppVersion, platformCatalog, allCatalog)
-        val attempt = ContractAcquisitionAttempt(
-            exactReleaseUninspected = uninspectedExactReleaseReason(request.installedAppVersion, platformCatalog, allCatalog)
-                .takeIf { exactRelease == null },
-        )
+        // Every no-contract reason below is derived from this record of what was actually inspected.
+        val attempt = ContractAcquisitionEvidence(request.installedAppVersion, platformCatalog, allCatalog)
+        if (releases.isEmpty()) return attempt.unavailable()
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
         val verifiedRouteFallbacks = mutableListOf<Pair<AppStoreRelease, VerifiedPackageContract>>()
@@ -142,6 +140,7 @@ class SignedAppStoreContractAcquirer(
             val verified = try {
                 trustVerifier.verifyAndExtract(release, archive)
             } catch (_: OpenApiContractMissingException) {
+                attempt.recordInspected(release, InspectedCandidateResult.PackageWithoutContract)
                 missingPackageContracts += release
                 continue
             } catch (failure: GeneralSecurityException) {
@@ -176,6 +175,7 @@ class SignedAppStoreContractAcquirer(
                         linkedContract.mergeVerifiedPackageRoutes(verified),
                     )
                 }
+                attempt.recordInspected(release, InspectedCandidateResult.ReadRoutesOnly)
                 verifiedRouteFallbacks += release to verified
                 continue
             }
@@ -239,7 +239,7 @@ class SignedAppStoreContractAcquirer(
         release: AppStoreRelease,
         installedAppVersion: String?,
         exact: Boolean,
-        attempt: ContractAcquisitionAttempt,
+        attempt: ContractAcquisitionEvidence,
     ): VerifiedOpenApiContract? {
         release.githubSources.forEach sourceLoop@ { source ->
             val sourceRoot = "${rawGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}/${source.tag}"
@@ -314,7 +314,7 @@ class SignedAppStoreContractAcquirer(
         source: GitHubSourceReference,
         release: AppStoreRelease,
         sourceRoot: String,
-        attempt: ContractAcquisitionAttempt,
+        attempt: ContractAcquisitionEvidence,
     ): OpenApiCandidate? {
         val archiveUrl = "${codeloadGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}" +
             "/tar.gz/refs/tags/${source.tag}"
