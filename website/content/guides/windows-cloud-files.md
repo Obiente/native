@@ -8,7 +8,7 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-09-27
+lastUpdated: 2026-10-17
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
@@ -72,5 +72,13 @@ Windows can dehydrate in-sync placeholders when space is needed. **Free up space
 @capture-caption: Cloud Files writeback keeps recovery metadata and surfaces conflicts when a local edit cannot safely replace a newer Nextcloud version.
 
 When a desktop application edits a hydrated file, nati.ve stages the local generation and writes it back with the expected remote identity. If Nextcloud changed first, the provider retains the local edit and marks a conflict instead of overwriting the server version. Failed writebacks use bounded retries and remain visible when manual attention is required.
+
+**Last reviewed: 2026-10-17.** The following behavior is implemented in source
+and may not be in your installed build; check the
+[release notes](https://github.com/obiente/native/releases) for your version.
+An edited file is marked as synced only if it did not change again while it was
+uploading; a newer edit is uploaded next. If a file that is already on the
+computer is edited while nati.ve is not running, nati.ve writes it back the next
+time it starts, with the same expected remote identity and conflict protection.
 
 Do not repeatedly rename, move, or reopen an item while its result is unknown. Keep the app installed and signed in so recovery can reconcile pending work. Current recovery serializes competing File Explorer population requests and protects placeholder updates from concurrent access; retry from the visible failure instead of deleting the sync root. Before uninstalling or removing an account, confirm that no pending or failed writebacks remain. The Windows MSI is currently unsigned, but disabling SmartScreen or Defender is never part of Cloud Files troubleshooting.
