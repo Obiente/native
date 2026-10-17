@@ -26,6 +26,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -214,7 +216,16 @@ private fun createMedia3VideoPlayer(
         .build()
     val renderersFactory = DefaultRenderersFactory(context.applicationContext)
         .setEnableDecoderFallback(true)
-    return ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply {
+    // Autoplay takes audio focus so other media pauses or ducks instead of mixing, and unplugging
+    // headphones pauses instead of moving the sound to the speaker.
+    val audioAttributes = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+    return ExoPlayer.Builder(context.applicationContext, renderersFactory)
+        .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+        .setHandleAudioBecomingNoisy(true)
+        .build().apply {
         addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
