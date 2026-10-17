@@ -585,7 +585,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicApiRequestCoalescer.kt": "9aeb3dce3a1bd11651a7c84b5ab0e77e2d905055c68bc8f8cd02d412670c5ed5",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicArtworkMemoryCache.kt": "c313daea9465087ab1862814bc5a772bdcc1f087bc673eb80f417db73668ea1c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicCollectionHeaderActions.kt": "d352d0a0fc28bdf5cfd3cf24b04dc7b23aa15de5ec29dbcf6e5c49f25599d1ab",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractFallback.kt": "f3fc3ebc44104f303fd9a9436fb577f77eea198729f2ad72e1239b9dce88bf6d",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractFallback.kt": "b6569bba81ee19a8987b458b10bbd7ae972c9d7e3346707ced08247515c79743",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractInfo.kt": "79bb347d92be621079008d3ab4fcde43167fe9d37e182e6762e100f3ad2d1215",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicDiscoveryDiagnostics.kt": "753c8282cf2cd44408290198c6661c9b23883d83404b4e0ebefadf74b4bec7fb",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicDiscoveryPersistence.kt": "3a5b7e7951847d9fff084cfe79bc12b21c8ed8319392782e6b704a7f64987151",
