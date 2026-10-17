@@ -27,8 +27,10 @@ The app is built from four layers. Only the last one is platform-specific.
 
 ## Modules and source sets
 
-This section describes where code lives today. The Gradle build has three
-modules (`settings.gradle.kts`); the Rust crate is built separately.
+**Last reviewed: 2026-10-17.** This section describes where code lives; the
+code may have changed since, and the default branch is the source of truth.
+The Gradle build has three modules (`settings.gradle.kts`); the Rust crate is
+built separately.
 
 | Location | What it owns |
 | --- | --- |
@@ -63,10 +65,11 @@ behaves identically on both JVM targets belongs in `ui/src/jvmMain`. Code that
 differs because of lifecycle, storage, or operating-system APIs stays in the
 platform module, with the difference documented and tested.
 
-**Last reviewed: 2026-10-02.** This is a source inventory, not a plan. The code
+**Last reviewed: 2026-10-17.** This is a source inventory, not a plan. The code
 may have changed since; the default branch is the source of truth. Similarity
-figures came from comparing function bodies after removing the `Android` and
-`Desktop` name prefixes.
+figures came from comparing function bodies on 2026-10-02 after removing the
+`Android` and `Desktop` name prefixes, and were not remeasured on the review
+date.
 
 **Already shared.** All Compose UI, the sync domain model (planning,
 conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
@@ -90,7 +93,7 @@ its own HTTP request code, protocol adapters, XML parsers, and sync executor.
 | Medium | Dynamic discovery cache. Most of the logic is identical | `AndroidDynamicDiscoveryCache.kt` | `DesktopDynamicDiscoveryCache.kt` | One `jvmMain` cache |
 | Medium | Deck card draft codec, capacity, and migration policy | `AndroidDeckCardDraftStore.kt` | `DesktopDeckCardDraftStore.kt` | `commonMain` policy behind a storage port |
 | Medium | File read cache. Android skips leased entries during eviction; desktop eviction has no lease check | `AndroidFileReadCache.kt`, `AndroidVirtualFileCache.kt` | `DesktopFileReadCache.kt` | A `jvmMain` blob store |
-| Medium | Account removal stages and journals | Five `AndroidAccountRemoval*` files | `DesktopAccountRemoval.kt` | A `commonMain` removal state machine |
+| Medium | Account removal stages and journals | Four `AndroidAccountRemoval*` files | `DesktopAccountRemoval.kt` | A `commonMain` removal state machine |
 | Medium | Pure policy kept in platform code | `AndroidFileSyncContentEvidence.kt` | `DesktopFileSyncRetryPolicy.kt`, `DesktopFileSyncBatchResult.kt`, `DesktopFileSyncContentSlices.kt` | `commonMain` |
 | Low | Small identical helpers: streaming multipart body, document-editing capability parsing, bounded reads, `sha256Hex` copies, update-channel preferences | Several files | Several files | `jvmMain` |
 

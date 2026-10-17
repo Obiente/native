@@ -184,6 +184,10 @@ typed acquisition kind, so rewording a diagnostic message never changes a code.
 
 ## Metadata fallback reasons
 
+**Last reviewed: 2026-10-17.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. It is not a claim about a published release.
+
 When no same-origin or App Store source yields a verified contract, discovery
 keeps the metadata-only descriptor and records a typed reason in
 [`DynamicContractFallback.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractFallback.kt).
