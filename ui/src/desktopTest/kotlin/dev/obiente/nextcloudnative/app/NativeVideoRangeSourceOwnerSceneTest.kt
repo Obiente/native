@@ -71,7 +71,28 @@ class NativeVideoRangeSourceOwnerSceneTest {
         }
     }
 
-    private fun services(opens: AtomicInteger, closes: AtomicInteger): NextcloudPlatformServices =
+    @Test
+    fun `a session that fails to open for a removed account is unavailable instead of crashing`() {
+        val opens = AtomicInteger()
+        val services = services(opens, AtomicInteger(), openFailure = java.io.FileNotFoundException("synthetic removed account"))
+        var observed: NativeVideoRangeSourceSlot? = null
+        nativeSceneTest(400, 300, content = {
+            observed = rememberNativeVideoRangeSource(
+                NativeVideoCompatibilityRangePlan.WholeFile(video), needed = true, attempt = 0, session, "alice", services,
+            )
+            Text("host")
+        }) {
+            settleUntil { observed == NativeVideoRangeSourceSlot.Unavailable }
+            assertEquals(NativeVideoRangeSourceSlot.Unavailable, observed)
+            assertEquals(1, opens.get())
+        }
+    }
+
+    private fun services(
+        opens: AtomicInteger,
+        closes: AtomicInteger,
+        openFailure: Exception? = null,
+    ): NextcloudPlatformServices =
         Proxy.newProxyInstance(
             NextcloudPlatformServices::class.java.classLoader,
             arrayOf(NextcloudPlatformServices::class.java),
@@ -82,6 +103,7 @@ class NativeVideoRangeSourceOwnerSceneTest {
                 "equals" -> proxy === args?.singleOrNull()
                 "openFileRangeSession" -> {
                     opens.incrementAndGet()
+                    if (openFailure != null) throw openFailure
                     NextcloudFileRangeSession(
                         size = args!![3] as Long,
                         readBlock = { _, length -> ByteArray(length) },

@@ -414,7 +414,7 @@ packaging may have changed.
 - libVLC is found once per process (`DesktopLibVlcRuntime.kt`). A copy bundled
   in the package is preferred over a system VLC. Windows and macOS packages
   stage VideoLAN's VLC 3.0.24 release libraries and playback plugins, pinned
-  by SHA-256 in `ui/desktop-libvlc.gradle.kts`, with libVLC's license and a
+  by SHA-256 in `ui/desktop-libvlc.gradle.kts`, with libVLC's LGPL and GPL texts and a
   source link in the packaged `libvlc` folder. Linux packages do not bundle
   libVLC: the DEB recommends `libvlc5` and `vlc-plugin-base`, and the RPM
   recommends any package that provides `libvlc.so.5`. Without libVLC the

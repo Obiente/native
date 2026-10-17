@@ -123,6 +123,24 @@ class MediaVideoOriginalTest {
     }
 
     @Test
+    fun aDownloadRestrictedNonGalleryVideoIsNeverResolvedToItsOriginal() = runBlocking<Unit> {
+        // Like a Talk attachment shared with downloads hidden: a real Files path, access denied.
+        val restricted = filesVideo.copy(originalAccessAllowed = false)
+
+        assertFalse(restricted.needsVideoOriginalResolution("alice"))
+        assertEquals(MediaVideoOriginalState.Direct, restricted.initialVideoOriginalState("alice"))
+        assertEquals(
+            MediaVideoOriginalState.Direct,
+            resolveMediaVideoOriginal(restricted, "alice") { error("A policy restriction must not be looked up.") },
+        )
+        assertSame(restricted, MediaVideoOriginalState.Direct.playbackFileFor(restricted))
+        assertNull(
+            restricted.nativeVideoPlaybackSource("alice", nativePlaybackAvailable = true, livePhotoSource = null, motionPlaying = false),
+            "The original stays unavailable for playback.",
+        )
+    }
+
+    @Test
     fun theViewerStartsFromAnHonestState() {
         assertEquals(MediaVideoOriginalState.Resolving, galleryVideo.initialVideoOriginalState("alice"))
         assertEquals(MediaVideoOriginalState.PreviewOnly, galleryVideo.copy(fileId = null).initialVideoOriginalState("alice"))

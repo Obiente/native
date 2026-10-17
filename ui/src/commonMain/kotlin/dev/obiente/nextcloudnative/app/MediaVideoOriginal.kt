@@ -41,9 +41,16 @@ internal sealed interface MediaVideoOriginalState {
     data object LookupFailed : MediaVideoOriginalState
 }
 
-/** A video record without Files access, such as a Memories gallery item. */
+/**
+ * A Memories gallery video, whose missing Files access comes from its synthetic gallery path.
+ *
+ * Only Memories records qualify. Other preview-only records, such as a Talk attachment shared
+ * with downloads hidden, restrict original access as a policy, and resolving them to a Files
+ * record would bypass it.
+ */
 internal fun NextcloudFile.isPreviewOnlyVideo(userId: String): Boolean =
-    !isDirectory && mediaAssetFormat() == MediaAssetFormat.Video && !hasAuthoritativeMediaDavAccess(userId)
+    memoriesRenderAllowed && !isDirectory && mediaAssetFormat() == MediaAssetFormat.Video &&
+        !hasAuthoritativeMediaDavAccess(userId)
 
 internal fun NextcloudFile.needsVideoOriginalResolution(userId: String): Boolean =
     isPreviewOnlyVideo(userId) && (fileId ?: 0L) > 0L && userId.isNotBlank()

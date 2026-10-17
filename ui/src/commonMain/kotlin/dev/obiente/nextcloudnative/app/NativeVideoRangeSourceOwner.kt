@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
 
 /** The seekable source a video player reads from, once the viewer has committed to showing it. */
 internal sealed interface NativeVideoRangeSourceSlot {
@@ -55,10 +56,11 @@ private fun openOrNull(
     userId: String,
 ): NativeVideoRangeSource? = try {
     plan.openRangeSource(services = services, session = session, userId = userId)
-} catch (_: IllegalArgumentException) {
-    // The record has no safe size, ETag, or path to pin a range read to.
-    null
-} catch (_: IllegalStateException) {
-    // The account session is closing.
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    // UI fault boundary: an unsafe record, a closing account session, or a platform reporting a
+    // changed or removed account (Android throws FileNotFoundException) leaves nothing to stream.
+    // The player then reports a typed playback failure instead of crashing the viewer.
     null
 }

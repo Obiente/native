@@ -51,6 +51,7 @@ val desktopLibVlcExcludedPluginGroups = listOf(
 )
 
 val desktopLibVlcDownloadDirectory = layout.buildDirectory.dir("libvlc/download")
+val desktopLibVlcLicenseDirectory = rootProject.layout.projectDirectory.dir("release/third-party/libvlc")
 val desktopAppResourcesDirectory = layout.buildDirectory.dir("generated/desktop-app-resources")
 
 fun File.sha256(): String {
@@ -117,6 +118,7 @@ val prepareDesktopLibVlc by tasks.registering {
     if (archive != null) {
         inputs.file(desktopLibVlcDownloadDirectory.map { it.file(archive.fileName) })
         inputs.property("excludedPluginGroups", desktopLibVlcExcludedPluginGroups)
+        inputs.dir(desktopLibVlcLicenseDirectory)
     }
     outputs.dir(desktopAppResourcesDirectory)
     doLast {
@@ -132,7 +134,7 @@ val prepareDesktopLibVlc by tasks.registering {
                 val root = "vlc-$desktopLibVlcVersion"
                 copy {
                     from(zipTree(downloaded)) {
-                        include("$root/libvlc.dll", "$root/libvlccore.dll", "$root/COPYING.txt", "$root/plugins/**")
+                        include("$root/libvlc.dll", "$root/libvlccore.dll", "$root/plugins/**")
                         desktopLibVlcExcludedPluginGroups.forEach { exclude("$root/plugins/$it/**") }
                         // Blu-ray menu jars would otherwise join the application class path.
                         exclude("**/*.jar")
@@ -158,7 +160,6 @@ val prepareDesktopLibVlc by tasks.registering {
                             into("plugins")
                             exclude("**/*.jar")
                         }
-                        from(File(mount, "VLC.app/Contents/Resources")) { include("COPYING") }
                         into(output)
                     }
                 } finally {
@@ -170,10 +171,19 @@ val prepareDesktopLibVlc by tasks.registering {
             "The libVLC archive did not contain the expected library."
         }
         check(File(output, "plugins").isDirectory) { "The libVLC archive did not contain its plugins." }
+        // VideoLAN's binary archives omit COPYING.LIB, so both texts come from the 3.0.24 source tag.
+        copy {
+            from(desktopLibVlcLicenseDirectory) { include("COPYING", "COPYING.LIB") }
+            into(output)
+        }
+        check(File(output, "COPYING.LIB").isFile && File(output, "COPYING").isFile) {
+            "The libVLC license texts were not staged."
+        }
         File(output, "README.txt").writeText(
             listOf(
                 "libVLC $desktopLibVlcVersion from VideoLAN, used by nati.ve for in-app video playback.",
-                "License: GNU Lesser General Public License 2.1 or later; see the COPYING file here.",
+                "License: libVLC is under the GNU Lesser General Public License 2.1 or later (COPYING.LIB).",
+                "Some VLC plugins are under the GNU General Public License 2 or later (COPYING).",
                 "Release binaries: ${pinned.url}",
                 "Corresponding source: https://get.videolan.org/vlc/$desktopLibVlcVersion/vlc-$desktopLibVlcVersion.tar.xz",
             ).joinToString(separator = "\n", postfix = "\n"),
