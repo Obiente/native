@@ -54,7 +54,13 @@ internal fun refreshShortcut(
 }
 
 /** Evidence gathered by one uncoalesced acquisition that decides its no-contract reason. */
-internal class ContractAcquisitionAttempt {
+/**
+ * Records what inspecting candidate releases found. When no candidate provides a contract, a
+ * temporarily unavailable linked source wins, because a contract may still exist; then an exact
+ * installed release that could not be inspected ([exactReleaseUninspected]); and only then
+ * [ContractUnavailableReason.NoUsableContract], which claims the inspected releases provide no API.
+ */
+internal class ContractAcquisitionAttempt(private val exactReleaseUninspected: ContractUnavailableReason? = null) {
     var sourceTemporarilyUnavailable: Boolean = false
         private set
 
@@ -63,10 +69,10 @@ internal class ContractAcquisitionAttempt {
     }
 
     fun unavailable(): ContractAcquisitionOutcome.Unavailable = ContractAcquisitionOutcome.Unavailable(
-        if (sourceTemporarilyUnavailable) {
-            ContractUnavailableReason.SourceTemporarilyUnavailable
-        } else {
-            ContractUnavailableReason.NoUsableContract
+        when {
+            sourceTemporarilyUnavailable -> ContractUnavailableReason.SourceTemporarilyUnavailable
+            exactReleaseUninspected != null -> exactReleaseUninspected
+            else -> ContractUnavailableReason.NoUsableContract
         },
     )
 }

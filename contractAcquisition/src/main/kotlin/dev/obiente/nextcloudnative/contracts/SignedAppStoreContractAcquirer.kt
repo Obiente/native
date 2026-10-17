@@ -114,7 +114,10 @@ class SignedAppStoreContractAcquirer(
         ).filterNot { candidate -> candidate.version == exactRelease?.version }
         val releases = listOfNotNull(exactRelease) + compatibleReleases
         if (releases.isEmpty()) return unmatchedReleaseOutcome(request.installedAppVersion, platformCatalog, allCatalog)
-        val attempt = ContractAcquisitionAttempt()
+        val attempt = ContractAcquisitionAttempt(
+            exactReleaseUninspected = uninspectedExactReleaseReason(request.installedAppVersion, platformCatalog, allCatalog)
+                .takeIf { exactRelease == null },
+        )
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
         val verifiedRouteFallbacks = mutableListOf<Pair<AppStoreRelease, VerifiedPackageContract>>()

@@ -70,6 +70,25 @@ internal fun unmatchedReleaseOutcome(
     )
 }
 
+/**
+ * Why the exact installed release could not be inspected: its catalog was unreadable, or an entry
+ * that may be the exact release was malformed. Null when the catalogs were readable and simply do
+ * not list it.
+ */
+internal fun uninspectedExactReleaseReason(
+    installedVersion: String?,
+    platformCatalog: CatalogReleases,
+    allCatalog: CatalogReleases?,
+): ContractUnavailableReason? {
+    if (installedVersion == null) return null
+    if (!platformCatalog.documentReadable || allCatalog?.documentReadable == false) {
+        return ContractUnavailableReason.UnreadableCatalog
+    }
+    val malformedExact = (platformCatalog.malformed + allCatalog?.malformed.orEmpty())
+        .any { entry -> entry.version == null || entry.version == installedVersion }
+    return if (malformedExact) ContractUnavailableReason.MalformedSource else null
+}
+
 internal fun selectRelease(
     catalogJson: String,
     request: ContractAcquisitionRequest,
