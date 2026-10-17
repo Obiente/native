@@ -49,10 +49,13 @@ internal fun rememberNativeVideoRangeSource(
     }
     LaunchedEffect(wanted, attempt, session, userId, services) {
         if (wanted == null) return@LaunchedEffect
-        val opened = withContext(NonCancellable + videoRangeOpenDispatcher) {
-            openOrNull(wanted, services, session, userId)
-        }
+        // Assigned inside the block: withContext discards its result when it resumes into a
+        // cancelled effect, so the finally must see the session even then.
+        var opened: NativeVideoRangeSource? = null
         try {
+            withContext(NonCancellable + videoRangeOpenDispatcher) {
+                opened = openOrNull(wanted, services, session, userId)
+            }
             slot = opened?.let(NativeVideoRangeSourceSlot::Open) ?: NativeVideoRangeSourceSlot.Unavailable
             awaitCancellation()
         } finally {

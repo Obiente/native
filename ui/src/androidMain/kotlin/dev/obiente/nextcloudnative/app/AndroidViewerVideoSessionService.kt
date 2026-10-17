@@ -180,10 +180,21 @@ internal class AndroidViewerVideoSessionPlayer(
         next()?.invoke(playWhenReady)
     }
 
-    /** The system Play on a finished video restarts it, as the in-window replay control does. */
+    /**
+     * The system Play restarts a finished video, as the in-window replay control does, and
+     * prepares a player an earlier Stop left idle.
+     */
     override fun play() {
-        if (playbackState == Player.STATE_ENDED) seekToDefaultPosition()
+        when (playbackState) {
+            Player.STATE_ENDED -> seekToDefaultPosition()
+            Player.STATE_IDLE -> prepare()
+        }
         super.play()
+    }
+
+    /** The viewer owns the player's lifetime, so a system Stop pauses instead of unloading it. */
+    override fun stop() {
+        pause()
     }
 
     override fun hasPreviousMediaItem(): Boolean = previous() != null

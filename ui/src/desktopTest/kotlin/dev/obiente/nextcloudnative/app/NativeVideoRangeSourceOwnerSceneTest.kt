@@ -72,6 +72,30 @@ class NativeVideoRangeSourceOwnerSceneTest {
     }
 
     @Test
+    fun `a session that finishes opening after the viewer left is closed`() {
+        val opens = AtomicInteger()
+        val closes = AtomicInteger()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val services = services(opens, closes, beforeOpen = { release.await(5, java.util.concurrent.TimeUnit.SECONDS) })
+        var shown by mutableStateOf(true)
+        nativeSceneTest(400, 300, content = {
+            if (shown) {
+                rememberNativeVideoRangeSource(
+                    NativeVideoCompatibilityRangePlan.WholeFile(video), needed = true, attempt = 0, session, "alice", services,
+                )
+            }
+            Text("host")
+        }) {
+            settleUntil { opens.get() == 1 }
+            shown = false
+            settle()
+            release.countDown()
+            settleUntil { closes.get() == 1 }
+            assertEquals(1, closes.get(), "The late session is closed, not left registered.")
+        }
+    }
+
+    @Test
     fun `a session that fails to open for a removed account is unavailable instead of crashing`() {
         val opens = AtomicInteger()
         val services = services(opens, AtomicInteger(), openFailure = java.io.FileNotFoundException("synthetic removed account"))
@@ -92,6 +116,7 @@ class NativeVideoRangeSourceOwnerSceneTest {
         opens: AtomicInteger,
         closes: AtomicInteger,
         openFailure: Exception? = null,
+        beforeOpen: () -> Unit = {},
     ): NextcloudPlatformServices =
         Proxy.newProxyInstance(
             NextcloudPlatformServices::class.java.classLoader,
@@ -103,6 +128,7 @@ class NativeVideoRangeSourceOwnerSceneTest {
                 "equals" -> proxy === args?.singleOrNull()
                 "openFileRangeSession" -> {
                     opens.incrementAndGet()
+                    beforeOpen()
                     if (openFailure != null) throw openFailure
                     NextcloudFileRangeSession(
                         size = args!![3] as Long,
