@@ -27,6 +27,35 @@ internal fun AppStoreCatalogCache.storeBestEffort(url: String, bytes: ByteArray)
     }
 }
 
+/** Whether a catalog read may reuse the cached copy. Only an explicit user retry asks for [Refresh]. */
+enum class CatalogPolicy { UseCache, Refresh }
+
+/**
+ * Bounds explicit catalog refreshes to one forced download per catalog URL per interval. A retry
+ * inside the window reuses the cached catalog, so repeated presses cannot hammer the App Store.
+ * A forced download counts even when it fails.
+ */
+class CatalogRefreshThrottle(
+    private val intervalMillis: Long = DEFAULT_CATALOG_REFRESH_INTERVAL_MILLIS,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) {
+    private val lastRefresh = ConcurrentHashMap<String, Long>()
+
+    /** Returns true, and starts a new window, when [url] may be downloaded again now. */
+    fun tryRefresh(url: String): Boolean {
+        val now = nowMillis()
+        var allowed = false
+        lastRefresh.compute(url) { _, previous ->
+            if (previous == null || now - previous !in 0 until intervalMillis) now.also { allowed = true } else previous
+        }
+        return allowed
+    }
+
+    companion object {
+        const val DEFAULT_CATALOG_REFRESH_INTERVAL_MILLIS = 60_000L
+    }
+}
+
 class MemoryAppStoreCatalogCache : AppStoreCatalogCache {
     private val entries = ConcurrentHashMap<String, ByteArray>()
 

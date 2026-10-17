@@ -158,7 +158,7 @@ suspend fun discoverDynamicAppDescriptor(
     )
     val acquisition = observeDynamicDiscoveryStage(DynamicDiscoveryStage.PackageAcquisition, services::recordSupportDiagnostic,
         available = { it is AppStoreContractAcquisition.Acquired }) {
-        services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
+        services.acquireSignedOpenApiContract(AppStoreContractRequest(contractAppId, coreVersion, installedVersion))
     }.getOrElse { failure ->
         // Only the typed kind enters diagnostics and copy; exception text and class names stay local.
         val kind = failure.appStoreContractFailureKind()

@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
@@ -5031,16 +5030,8 @@ class DesktopNextcloudServices(
         NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
     }
 
-    override suspend fun acquireSignedOpenApiContract(
-        appId: String,
-        serverVersion: String,
-        installedAppVersion: String?,
-    ): AppStoreContractAcquisition = withContext(Dispatchers.IO) {
-        acquireAppStoreContract(
-            ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
-            contractAcquirer::acquireOutcome,
-        )
-    }
+    override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
+        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer::acquireOutcome) }
 
     override suspend fun listActivities(session: NextcloudSession, limit: Int): List<NextcloudActivity> =
         withContext(Dispatchers.IO) {

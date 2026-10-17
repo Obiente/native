@@ -5,9 +5,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.obiente.nextcloudnative.app.AppStoreContractAcquisition
 import dev.obiente.nextcloudnative.app.AppStoreContractAcquisitionException
 import dev.obiente.nextcloudnative.app.AppStoreContractFailureKind
+import dev.obiente.nextcloudnative.app.AppStoreContractRequest
 import dev.obiente.nextcloudnative.app.AppStoreContractUnavailableReason
 import dev.obiente.nextcloudnative.app.acquireAppStoreContract
-import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import java.io.File
@@ -66,7 +66,7 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
         Class.forName("dev.obiente.nextcloudnative.app.JvmAppStoreContractAcquisitionKt")
 
         val failed = try {
-            acquireAppStoreContract(ContractAcquisitionRequest("example", "34.0.3", "1.0.0")) {
+            acquireAppStoreContract(AppStoreContractRequest("example", "34.0.3", "1.0.0")) { _, _ ->
                 throw NoClassDefFoundError("dev.obiente.nextcloudnative.contracts.SyntheticKt")
             }
             null
@@ -94,7 +94,7 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
                     catalogCache = FileAppStoreCatalogCache(File(File(cacheRoot, "blocked"), "catalogs")),
                 )
                 val outcome = acquireAppStoreContract(
-                    ContractAcquisitionRequest("example", "34.0.3", "1.0.0"),
+                    AppStoreContractRequest("example", "34.0.3", "1.0.0"),
                     acquirer::acquireOutcome,
                 )
                 assertEquals(

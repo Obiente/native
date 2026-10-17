@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.contracts.CatalogPolicy
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
@@ -18,7 +19,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertSame
 
 class JvmAppStoreContractAcquisitionTest {
-    private val request = ContractAcquisitionRequest("example", "34.0.3", "1.0.0")
+    private val request = AppStoreContractRequest("example", "34.0.3", "1.0.0")
 
     @Test
     fun verifiedContractKeepsItsProvenanceAndKind() {
@@ -36,7 +37,7 @@ class JvmAppStoreContractAcquisitionTest {
                 VerifiedContractKind.VerifiedReadRoutes to AcquiredContractKind.VerifiedReadRoutes,
                 VerifiedContractKind.OpenApiWithVerifiedReadRoutes to AcquiredContractKind.OpenApiWithVerifiedReadRoutes,
             )) {
-                val outcome = acquireAppStoreContract(request) {
+                val outcome = acquireAppStoreContract(request) { _, _ ->
                     ContractAcquisitionOutcome.Acquired(verified(source, kind))
                 }
                 val acquired = (outcome as AppStoreContractAcquisition.Acquired).contract
@@ -56,7 +57,7 @@ class JvmAppStoreContractAcquisitionTest {
         )) {
             assertEquals(
                 AppStoreContractAcquisition.Unavailable(expected),
-                acquireAppStoreContract(request) { ContractAcquisitionOutcome.Unavailable(reason) },
+                acquireAppStoreContract(request) { _, _ -> ContractAcquisitionOutcome.Unavailable(reason) },
             )
         }
     }
@@ -71,7 +72,7 @@ class JvmAppStoreContractAcquisitionTest {
             IllegalStateException("synthetic") to AppStoreContractFailureKind.Unexpected,
         )) {
             val typed = assertFailsWith<AppStoreContractAcquisitionException> {
-                acquireAppStoreContract(request) { throw failure }
+                acquireAppStoreContract(request) { _, _ -> throw failure }
             }
             assertEquals(expected, typed.kind)
             assertSame(failure, typed.cause)
@@ -85,7 +86,7 @@ class JvmAppStoreContractAcquisitionTest {
             ExceptionInInitializerError(IllegalArgumentException("Syntax error near index 3")),
         )) {
             val typed = assertFailsWith<AppStoreContractAcquisitionException> {
-                acquireAppStoreContract(request) { throw failure }
+                acquireAppStoreContract(request) { _, _ -> throw failure }
             }
             assertEquals(AppStoreContractFailureKind.RuntimeIncompatible, typed.kind)
             assertSame(failure, typed.cause)
@@ -96,9 +97,24 @@ class JvmAppStoreContractAcquisitionTest {
     @Test
     fun cancellationAndUnrelatedErrorsAreNotConverted() {
         val cancelled = CancellationException("stop")
-        assertSame(cancelled, assertFailsWith<CancellationException> { acquireAppStoreContract(request) { throw cancelled } })
+        assertSame(cancelled, assertFailsWith<CancellationException> { acquireAppStoreContract(request) { _, _ -> throw cancelled } })
         val overflow = StackOverflowError()
-        assertSame(overflow, assertFailsWith<StackOverflowError> { acquireAppStoreContract(request) { throw overflow } })
+        assertSame(overflow, assertFailsWith<StackOverflowError> { acquireAppStoreContract(request) { _, _ -> throw overflow } })
+    }
+
+    @Test
+    fun theRequestAndItsCatalogPolicyCrossTheBoundaryUnchanged() {
+        for ((policy, expected) in listOf(
+            AppStoreCatalogPolicy.UseCache to CatalogPolicy.UseCache,
+            AppStoreCatalogPolicy.RefreshCatalog to CatalogPolicy.Refresh,
+        )) {
+            var seen: Pair<ContractAcquisitionRequest, CatalogPolicy>? = null
+            acquireAppStoreContract(request.copy(catalogPolicy = policy)) { contractRequest, catalogPolicy ->
+                seen = contractRequest to catalogPolicy
+                ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.NoMatchingRelease)
+            }
+            assertEquals(ContractAcquisitionRequest("example", "34.0.3", "1.0.0") to expected, seen)
+        }
     }
 
     private fun verified(source: OpenApiContractSourceKind, kind: VerifiedContractKind) = VerifiedOpenApiContract(

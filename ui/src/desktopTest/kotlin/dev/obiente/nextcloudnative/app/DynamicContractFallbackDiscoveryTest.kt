@@ -157,11 +157,8 @@ class DynamicContractFallbackDiscoveryTest {
             override suspend fun executeNextcloudApi(session: NextcloudSession, request: NextcloudApiRequest) =
                 NextcloudApiResponse(404, ByteArray(0), "application/json", etag = null)
 
-            override suspend fun acquireSignedOpenApiContract(
-                appId: String,
-                serverVersion: String,
-                installedAppVersion: String?,
-            ): AppStoreContractAcquisition = acquire()
+            override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
+                acquire()
         }
     }
 }

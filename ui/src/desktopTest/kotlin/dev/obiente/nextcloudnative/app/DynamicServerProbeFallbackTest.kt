@@ -182,11 +182,8 @@ class DynamicServerProbeFallbackTest {
             override suspend fun executeNextcloudApi(session: NextcloudSession, request: NextcloudApiRequest) =
                 execute(request)
 
-            override suspend fun acquireSignedOpenApiContract(
-                appId: String,
-                serverVersion: String,
-                installedAppVersion: String?,
-            ): AppStoreContractAcquisition = acquire()
+            override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
+                acquire()
         }
     }
 

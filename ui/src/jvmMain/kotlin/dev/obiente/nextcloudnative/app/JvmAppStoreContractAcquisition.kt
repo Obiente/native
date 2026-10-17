@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.contracts.CatalogPolicy
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionFailureKind
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionOutcome
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
@@ -19,11 +20,15 @@ import kotlinx.coroutines.CancellationException
  * its message. Other errors, such as running out of memory, still propagate.
  */
 fun acquireAppStoreContract(
-    request: ContractAcquisitionRequest,
-    acquire: (ContractAcquisitionRequest) -> ContractAcquisitionOutcome,
+    request: AppStoreContractRequest,
+    acquire: (ContractAcquisitionRequest, CatalogPolicy) -> ContractAcquisitionOutcome,
 ): AppStoreContractAcquisition {
+    val catalogPolicy = when (request.catalogPolicy) {
+        AppStoreCatalogPolicy.UseCache -> CatalogPolicy.UseCache
+        AppStoreCatalogPolicy.RefreshCatalog -> CatalogPolicy.Refresh
+    }
     val outcome = try {
-        acquire(request)
+        acquire(ContractAcquisitionRequest(request.appId, request.serverVersion, request.installedAppVersion), catalogPolicy)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {

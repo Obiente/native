@@ -38,6 +38,34 @@ enum class AppStoreContractUnavailableReason {
     MalformedSource,
 }
 
+/** Whether App Store acquisition may reuse its cached catalog. Only an explicit user retry refreshes it. */
+enum class AppStoreCatalogPolicy { UseCache, RefreshCatalog }
+
+/** What discovery asks of [NextcloudPlatformServices.acquireSignedOpenApiContract]. */
+data class AppStoreContractRequest(
+    val appId: String,
+    val serverVersion: String,
+    val installedAppVersion: String?,
+    val catalogPolicy: AppStoreCatalogPolicy = AppStoreCatalogPolicy.UseCache,
+)
+
+/** Discovery services whose App Store requests use [policy]; every other member delegates unchanged. */
+internal fun NextcloudPlatformServices.withAppStoreCatalogPolicy(policy: AppStoreCatalogPolicy): NextcloudPlatformServices {
+    if (policy == AppStoreCatalogPolicy.UseCache) return this
+    val delegate = this
+    return object : NextcloudPlatformServices by delegate {
+        override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
+            delegate.acquireSignedOpenApiContract(request.copy(catalogPolicy = policy))
+    }
+}
+
+/**
+ * The first discovery of an app screen uses the cached catalog. A discovery started by, or after, an
+ * explicit retry on that screen asks for a fresh catalog; the platform acquirer bounds how often.
+ */
+internal fun NextcloudPlatformServices.forDiscoveryAttempt(attempt: Int): NextcloudPlatformServices =
+    withAppStoreCatalogPolicy(if (attempt > 0) AppStoreCatalogPolicy.RefreshCatalog else AppStoreCatalogPolicy.UseCache)
+
 /** Result of [NextcloudPlatformServices.acquireSignedOpenApiContract]. Failures are thrown instead. */
 sealed interface AppStoreContractAcquisition {
     data class Acquired(val contract: AcquiredOpenApiContract) : AppStoreContractAcquisition

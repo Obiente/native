@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import dev.obiente.nextcloudnative.app.AppStoreContractAcquisition
+import dev.obiente.nextcloudnative.app.AppStoreContractRequest
 import dev.obiente.nextcloudnative.app.acquireAppStoreContract
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
@@ -229,7 +230,6 @@ import dev.obiente.nextcloudnative.app.parseTalkMessageJson
 import dev.obiente.nextcloudnative.app.requireSafe
 import dev.obiente.nextcloudnative.app.systemTagsDavDiscoveryRequest
 import dev.obiente.nextcloudnative.app.toWebDavMutationSpec
-import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
@@ -2956,16 +2956,8 @@ internal class AndroidNextcloudServices(
         NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
     }
 
-    override suspend fun acquireSignedOpenApiContract(
-        appId: String,
-        serverVersion: String,
-        installedAppVersion: String?,
-    ): AppStoreContractAcquisition = withContext(Dispatchers.IO) {
-        acquireAppStoreContract(
-            ContractAcquisitionRequest(appId, serverVersion, installedAppVersion),
-            contractAcquirer::acquireOutcome,
-        )
-    }
+    override suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition =
+        withContext(Dispatchers.IO) { acquireAppStoreContract(request, contractAcquirer::acquireOutcome) }
 
     override suspend fun listActivities(
         session: NextcloudSession,

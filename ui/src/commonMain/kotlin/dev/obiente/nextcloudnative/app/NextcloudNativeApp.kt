@@ -2184,7 +2184,7 @@ private fun AppInfoScreen(
         discoveryError = null
         runCatching {
             discoverDynamicAppDescriptor(
-                services = services,
+                services = services.forDiscoveryAttempt(discoveryAttempt),
                 session = session,
                 app = app,
                 serverVersion = serverVersion,

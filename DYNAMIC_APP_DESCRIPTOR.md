@@ -227,6 +227,14 @@ a malformed source; it is never cached, so checking again downloads it again.
 A corrupt or mismatched App Store-linked source archive yields no candidate,
 like an archive without a contract, instead of an unexpected client fault.
 
+App Store catalogs are cached for six hours. The first discovery of an app
+screen uses the cache. A discovery started by, or after, an explicit retry on
+that screen carries `AppStoreCatalogPolicy.RefreshCatalog` through the platform
+boundary to the acquirer, which downloads each catalog again at most once per
+minute per catalog URL; retries inside that window reuse the cached copy. A
+forced download that fails or is unreadable leaves the cached catalog in place,
+because only a readable catalog replaces it.
+
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
 When probes disagree, the highest-precedence result wins, and the first one
