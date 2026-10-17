@@ -2,43 +2,20 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChevronLeft
-import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -60,8 +37,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import kotlinx.coroutines.CancellationException
@@ -176,6 +151,13 @@ internal fun NextcloudMediaViewer(
     ) {
         mutableStateOf(false)
     }
+    var videoOriginalAttempt by remember(selected.path) { mutableIntStateOf(0) }
+    var videoOriginal by remember(selected, userId, session.serverUrl, session.loginName) {
+        mutableStateOf(selected.initialVideoOriginalState(userId))
+    }
+    val playbackFile = videoOriginal.playbackFileFor(selected)
+    // Survives item changes so swiping through media stays immersive once the user hid controls.
+    var chromeVisible by remember { mutableStateOf(true) }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
     var writeBlockNotice by remember(selected.path) { mutableStateOf<FileWriteBlock?>(null) }
     val scope = rememberCoroutineScope()
@@ -187,8 +169,7 @@ internal fun NextcloudMediaViewer(
         }
     }
     val viewerActions = remember(
-        selected,
-        userId,
+        selected, playbackFile, userId,
         taggingAvailable,
         sharingCapabilities,
         services.externalFileHandoffSupport,
@@ -202,6 +183,7 @@ internal fun NextcloudMediaViewer(
             taggingAvailable = taggingAvailable,
             sharingCapabilities = sharingCapabilities,
             externalActions = externalActions,
+            handoffFile = playbackFile,
         )
     }
 
@@ -214,7 +196,8 @@ internal fun NextcloudMediaViewer(
     }
 
     fun handoffToExternalApp(action: ExternalFileHandoffAction) {
-        if (externalOpening || !selected.hasAuthoritativeMediaDavAccess(userId)) return
+        val target = playbackFile
+        if (externalOpening || !target.hasAuthoritativeMediaDavAccess(userId)) return
         externalOpening = true
         externalError = null
         scope.launch {
@@ -222,7 +205,7 @@ internal fun NextcloudMediaViewer(
                 services.handoffFileToExternalApp(
                     session = session,
                     userId = userId,
-                    file = selected,
+                    file = target,
                     action = action,
                 )
             }.onSuccess { result ->
@@ -251,6 +234,14 @@ internal fun NextcloudMediaViewer(
     }
 
     fun openInMediaApp() = handoffToExternalApp(ExternalFileHandoffAction.OpenWith)
+
+    LaunchedEffect(selected, userId, session, services, videoOriginalAttempt) {
+        if (!selected.needsVideoOriginalResolution(userId)) return@LaunchedEffect
+        videoOriginal = MediaVideoOriginalState.Resolving
+        videoOriginal = resolveMediaVideoOriginal(selected, userId) { fileId ->
+            services.resolveFilesById(session, userId, listOf(fileId))[fileId]
+        }
+    }
 
     LaunchedEffect(
         livePhotoDiscoveryIdentity,
@@ -516,25 +507,28 @@ internal fun NextcloudMediaViewer(
             resolveMediaViewerLayout(sourcePlan.choices.size)
         }
         val playbackSource = remember(
-            selected,
+            playbackFile,
             userId,
             livePhotoSource,
             motionPlaying,
             platformNativeVideoPlaybackAvailable,
         ) {
-            selected.nativeVideoPlaybackSource(
+            playbackFile.nativeVideoPlaybackSource(
                 userId = userId,
                 nativePlaybackAvailable = platformNativeVideoPlaybackAvailable,
                 livePhotoSource = livePhotoSource,
                 motionPlaying = motionPlaying,
             )
         }
+        // Failures and notices need the header to stay reachable even in immersive mode.
+        val showChrome = chromeVisible || nativeVideoFailure != null ||
+            previewState is MediaPreviewState.Error
         val mediaCanvasModifier = when (viewerLayout.contentLayout) {
             MediaViewerContentLayout.FullCanvasBehindChrome -> Modifier.fillMaxSize()
         }
         val playbackCompatibilityRangePlan = remember(
             playbackSource,
-            selected,
+            playbackFile,
             userId,
             livePhotoCompatibilityRangePlan,
         ) {
@@ -542,31 +536,18 @@ internal fun NextcloudMediaViewer(
                 is NativeVideoPlaybackSource.MemoriesLivePhoto ->
                     livePhotoCompatibilityRangePlan
                 is NativeVideoPlaybackSource.DavFile ->
-                    selected.wholeFileVideoCompatibilityPlanOrNull(userId)
+                    playbackFile.wholeFileVideoCompatibilityPlanOrNull(userId)
                 null -> null
             }
         }
-        val playbackRangeSource = remember(
-            playbackCompatibilityRangePlan,
-            compatibilityPlaybackRequested,
-            compatibilityPlaybackAttempt,
-            session,
-            userId,
-            services,
-        ) {
-            playbackCompatibilityRangePlan
-                ?.takeIf { compatibilityPlaybackRequested }
-                ?.let { plan ->
-                    runCatching {
-                        plan.openRangeSource(
-                            services = services,
-                            session = session,
-                            userId = userId,
-                        )
-                    }.getOrNull()
-                }
-        }
-        DisposableEffect(playbackRangeSource) { onDispose { playbackRangeSource?.close() } }
+        val playbackRangeSource = rememberNativeVideoRangeSource(
+            plan = playbackCompatibilityRangePlan,
+            needed = compatibilityPlaybackRequested || platformNativeVideoPlaybackUsesRangeSource,
+            attempt = compatibilityPlaybackAttempt,
+            session = session,
+            userId = userId,
+            services = services,
+        )
         if (editing && displayImage != null) {
             NextcloudPhotoEditor(
                 image = displayImage,
@@ -580,22 +561,30 @@ internal fun NextcloudMediaViewer(
                 onNavigationCancelled = onNavigationCancelled,
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (playbackSource != null && nativeVideoFailure == null) {
+        } else if (
+            playbackSource != null && nativeVideoFailure == null &&
+            playbackRangeSource != NativeVideoRangeSourceSlot.Opening
+        ) {
             PlatformNativeVideoPlayer(
                 session = session,
                 userId = userId,
                 source = playbackSource,
-                rangeSource = playbackRangeSource,
+                rangeSource = playbackRangeSource.sourceOrNull,
                 compatibilityPlaybackRequested = compatibilityPlaybackRequested,
                 onPlaybackEnded = {
-                    if (playbackSource.restoresStillAfterPlaybackEnds()) {
-                        motionPlaying = false
-                    }
+                    // The still returns with its controls even if the motion's controls had hidden.
+                    if (playbackSource.restoresStillAfterPlaybackEnds()) { motionPlaying = false; chromeVisible = true }
                 },
                 onFailure = { failure ->
                     nativeVideoFailure = failure
                 },
+                onControlsVisibilityChanged = { visible -> chromeVisible = visible },
                 modifier = mediaCanvasModifier,
+                systemMedia = NativeVideoSystemMedia(
+                    title = selected.name,
+                    onPrevious = (::selectPrevious).takeIf { !navigationBlocked && canGoPrevious },
+                    onNext = (::selectNext).takeIf { !navigationBlocked && canGoNext },
+                ),
             )
         } else when (val state = previewState) {
             MediaPreviewState.Loading -> CircularProgressIndicator(
@@ -609,12 +598,22 @@ internal fun NextcloudMediaViewer(
                 transform = imageTransform,
                 onTransform = { imageTransform = it },
                 modifier = mediaCanvasModifier,
+                controlsVisible = showChrome,
+                onTap = { chromeVisible = !showChrome },
+                onSwipe = { direction ->
+                    if (!navigationBlocked) {
+                        when (direction) {
+                            MediaSwipeNavigation.Previous -> selectPrevious()
+                            MediaSwipeNavigation.Next -> selectNext()
+                        }
+                    }
+                },
             )
 
             is MediaPreviewState.Error -> PreviewError(
                 detail = state.detail,
                 onRetry = { retryKey += 1 },
-                onOpenExternal = if (selected.hasAuthoritativeMediaDavAccess(userId)) {
+                onOpenExternal = if (playbackFile.hasAuthoritativeMediaDavAccess(userId)) {
                     ::openInMediaApp
                 } else {
                     null
@@ -629,10 +628,11 @@ internal fun NextcloudMediaViewer(
 
         if (!editing) {
             if (
-                livePhotoSource != null &&
-                !motionPlaying &&
+                livePhotoSource != null && !motionPlaying && showChrome &&
                 previewState is MediaPreviewState.Ready &&
-                platformNativeVideoPlaybackAvailable
+                platformNativeVideoPlaybackAvailable &&
+                // A range-reading player can only play motion once its pinned plan has resolved.
+                (!platformNativeVideoPlaybackUsesRangeSource || livePhotoCompatibilityRangePlan != null)
             ) {
                 Button(
                     onClick = {
@@ -647,12 +647,12 @@ internal fun NextcloudMediaViewer(
             }
             if (
                 selected.mediaAssetFormat() == MediaAssetFormat.Video &&
-                !platformNativeVideoPlaybackAvailable &&
+                !platformNativeVideoPlaybackAvailable && !platformNativeVideoPlaybackDiscoveryPending &&
                 previewState is MediaPreviewState.Ready
             ) {
                 Button(
                     onClick = ::openInMediaApp,
-                    enabled = !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
+                    enabled = !externalOpening && playbackFile.hasAuthoritativeMediaDavAccess(userId),
                     modifier = Modifier.align(Alignment.Center),
                 ) {
                     if (externalOpening) {
@@ -679,7 +679,7 @@ internal fun NextcloudMediaViewer(
                     playbackSource is NativeVideoPlaybackSource.MemoriesLivePhoto
                 val actions = nativeVideoFailureActionPolicy(
                     failure = failure,
-                    compatibilityAvailable = playbackCompatibilityRangePlan != null,
+                    compatibilityAvailable = platformVideoCompatibilityPlaybackAvailable && playbackCompatibilityRangePlan != null,
                     motionOnly = motionOnly,
                 )
                 NativeVideoFailureOverlay(
@@ -688,7 +688,7 @@ internal fun NextcloudMediaViewer(
                     showCompatibilityAction = actions.showCompatibilityAction,
                     showExternalAction = actions.showExternalAction,
                     externalActionEnabled =
-                        !externalOpening && selected.hasAuthoritativeMediaDavAccess(userId),
+                        !externalOpening && playbackFile.hasAuthoritativeMediaDavAccess(userId),
                     externalOpening = externalOpening,
                     onCompatibilityPlayback = {
                         compatibilityPlaybackAttempt += 1
@@ -699,7 +699,7 @@ internal fun NextcloudMediaViewer(
                         nativeVideoFailure = null
                     },
                     onOpenExternal = ::openInMediaApp,
-                    onShowStillPhoto = { motionPlaying = false; nativeVideoFailure = null },
+                    onShowStillPhoto = { motionPlaying = false; nativeVideoFailure = null; chromeVisible = true },
                     modifier = Modifier
                         .align(if (motionOnly) Alignment.BottomCenter else Alignment.Center)
                         .padding(
@@ -709,7 +709,15 @@ internal fun NextcloudMediaViewer(
                         ),
                 )
             }
-            ViewerHeader(
+            MediaVideoOriginalNotice(
+                state = videoOriginal,
+                onRetry = { videoOriginalAttempt += 1 },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 88.dp),
+            )
+            MediaViewerChrome(visible = showChrome, modifier = Modifier.align(Alignment.TopCenter)) { ViewerHeader(
                 filename = selected.name,
                 counter = buildString {
                     append("${selectedIndex + 1} of ${items.size}")
@@ -788,21 +796,24 @@ internal fun NextcloudMediaViewer(
                 },
                 onClose = onClose,
                 layout = viewerLayout,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
+            ) }
 
-            if (items.size > 1) ViewerNavigationButton(
-                previous = true,
-                enabled = !navigationBlocked && canGoPrevious,
-                onClick = ::selectPrevious,
-                modifier = Modifier.align(Alignment.CenterStart).padding(12.dp),
-            )
-            if (items.size > 1) ViewerNavigationButton(
-                previous = false,
-                enabled = !navigationBlocked && canGoNext,
-                onClick = ::selectNext,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(12.dp),
-            )
+            if (items.size > 1) MediaViewerChrome(showChrome, Modifier.align(Alignment.CenterStart)) {
+                ViewerNavigationButton(
+                    previous = true,
+                    enabled = !navigationBlocked && canGoPrevious,
+                    onClick = ::selectPrevious,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+            if (items.size > 1) MediaViewerChrome(showChrome, Modifier.align(Alignment.CenterEnd)) {
+                ViewerNavigationButton(
+                    previous = false,
+                    enabled = !navigationBlocked && canGoNext,
+                    onClick = ::selectNext,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
         }
     }
 
@@ -885,277 +896,6 @@ internal fun canConfirmMediaViewerNavigation(
 ): Boolean {
     require(activeActionMutations >= 0) { "Active media mutation count cannot be negative." }
     return !editing && !tagSaving && activeActionMutations == 0
-}
-
-@Composable
-private fun ViewerHeader(
-    filename: String,
-    counter: String,
-    sourceChoices: List<MediaSourceChoice>,
-    selectedSourcePath: String,
-    onSelectSource: (MediaSourceChoice) -> Unit,
-    onEdit: (() -> Unit)?,
-    onTags: (() -> Unit)?,
-    actions: List<MediaViewerAction>,
-    onAction: (MediaViewerAction) -> Unit,
-    onClose: () -> Unit,
-    layout: MediaViewerLayout,
-    modifier: Modifier = Modifier,
-) {
-    var menuExpanded by remember(filename) { mutableStateOf(false) }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.62f))
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(layout.primaryRowHeight),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            IconButton(
-                onClick = onClose,
-                colors = viewerIconButtonColors(),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = "Close preview",
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = filename,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = counter,
-                    color = Color.White.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            onEdit?.let {
-                IconButton(onClick = it, colors = viewerIconButtonColors()) {
-                    Icon(NextcloudIcons.Edit, contentDescription = "Edit $filename")
-                }
-            }
-            onTags?.let {
-                IconButton(onClick = it, colors = viewerIconButtonColors()) {
-                    Icon(NextcloudIcons.Tag, contentDescription = "Edit tags for $filename")
-                }
-            }
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    colors = viewerIconButtonColors(),
-                ) {
-                    Icon(NextcloudIcons.More, contentDescription = "More actions for $filename")
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    actions.forEach { action ->
-                        DropdownMenuItem(
-                            text = { Text(action.label) },
-                            onClick = {
-                                menuExpanded = false
-                                onAction(action)
-                            },
-                        )
-                    }
-                }
-            }
-        }
-        if (layout.sourceChoiceLayout == MediaViewerSourceChoiceLayout.SeparateScrollableRow) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(checkNotNull(layout.sourceChoiceRowHeight))
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                sourceChoices.forEach { choice ->
-                    TextButton(
-                        onClick = { onSelectSource(choice) },
-                        enabled = choice.file.path != selectedSourcePath,
-                        modifier = Modifier.defaultMinSize(minHeight = 48.dp),
-                    ) {
-                        Text(
-                            text = choice.pickerLabel,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-internal enum class MediaViewerContentLayout {
-    FullCanvasBehindChrome,
-}
-
-internal enum class MediaViewerSourceChoiceLayout {
-    Hidden,
-    SeparateScrollableRow,
-}
-
-internal data class MediaViewerLayout(
-    val contentLayout: MediaViewerContentLayout,
-    val sourceChoiceLayout: MediaViewerSourceChoiceLayout,
-    val primaryRowHeight: Dp,
-    val sourceChoiceRowHeight: Dp?,
-) {
-    val chromeContentHeight: Dp
-        get() = primaryRowHeight + (sourceChoiceRowHeight ?: 0.dp)
-}
-
-internal fun resolveMediaViewerLayout(sourceChoiceCount: Int): MediaViewerLayout {
-    require(sourceChoiceCount >= 0) { "Source choice count cannot be negative." }
-    val showsSourceChoices = sourceChoiceCount > 1
-    return MediaViewerLayout(
-        contentLayout = MediaViewerContentLayout.FullCanvasBehindChrome,
-        sourceChoiceLayout = if (showsSourceChoices) {
-            MediaViewerSourceChoiceLayout.SeparateScrollableRow
-        } else {
-            MediaViewerSourceChoiceLayout.Hidden
-        },
-        primaryRowHeight = 56.dp,
-        sourceChoiceRowHeight = if (showsSourceChoices) 48.dp else null,
-    )
-}
-
-@Composable
-private fun PhotoTagsDialog(
-    filename: String,
-    state: ResolvedMemoriesPhotoTags?,
-    selectedTagIds: Set<Long>,
-    error: String?,
-    saving: Boolean,
-    onToggle: (NextcloudSystemTag, Boolean) -> Unit,
-    onRetry: () -> Unit,
-    onDismiss: () -> Unit,
-    onSave: () -> Unit,
-) {
-    var search by remember(filename) { mutableStateOf("") }
-    val displayedTags = state?.availableTags.orEmpty().filter { tag ->
-        tag.userVisible && (search.isBlank() || tag.name.contains(search, ignoreCase = true))
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Photo tags") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    filename,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                when {
-                    state == null && error == null -> Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
-                    }
-                    state == null -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(error ?: "Could not load photo tags.", color = MaterialTheme.colorScheme.error)
-                        TextButton(onClick = onRetry) { Text("Try again") }
-                    }
-                    else -> {
-                        OutlinedTextField(
-                            value = search,
-                            onValueChange = { search = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Find a tag") },
-                            singleLine = true,
-                        )
-                        if (state.unresolvedNames.isNotEmpty()) {
-                            Text(
-                                "${state.unresolvedNames.size} existing tag assignment" +
-                                    if (state.unresolvedNames.size == 1) {
-                                        " is preserved but cannot be identified safely."
-                                    } else {
-                                        "s are preserved but cannot be identified safely."
-                                    },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        if (displayedTags.isEmpty()) {
-                            Text(
-                                if (search.isBlank()) "No visible system tags are available." else "No tags match your search.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
-                                items(displayedTags, key = NextcloudSystemTag::id) { tag ->
-                                    val ambiguous = tag.name in state.ambiguousNames
-                                    val enabled = !saving && tag.canAssign && !ambiguous
-                                    val checked = tag.id in selectedTagIds
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Checkbox(
-                                            checked = checked,
-                                            onCheckedChange = if (enabled) {
-                                                { value -> onToggle(tag, value) }
-                                            } else {
-                                                null
-                                            },
-                                            enabled = enabled,
-                                        )
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(tag.name, style = MaterialTheme.typography.bodyLarge)
-                                            if (!tag.canAssign || ambiguous) {
-                                                Text(
-                                                    if (ambiguous) "Duplicate server name · preserved" else "Read only",
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    }
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") }
-        },
-        confirmButton = {
-            Button(
-                onClick = onSave,
-                enabled = state != null && !saving && selectedTagIds != state.currentTagIds,
-            ) {
-                if (saving) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("Save")
-                }
-            }
-        },
-    )
 }
 
 private sealed interface MediaPreviewState {
@@ -1300,28 +1040,6 @@ internal fun canEditMediaPreview(
 
 internal fun NextcloudFile.hasAuthoritativeMediaDavAccess(userId: String): Boolean =
     originalAccessAllowed && davPathAuthoritative && userId.isNotBlank()
-
-internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
-    userId: String,
-    nativePlaybackAvailable: Boolean,
-): Boolean =
-    nativePlaybackAvailable &&
-        mediaAssetFormat() == MediaAssetFormat.Video &&
-        hasAuthoritativeMediaDavAccess(userId)
-
-internal fun NextcloudFile.nativeVideoPlaybackSource(
-    userId: String,
-    nativePlaybackAvailable: Boolean,
-    livePhotoSource: MemoriesLivePhotoSource?,
-    motionPlaying: Boolean,
-): NativeVideoPlaybackSource? {
-    if (!nativePlaybackAvailable) return null
-    if (motionPlaying && livePhotoSource != null && livePhotoSource.fileId == fileId) {
-        return NativeVideoPlaybackSource.MemoriesLivePhoto(livePhotoSource)
-    }
-    return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
-        ?.let { NativeVideoPlaybackSource.DavFile(it) }
-}
 
 private const val MAXIMUM_PREVIEW_IMAGE_DIMENSION = 1_600
 private const val MAXIMUM_DISPLAY_IMAGE_DIMENSION = 4_096

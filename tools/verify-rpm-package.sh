@@ -20,6 +20,11 @@ if ! rpm -qp --requires "$package" |
     exit 1
 fi
 
+if ! rpm -qp --recommends "$package" | grep -Fxq 'libvlc.so.5()(64bit)'; then
+    printf 'RPM package must recommend libVLC for in-app video playback.\n' >&2
+    exit 1
+fi
+
 package_files="$(rpm2cpio "$package" | cpio -it --quiet | sed 's#^\./#/#')"
 build_id_paths="$({
     printf '%s\n' "$package_files" |

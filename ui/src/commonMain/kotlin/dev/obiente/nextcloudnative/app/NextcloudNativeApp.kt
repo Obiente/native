@@ -10417,20 +10417,7 @@ internal fun MediaTile(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.Center).size(28.dp),
             )
-            badge?.let { label ->
-                Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
-                    color = Color.Black.copy(alpha = 0.72f),
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    Text(
-                        label,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
+            MediaTileBadges(file = file, stackBadge = badge)
             backupStatus?.let { status ->
                 MediaBackupStatusIndicator(
                     status = status,

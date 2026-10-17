@@ -804,7 +804,7 @@ private fun NextcloudFile.isPhotoEditSidecarCandidate(original: NextcloudFile): 
 private fun String.isSyntheticMemoriesMediaPath(): Boolean =
     startsWith("memories/people/") || startsWith("memories/collections/")
 
-private fun String.isSafeDavRelativePath(): Boolean {
+internal fun String.isSafeDavRelativePath(): Boolean {
     if (isBlank() || startsWith('/') || endsWith('/') || any(Char::isISOControl)) return false
     return split('/').all { segment -> segment.isNotEmpty() && segment != "." && segment != ".." }
 }

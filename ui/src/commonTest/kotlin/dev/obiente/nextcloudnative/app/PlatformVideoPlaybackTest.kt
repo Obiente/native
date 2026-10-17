@@ -70,6 +70,10 @@ class PlatformVideoPlaybackTest {
             NativeVideoPlaybackFailure.DecodeFailed(format = null)
                 .canUseSoftwareFallback(),
         )
+        assertTrue(
+            NativeVideoPlaybackFailure.ContainerUnsupported.canUseSoftwareFallback(),
+            "A container the built-in player cannot read may still open in compatibility playback.",
+        )
         assertFalse(NativeVideoPlaybackFailure.NetworkUnavailable.canUseSoftwareFallback())
         assertFalse(NativeVideoPlaybackFailure.AccessDenied.canUseSoftwareFallback())
         assertFalse(NativeVideoPlaybackFailure.SourceChanged.canUseSoftwareFallback())

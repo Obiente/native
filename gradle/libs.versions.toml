@@ -17,6 +17,7 @@ json = "20250517"
 media3 = "1.10.1"
 libvlc = "3.7.5"
 javafx = "21.0.12"
+vlcj = "4.12.1"
 jse = "1.1.0"
 # SQLite 2.7 JVM artifacts omit the Intel macOS native library.
 sqlite = { strictly = "2.6.2" }
@@ -46,6 +47,7 @@ jse-spi-vorbis = { module = "io.github.jseproject:jse-spi-vorbis", version.ref =
 jse-spi-opus = { module = "io.github.jseproject:jse-spi-opus", version.ref = "jse" }
 jse-spi-mp3 = { module = "io.github.jseproject:jse-spi-mp3", version.ref = "jse" }
 jse-spi-aac = { module = "io.github.jseproject:jse-spi-aac", version.ref = "jse" }
+vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
 androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
 
 [plugins]

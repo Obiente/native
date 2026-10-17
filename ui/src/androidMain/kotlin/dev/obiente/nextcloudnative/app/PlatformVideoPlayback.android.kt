@@ -2,8 +2,10 @@ package dev.obiente.nextcloudnative.app
 
 import android.util.Base64
 import android.content.Intent
+import android.view.View
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,7 +26,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -40,6 +45,13 @@ import org.videolan.libvlc.util.VLCVideoLayout
 
 internal actual val platformNativeVideoPlaybackAvailable: Boolean = true
 
+internal actual val platformNativeVideoPlaybackDiscoveryPending: Boolean = false
+
+// Media3 streams DAV over HTTP itself; only LibVLC compatibility playback reads ranges.
+internal actual val platformNativeVideoPlaybackUsesRangeSource: Boolean = false
+
+internal actual val platformVideoCompatibilityPlaybackAvailable: Boolean = true
+
 @OptIn(UnstableApi::class)
 @Composable
 internal actual fun PlatformNativeVideoPlayer(
@@ -51,14 +63,21 @@ internal actual fun PlatformNativeVideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
+    systemMedia: NativeVideoSystemMedia,
 ) {
+    // Transport controls sit above the gesture navigation area; the picture stays centered.
+    val playerModifier = modifier.navigationBarsPadding()
     if (compatibilityPlaybackRequested && rangeSource != null) {
+        // Its Play/Pause control never hides, so the viewer chrome Media3 may have hidden returns.
+        val currentOnControlsVisibilityChanged by rememberUpdatedState(onControlsVisibilityChanged)
+        LaunchedEffect(rangeSource) { currentOnControlsVisibilityChanged(true) }
         LibVlcVideoPlayer(
             source = source,
             rangeSource = rangeSource,
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
-            modifier = modifier,
+            modifier = playerModifier,
         )
     } else {
         Media3VideoPlayer(
@@ -67,7 +86,9 @@ internal actual fun PlatformNativeVideoPlayer(
             source = source,
             onPlaybackEnded = onPlaybackEnded,
             onFailure = onFailure,
-            modifier = modifier,
+            onControlsVisibilityChanged = onControlsVisibilityChanged,
+            systemMedia = systemMedia,
+            modifier = playerModifier,
         )
     }
 }
@@ -80,103 +101,182 @@ private fun Media3VideoPlayer(
     source: NativeVideoPlaybackSource,
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
+    systemMedia: NativeVideoSystemMedia,
     modifier: Modifier,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val currentSystemMedia = rememberUpdatedState(systemMedia)
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnFailure = rememberUpdatedState(onFailure)
-    val player = remember(session.serverUrl, session.loginName, userId, source) {
-        val authorization = Base64.encodeToString(
-            "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
-            Base64.NO_WRAP,
+    val currentOnControlsVisibilityChanged = rememberUpdatedState(onControlsVisibilityChanged)
+    var player by remember(session.serverUrl, session.loginName, userId, source) { mutableStateOf<ExoPlayer?>(null) }
+    var playing by remember(session.serverUrl, session.loginName, userId, source) { mutableStateOf(false) }
+    var sessionPlayer by remember(session.serverUrl, session.loginName, userId, source) {
+        mutableStateOf<AndroidViewerVideoSessionPlayer?>(null)
+    }
+    val hasPrevious = systemMedia.onPrevious != null
+    val hasNext = systemMedia.onNext != null
+    // Moving through the viewer or blocking navigation changes the skip buttons the system shows.
+    LaunchedEffect(sessionPlayer, hasPrevious, hasNext) { sessionPlayer?.refreshAvailableCommands() }
+    // The player is created, prepared, and started only by a committed effect, whose disposal
+    // always releases it; an abandoned composition can never leave decoding or audio running.
+    DisposableEffect(session.serverUrl, session.loginName, userId, source) {
+        val created = createMedia3VideoPlayer(
+            context = context,
+            session = session,
+            userId = userId,
+            source = source,
+            title = systemMedia.title,
+            onPlaybackEnded = { currentOnPlaybackEnded.value() },
+            onFailure = { failure -> currentOnFailure.value(failure) },
+            reportIsPlaying = { isPlaying -> playing = isPlaying },
         )
-        val client = OkHttpClient.Builder()
-            .useAndroidNextcloudCertificateTrust(context.applicationContext)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .build()
-        val sourceFactory = OkHttpDataSource.Factory(client)
-            .setUserAgent("nati.ve")
-            .setDefaultRequestProperties(
-                source.authenticatedRequestProperties("Basic $authorization"),
+        created.prepare()
+        // Opening a video is the request to watch it, as with a Live Photo's motion. A player
+        // created after the activity stopped (a lookup finished in the background) waits for
+        // the user instead, because the earlier ON_STOP is not replayed to the observer.
+        created.playWhenReady = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        player = created
+        // Full videos appear in the system media controls; a Live Photo's motion does not.
+        val published = (source as? NativeVideoPlaybackSource.DavFile)?.let {
+            AndroidViewerVideoSessionPlayer(
+                player = created,
+                previous = { currentSystemMedia.value.onPrevious },
+                next = { currentSystemMedia.value.onNext },
             )
-        val mediaId = when (source) {
-            is NativeVideoPlaybackSource.DavFile ->
-                source.file.fileId?.toString() ?: source.file.path
-            is NativeVideoPlaybackSource.MemoriesLivePhoto ->
-                "live-photo:${source.source.fileId}"
         }
-        val uri = when (source) {
-            is NativeVideoPlaybackSource.DavFile ->
-                buildNextcloudFileUrl(session.serverUrl, userId, source.file.path)
-            is NativeVideoPlaybackSource.MemoriesLivePhoto ->
-                buildNextcloudApiUrl(session.serverUrl, memoriesLivePhotoVideoRequest(source.source))
+        val sessionAttachment = published?.let {
+            AndroidViewerVideoSessionBridge.attach(context = context.applicationContext, player = it)
         }
-        val item = MediaItem.Builder()
-            .setMediaId(mediaId)
-            .setUri(uri)
-            .apply {
-                if (source is NativeVideoPlaybackSource.DavFile) {
-                    setMimeType(source.file.mimeType)
-                }
-            }
-            .build()
-        val renderersFactory = DefaultRenderersFactory(context.applicationContext)
-            .setEnableDecoderFallback(true)
-        ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply {
-            addListener(
-                object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_ENDED) {
-                            currentOnPlaybackEnded.value()
-                        }
-                    }
-
-                    override fun onPlayerError(error: PlaybackException) {
-                        currentOnFailure.value(error.toNativeVideoPlaybackFailure())
-                    }
-                },
-            )
-            setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
-            prepare()
-            playWhenReady = source is NativeVideoPlaybackSource.MemoriesLivePhoto
+        sessionPlayer = published
+        onDispose {
+            sessionPlayer = null
+            sessionAttachment?.let(AndroidViewerVideoSessionBridge::detach)
+            player = null
+            created.release()
         }
     }
-    var playing by remember(player) { mutableStateOf(player.isPlaying) }
-    DisposableEffect(player, lifecycleOwner) {
-        val playerListener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playing = isPlaying
-            }
-        }
+    val active = player
+    DisposableEffect(active, lifecycleOwner) {
         val lifecycleObserver = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                player.pause()
+            when (event) {
+                Lifecycle.Event.ON_STOP -> active?.pause()
+                // A player that attached while the app was in the background gets its session now.
+                Lifecycle.Event.ON_START -> AndroidViewerVideoSessionBridge.ensureStarted(context.applicationContext)
+                else -> Unit
             }
         }
-        player.addListener(playerListener)
         lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
-            player.removeListener(playerListener)
-            player.release()
-        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(lifecycleObserver) }
+    }
+    if (active == null) {
+        Box(modifier)
+        return
     }
     AndroidView(
         factory = { viewContext ->
             PlayerView(viewContext).apply {
-                this.player = player
+                this.player = active
                 useController = true
+                // The viewer owns previous/next media; one-item players would show dead buttons.
+                setShowPreviousButton(false)
+                setShowNextButton(false)
+                setControllerVisibilityListener(
+                    PlayerView.ControllerVisibilityListener { visibility ->
+                        currentOnControlsVisibilityChanged.value(visibility == View.VISIBLE)
+                    },
+                )
                 keepScreenOn = playing
             }
         },
         update = { view ->
-            view.player = player
+            view.player = active
             view.keepScreenOn = playing
         },
+        onRelease = { view -> view.player = null },
         modifier = modifier,
     )
+}
+
+/** Builds an unprepared player for [source]; the caller owns preparing and releasing it. */
+@OptIn(UnstableApi::class)
+private fun createMedia3VideoPlayer(
+    context: android.content.Context,
+    session: NextcloudSession,
+    userId: String,
+    source: NativeVideoPlaybackSource,
+    title: String,
+    onPlaybackEnded: () -> Unit,
+    onFailure: (NativeVideoPlaybackFailure) -> Unit,
+    reportIsPlaying: (Boolean) -> Unit,
+): ExoPlayer {
+    val authorization = Base64.encodeToString(
+        "${session.loginName}:${session.appPassword}".toByteArray(Charsets.UTF_8),
+        Base64.NO_WRAP,
+    )
+    val client = OkHttpClient.Builder()
+        .useAndroidNextcloudCertificateTrust(context.applicationContext)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+    val sourceFactory = OkHttpDataSource.Factory(client)
+        .setUserAgent("nati.ve")
+        .setDefaultRequestProperties(
+            source.authenticatedRequestProperties("Basic $authorization"),
+        )
+    val mediaId = when (source) {
+        is NativeVideoPlaybackSource.DavFile ->
+            source.file.fileId?.toString() ?: source.file.path
+        is NativeVideoPlaybackSource.MemoriesLivePhoto ->
+            "live-photo:${source.source.fileId}"
+    }
+    val uri = when (source) {
+        is NativeVideoPlaybackSource.DavFile ->
+            buildNextcloudFileUrl(session.serverUrl, userId, source.file.path)
+        is NativeVideoPlaybackSource.MemoriesLivePhoto ->
+            buildNextcloudApiUrl(session.serverUrl, memoriesLivePhotoVideoRequest(source.source))
+    }
+    val item = MediaItem.Builder()
+        .setMediaId(mediaId)
+        .setUri(uri)
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(title.takeIf(String::isNotBlank)).build())
+        .apply {
+            if (source is NativeVideoPlaybackSource.DavFile) {
+                setMimeType(source.file.mimeType)
+            }
+        }
+        .build()
+    val renderersFactory = DefaultRenderersFactory(context.applicationContext)
+        .setEnableDecoderFallback(true)
+    // Autoplay takes audio focus so other media pauses or ducks instead of mixing, and unplugging
+    // headphones pauses instead of moving the sound to the speaker.
+    val audioAttributes = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+    return ExoPlayer.Builder(context.applicationContext, renderersFactory)
+        .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+        .setHandleAudioBecomingNoisy(true)
+        .build().apply {
+        addListener(
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_ENDED) onPlaybackEnded()
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    onFailure(error.toNativeVideoPlaybackFailure())
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    reportIsPlaying(isPlaying)
+                }
+            },
+        )
+        setMediaSource(ProgressiveMediaSource.Factory(sourceFactory).createMediaSource(item))
+    }
 }
 
 @Composable
@@ -314,6 +414,8 @@ private fun PlaybackException.toNativeVideoPlaybackFailure(): NativeVideoPlaybac
             nativeVideoPlaybackFailureForHttpStatus(httpResponseCodeOrNull() ?: -1)
         PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
             NativeVideoPlaybackFailure.SourceChanged
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+            NativeVideoPlaybackFailure.ContainerUnsupported
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
         PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
         -> NativeVideoPlaybackFailure.MalformedMedia

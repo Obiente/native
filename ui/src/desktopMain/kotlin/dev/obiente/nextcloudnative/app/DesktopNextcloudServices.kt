@@ -4478,8 +4478,8 @@ class DesktopNextcloudServices(
                     if (closed.get()) call.cancel()
                     try {
                         call.execute().use { response ->
-                            check(response.code == 206) {
-                                "The server did not honor the bounded file range request (HTTP ${response.code})."
+                            if (response.code != 206) {
+                                throw NextcloudFileRangeHttpException(response.code)
                             }
                             check(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
                                 "The server returned a different file range than requested."
