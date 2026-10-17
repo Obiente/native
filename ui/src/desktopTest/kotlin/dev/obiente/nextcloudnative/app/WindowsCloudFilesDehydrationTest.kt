@@ -44,9 +44,41 @@ class WindowsCloudFilesDehydrationTest {
         assertTrue(isWindowsCloudDehydrationRefusedResult(0x80070179.toInt()))
         assertTrue(isWindowsCloudDehydrationRefusedResult(0x80070187.toInt()))
         assertTrue(isWindowsCloudDehydrationRefusedResult(0x80070188.toInt()))
+        // The exclusive oplock is unavailable or broke before dehydration.
+        assertTrue(isWindowsCloudDehydrationRefusedResult(0x80070020.toInt()))
+        assertTrue(isWindowsCloudDehydrationRefusedResult(0x80070323.toInt()))
         assertFalse(isWindowsCloudDehydrationRefusedResult(0))
         assertFalse(isWindowsCloudDehydrationRefusedResult(0x80070005.toInt())) // E_ACCESSDENIED
         assertFalse(isWindowsCloudDehydrationRefusedResult(0x8007016B.toInt())) // Metadata corrupt
+    }
+
+    @Test
+    fun `a planned eviction is kept when its file changed after planning`() {
+        val planned = WindowsCloudFileIdentity("account-01", "planned.bin", "\"etag-01\"", 64L, false)
+        val api = EvictionApi(allocated = 64L)
+        fun execute(current: WindowsCloudFileIdentity?) = api.dehydratePlannedEvictions(listOf(eviction(planned))) { relative ->
+            current?.takeIf { it.path == relative }?.let { it to Path.of(it.path) }
+        }
+
+        // A same-size newer revision replaced the planned one, so its access history is unknown.
+        assertEquals(0L, execute(planned.copy(remoteRevision = "\"etag-02\"")))
+        assertEquals(0L, execute(null))
+        api.pinned = true
+        assertEquals(0L, execute(planned))
+        api.pinned = false
+        api.state = WindowsCloudPlaceholderState.Dirty
+        assertEquals(0L, execute(planned))
+        api.state = WindowsCloudPlaceholderState.InSync
+        api.allocated = 128L
+        assertEquals(0L, execute(planned))
+        assertEquals(emptyList(), api.dehydrated)
+
+        api.allocated = 64L
+        assertEquals(64L, execute(planned))
+        assertEquals(listOf(Path.of("planned.bin")), api.dehydrated)
+        // Freed bytes are what dehydration released, not what the plan expected.
+        api.released = 0L
+        assertEquals(0L, execute(planned))
     }
 
     @Test
@@ -117,6 +149,28 @@ class WindowsCloudFilesDehydrationTest {
                 assertEquals(allocated.getValue(pinned), summary.pinnedBytes)
             }
         }
+
+    private fun eviction(identity: WindowsCloudFileIdentity) = VirtualFileEviction(
+        key = FileOfflineKey(identity.accountId, identity.path),
+        expectedLocalRevision = identity.remoteRevision,
+        sizeBytes = identity.size,
+        reasons = setOf(VirtualFileEvictionReason.CacheBudget),
+    )
+
+    /** Only the checks an eviction executor makes; every other Cloud Files call is unexpected. */
+    private class EvictionApi(
+        var allocated: Long,
+    ) : WindowsCloudFilesApi by WindowsCloudFilesProviderTest.FakeApi() {
+        var pinned = false
+        var state = WindowsCloudPlaceholderState.InSync
+        var released = allocated
+        val dehydrated = mutableListOf<Path>()
+
+        override fun isPinned(path: Path) = pinned
+        override fun placeholderState(path: Path) = state
+        override fun allocatedBytes(path: Path) = allocated
+        override fun dehydrate(path: Path): Long = released.also { dehydrated.add(path) }
+    }
 
     private fun withNativeRoot(
         block: (

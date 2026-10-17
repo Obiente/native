@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import com.sun.jna.Native
 import com.sun.jna.WString
+import com.sun.jna.platform.win32.WinNT
 import com.sun.jna.ptr.IntByReference
 import java.nio.file.Path
 
@@ -20,13 +21,60 @@ internal fun windowsCloudDehydratable(entry: WindowsCloudLocalEntry, fileAttribu
         entry.inspection.state == WindowsCloudPlaceholderEntryState.InSync
 
 /**
- * Windows refuses to dehydrate content that became dirty, pinned or opened by another application
- * after [windowsCloudDehydratable] accepted it. The content stays local and nothing is freed.
+ * Windows keeps content that became dirty, pinned or opened by another application after
+ * [windowsCloudDehydratable] accepted it. The content stays local and nothing is freed.
  */
 internal fun isWindowsCloudDehydrationRefusedResult(result: Int): Boolean =
-    result == 0x80070179.toInt() || // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_IN_SYNC)
+    result == 0x80070020.toInt() || // HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION): no exclusive oplock
+        result == 0x80070179.toInt() || // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_NOT_IN_SYNC)
         result == 0x80070187.toInt() || // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_IN_USE)
-        result == 0x80070188.toInt() // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_PINNED)
+        result == 0x80070188.toInt() || // HRESULT_FROM_WIN32(ERROR_CLOUD_FILE_PINNED)
+        result == 0x80070323.toInt() // HRESULT_FROM_WIN32(ERROR_OPLOCK_HANDLE_CLOSED)
+
+/**
+ * CfDehydratePlaceholder requires an exclusive handle, and Microsoft recommends an exclusive
+ * oplock so another application's open breaks it instead of failing. Returns false when Windows
+ * keeps the content, including when the oplock cannot be taken or breaks before dehydration.
+ */
+internal fun CldApi.dehydrateExclusively(path: Path): Boolean {
+    val protectedHandle = WinNT.HANDLEByReference()
+    val flags = windowsCloudOpenFileFlags(write = false, exclusive = true)
+    val opened = CfOpenFileWithOplock(WString(path.toWindowsWin32Path()), flags, protectedHandle)
+    if (isWindowsCloudDehydrationRefusedResult(opened)) return false
+    checkWindowsCloudHResult(opened, "open a Windows Cloud Files placeholder for dehydration")
+    try {
+        // A reference fails once another application's open has broken the oplock.
+        if (CfReferenceProtectedHandle(protectedHandle.value).toInt() == 0) return false
+        try {
+            val handle = CfGetWin32HandleFromProtectedHandle(protectedHandle.value)
+            val result = CfDehydratePlaceholder(handle, 0L, -1L, 0, null)
+            if (isWindowsCloudDehydrationRefusedResult(result)) return false
+            checkWindowsCloudHResult(result, "dehydrate a Windows Cloud Files placeholder")
+            return true
+        } finally {
+            CfReleaseProtectedHandle(protectedHandle.value)
+        }
+    } finally {
+        CfCloseHandle(protectedHandle.value)
+    }
+}
+
+/**
+ * Dehydrates the files an eviction plan selected, rechecking each at execution time. A file that
+ * another revision replaced, or that was pinned, edited or resized since planning, is kept.
+ * Returns the bytes actually released.
+ */
+internal fun WindowsCloudFilesApi.dehydratePlannedEvictions(
+    evictions: List<VirtualFileEviction>,
+    currentFile: (relativePath: String) -> Pair<WindowsCloudFileIdentity, Path>?,
+): Long = evictions.sumOf { eviction ->
+    val (identity, path) = currentFile(eviction.key.relativePath) ?: return@sumOf 0L
+    val unchanged = identity.remoteRevision == eviction.expectedLocalRevision &&
+        !isPinned(path) &&
+        placeholderState(path) == WindowsCloudPlaceholderState.InSync &&
+        allocatedBytes(path) == eviction.sizeBytes
+    if (unchanged) dehydrate(path) else 0L
+}
 
 /** Bytes allocated on disk; a dehydrated placeholder keeps its logical size but allocates none. */
 internal fun KernelFileApi.allocatedFileBytes(path: Path): Long {

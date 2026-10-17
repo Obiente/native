@@ -1082,19 +1082,9 @@ internal class WindowsCloudFilesProvider(
             availableFreeBytes = Files.getFileStore(root).usableSpace,
             nowEpochMillis = nowEpochMillis,
         )
-        var freed = 0L
-        plan.evictions.forEach { eviction ->
-            val identity = knownIdentities[eviction.key.relativePath] ?: return@forEach
-            val path = localPath(identity)
-            if (
-                !api.isPinned(path) &&
-                api.placeholderState(path) == WindowsCloudPlaceholderState.InSync &&
-                api.allocatedBytes(path) == eviction.sizeBytes
-            ) {
-                freed += api.dehydrate(path)
-            }
+        return api.dehydratePlannedEvictions(plan.evictions) { relative ->
+            knownIdentities[relative]?.let { identity -> identity to localPath(identity) }
         }
-        return freed
     }
 
     fun summary(): WindowsCloudFilesSummary = synchronized(corruptRootStableAccessLock) {

@@ -524,12 +524,9 @@ internal class JnaWindowsCloudFilesApi(
 
     override fun dehydrate(path: Path): Long {
         if (!withFindData(path, false) { windowsCloudDehydratable(localEntry(path, it), it.dwFileAttributes) }) return 0L
-        val allocated = kernelFiles.allocatedFileBytes(path)
-        // Attribute access suffices, so an application that denies write sharing is reported as in use.
-        val result = withWindowsFileHandle(path, write = false) { cldApi.CfDehydratePlaceholder(it, 0L, -1L, 0, null) }
-        if (isWindowsCloudDehydrationRefusedResult(result)) return 0L
-        checkWindowsCloudHResult(result, "dehydrate a Windows Cloud Files placeholder")
-        return allocated
+        // An online-only placeholder needs no native call, so a pass does not scale with the remote tree.
+        val allocated = kernelFiles.allocatedFileBytes(path).takeIf { it > 0L } ?: return 0L
+        return if (cldApi.dehydrateExclusively(path)) allocated else 0L
     }
 
     private fun localEntry(path: Path, findData: WinBase.WIN32_FIND_DATA): WindowsCloudLocalEntry =

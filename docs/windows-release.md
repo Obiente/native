@@ -256,13 +256,16 @@ find data with the same rule as the startup enumeration. Allocated bytes come
 from `GetCompressedFileSizeW`: a dehydrated placeholder keeps its logical size
 and allocates no bytes.
 
-Only an unpinned, in-sync file placeholder is dehydrated. Windows also refuses
-the call when the file became dirty (`0x80070179`), pinned (`0x80070188`), or
-open in another application (`0x80070187`) after that check; the content stays
-local and counts as not freed. Dehydration opens the file for attribute access
-only, so an application that denies write sharing produces the in-use refusal
-rather than a sharing violation. Freed totals count the bytes each dehydration
-actually released.
+Only an unpinned, in-sync file placeholder that allocates bytes is dehydrated,
+so an online-only placeholder costs no native call. As
+[`CfDehydratePlaceholder`](https://learn.microsoft.com/en-us/previous-versions/mt827480(v=vs.85))
+requires, dehydration holds an exclusive `CfOpenFileWithOplock` handle. When
+the oplock cannot be taken (`0x80070020`) or breaks first, or when Windows
+refuses a file that became dirty (`0x80070179`), pinned (`0x80070188`), or open
+in another application (`0x80070187`), the content stays local and counts as
+not freed. Automatic cleanup also keeps a planned file whose known revision,
+pin, sync state, or allocated size changed after planning. Freed totals count
+the bytes each dehydration actually released.
 
 **Last reviewed: 2026-10-17.** On a local Windows 11 sync root,
 `WindowsCloudFilesDehydrationTest` hydrates a synthetic file, observes nonzero
