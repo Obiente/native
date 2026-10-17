@@ -444,8 +444,12 @@ packaging may have changed.
 - The Android viewer's Media3 player is published through
   `AndroidViewerVideoSessionService`, a `MediaSessionService` that provides the
   media notification, lock-screen, Bluetooth, and headset controls, with
-  previous and next mapped to the viewer's sequence. A Live Photo's motion is
-  not published on either platform.
+  previous and next mapped to the viewer's sequence. The viewer does not
+  publish a Live Photo's motion on either platform. On Android, though,
+  LibVLC compatibility playback (`AndroidCompatibilityVideoPlaybackService`)
+  still creates its own media session for whatever it plays, so motion played
+  in compatibility mode appears in the notification and lock-screen controls
+  without previous or next.
 - Evidence boundary: on Windows, the bundled copy was staged and played in a
   local build, and a local check through the system media session manager saw
   the published title, state, and enabled previous and next, and delivered a

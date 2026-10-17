@@ -9,6 +9,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Publishes the media viewer's current video to Android's media controls: the media
@@ -111,6 +112,28 @@ internal class AndroidViewerVideoSessionPlayer(
     private val previous: () -> (() -> Unit)?,
     private val next: () -> (() -> Unit)?,
 ) : ForwardingPlayer(player) {
+    private val listeners = CopyOnWriteArraySet<Player.Listener>()
+
+    override fun addListener(listener: Player.Listener) {
+        super.addListener(listener)
+        listeners += listener
+    }
+
+    override fun removeListener(listener: Player.Listener) {
+        super.removeListener(listener)
+        listeners -= listener
+    }
+
+    /**
+     * Tells connected controllers, such as the notification and lock screen, that previous/next
+     * availability changed. The wrapped player never reports this, because the viewer owns it.
+     * Main thread.
+     */
+    fun refreshAvailableCommands() {
+        val commands = availableCommands
+        listeners.forEach { listener -> listener.onAvailableCommandsChanged(commands) }
+    }
+
     override fun getAvailableCommands(): Player.Commands =
         viewerVideoSessionCommands(super.getAvailableCommands(), previous() != null, next() != null)
 

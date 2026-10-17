@@ -82,14 +82,20 @@ internal class DesktopSystemMediaSession(
     fun update(snapshot: SystemMediaSnapshot) = submit {
         if (snapshot == published) return@submit
         published = snapshot
-        guarded { controls.update(snapshot) }
+        try {
+            controls.update(snapshot)
+        } catch (_: RuntimeException) {
+            discardFailedControls()
+        } catch (_: LinkageError) {
+            discardFailedControls()
+        }
     }
 
     override fun close() {
         if (closed) return
         closed = true
         try {
-            executor.execute { guarded { controls.close() } }
+            executor.execute { closeQuietly(controls) }
         } catch (_: RejectedExecutionException) {
             // Already shut down.
         }
@@ -105,14 +111,23 @@ internal class DesktopSystemMediaSession(
         }
     }
 
-    /** A failing platform integration must never break playback; it stops updating instead. */
-    private fun guarded(block: () -> Unit) {
+    /**
+     * A failing platform integration must never break playback. It stops updating, but is still
+     * closed so its button handler, bus name, or Now Playing entry is not left registered.
+     */
+    private fun discardFailedControls() {
+        val failed = controls
+        controls = UnavailableDesktopSystemMediaControls
+        closeQuietly(failed)
+    }
+
+    private fun closeQuietly(target: DesktopSystemMediaControls) {
         try {
-            block()
+            target.close()
         } catch (_: RuntimeException) {
-            controls = UnavailableDesktopSystemMediaControls
+            // Best effort: the integration is already unusable.
         } catch (_: LinkageError) {
-            controls = UnavailableDesktopSystemMediaControls
+            // Best effort: the integration is already unusable.
         }
     }
 }

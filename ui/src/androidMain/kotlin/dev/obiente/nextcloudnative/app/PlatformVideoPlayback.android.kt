@@ -113,6 +113,13 @@ private fun Media3VideoPlayer(
     val currentOnControlsVisibilityChanged = rememberUpdatedState(onControlsVisibilityChanged)
     var player by remember(session.serverUrl, session.loginName, userId, source) { mutableStateOf<ExoPlayer?>(null) }
     var playing by remember(session.serverUrl, session.loginName, userId, source) { mutableStateOf(false) }
+    var sessionPlayer by remember(session.serverUrl, session.loginName, userId, source) {
+        mutableStateOf<AndroidViewerVideoSessionPlayer?>(null)
+    }
+    val hasPrevious = systemMedia.onPrevious != null
+    val hasNext = systemMedia.onNext != null
+    // Moving through the viewer or blocking navigation changes the skip buttons the system shows.
+    LaunchedEffect(sessionPlayer, hasPrevious, hasNext) { sessionPlayer?.refreshAvailableCommands() }
     // The player is created, prepared, and started only by a committed effect, whose disposal
     // always releases it; an abandoned composition can never leave decoding or audio running.
     DisposableEffect(session.serverUrl, session.loginName, userId, source) {
@@ -133,17 +140,19 @@ private fun Media3VideoPlayer(
         created.playWhenReady = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         player = created
         // Full videos appear in the system media controls; a Live Photo's motion does not.
-        val sessionAttachment = (source as? NativeVideoPlaybackSource.DavFile)?.let {
-            AndroidViewerVideoSessionBridge.attach(
-                context = context.applicationContext,
-                player = AndroidViewerVideoSessionPlayer(
-                    player = created,
-                    previous = { currentSystemMedia.value.onPrevious },
-                    next = { currentSystemMedia.value.onNext },
-                ),
+        val published = (source as? NativeVideoPlaybackSource.DavFile)?.let {
+            AndroidViewerVideoSessionPlayer(
+                player = created,
+                previous = { currentSystemMedia.value.onPrevious },
+                next = { currentSystemMedia.value.onNext },
             )
         }
+        val sessionAttachment = published?.let {
+            AndroidViewerVideoSessionBridge.attach(context = context.applicationContext, player = it)
+        }
+        sessionPlayer = published
         onDispose {
+            sessionPlayer = null
             sessionAttachment?.let(AndroidViewerVideoSessionBridge::detach)
             player = null
             created.release()

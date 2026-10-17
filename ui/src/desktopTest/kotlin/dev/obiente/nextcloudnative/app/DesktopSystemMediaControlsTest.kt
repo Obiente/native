@@ -62,6 +62,7 @@ class DesktopSystemMediaControlsTest {
         throwingOpen.close()
 
         var updates = 0
+        var closes = 0
         val throwingUpdate = DesktopSystemMediaSession(null, { _, _ ->
             object : DesktopSystemMediaControls {
                 override fun update(snapshot: SystemMediaSnapshot) {
@@ -69,14 +70,18 @@ class DesktopSystemMediaControlsTest {
                     error("synthetic native failure")
                 }
 
-                override fun close() = Unit
+                override fun close() {
+                    closes += 1
+                }
             }
         }) {}
         throwingUpdate.update(snapshot)
         throwingUpdate.update(snapshot.copy(title = "other.mp4"))
         Thread.sleep(300)
         throwingUpdate.close()
+        Thread.sleep(200)
         assertEquals(1, updates, "After a failure the integration stops instead of retrying native calls.")
+        assertEquals(1, closes, "The failed integration is closed once so nothing stays registered.")
     }
 
     @Test
