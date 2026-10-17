@@ -12,6 +12,9 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 
+private const val IO_REPARSE_TAG_CLOUD = 0x9000001A.toInt()
+private const val IO_REPARSE_TAG_CLOUD_MASK = 0x0000F000
+
 /**
  * One resident entry with the metadata the startup scan needs.
  *
@@ -22,17 +25,18 @@ import java.nio.file.attribute.BasicFileAttributes
 internal class WindowsCloudLocalEntry(
     val path: Path,
     val directory: Boolean,
-    val regularFile: Boolean,
+    /** A plain file or a Cloud Files file placeholder; never a link, device or foreign reparse point. */
+    val file: Boolean,
     val symbolicLink: Boolean,
     inspect: () -> WindowsCloudPlaceholderInspection,
 ) {
     constructor(
         path: Path,
         directory: Boolean,
-        regularFile: Boolean,
+        file: Boolean,
         symbolicLink: Boolean,
         inspection: WindowsCloudPlaceholderInspection,
-    ) : this(path, directory, regularFile, symbolicLink, { inspection })
+    ) : this(path, directory, file, symbolicLink, { inspection })
 
     /**
      * Native entries carry this from the enumeration. The Files-based fallback reads it on first
@@ -41,28 +45,42 @@ internal class WindowsCloudLocalEntry(
     val inspection: WindowsCloudPlaceholderInspection by lazy(inspect)
 }
 
-/** Classifies like Java NIO with NOFOLLOW_LINKS so native and Files-based scans agree exactly. */
+/**
+ * Classifies links and directories like Java NIO with NOFOLLOW_LINKS.
+ *
+ * Java NIO reports every non-link reparse point as "other", and every Cloud Files file
+ * placeholder carries a cloud reparse tag. Those placeholders are the files this provider owns,
+ * so a cloud tag keeps an entry a file while any other reparse tag or a device does not.
+ */
 internal fun windowsCloudLocalEntry(
     path: Path,
     fileAttributes: Int,
     reparseTag: Int,
     inspection: WindowsCloudPlaceholderInspection,
 ): WindowsCloudLocalEntry {
-    val symbolicLink = fileAttributes and WinNT.FILE_ATTRIBUTE_REPARSE_POINT != 0 &&
-        reparseTag == WinNT.IO_REPARSE_TAG_SYMLINK
+    val reparsePoint = fileAttributes and WinNT.FILE_ATTRIBUTE_REPARSE_POINT != 0
+    val symbolicLink = reparsePoint && reparseTag == WinNT.IO_REPARSE_TAG_SYMLINK
     val directory = !symbolicLink && fileAttributes and WinNT.FILE_ATTRIBUTE_DIRECTORY != 0
-    val other = !symbolicLink &&
-        fileAttributes and (WinNT.FILE_ATTRIBUTE_DEVICE or WinNT.FILE_ATTRIBUTE_REPARSE_POINT) != 0
-    return WindowsCloudLocalEntry(path, directory, !symbolicLink && !directory && !other, symbolicLink, inspection)
+    val file = !symbolicLink && !directory &&
+        fileAttributes and WinNT.FILE_ATTRIBUTE_DEVICE == 0 &&
+        (!reparsePoint || isWindowsCloudFilesReparseTag(reparseTag))
+    return WindowsCloudLocalEntry(path, directory, file, symbolicLink, inspection)
 }
 
-/** Builds an entry from Java NIO attributes; used for the root and by non-native test doubles. */
+/** IO_REPARSE_TAG_CLOUD through IO_REPARSE_TAG_CLOUD_F differ only in IO_REPARSE_TAG_CLOUD_MASK. */
+internal fun isWindowsCloudFilesReparseTag(reparseTag: Int): Boolean =
+    reparseTag and IO_REPARSE_TAG_CLOUD_MASK.inv() == IO_REPARSE_TAG_CLOUD
+
+/**
+ * Builds an entry from Java NIO attributes; used for the root and by non-native test doubles.
+ * NIO cannot read reparse tags, so only the native enumeration recognizes file placeholders.
+ */
 internal fun WindowsCloudFilesApi.localEntry(path: Path): WindowsCloudLocalEntry {
     val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
     return WindowsCloudLocalEntry(
         path = path,
         directory = attributes.isDirectory,
-        regularFile = attributes.isRegularFile,
+        file = attributes.isRegularFile,
         symbolicLink = attributes.isSymbolicLink,
         inspect = { inspectPlaceholder(path) },
     )
@@ -91,6 +109,13 @@ internal fun WinBase.WIN32_FIND_DATA.windowsCloudInspection(
     )
 }
 
+/** Classifies one native find-data record; see [windowsCloudLocalEntry]. */
+internal fun WinBase.WIN32_FIND_DATA.windowsCloudLocalEntry(
+    path: Path,
+    placeholderState: (Pointer) -> Int,
+): WindowsCloudLocalEntry =
+    windowsCloudLocalEntry(path, dwFileAttributes, dwReserved0, windowsCloudInspection(placeholderState))
+
 /**
  * Enumerates resident children with their find data in one native call, without asking Cloud
  * Files to populate remote folders.
@@ -114,10 +139,7 @@ internal fun windowsCloudLocalEntries(
             do {
                 data.read()
                 val name = Native.toString(data.cFileName)
-                if (name != "." && name != "..") {
-                    val inspection = data.windowsCloudInspection(placeholderState)
-                    add(windowsCloudLocalEntry(directory.resolve(name), data.dwFileAttributes, data.dwReserved0, inspection))
-                }
+                if (name != "." && name != "..") add(data.windowsCloudLocalEntry(directory.resolve(name), placeholderState))
             } while (Kernel32.INSTANCE.FindNextFile(handle, data.pointer))
             val error = Native.getLastError()
             if (error != 18) throw WindowsCloudLocalScanException(error)

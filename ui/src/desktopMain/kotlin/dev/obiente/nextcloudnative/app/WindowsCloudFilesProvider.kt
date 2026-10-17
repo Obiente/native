@@ -224,6 +224,10 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     )
     fun convertToPlaceholder(path: Path, placeholder: WindowsCloudPlaceholder)
     fun markInSync(path: Path)
+    fun localContentStamp(path: Path): WindowsCloudLocalContentStamp = nioWindowsCloudLocalContentStamp(path)
+    fun markInSyncIfUnchanged(path: Path, expected: WindowsCloudLocalContentStamp): WindowsCloudInSyncCommit =
+        markInSyncWhenStampMatches(path, expected)
+    /** Returns the bytes released, or 0 when the entry is not an unpinned in-sync file or Windows kept it. */
     fun dehydrate(path: Path): Long
 }
 
@@ -356,6 +360,9 @@ internal class WindowsCloudFilesProvider(
     private val pendingWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val failedWritebacks = ConcurrentHashMap.newKeySet<String>()
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
+    private val writeback = WindowsCloudFilesWriteback(api, backend, { knownIdentities[it.path] = it }) { local, uploaded ->
+        updatePlaceholderAfterRemoteMutation(local, uploaded, preserveSyncState = true)
+    }
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
     private val accountRemovalPaused = AtomicBoolean(false)
@@ -537,6 +544,7 @@ internal class WindowsCloudFilesProvider(
         pendingWritebacks.clear()
         failedWritebacks.clear()
         writebackAttempts.clear()
+        writeback.clear()
         recordPlaceholderDiagnostic(
             severity = SupportDiagnosticSeverity.Warning,
             operation = "cloud-files.corrupt-root-recovery",
@@ -899,7 +907,8 @@ internal class WindowsCloudFilesProvider(
 
     override fun closed(info: WindowsCloudCallbackInfo, deleted: Boolean) {
         if (callbacksPaused.get() || deleted || info.fileIdentity == null) return
-        val identity = runCatching { requireIdentity(info, expectDirectory = null) }.getOrNull() ?: return
+        // After a blocked commit Windows still reports the last in-sync size; only hydration needs it.
+        val identity = runCatching { requireIdentity(info, null, recordedSize = false) }.getOrNull() ?: return
         if (identity.directory) return
         val localPath = root.resolve(identity.path.replace('/', File.separatorChar)).normalize()
         if (!localPath.startsWith(root) || !Files.exists(localPath)) return
@@ -908,16 +917,7 @@ internal class WindowsCloudFilesProvider(
             if (api.placeholderState(localPath) != WindowsCloudPlaceholderState.Dirty) return
             pendingWritebacks += identity.path
             submitPathOperation(identity.path) {
-                val current = api.placeholderIdentity(localPath)
-                    ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
-                    ?.takeIf { it.accountId == backend.accountId && it.path == identity.path && !it.directory }
-                    ?: knownIdentities[identity.path]
-                    ?: identity
-                val uploaded = backend.upload(identity.path, localPath.toFile(), current.remoteRevision)
-                knownIdentities[uploaded.path] = uploaded
-                if (updatePlaceholderAfterRemoteMutation(localPath, uploaded)) {
-                    api.markInSync(localPath)
-                }
+                writeback.writeBack(localPath, identity.path, fallback = knownIdentities[identity.path] ?: identity)
             }
         }
     }
@@ -1038,9 +1038,7 @@ internal class WindowsCloudFilesProvider(
                 if (requestedBytes > 0L && freed >= requestedBytes) return@forEach
                 val path = localPath(identity)
                 if (path.startsWith(root) && api.placeholderState(path) == WindowsCloudPlaceholderState.InSync) {
-                    val allocated = api.allocatedBytes(path)
-                    api.dehydrate(path)
-                    freed += allocated
+                    freed += api.dehydrate(path)
                 }
             }
         return freed
@@ -1079,20 +1077,9 @@ internal class WindowsCloudFilesProvider(
             availableFreeBytes = Files.getFileStore(root).usableSpace,
             nowEpochMillis = nowEpochMillis,
         )
-        var freed = 0L
-        plan.evictions.forEach { eviction ->
-            val identity = knownIdentities[eviction.key.relativePath] ?: return@forEach
-            val path = localPath(identity)
-            if (
-                !api.isPinned(path) &&
-                api.placeholderState(path) == WindowsCloudPlaceholderState.InSync &&
-                api.allocatedBytes(path) == eviction.sizeBytes
-            ) {
-                api.dehydrate(path)
-                freed += eviction.sizeBytes
-            }
+        return api.dehydratePlannedEvictions(plan.evictions) { relative ->
+            knownIdentities[relative]?.let { identity -> identity to localPath(identity) }
         }
-        return freed
     }
 
     fun summary(): WindowsCloudFilesSummary = synchronized(corruptRootStableAccessLock) {
@@ -1844,13 +1831,14 @@ internal class WindowsCloudFilesProvider(
     private fun requireIdentity(
         info: WindowsCloudCallbackInfo,
         expectDirectory: Boolean?,
+        recordedSize: Boolean = true,
     ): WindowsCloudFileIdentity {
         val bytes = requireNotNull(info.fileIdentity) { "The Cloud Files callback has no identity." }
         val identity = WindowsCloudFileIdentityCodec.decode(bytes)
         require(identity.accountId == backend.accountId) { "The Cloud Files callback belongs to another account." }
         requireWindowsCloudCallbackPath(root, info.normalizedPath, identity.path)
         if (expectDirectory != null) require(identity.directory == expectDirectory)
-        require(identity.size == info.fileSize || identity.directory) { "The Cloud Files callback size is stale." }
+        require(!recordedSize || identity.size == info.fileSize || identity.directory) { "The Cloud Files callback size is stale." }
         knownIdentities[identity.path] = identity
         return identity
     }
@@ -2086,7 +2074,7 @@ internal class WindowsCloudFilesProvider(
                         inspection.state == WindowsCloudPlaceholderEntryState.Local
                     ) return@forEach
                     val directory = entry.directory
-                    if (!directory && !entry.regularFile) return@forEach
+                    if (!directory && !entry.file) return@forEach
                     val original = api.placeholderIdentity(local)
                         ?.let { encoded -> runCatching { WindowsCloudFileIdentityCodec.decode(encoded) }.getOrNull() }
                         ?.takeIf { identity ->
@@ -2103,19 +2091,7 @@ internal class WindowsCloudFilesProvider(
                         deferredWhenPaused = { if (!runtimeStopping.get()) deferredLocalChanges.add(local) },
                         allowWhilePaused = allowWhilePaused,
                     ) {
-                        val current = requireNotNull(api.placeholderIdentity(local)) {
-                            "The dirty Windows placeholder has no recoverable identity."
-                        }.let(WindowsCloudFileIdentityCodec::decode)
-                        require(
-                            current.accountId == backend.accountId &&
-                                current.path == original.path &&
-                                !current.directory,
-                        ) { "The dirty Windows placeholder identity is not safe to recover." }
-                        val uploaded = backend.upload(current.path, local.toFile(), current.remoteRevision)
-                        knownIdentities[uploaded.path] = uploaded
-                        if (updatePlaceholderAfterRemoteMutation(local, uploaded)) {
-                            api.markInSync(local)
-                        }
+                        writeback.writeBack(local, original.path)
                     }
                 }
             }
