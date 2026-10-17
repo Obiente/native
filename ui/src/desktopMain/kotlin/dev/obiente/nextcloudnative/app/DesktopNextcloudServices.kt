@@ -735,6 +735,7 @@ class DesktopNextcloudServices(
     private val fileRangeSessionLock = Any()
     @Volatile
     private var sessionClearing = false
+    // Lock order: before the account guard's activation monitor (tryActivateVirtualFileResource).
     private val virtualFileProviderLock = Any()
     private val virtualFileCacheTierMutations = mutableSetOf<String>()
     private var linuxVirtualFileSystem: LinuxNextcloudVirtualFileSystem? = null
@@ -1189,20 +1190,17 @@ class DesktopNextcloudServices(
                     }
                 }
         }
-        val accepted = accountOperationGuard.tryActivateResource {
-            if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
-                false
-            } else {
-                synchronized(virtualFileProviderLock) {
-                    synchronized(virtualFolderHydrationJobs) {
-                        if (
-                            sessionClearing ||
-                            accountId in virtualFileCacheTierMutations ||
-                            virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
-                        ) false
-                        else true.also { virtualFolderHydrationJobs[jobKey] = job }
-                    }
-                }
+        val accepted = accountOperationGuard.tryActivateVirtualFileResource(
+            virtualFileProviderLock,
+            sessionMatches = { desktopResourceActivationMatchesActiveSession(loadSession(), session) },
+        ) {
+            synchronized(virtualFolderHydrationJobs) {
+                if (
+                    sessionClearing ||
+                    accountId in virtualFileCacheTierMutations ||
+                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                ) false
+                else true.also { virtualFolderHydrationJobs[jobKey] = job }
             }
         }
         if (accepted) job.start() else job.cancel()
