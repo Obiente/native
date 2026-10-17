@@ -138,7 +138,10 @@ internal fun DesktopVideoSurface(
     LaunchedEffect(engine, playing) {
         if (playing && !autoplayChecked) {
             autoplayChecked = true
-            if (!windowVisible) engine.command(NativeVideoTransportCommand.Pause)
+            // A skip from the media controls while playing keeps playing in the background.
+            if (!windowVisible && systemMedia?.resumePlayback != true) {
+                engine.command(NativeVideoTransportCommand.Pause)
+            }
         }
     }
     DesktopSystemMediaEffect(engine, state, systemMedia, systemMediaControls)
@@ -212,6 +215,8 @@ private fun NativeVideoTransportState.accessibleDescription(): String = buildStr
 internal const val DESKTOP_VIDEO_SURFACE_TEST_TAG = "desktop-video-surface"
 private const val DESKTOP_VIDEO_CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 
+private fun DesktopVideoEngine.isPlaying(): Boolean = state.value.status == NativeVideoTransportStatus.Playing
+
 /**
  * Publishes the playing video to the operating system's media controls and routes their
  * commands back on the UI thread: play and pause to [engine], previous and next to the viewer.
@@ -242,8 +247,8 @@ private fun DesktopSystemMediaEffect(
                 SystemMediaCommand.Play -> engine.command(NativeVideoTransportCommand.Play)
                 SystemMediaCommand.Pause, SystemMediaCommand.Stop -> engine.command(NativeVideoTransportCommand.Pause)
                 SystemMediaCommand.TogglePlayPause -> engine.command(NativeVideoTransportCommand.TogglePlayback)
-                SystemMediaCommand.Next -> currentSystemMedia.onNext?.invoke()
-                SystemMediaCommand.Previous -> currentSystemMedia.onPrevious?.invoke()
+                SystemMediaCommand.Next -> currentSystemMedia.onNext?.invoke(engine.isPlaying())
+                SystemMediaCommand.Previous -> currentSystemMedia.onPrevious?.invoke(engine.isPlaying())
             }
         }
     }

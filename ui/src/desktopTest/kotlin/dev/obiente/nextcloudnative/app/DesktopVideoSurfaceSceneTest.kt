@@ -146,6 +146,29 @@ class DesktopVideoSurfaceSceneTest {
     }
 
     @Test
+    fun `a skip from the media controls keeps playing the next item in the background`() {
+        val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
+        var send: ((SystemMediaCommand) -> Unit)? = null
+        val skips = Collections.synchronizedList(mutableListOf<Boolean>())
+        val factory: DesktopSystemMediaControlsFactory = { _, onCommand ->
+            send = onCommand
+            recordingControls(Collections.synchronizedList(mutableListOf()))
+        }
+        val media = NativeVideoSystemMedia(title = "next.mp4", onNext = { skips += it }, resumePlayback = true)
+        nativeSceneTest(800, 600, content = {
+            Surface(engine, window = MutableStateFlow(false), systemMedia = media, systemMediaControls = factory)
+        }) {
+            settleUntil { send != null }
+            settle()
+            assertEquals(emptyList(), engine.commands, "An item a playing skip opened is not paused while hidden.")
+
+            requireNotNull(send)(SystemMediaCommand.Next)
+            settleUntil { skips.isNotEmpty() }
+            assertEquals(listOf(true), skips, "The skip reports that playback was active.")
+        }
+    }
+
+    @Test
     fun `outcomes reach the viewer and leaving releases the engine`() {
         val engine = ScriptedEngine(NativeVideoTransportStatus.Playing)
         val events = Collections.synchronizedList(mutableListOf<String>())

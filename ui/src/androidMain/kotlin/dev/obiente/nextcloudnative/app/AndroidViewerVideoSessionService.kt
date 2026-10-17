@@ -133,8 +133,8 @@ internal object AndroidViewerVideoSessionBridge {
 @OptIn(UnstableApi::class)
 internal class AndroidViewerVideoSessionPlayer(
     player: Player,
-    private val previous: () -> (() -> Unit)?,
-    private val next: () -> (() -> Unit)?,
+    private val previous: () -> ((Boolean) -> Unit)?,
+    private val next: () -> ((Boolean) -> Unit)?,
 ) : ForwardingPlayer(player) {
     private val listeners = CopyOnWriteArraySet<Player.Listener>()
 
@@ -164,19 +164,25 @@ internal class AndroidViewerVideoSessionPlayer(
     override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
 
     override fun seekToPrevious() {
-        previous()?.invoke()
+        previous()?.invoke(playWhenReady)
     }
 
     override fun seekToPreviousMediaItem() {
-        previous()?.invoke()
+        previous()?.invoke(playWhenReady)
     }
 
     override fun seekToNext() {
-        next()?.invoke()
+        next()?.invoke(playWhenReady)
     }
 
     override fun seekToNextMediaItem() {
-        next()?.invoke()
+        next()?.invoke(playWhenReady)
+    }
+
+    /** The system Play on a finished video restarts it, as the in-window replay control does. */
+    override fun play() {
+        if (playbackState == Player.STATE_ENDED) seekToDefaultPosition()
+        super.play()
     }
 
     override fun hasPreviousMediaItem(): Boolean = previous() != null

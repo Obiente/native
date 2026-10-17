@@ -158,6 +158,7 @@ internal fun NextcloudMediaViewer(
     val playbackFile = videoOriginal.playbackFileFor(selected)
     // Survives item changes so swiping through media stays immersive once the user hid controls.
     var chromeVisible by remember { mutableStateOf(true) }
+    var resumeAfterSystemSkip by remember { mutableStateOf(false) }
     var viewerAction by remember(selected.path) { mutableStateOf<MediaViewerAction?>(null) }
     var writeBlockNotice by remember(selected.path) { mutableStateOf<FileWriteBlock?>(null) }
     val scope = rememberCoroutineScope()
@@ -187,12 +188,12 @@ internal fun NextcloudMediaViewer(
         )
     }
 
-    fun selectPrevious() {
-        if (canGoPrevious) onSelect(items[selectedIndex - 1])
+    fun selectPrevious(keepPlaying: Boolean = false) {
+        resumeAfterSystemSkip = keepPlaying; if (canGoPrevious) onSelect(items[selectedIndex - 1])
     }
 
-    fun selectNext() {
-        if (canGoNext) onSelect(items[selectedIndex + 1])
+    fun selectNext(keepPlaying: Boolean = false) {
+        resumeAfterSystemSkip = keepPlaying; if (canGoNext) onSelect(items[selectedIndex + 1])
     }
 
     fun handoffToExternalApp(action: ExternalFileHandoffAction) {
@@ -575,15 +576,14 @@ internal fun NextcloudMediaViewer(
                     // The still returns with its controls even if the motion's controls had hidden.
                     if (playbackSource.restoresStillAfterPlaybackEnds()) { motionPlaying = false; chromeVisible = true }
                 },
-                onFailure = { failure ->
-                    nativeVideoFailure = failure
-                },
+                onFailure = { failure -> nativeVideoFailure = failure },
                 onControlsVisibilityChanged = { visible -> chromeVisible = visible },
                 modifier = mediaCanvasModifier,
                 systemMedia = NativeVideoSystemMedia(
                     title = selected.name,
                     onPrevious = (::selectPrevious).takeIf { !navigationBlocked && canGoPrevious },
                     onNext = (::selectNext).takeIf { !navigationBlocked && canGoNext },
+                    resumePlayback = resumeAfterSystemSkip,
                 ),
             )
         } else when (val state = previewState) {

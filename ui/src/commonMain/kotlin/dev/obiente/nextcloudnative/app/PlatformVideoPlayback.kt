@@ -365,12 +365,15 @@ private fun NativeVideoFormatSummary?.safeDescription(): String {
 /**
  * What the operating system's media controls (notification, lock screen, headset and media keys)
  * show and do for the playing video. Previous and next move through the viewer's own sequence and
- * are null when there is no neighbor or navigation is blocked.
+ * are null when there is no neighbor or navigation is blocked; each is told whether playback was
+ * active, so a skip from the media controls keeps playing the next item even in the background.
+ * [resumePlayback] marks the item such a skip opened.
  */
 internal class NativeVideoSystemMedia(
     val title: String = "",
-    val onPrevious: (() -> Unit)? = null,
-    val onNext: (() -> Unit)? = null,
+    val onPrevious: ((keepPlaying: Boolean) -> Unit)? = null,
+    val onNext: ((keepPlaying: Boolean) -> Unit)? = null,
+    val resumePlayback: Boolean = false,
 )
 
 /**

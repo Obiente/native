@@ -26,6 +26,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -68,7 +69,13 @@ internal actual fun PlatformNativeVideoPlayer(
 ) {
     // Transport controls sit above the gesture navigation area; the picture stays centered.
     val playerModifier = modifier.navigationBarsPadding()
-    if (compatibilityPlaybackRequested && rangeSource != null) {
+    if (compatibilityPlaybackRequested && rangeSource == null) {
+        // The compatibility source could not open, for example after an account change. Report it
+        // instead of silently retrying the player that already failed.
+        val currentOnFailure by rememberUpdatedState(onFailure)
+        LaunchedEffect(source) { currentOnFailure(NativeVideoPlaybackFailure.SourceChanged) }
+        Box(playerModifier)
+    } else if (compatibilityPlaybackRequested && rangeSource != null) {
         // Its Play/Pause control never hides, so the viewer chrome Media3 may have hidden returns.
         val currentOnControlsVisibilityChanged by rememberUpdatedState(onControlsVisibilityChanged)
         LaunchedEffect(rangeSource) { currentOnControlsVisibilityChanged(true) }
@@ -136,8 +143,10 @@ private fun Media3VideoPlayer(
         created.prepare()
         // Opening a video is the request to watch it, as with a Live Photo's motion. A player
         // created after the activity stopped (a lookup finished in the background) waits for
-        // the user instead, because the earlier ON_STOP is not replayed to the observer.
-        created.playWhenReady = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        // the user instead, because the earlier ON_STOP is not replayed to the observer, unless a
+        // skip from the system media controls opened it while playing.
+        created.playWhenReady = systemMedia.resumePlayback ||
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         player = created
         // Full videos appear in the system media controls; a Live Photo's motion does not.
         val published = (source as? NativeVideoPlaybackSource.DavFile)?.let {
@@ -300,16 +309,27 @@ private fun LibVlcVideoPlayer(
     val currentSurfaceController = surfaceController
         ?.takeIf { it.requestId == request.requestId }
 
-    LaunchedEffect(request) {
+    // The source may finish opening after the activity stopped. Android refuses service starts
+    // from the background, so the service starts once the activity is started again.
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateAsState()
+    val started = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    var serviceStarted by remember(request) { mutableStateOf(false) }
+    LaunchedEffect(request, started) {
+        if (!started || serviceStarted) return@LaunchedEffect
         AndroidCompatibilityVideoPlaybackBridge.submit(request)
-        context.startService(
-            Intent(context, AndroidCompatibilityVideoPlaybackService::class.java)
-                .setAction(AndroidCompatibilityVideoPlaybackService.ACTION_OPEN)
-                .putExtra(
-                    AndroidCompatibilityVideoPlaybackService.EXTRA_REQUEST_ID,
-                    request.requestId,
-                ),
-        )
+        serviceStarted = try {
+            context.startService(
+                Intent(context, AndroidCompatibilityVideoPlaybackService::class.java)
+                    .setAction(AndroidCompatibilityVideoPlaybackService.ACTION_OPEN)
+                    .putExtra(
+                        AndroidCompatibilityVideoPlaybackService.EXTRA_REQUEST_ID,
+                        request.requestId,
+                    ),
+            )
+            true
+        } catch (_: IllegalStateException) {
+            false
+        }
     }
     LaunchedEffect(currentState?.status, currentState?.failure) {
         when (currentState?.status) {
