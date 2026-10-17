@@ -36,6 +36,7 @@ class SignedAppStoreContractAcquirer(
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
         ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
+    private val publicationFence = ContractPublicationFence()
 
     init {
         if (requireHttps) {
@@ -73,7 +74,8 @@ class SignedAppStoreContractAcquirer(
             }
         }
         return try {
-            acquireUncoalesced(request, cachePolicy).also { acquired -> owner.complete(acquired) }
+            val generation = publicationFence.start(request)
+            acquireUncoalesced(request, cachePolicy, generation).also { acquired -> owner.complete(acquired) }
         } catch (failure: Throwable) {
             owner.completeExceptionally(failure)
             throw failure
@@ -85,6 +87,7 @@ class SignedAppStoreContractAcquirer(
     private fun acquireUncoalesced(
         request: ContractAcquisitionRequest,
         cachePolicy: AcquisitionCachePolicy,
+        generation: Long,
     ): ContractAcquisitionOutcome {
         requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
@@ -165,30 +168,35 @@ class SignedAppStoreContractAcquirer(
                 )?.let { linkedContract ->
                     return cacheContract(
                         request,
+                        generation,
                         linkedContract.mergeVerifiedPackageRoutes(verified),
                     )
                 }
                 verifiedRouteFallbacks += release to verified
                 continue
             }
-            return cacheContract(request, verified.asPackageContract(request, release))
+            return cacheContract(request, generation, verified.asPackageContract(request, release))
         }
 
         for (release in missingPackageContracts) {
             val exact = release.version == request.installedAppVersion
             acquireGitHubTagContract(release, request.installedAppVersion, exact, attempt)?.let { contract ->
-                return cacheContract(request, contract)
+                return cacheContract(request, generation, contract)
             }
         }
         val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return attempt.unavailable()
-        return cacheContract(request, verified.asPackageContract(request, release))
+        return cacheContract(request, generation, verified.asPackageContract(request, release))
     }
 
-    /** Forgets the verified contract for [request], for example after it proved unusable downstream. */
-    fun invalidateVerifiedContract(request: ContractAcquisitionRequest): VerifiedContractRemoval {
-        verifiedContracts.remove(request)
-        return verifiedContractCache.remove(request)
-    }
+    /**
+     * Forgets the verified contract for [request], for example after it proved unusable downstream.
+     * Acquisitions already running for [request] can no longer publish their result.
+     */
+    fun invalidateVerifiedContract(request: ContractAcquisitionRequest): VerifiedContractRemoval =
+        publicationFence.invalidate(request) {
+            verifiedContracts.remove(request)
+            verifiedContractCache.remove(request)
+        }
 
     private fun VerifiedPackageContract.asPackageContract(
         request: ContractAcquisitionRequest,
@@ -210,12 +218,20 @@ class SignedAppStoreContractAcquirer(
         contractKind = contractKind,
     )
 
+    /**
+     * Publishes [contract] unless an acquisition that started later, or an invalidation, already
+     * superseded [generation]. A superseded caller receives the newer contract when one is published.
+     */
     private fun cacheContract(
         request: ContractAcquisitionRequest,
+        generation: Long,
         contract: VerifiedOpenApiContract,
-    ): ContractAcquisitionOutcome = ContractAcquisitionOutcome.Acquired(contract).also {
-        verifiedContracts[request] = contract
-        runCatching { verifiedContractCache.store(request, contract) }
+    ): ContractAcquisitionOutcome {
+        val published = publicationFence.publishIfCurrent(request, generation) {
+            verifiedContracts[request] = contract
+            runCatching { verifiedContractCache.store(request, contract) }
+        }
+        return ContractAcquisitionOutcome.Acquired(if (published) contract else verifiedContracts[request] ?: contract)
     }
 
     private fun acquireGitHubTagContract(
