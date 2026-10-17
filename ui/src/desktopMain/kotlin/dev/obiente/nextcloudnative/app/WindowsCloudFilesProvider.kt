@@ -227,6 +227,7 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     fun localContentStamp(path: Path): WindowsCloudLocalContentStamp = nioWindowsCloudLocalContentStamp(path)
     fun markInSyncIfUnchanged(path: Path, expected: WindowsCloudLocalContentStamp): WindowsCloudInSyncCommit =
         markInSyncWhenStampMatches(path, expected)
+    /** Returns the bytes released, or 0 when the entry is not an unpinned in-sync file or Windows kept it. */
     fun dehydrate(path: Path): Long
 }
 
@@ -1037,9 +1038,7 @@ internal class WindowsCloudFilesProvider(
                 if (requestedBytes > 0L && freed >= requestedBytes) return@forEach
                 val path = localPath(identity)
                 if (path.startsWith(root) && api.placeholderState(path) == WindowsCloudPlaceholderState.InSync) {
-                    val allocated = api.allocatedBytes(path)
-                    api.dehydrate(path)
-                    freed += allocated
+                    freed += api.dehydrate(path)
                 }
             }
         return freed
@@ -1078,20 +1077,9 @@ internal class WindowsCloudFilesProvider(
             availableFreeBytes = Files.getFileStore(root).usableSpace,
             nowEpochMillis = nowEpochMillis,
         )
-        var freed = 0L
-        plan.evictions.forEach { eviction ->
-            val identity = knownIdentities[eviction.key.relativePath] ?: return@forEach
-            val path = localPath(identity)
-            if (
-                !api.isPinned(path) &&
-                api.placeholderState(path) == WindowsCloudPlaceholderState.InSync &&
-                api.allocatedBytes(path) == eviction.sizeBytes
-            ) {
-                api.dehydrate(path)
-                freed += eviction.sizeBytes
-            }
+        return api.dehydratePlannedEvictions(plan.evictions) { relative ->
+            knownIdentities[relative]?.let { identity -> identity to localPath(identity) }
         }
-        return freed
     }
 
     fun summary(): WindowsCloudFilesSummary = synchronized(corruptRootStableAccessLock) {
