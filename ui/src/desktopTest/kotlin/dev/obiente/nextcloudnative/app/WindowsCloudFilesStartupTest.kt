@@ -77,6 +77,35 @@ class WindowsCloudFilesStartupTest {
     }
 
     @Test
+    fun `traversal rechecks a directory without following links before descending`() {
+        val root = createTempDirectory("cloud-local-tree-stale-")
+        val folder = Files.createDirectory(root.resolve("Shoot"))
+        Files.writeString(folder.resolve("frame.raw"), "synthetic frame")
+        // Simulates a folder replaced after its parent was listed: the cached entry still says
+        // directory, but the path no longer is one when the traversal reaches it.
+        val replaced = Files.writeString(root.resolve("Replaced"), "synthetic file")
+        val api = object : WindowsCloudFilesApi by LocalApi() {
+            val enumerated = CopyOnWriteArrayList<Path>()
+            override fun localEntries(directory: Path): List<WindowsCloudLocalEntry> {
+                enumerated.add(directory)
+                return Files.list(directory).use { it.toList() }.map { child ->
+                    val stale = child == replaced
+                    WindowsCloudLocalEntry(child, stale || Files.isDirectory(child), !stale && Files.isRegularFile(child), false) {
+                        WindowsCloudPlaceholderInspection(WindowsCloudPlaceholderEntryState.Local)
+                    }
+                }
+            }
+        }
+        try {
+            val visited = api.localTree(root).toSet()
+            assertEquals(setOf(root, folder, folder.resolve("frame.raw")), visited)
+            assertEquals(setOf(root, folder), api.enumerated.toSet())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `resident traversal includes nested entries and rejects paths outside the directory`() {
         val root = createTempDirectory("cloud-local-tree-")
         val directory = Files.createDirectory(root.resolve("Notes"))
@@ -107,8 +136,14 @@ class WindowsCloudFilesStartupTest {
             val file = Files.writeString(root.resolve("draft.txt"), "synthetic draft")
             assertEquals(setOf(folder, file), api.localChildren(root).toSet())
             val entries = api.localEntries(root).associateBy { it.path }
-            assertEquals(api.localEntry(folder), entries.getValue(folder))
-            assertEquals(api.localEntry(file), entries.getValue(file))
+            listOf(folder, file).forEach { path ->
+                val native = entries.getValue(path)
+                val fallback = api.localEntry(path)
+                assertEquals(
+                    listOf(fallback.directory, fallback.regularFile, fallback.symbolicLink, fallback.inspection.state),
+                    listOf(native.directory, native.regularFile, native.symbolicLink, native.inspection.state),
+                )
+            }
             assertTrue(entries.getValue(folder).directory && entries.getValue(file).regularFile)
             assertFailsWith<WindowsCloudLocalScanException> { api.localChildren(root.resolve("missing")) }
         } finally {
