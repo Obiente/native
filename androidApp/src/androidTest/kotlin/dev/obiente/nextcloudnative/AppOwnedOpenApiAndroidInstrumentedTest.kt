@@ -58,9 +58,9 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
             "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "AppStoreCatalogReleasesKt",
             "ContractAcquisitionFailureKt", "ContractAcquisitionOutcomeKt", "LinkedSourceArchiveKt",
             "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "SignedAppStoreContractAcquirerKt",
-            "SignedPackageTarReaderKt",
-            "StaticPhpParametersKt", "StaticRouteContractKt", "TarArchivePathKt", "VerifiedChoresContractKt",
-            "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt", "SignedAppStoreContractAcquirer",
+            "SignedPackageTarReaderKt", "StaticPhpParametersKt", "StaticRouteContractKt", "StrictJsonValuesKt",
+            "TarArchivePathKt", "VerifiedChoresContractKt", "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt",
+            "SignedAppStoreContractAcquirer",
             "FileAppStoreCatalogCache", "DynamicApiResponseCache", "FileVerifiedContractCache",
         ).forEach { name -> Class.forName("dev.obiente.nextcloudnative.contracts.$name") }
         Class.forName("dev.obiente.nextcloudnative.app.JvmAppStoreContractAcquisitionKt")

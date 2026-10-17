@@ -13,13 +13,20 @@ internal enum class MalformedCatalogField {
     Releases,
     Entry,
     Version,
+
+    /** `isNightly` is present but not a JSON boolean, so the release channel is unknown. */
+    Nightly,
     Certificate,
     Download,
     Signature,
     SignatureDigest,
 }
 
-/** A catalog entry for the requested app that parsing dropped. A null version could not be read. */
+/**
+ * A catalog entry for the requested app that parsing dropped. A null version could not be read. A
+ * required value of the wrong JSON type, for example a number or object where a string belongs, is
+ * malformed exactly like a missing one; it is never coerced.
+ */
 internal data class MalformedCatalogEntry(val version: String?, val field: MalformedCatalogField)
 
 /** Where a catalog read came from. */
@@ -99,11 +106,11 @@ internal fun parseReleases(
     val app = (0 until apps.length())
         .asSequence()
         .mapNotNull(apps::optJSONObject)
-        .firstOrNull { candidate -> candidate.optString("id") == appId }
+        .firstOrNull { candidate -> candidate.stringValue("id") == appId }
         ?: return CatalogReleases(emptyList())
     val releases = app.optJSONArray("releases")
         ?: return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Releases)))
-    val certificate = app.optString("certificate").takeIf(String::isNotBlank)
+    val certificate = app.stringValue("certificate")?.takeIf(String::isNotBlank)
     val malformed = mutableListOf<MalformedCatalogEntry>()
     val parsed = (0 until releases.length())
         .asSequence()
@@ -112,18 +119,22 @@ internal fun parseReleases(
                 if (release == null) malformed += MalformedCatalogEntry(null, MalformedCatalogField.Entry)
             }
         }
-        .filter { release -> !release.optBoolean("isNightly", false) }
+        .filter { release -> !release.booleanValue("isNightly", absent = false, wrongType = false) }
         .mapNotNull { release ->
-            val version = release.optString("version").takeIf(String::isNotBlank)
+            val version = release.stringValue("version")?.takeIf(String::isNotBlank)
+            val nightlyKnown = release.opt("isNightly").let { value -> value == null || value is Boolean }
             // A download value that is not a valid HTTP URL is malformed catalog data, like a missing one.
-            val download = release.optString("download").takeIf { value -> value.toHttpUrlOrNull() != null }
-            val signature = release.optString("signature").takeIf(String::isNotBlank)
-            val digest = release.optString("signatureDigest").takeIf(String::isNotBlank)
-            if (version == null || certificate == null || download == null || signature == null || digest == null) {
+            val download = release.stringValue("download")?.takeIf { value -> value.toHttpUrlOrNull() != null }
+            val signature = release.stringValue("signature")?.takeIf(String::isNotBlank)
+            val digest = release.stringValue("signatureDigest")?.takeIf(String::isNotBlank)
+            if (version == null || !nightlyKnown || certificate == null || download == null || signature == null ||
+                digest == null
+            ) {
                 malformed += MalformedCatalogEntry(
                     version = version,
                     field = when {
                         version == null -> MalformedCatalogField.Version
+                        !nightlyKnown -> MalformedCatalogField.Nightly
                         certificate == null -> MalformedCatalogField.Certificate
                         download == null -> MalformedCatalogField.Download
                         signature == null -> MalformedCatalogField.Signature
@@ -140,7 +151,7 @@ internal fun parseReleases(
                 signatureDigest = digest,
                 certificatePem = certificate,
                 catalogUrl = catalogUrl,
-                platformVersionSpec = release.optString("platformVersionSpec").takeIf(String::isNotBlank),
+                platformVersionSpec = release.stringValue("platformVersionSpec")?.takeIf(String::isNotBlank),
                 githubSources = deriveGitHubSources(
                     app = app,
                     downloadUrl = download,
@@ -240,8 +251,8 @@ private fun deriveGitHubSources(
 ): List<GitHubSourceReference> {
     val release = parseGitHubReleaseLocation(downloadUrl, requireOfficialReleaseHost) ?: return emptyList()
     val repositories = buildList {
-        parseGitHubRepository(app.optString("repository"))?.let(::add)
-        parseGitHubRepository(app.optString("website"))?.let(::add)
+        app.stringValue("repository")?.let(::parseGitHubRepository)?.let(::add)
+        app.stringValue("website")?.let(::parseGitHubRepository)?.let(::add)
         add(release.repository)
     }.distinct()
     val conventionalTags = setOf(releaseVersion, "v$releaseVersion")

@@ -243,13 +243,13 @@ class SignedAppStoreContractAcquirer(
             )
             val contracts = treeBytes?.let { bytes ->
                 val tree = runCatching { JSONObject(bytes.decodeToString()) }.getOrNull()
-                val entries = tree?.takeUnless { it.optBoolean("truncated", true) }?.optJSONArray("tree")
+                val entries = tree?.takeUnless { it.booleanValue("truncated", absent = true, wrongType = true) }?.optJSONArray("tree")
                 entries?.let { treeEntries ->
                     val candidates = (0 until treeEntries.length())
                         .asSequence()
                         .mapNotNull(treeEntries::optJSONObject)
-                        .filter { entry -> entry.optString("type") == "blob" }
-                        .map { entry -> entry.optString("path") }
+                        .filter { entry -> entry.stringValue("type") == "blob" }
+                        .mapNotNull { entry -> entry.stringValue("path") }
                         .filter { path -> path.substringAfterLast('/').matches(OPEN_API_FILE_PATTERN) }
                         .distinct()
                         .sorted()
@@ -311,7 +311,7 @@ class SignedAppStoreContractAcquirer(
             path = extracted.specFile,
             document = extracted.document,
             apiVersion = runCatching {
-                JSONObject(extracted.document).optJSONObject("info")?.optString("version")
+                JSONObject(extracted.document).optJSONObject("info")?.stringValue("version")
             }.getOrNull(),
             sourceUrl = "$sourceRoot/${extracted.specFile}",
         )
@@ -348,7 +348,7 @@ class SignedAppStoreContractAcquirer(
             if (depth > MAX_EXTERNAL_REFERENCE_DEPTH) return value
             return when (value) {
                 is JSONObject -> {
-                    val reference = value.optString("${'$'}ref").takeIf(String::isNotBlank)
+                    val reference = value.stringValue("${'$'}ref")?.takeIf(String::isNotBlank)
                     if (reference != null) {
                         val (filePart, fragment) = splitSchemaReference(reference) ?: return value
                         if (filePart.isEmpty() && preserveLocalReferences) return value
@@ -587,14 +587,14 @@ internal fun extractOpenApiContract(
 
 private fun parseOpenApiCandidate(path: String, bytes: ByteArray): OpenApiCandidate? {
     val document = parseStructuredObject(path, bytes) ?: return null
-    if (!document.optString("openapi").startsWith("3.") || document.optJSONObject("paths") == null) {
+    if (document.stringValue("openapi")?.startsWith("3.") != true || document.optJSONObject("paths") == null) {
         return null
     }
     val normalized = document.toString()
     return OpenApiCandidate(
         path = path,
         document = normalized,
-        apiVersion = document.optJSONObject("info")?.optString("version")?.takeIf(String::isNotBlank),
+        apiVersion = document.optJSONObject("info")?.stringValue("version")?.takeIf(String::isNotBlank),
     )
 }
 

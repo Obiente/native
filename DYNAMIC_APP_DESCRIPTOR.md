@@ -197,7 +197,7 @@ The fallback card derives its title, explanation, and action from that reason:
 - the App Store lists no release matching the installed version;
 - the App Store lists the app, but the entry that would be selected lacks a
   required value such as its certificate, download, signature, or signature
-  digest;
+  digest, or supplies one with the wrong JSON type;
 - an App Store catalog document could not be read at all, so no entries were
   available to check;
 - the app's linked source refused or rate limited the last fallback request
@@ -241,6 +241,11 @@ separates no matching release, a malformed catalog entry, a temporarily
 unavailable linked source, and releases inspected without a usable contract,
 and the shared JVM boundary carries that reason to the fallback card. Catalog
 parsing records which required value made each dropped entry unusable. A
+required value must have its exact JSON type: a number, boolean, object, array,
+or `null` where a string belongs, or an `isNightly` that is not a boolean, is
+malformed like a missing value and is never coerced. Contract documents are read
+the same way, so a non-string `openapi` version, operation ID, parameter, or
+reference is ignored, and a non-boolean `required` flag counts as required. A
 dropped entry counts only when it would have been selected: the exact installed
 version, a patch-compatible release, or an entry whose version cannot be read.
 A catalog document that is truncated, empty, not JSON, or not an array is an
@@ -319,7 +324,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog and package requests | No response; non-success status; redirect away from HTTPS | Network; source unavailable; verification failed |
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
 | Catalog document | Truncated, empty, not JSON, or not an array | Unreadable catalog, never cached |
-| Catalog entry | Missing value, or a download that is not an HTTP URL | Malformed source when it would be selected |
+| Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
 | Catalog cache write | Local storage failure | Ignored |
 | Explicit retry inside the refresh window without a cached copy | None | Recently checked; no request |
 | Package verification | Signature, certificate, revocation, identity, archive structure, or app metadata rejected | Verification failed |
@@ -331,12 +336,12 @@ only genuine client faults remain unexpected. Size limits throw
 | Linked archive content | Corrupt, unsafe path, identity mismatch, malformed or misencoded `info.xml`, size limit | No candidate |
 | Linked JSON or YAML documents | Unreadable | Skipped |
 | Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract; that cached contract is discarded |
+| Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
 | Contract module class loading | `LinkageError` | Client fault |
 | Same-origin probes | See the precedence list above | Typed probe result |
 | Remaining unexpected failures | XML parser configuration, internal invariants | Client fault |
 
 ## Read failures
-| Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
 
 [`DynamicReadFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReadFailure.kt)
 classifies unsuccessful HTTP reads as authentication, permission, missing
