@@ -10,6 +10,10 @@ import kotlinx.coroutines.withContext
 internal class DesktopAccountOperationGuard {
     private val accountMutationMutex = Mutex()
     private val syncRunMutex = Mutex()
+
+    // Lock order: the desktop virtual-file provider lock, then this monitor. A caller may hold the
+    // provider lock here; a tryActivateResource action must never be the first to take it. Use
+    // tryActivateVirtualFileResource when the activation also needs the provider lock.
     private val resourceActivationMonitor = Any()
     private var accountMutationActive = false
 
@@ -34,6 +38,19 @@ internal class DesktopAccountOperationGuard {
     }
 
     suspend fun <Result> withSyncRunLock(action: suspend () -> Result): Result = syncRunMutex.withLock { action() }
+}
+
+/**
+ * Activates a resource that is registered under [providerLock], the desktop virtual-file provider
+ * lock. The provider lock is taken before the activation monitor, matching post-mutation refreshes
+ * that already hold it, so the two monitors are never acquired in opposite orders.
+ */
+internal fun DesktopAccountOperationGuard.tryActivateVirtualFileResource(
+    providerLock: Any,
+    sessionMatches: () -> Boolean,
+    register: () -> Boolean,
+): Boolean = synchronized(providerLock) {
+    tryActivateResource { sessionMatches() && register() }
 }
 
 internal class DesktopSessionPublicationGuard {
