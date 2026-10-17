@@ -4656,9 +4656,9 @@ private fun DynamicDiscoveredAppScreen(
                     val notice = discovery.fallbackReason.fallbackNotice()
                     Text(notice.title, style = MaterialTheme.typography.titleSmall)
                     Text(notice.message, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onRetryDiscovery) {
-                        Text(notice.actionLabel)
-                    }
+                    notice.actionLabel?.let { label -> TextButton(onClick = onRetryDiscovery) {
+                        Text(label)
+                    } }
                 }
             }
         }

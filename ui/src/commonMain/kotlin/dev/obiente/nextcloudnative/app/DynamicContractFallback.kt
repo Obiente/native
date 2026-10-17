@@ -239,7 +239,11 @@ internal const val DYNAMIC_DISCOVERY_FAILURE_MESSAGE = "Could not check this app
 internal data class DynamicContractFallbackNotice(
     val title: String,
     val message: String,
-    val actionLabel: String,
+    /**
+     * The label of the action that checks again, or null when checking again would repeat a request
+     * that cannot succeed, such as one made with credentials the server rejected.
+     */
+    val actionLabel: String?,
 )
 
 /** Product copy for a metadata fallback. It explains what happened and whether checking again can help. */
@@ -279,16 +283,20 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
             "Store offered no verified contract. Check the connection and try again.",
         "Try again",
     )
+    // Checking again would resend the rejected credentials, so no retry is offered. The app has no
+    // in-session reauthentication; signing out from account settings is the way to sign in again.
     DynamicContractFallbackReason.ServerAuthenticationRequired -> DynamicContractFallbackNotice(
         "Sign in again",
         "The server did not accept this account while checking for this app's API, and the App Store " +
-            "offered no verified contract. Sign in again to continue.",
-        "Try again",
+            "offered no verified contract. To sign in again, open Settings, then Account, choose Sign out " +
+            "and revoke access, and sign in to this server.",
+        null,
     )
     DynamicContractFallbackReason.ServerPermissionDenied -> DynamicContractFallbackNotice(
         "Server API not permitted",
         "Your account does not have permission to read this server's API catalog, which may be limited " +
-            "to administrators, and the App Store offered no verified contract. Only app details are shown.",
+            "to administrators, and the App Store offered no verified contract. Only app details are shown. " +
+            "Checking again helps only after an administrator grants access or the App Store adds a release.",
         "Check again",
     )
     DynamicContractFallbackReason.UnreadableCatalog -> DynamicContractFallbackNotice(

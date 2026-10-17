@@ -118,6 +118,19 @@ class DynamicContractFallbackDiscoveryTest {
         assertEquals("Try again", DynamicContractFallbackReason.AppStoreUnreachable.fallbackNotice().actionLabel)
     }
 
+    @Test
+    fun rejectedCredentialsOfferNoRetryAndSayWhereToSignInAgain() {
+        val rejected = DynamicContractFallbackReason.ServerAuthenticationRequired.fallbackNotice()
+        assertNull(rejected.actionLabel)
+        assertTrue("Settings" in rejected.message && "sign in" in rejected.message, rejected.message)
+        // Every other state still offers a way to check again.
+        val others = (DynamicContractFallbackReason.entries - DynamicContractFallbackReason.ServerAuthenticationRequired)
+        assertEquals(emptyList<DynamicContractFallbackReason>(), others.filter { it.fallbackNotice().actionLabel == null })
+        val denied = DynamicContractFallbackReason.ServerPermissionDenied.fallbackNotice()
+        assertEquals("Check again", denied.actionLabel)
+        assertTrue("administrator grants access" in denied.message, denied.message)
+    }
+
     private fun assertNoPrivateText(discovery: DynamicDescriptorDiscovery) {
         val text = discovery.diagnostics.joinToString("\n")
         for (secret in listOf("SyntheticKt", "private.invalid", "token", "NoClassDefFoundError", "IllegalState")) {
