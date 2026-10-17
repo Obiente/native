@@ -1,10 +1,13 @@
 package dev.obiente.nextcloudnative.contracts
 
+import java.io.IOException
+import java.io.InputStream
 import java.util.Date
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -32,6 +35,24 @@ class BundledTrustMaterialTest {
     fun `bundled trust resources of an unsupported format are client faults`() {
         assertClientFault(verifier(revocations = roots))
         assertClientFault(verifier(roots = revocations))
+    }
+
+    @Test
+    fun `a bundled resource that fails while it is read is a client fault, not a network failure`() {
+        val failing = NextcloudAppPackageTrustVerifier(trustResourceLoader = { name ->
+            if (name == ROOTS) {
+                roots
+            } else {
+                object : InputStream() {
+                    private var served = 0
+
+                    override fun read(): Int = if (served++ < 16) 'x'.code else throw IOException("synthetic read failure")
+                }.readBytes()
+            }
+        })
+        val failure = assertFailsWith<ContractTrustMaterialInvalidException> { acquireWith(failing) }
+        assertIs<IOException>(failure.cause)
+        assertEquals(ContractAcquisitionFailureKind.RuntimeIncompatible, classifyContractAcquisitionFailure(failure))
     }
 
     @Test

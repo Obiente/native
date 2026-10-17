@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.contracts
 
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.InputStream
+import java.io.UncheckedIOException
 import java.security.GeneralSecurityException
 import java.security.Signature
 import java.security.cert.CertificateFactory
@@ -49,8 +51,8 @@ class NextcloudAppPackageTrustVerifier internal constructor(
      * [ContractTrustResourceMissingException]; it never describes the downloaded package.
      */
     private fun loadTrustMaterial(): TrustMaterial {
-        val certificateBytes = trustResourceLoader(ROOT_CERTIFICATES_RESOURCE)
-        val revocationBytes = trustResourceLoader(ROOT_REVOCATION_LIST_RESOURCE)
+        val certificateBytes = readTrustResource(ROOT_CERTIFICATES_RESOURCE)
+        val revocationBytes = readTrustResource(ROOT_REVOCATION_LIST_RESOURCE)
         return try {
             val factory = CertificateFactory.getInstance("X.509")
             val trusted = factory.generateCertificates(ByteArrayInputStream(certificateBytes))
@@ -73,6 +75,18 @@ class NextcloudAppPackageTrustVerifier internal constructor(
             // A resource of the wrong kind, for example a certificate where the revocation list belongs.
             throw ContractTrustMaterialInvalidException(failure)
         }
+    }
+
+    /**
+     * Reads one bundled resource. A missing resource keeps its own exception; a stream that fails
+     * while it is read is local installation or storage damage, never a network failure.
+     */
+    private fun readTrustResource(name: String): ByteArray = try {
+        trustResourceLoader(name)
+    } catch (failure: IOException) {
+        throw ContractTrustMaterialInvalidException(failure)
+    } catch (failure: UncheckedIOException) {
+        throw ContractTrustMaterialInvalidException(failure)
     }
 
     private data class TrustMaterial(
