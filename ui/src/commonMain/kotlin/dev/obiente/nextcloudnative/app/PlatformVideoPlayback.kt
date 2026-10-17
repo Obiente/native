@@ -5,6 +5,12 @@ import androidx.compose.ui.Modifier
 
 internal expect val platformNativeVideoPlaybackAvailable: Boolean
 
+/**
+ * True while the platform is still finding its player. The viewer then offers neither in-app
+ * nor external playback, so one tap cannot start both once discovery finishes.
+ */
+internal expect val platformNativeVideoPlaybackDiscoveryPending: Boolean
+
 /** True when [PlatformNativeVideoPlayer] reads every source through a [NativeVideoRangeSource]. */
 internal expect val platformNativeVideoPlaybackUsesRangeSource: Boolean
 

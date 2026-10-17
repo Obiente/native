@@ -41,6 +41,9 @@ import kotlinx.coroutines.delay
 internal actual val platformNativeVideoPlaybackAvailable: Boolean
     get() = sharedDesktopLibVlcRuntime.availableOrStartDiscovery()
 
+internal actual val platformNativeVideoPlaybackDiscoveryPending: Boolean
+    get() = sharedDesktopLibVlcRuntime.discoveryPending()
+
 internal actual val platformNativeVideoPlaybackUsesRangeSource: Boolean = true
 
 // libVLC already decodes in software when hardware decoding fails; there is no second player.

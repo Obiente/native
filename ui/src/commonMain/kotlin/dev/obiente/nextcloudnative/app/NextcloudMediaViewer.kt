@@ -572,9 +572,8 @@ internal fun NextcloudMediaViewer(
                 rangeSource = playbackRangeSource.sourceOrNull,
                 compatibilityPlaybackRequested = compatibilityPlaybackRequested,
                 onPlaybackEnded = {
-                    if (playbackSource.restoresStillAfterPlaybackEnds()) {
-                        motionPlaying = false
-                    }
+                    // The still returns with its controls even if the motion's controls had hidden.
+                    if (playbackSource.restoresStillAfterPlaybackEnds()) { motionPlaying = false; chromeVisible = true }
                 },
                 onFailure = { failure ->
                     nativeVideoFailure = failure
@@ -643,7 +642,7 @@ internal fun NextcloudMediaViewer(
             }
             if (
                 selected.mediaAssetFormat() == MediaAssetFormat.Video &&
-                !platformNativeVideoPlaybackAvailable &&
+                !platformNativeVideoPlaybackAvailable && !platformNativeVideoPlaybackDiscoveryPending &&
                 previewState is MediaPreviewState.Ready
             ) {
                 Button(

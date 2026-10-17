@@ -42,6 +42,8 @@ import org.videolan.libvlc.util.VLCVideoLayout
 
 internal actual val platformNativeVideoPlaybackAvailable: Boolean = true
 
+internal actual val platformNativeVideoPlaybackDiscoveryPending: Boolean = false
+
 // Media3 streams DAV over HTTP itself; only LibVLC compatibility playback reads ranges.
 internal actual val platformNativeVideoPlaybackUsesRangeSource: Boolean = false
 

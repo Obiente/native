@@ -86,6 +86,7 @@ class DesktopVideoFramesTest {
     fun availabilityNeverBlocksAndADisabledRuntimeIsUnavailable() {
         val runtime = DesktopLibVlcRuntime(enabled = false)
         assertFalse(runtime.availableOrStartDiscovery())
+        assertFalse(runtime.discoveryPending(), "A disabled runtime is settled, so the external fallback shows.")
         assertFalse(runtime.isAvailable)
         assertNull(runtime.factoryOrNull())
     }

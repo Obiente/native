@@ -50,6 +50,13 @@ internal class DesktopLibVlcRuntime(private val enabled: Boolean) {
         return known == true
     }
 
+    /** Whether discovery has not finished yet, without blocking; starts it when needed. */
+    fun discoveryPending(): Boolean {
+        val known = discovered.value
+        if (known == null) startDiscovery()
+        return known == null
+    }
+
     fun startDiscovery() {
         if (!enabled || !discoveryStarted.compareAndSet(false, true)) return
         Thread({ discovered.value = isAvailable }, "nc-libvlc-discovery").apply {
