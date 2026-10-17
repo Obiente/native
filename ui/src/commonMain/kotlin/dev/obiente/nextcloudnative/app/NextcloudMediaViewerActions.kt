@@ -43,16 +43,23 @@ internal enum class MediaViewerAction(val label: String) {
     Delete("Delete"),
 }
 
+/**
+ * [handoffFile] is the record a copy or another app receives. For a Memories gallery video it is
+ * the resolved Files original, which can be handed off while file-level actions such as move or
+ * delete stay governed by the preview-only [file].
+ */
 internal fun availableMediaViewerActions(
     file: NextcloudFile,
     userId: String,
     taggingAvailable: Boolean,
     sharingCapabilities: NextcloudFileSharingCapabilities,
     externalActions: Set<ExternalFileHandoffAction>,
+    handoffFile: NextcloudFile = file,
 ): List<MediaViewerAction> {
     val authoritativeDavAccess = file.hasAuthoritativeMediaDavAccess(userId)
+    val handoffAllowed = handoffFile.hasAuthoritativeMediaDavAccess(userId) && handoffFile.fileId == file.fileId
     return buildList {
-        if (authoritativeDavAccess && ExternalFileHandoffAction.Share in externalActions) {
+        if (handoffAllowed && ExternalFileHandoffAction.Share in externalActions) {
             add(MediaViewerAction.SendCopy)
         }
         if (authoritativeDavAccess && sharingCapabilities.supportsAnyCreation) {
@@ -69,7 +76,7 @@ internal fun availableMediaViewerActions(
             add(MediaViewerAction.Move)
             add(MediaViewerAction.Copy)
         }
-        if (authoritativeDavAccess && ExternalFileHandoffAction.OpenWith in externalActions) {
+        if (handoffAllowed && ExternalFileHandoffAction.OpenWith in externalActions) {
             add(MediaViewerAction.OpenWith)
         }
         add(MediaViewerAction.Info)

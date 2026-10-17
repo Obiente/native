@@ -190,6 +190,32 @@ class MediaVideoOriginalTest {
     }
 
     @Test
+    fun aResolvedOriginalAddsOnlyHandoffActionsToAGalleryVideo() {
+        val external = setOf(ExternalFileHandoffAction.Share, ExternalFileHandoffAction.OpenWith)
+        fun actions(handoff: NextcloudFile) = availableMediaViewerActions(
+            file = galleryVideo,
+            userId = "alice",
+            taggingAvailable = true,
+            sharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
+            externalActions = external,
+            handoffFile = handoff,
+        )
+
+        assertEquals(listOf(MediaViewerAction.Info), actions(galleryVideo), "Unresolved: preview only.")
+        val resolved = resolveBlocking().playbackFileFor(galleryVideo)
+        assertEquals(
+            listOf(MediaViewerAction.SendCopy, MediaViewerAction.OpenWith, MediaViewerAction.Info),
+            actions(resolved),
+            "Move, copy, and delete stay governed by the gallery record.",
+        )
+        assertEquals(
+            listOf(MediaViewerAction.Info),
+            actions(resolved.copy(fileId = 99L)),
+            "A record for a different file is never handed off.",
+        )
+    }
+
+    @Test
     fun tileBadgeMarksVideosWithTheirKnownDuration() {
         assertEquals("1:15", mediaTileVideoBadgeLabel(galleryVideo))
         assertEquals("", mediaTileVideoBadgeLabel(filesVideo), "Unknown duration still shows the video cue.")

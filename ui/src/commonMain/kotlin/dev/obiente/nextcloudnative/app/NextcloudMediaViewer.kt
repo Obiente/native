@@ -169,8 +169,7 @@ internal fun NextcloudMediaViewer(
         }
     }
     val viewerActions = remember(
-        selected,
-        userId,
+        selected, playbackFile, userId,
         taggingAvailable,
         sharingCapabilities,
         services.externalFileHandoffSupport,
@@ -184,6 +183,7 @@ internal fun NextcloudMediaViewer(
             taggingAvailable = taggingAvailable,
             sharingCapabilities = sharingCapabilities,
             externalActions = externalActions,
+            handoffFile = playbackFile,
         )
     }
 
