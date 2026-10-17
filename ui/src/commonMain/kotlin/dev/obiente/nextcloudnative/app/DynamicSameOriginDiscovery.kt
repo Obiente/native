@@ -254,13 +254,19 @@ private suspend fun discoverOfficialViewerSpecIds(
         diagnostics += "OCS API Viewer does not advertise an OpenAPI specification for $appId."
         return emptyList()
     }
-    val specs = (appEntry["specs"] as? JsonArray)
-        .orEmpty()
-        .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-        .filter { it.matches(Regex("[A-Za-z0-9_.-]+")) && (it == appId || it.startsWith("$appId-")) }
+    // A missing or non-array list, or a malformed identifier when nothing usable remains, is an
+    // unreadable advertisement. A well-formed empty list, or one naming only other apps, is absence.
+    val advertised = appEntry["specs"] as? JsonArray
+    val identifiers = advertised.orEmpty().map { (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull }
+    val wellFormed = identifiers.filterNotNull().filter { it.matches(Regex("[A-Za-z0-9_.-]+")) }
+    val specs = wellFormed
+        .filter { it == appId || it.startsWith("$appId-") }
         .distinct()
         .sortedWith(compareBy<String> { it != appId }.thenBy { it })
     if (specs.isEmpty()) {
+        if (advertised == null || wellFormed.size != identifiers.size) {
+            probe.record(DynamicServerProbeFailure.UnreadableResponse)
+        }
         diagnostics += "OCS API Viewer advertised $appId without a usable specification ID."
     }
     return specs

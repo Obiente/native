@@ -246,13 +246,17 @@ wins among equals:
    may be limited to administrators.
 3. Inconclusive results that a retry may resolve: no response, a 5xx status,
    HTTP 429, or a successful catalog or contract response that is not readable
-   JSON or declares no OpenAPI version (`UnreadableResponse`).
+   JSON or declares no OpenAPI version (`UnreadableResponse`). An OCS API
+   Viewer entry for the app whose spec list is missing, not an array, or has a
+   malformed identifier with no usable one left is also `UnreadableResponse`;
+   usable identifiers beside malformed ones are still read.
 4. `UnsupportedContract`: a JSON contract that declares a version other than
    OpenAPI 3, such as Swagger 2, or an OpenAPI 3 contract that cannot be
    compiled.
 
 A 404, another definitive status, a non-JSON response at a static contract
-location, or an empty or non-advertising OCS API Viewer catalog is absence and
+location, an empty or non-advertising OCS API Viewer catalog, or a well-formed
+spec list that is empty or names only other apps is absence and
 records nothing. When the App Store then completes without a contract, or no
 release can be selected because the server version is unavailable, any recorded
 server result takes precedence over the App Store or version reason. A
