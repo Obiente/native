@@ -158,11 +158,17 @@ tasks.configureEach {
     }
 }
 
+apply(from = "desktop-libvlc.gradle.kts")
+
 tasks.withType<Test>().configureEach {
     testLogging {
         events("failed")
         exceptionFormat = TestExceptionFormat.FULL
     }
+    // Scene tests must not depend on whether the build machine has VLC installed.
+    systemProperty("dev.obiente.nextcloudnative.libvlc", "disabled")
+    // Nor may they register with the host's system media controls.
+    systemProperty("dev.obiente.nextcloudnative.systemmedia", "disabled")
 }
 
 kotlin {
@@ -223,6 +229,7 @@ kotlin {
             implementation(libs.jse.spi.opus)
             implementation(libs.jse.spi.mp3)
             implementation(libs.jse.spi.aac)
+            implementation(libs.vlcj)
             implementation("com.github.serceman:jnr-fuse:0.5.8")
             implementation("com.github.hypfvieh:dbus-java-core:5.2.0")
             implementation("com.github.hypfvieh:dbus-java-transport-native-unixsocket:5.2.0")
@@ -259,6 +266,8 @@ compose.desktop {
 
         nativeDistributions {
             modules("jdk.security.auth")
+            // libVLC for in-app video on Windows and macOS; see desktop-libvlc.gradle.kts.
+            appResourcesRootDir.set(layout.buildDirectory.dir("generated/desktop-app-resources"))
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             // Preserve Windows/Linux launcher paths used by existing integrations.
             packageName = if (System.getProperty("os.name").startsWith("Mac")) "nati.ve" else "NextcloudNative"
@@ -375,6 +384,10 @@ tasks.matching { task -> task.name in setOf("packageDeb", "packageRpm") }.config
 tasks.matching { task -> task.name == "packageMsi" }.configureEach {
     dependsOn("createDistributable", stageWindowsShellAssets)
     finalizedBy(repackageMsiWithUninstallCleanup)
+}
+
+tasks.matching { task -> task.name == "prepareAppResources" }.configureEach {
+    dependsOn("prepareDesktopLibVlc")
 }
 
 tasks.matching { task -> task.name == "createDistributable" }.configureEach {

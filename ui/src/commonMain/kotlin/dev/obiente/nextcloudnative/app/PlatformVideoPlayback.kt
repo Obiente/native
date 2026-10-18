@@ -5,6 +5,18 @@ import androidx.compose.ui.Modifier
 
 internal expect val platformNativeVideoPlaybackAvailable: Boolean
 
+/**
+ * True while the platform is still finding its player. The viewer then offers neither in-app
+ * nor external playback, so one tap cannot start both once discovery finishes.
+ */
+internal expect val platformNativeVideoPlaybackDiscoveryPending: Boolean
+
+/** True when [PlatformNativeVideoPlayer] reads every source through a [NativeVideoRangeSource]. */
+internal expect val platformNativeVideoPlaybackUsesRangeSource: Boolean
+
+/** True when a separate software player can retry after the default player fails. */
+internal expect val platformVideoCompatibilityPlaybackAvailable: Boolean
+
 internal sealed interface NativeVideoPlaybackSource {
     data class DavFile(val file: NextcloudFile) : NativeVideoPlaybackSource
 
@@ -180,12 +192,20 @@ private data class CachedVideoRange(
 private const val DEFAULT_VIDEO_READ_AHEAD_BYTES = 1_024 * 1_024
 private const val DEFAULT_VIDEO_CACHED_RANGE_COUNT = 2
 
+/**
+ * Request headers for streaming [this] source. A DAV file is pinned to its selected ETag, so a
+ * seek or reconnect after the server file was replaced fails with 412 (reported as a changed
+ * source) instead of mixing ranges from two versions.
+ */
 internal fun NativeVideoPlaybackSource.authenticatedRequestProperties(
     authorization: String,
 ): Map<String, String> = buildMap {
     put("Authorization", authorization)
-    if (this@authenticatedRequestProperties is NativeVideoPlaybackSource.MemoriesLivePhoto) {
-        put("OCS-APIRequest", "true")
+    when (val source = this@authenticatedRequestProperties) {
+        is NativeVideoPlaybackSource.MemoriesLivePhoto -> put("OCS-APIRequest", "true")
+        is NativeVideoPlaybackSource.DavFile -> source.file.etag
+            ?.let { etag -> runCatching { requireSafeFileRangeEtag(etag) }.getOrNull() }
+            ?.let { pinned -> put("If-Match", pinned) }
     }
 }
 
@@ -219,6 +239,11 @@ internal sealed interface NativeVideoPlaybackFailure {
         override val format: NativeVideoFormatSummary?,
     ) : NativeVideoPlaybackFailure
 
+    /** The player cannot read the file's container, though another player may. */
+    data object ContainerUnsupported : NativeVideoPlaybackFailure {
+        override val format: NativeVideoFormatSummary? = null
+    }
+
     data object NetworkUnavailable : NativeVideoPlaybackFailure {
         override val format: NativeVideoFormatSummary? = null
     }
@@ -245,6 +270,7 @@ internal fun NativeVideoPlaybackFailure.canUseSoftwareFallback(): Boolean = when
     is NativeVideoPlaybackFailure.FormatUnsupported,
     is NativeVideoPlaybackFailure.DecoderInitializationFailed,
     is NativeVideoPlaybackFailure.DecodeFailed,
+    NativeVideoPlaybackFailure.ContainerUnsupported,
     -> true
     NativeVideoPlaybackFailure.NetworkUnavailable,
     NativeVideoPlaybackFailure.AccessDenied,
@@ -286,6 +312,7 @@ internal fun NativeVideoPlaybackFailure.userTitle(): String = when (this) {
     is NativeVideoPlaybackFailure.DecoderInitializationFailed,
     is NativeVideoPlaybackFailure.DecodeFailed,
     -> "Video playback stopped"
+    NativeVideoPlaybackFailure.ContainerUnsupported -> "This video's file format is not supported"
     NativeVideoPlaybackFailure.NetworkUnavailable -> "The video is temporarily unavailable"
     NativeVideoPlaybackFailure.AccessDenied -> "This video cannot be accessed"
     NativeVideoPlaybackFailure.SourceChanged -> "The video changed on the server"
@@ -304,6 +331,8 @@ internal fun NativeVideoPlaybackFailure.userDetail(): String = when (this) {
         "The device could not start a compatible video decoder."
     is NativeVideoPlaybackFailure.DecodeFailed ->
         "The decoder could not finish reading this ${format.safeDescription()} stream."
+    NativeVideoPlaybackFailure.ContainerUnsupported ->
+        "The built-in player cannot read this file's container. The original file is unchanged."
     NativeVideoPlaybackFailure.NetworkUnavailable ->
         "Check the connection to Nextcloud, then try again."
     NativeVideoPlaybackFailure.AccessDenied ->
@@ -333,6 +362,27 @@ private fun NativeVideoFormatSummary?.safeDescription(): String {
     return "$formatName$dimensions"
 }
 
+/**
+ * What the operating system's media controls (notification, lock screen, headset and media keys)
+ * show and do for the playing video. Previous and next move through the viewer's own sequence and
+ * are null when there is no neighbor or navigation is blocked; each is told whether playback was
+ * active, so a skip from the media controls keeps playing the next item even in the background.
+ * [resumePlayback] marks the item such a skip opened.
+ */
+internal class NativeVideoSystemMedia(
+    val title: String = "",
+    val onPrevious: ((keepPlaying: Boolean) -> Unit)? = null,
+    val onNext: ((keepPlaying: Boolean) -> Unit)? = null,
+    val resumePlayback: Boolean = false,
+)
+
+/**
+ * Plays [source] inside the viewer canvas and starts as soon as it is ready.
+ *
+ * [onControlsVisibilityChanged] reports when the platform transport controls appear or auto-hide,
+ * so the viewer chrome can follow them during immersive playback. [systemMedia] publishes the
+ * video to the operating system's media controls where the platform supports them.
+ */
 @Composable
 internal expect fun PlatformNativeVideoPlayer(
     session: NextcloudSession,
@@ -343,4 +393,29 @@ internal expect fun PlatformNativeVideoPlayer(
     onPlaybackEnded: () -> Unit,
     onFailure: (NativeVideoPlaybackFailure) -> Unit,
     modifier: Modifier = Modifier,
+    onControlsVisibilityChanged: (Boolean) -> Unit = {},
+    systemMedia: NativeVideoSystemMedia = NativeVideoSystemMedia(),
 )
+
+internal fun NextcloudFile.canUsePlatformNativeVideoPlayback(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+): Boolean =
+    nativePlaybackAvailable &&
+        mediaAssetFormat() == MediaAssetFormat.Video &&
+        hasAuthoritativeMediaDavAccess(userId)
+
+internal fun NextcloudFile.nativeVideoPlaybackSource(
+    userId: String,
+    nativePlaybackAvailable: Boolean,
+    livePhotoSource: MemoriesLivePhotoSource?,
+    motionPlaying: Boolean,
+): NativeVideoPlaybackSource? {
+    if (!nativePlaybackAvailable) return null
+    if (motionPlaying && livePhotoSource != null && livePhotoSource.fileId == fileId) {
+        return NativeVideoPlaybackSource.MemoriesLivePhoto(livePhotoSource)
+    }
+    return takeIf { canUsePlatformNativeVideoPlayback(userId, nativePlaybackAvailable) }
+        ?.let { NativeVideoPlaybackSource.DavFile(it) }
+}
+

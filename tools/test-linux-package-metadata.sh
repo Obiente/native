@@ -47,6 +47,8 @@ PY
 grep -Fq 'Homepage: https://nati.ve/' "$templates/control"
 grep -Fq 'License: AGPL-3.0-or-later' "$templates/nextcloudnative.spec"
 grep -Fxq '%global _build_id_links none' "$templates/nextcloudnative.spec"
+grep -Fxq 'Recommends: libvlc.so.5()(64bit)' "$templates/nextcloudnative.spec"
+grep -Fq "Recommends: libvlc5, vlc-plugin-base" "$project_root/tools/enrich-deb-appstream.sh"
 if grep -Fq 'rm -rf' "$templates/nextcloudnative.spec" \
   "$project_root/tools/repackage-rpm-with-metadata.sh"; then
   printf 'Linux packaging cleanup must not use force-recursive removal.\n' >&2
@@ -163,6 +165,7 @@ printf '%s\n' \
   'set -euo pipefail' \
   'case "$*" in' \
   '  *--requires*) printf "%s\\n" "${MOCK_RPM_REQUIRES:-libsecret}" ;;' \
+  '  *--recommends*) printf "%s\\n" "${MOCK_RPM_RECOMMENDS-libvlc.so.5()(64bit)}" ;;' \
   '  *) printf "%s" "${MOCK_RPM_VERSION:-1.0.2971}" ;;' \
   'esac' >"$temporary/rpm"
 chmod +x "$temporary/rpm2cpio" "$temporary/cpio" "$temporary/rpm"
@@ -221,6 +224,19 @@ if PATH="$temporary:$PATH" \
   exit 1
 fi
 grep -Fq 'must require libsecret' "$temporary/verification-error"
+
+if PATH="$temporary:$PATH" \
+  MOCK_RPM_RECOMMENDS='' \
+  MOCK_RPM_FILE_LIST="$valid_rpm_file_list" \
+  MOCK_RPM_METADATA="$rendered_metadata" \
+  MOCK_RPM_DESKTOP="$temporary/application.desktop" \
+  MOCK_RPM_ICON="$temporary/icon.png" \
+  bash "$project_root/tools/verify-rpm-package.sh" \
+  "$temporary/nextcloudnative.rpm" >"$temporary/verification-error" 2>&1; then
+  printf 'RPM verifier accepted a package without the libVLC recommendation.\n' >&2
+  exit 1
+fi
+grep -Fq 'must recommend libVLC' "$temporary/verification-error"
 
 if PATH="$temporary:$PATH" \
   MOCK_RPM_FILE_LIST="$valid_rpm_file_list" \

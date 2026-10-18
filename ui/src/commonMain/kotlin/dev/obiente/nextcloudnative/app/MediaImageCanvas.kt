@@ -1,7 +1,13 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
@@ -25,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,13 +53,23 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
-/** No platform services or account access: this component only presents an image. */
+/**
+ * No platform services or account access: this component only presents an image.
+ *
+ * A single tap reports [onTap] so the viewer can show or hide its controls. A horizontal drag over
+ * the fitted image reports [onSwipe]; once zoomed in, drags pan instead.
+ */
 @Composable
 internal fun MediaImageCanvas(
     image: ImageBitmap,
@@ -60,13 +77,24 @@ internal fun MediaImageCanvas(
     transform: MediaViewportTransform,
     onTransform: (MediaViewportTransform) -> Unit,
     modifier: Modifier = Modifier,
+    controlsVisible: Boolean = true,
+    onTap: (() -> Unit)? = null,
+    onSwipe: ((MediaSwipeNavigation) -> Unit)? = null,
 ) {
     var viewport by remember { mutableStateOf(Size.Zero) }
     val imageSize = Size(image.width.toFloat(), image.height.toFloat())
     val bounded = transform.bounded(viewport, imageSize)
     val currentTransform by rememberUpdatedState(bounded)
     val currentOnTransform by rememberUpdatedState(onTransform)
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnSwipe by rememberUpdatedState(onSwipe)
     val focusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    var swipeDrag by remember { mutableStateOf(Offset.Zero) }
+    var swipeMultiTouch by remember { mutableStateOf(false) }
+    val swipeRelease = remember { Animatable(0f) }
+    val swipeMinimumDistance = with(LocalDensity.current) { 56.dp.toPx() }
+    val rightToLeft = LocalLayoutDirection.current == LayoutDirection.Rtl
     val center = Offset(viewport.width / 2f, viewport.height / 2f)
     val pixelPercent = mediaPixelScalePercent(bounded.zoom, viewport, imageSize)
     fun change(factor: Float = 1f, pan: Offset = Offset.Zero, anchor: Offset = center) {
@@ -99,7 +127,15 @@ internal fun MediaImageCanvas(
                     true
                 }
                 .focusable()
-                .semantics { stateDescription = "$pixelPercent percent of actual size. Plus and minus zoom, 0 fits, 1 shows actual size, arrow keys pan." }
+                .semantics {
+                    stateDescription = "$pixelPercent percent of actual size. Plus and minus zoom, 0 fits, 1 shows actual size, arrow keys pan."
+                    if (onTap != null) {
+                        onClick(label = if (controlsVisible) "Hide viewer controls" else "Show viewer controls") {
+                            onTap()
+                            true
+                        }
+                    }
+                }
                 .pointerInput(viewport, imageSize) {
                     awaitPointerEventScope {
                         while (true) {
@@ -115,14 +151,52 @@ internal fun MediaImageCanvas(
                         }
                     }
                 }
+                .pointerInput(viewport, imageSize, rightToLeft) {
+                    // Observes the whole gesture without consuming it, after the transform
+                    // detector below has accumulated the drag.
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        swipeDrag = Offset.Zero
+                        swipeMultiTouch = false
+                        do {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } > 1) swipeMultiTouch = true
+                        } while (event.changes.any { it.pressed })
+                        val navigation = mediaSwipeNavigationOrNull(
+                            drag = swipeDrag,
+                            viewportWidth = viewport.width,
+                            minimumDistance = swipeMinimumDistance,
+                            zoomedIn = currentTransform.zoom > 1f,
+                            multiTouch = swipeMultiTouch,
+                            rightToLeft = rightToLeft,
+                        )
+                        val released = mediaSwipeFeedbackOffset(swipeDrag.x, viewport.width)
+                        val onSwipeNow = currentOnSwipe
+                        scope.launch {
+                            swipeRelease.snapTo(if (navigation == null) released else 0f)
+                            swipeDrag = Offset.Zero
+                            if (navigation != null && onSwipeNow != null) {
+                                onSwipeNow(navigation)
+                            } else {
+                                swipeRelease.animateTo(0f)
+                            }
+                        }
+                    }
+                }
                 .pointerInput(viewport, imageSize) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
-                        change(factor = zoom, pan = pan, anchor = centroid)
+                        if (zoom != 1f) swipeMultiTouch = true
+                        if (currentOnSwipe != null && currentTransform.zoom <= 1f && !swipeMultiTouch) {
+                            swipeDrag += pan
+                        } else {
+                            change(factor = zoom, pan = pan, anchor = centroid)
+                        }
                     }
                 }
                 .pointerInput(viewport, imageSize) {
                     detectTapGestures(
                         onPress = { focusRequester.requestFocus() },
+                        onTap = { currentOnTap?.invoke() },
                         onDoubleTap = { anchor ->
                             focusRequester.requestFocus()
                             if (currentTransform.zoom > 1f) currentOnTransform(MediaViewportTransform())
@@ -137,14 +211,20 @@ internal fun MediaImageCanvas(
                 modifier = Modifier.fillMaxSize().graphicsLayer {
                     scaleX = bounded.zoom
                     scaleY = bounded.zoom
-                    translationX = bounded.offset.x
+                    translationX = bounded.offset.x +
+                        mediaSwipeFeedbackOffset(swipeDrag.x, viewport.width) + swipeRelease.value
                     translationY = bounded.offset.y
                 },
                 contentScale = ContentScale.Fit,
             )
         }
-        Surface(
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp),
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) { Surface(
+            modifier = Modifier.navigationBarsPadding().padding(12.dp),
             color = Color(0xE625232B),
             contentColor = Color.White,
             shape = RoundedCornerShape(24.dp),
@@ -172,6 +252,6 @@ internal fun MediaImageCanvas(
                     modifier = Modifier.semantics { contentDescription = "Actual size, one image pixel per screen pixel" },
                 ) { Text("1:1") }
             }
-        }
+        } }
     }
 }

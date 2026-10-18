@@ -140,11 +140,11 @@ class WindowsCloudFilesStartupTest {
                 val native = entries.getValue(path)
                 val fallback = api.localEntry(path)
                 assertEquals(
-                    listOf(fallback.directory, fallback.regularFile, fallback.symbolicLink, fallback.inspection.state),
-                    listOf(native.directory, native.regularFile, native.symbolicLink, native.inspection.state),
+                    listOf(fallback.directory, fallback.file, fallback.symbolicLink, fallback.inspection.state),
+                    listOf(native.directory, native.file, native.symbolicLink, native.inspection.state),
                 )
             }
-            assertTrue(entries.getValue(folder).directory && entries.getValue(file).regularFile)
+            assertTrue(entries.getValue(folder).directory && entries.getValue(file).file)
             assertFailsWith<WindowsCloudLocalScanException> { api.localChildren(root.resolve("missing")) }
         } finally {
             root.toFile().deleteRecursively()
