@@ -156,7 +156,7 @@ class DynamicServerProbeFallbackTest {
     fun accessAndUnsupportedCopyGivesTheRightNextStepWithoutRequestDetails() {
         val authentication = DynamicContractFallbackReason.ServerAuthenticationRequired.fallbackNotice()
         assertTrue("To sign in again, open Settings" in authentication.message, authentication.message)
-        assertEquals(null, authentication.actionLabel)
+        assertEquals(DynamicContractFallbackAction.OpenAccountSettings, authentication.action)
         val permission = DynamicContractFallbackReason.ServerPermissionDenied.fallbackNotice()
         assertTrue("permission" in permission.message && "administrators" in permission.message)
         val unsupported = DynamicContractFallbackReason.UnsupportedContract.fallbackNotice()

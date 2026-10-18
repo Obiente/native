@@ -119,13 +119,17 @@ class DynamicContractFallbackDiscoveryTest {
     }
 
     @Test
-    fun rejectedCredentialsOfferNoRetryAndSayWhereToSignInAgain() {
+    fun rejectedCredentialsLeadToAccountSettingsAndSayWhereToSignInAgain() {
         val rejected = DynamicContractFallbackReason.ServerAuthenticationRequired.fallbackNotice()
-        assertNull(rejected.actionLabel)
+        assertEquals(DynamicContractFallbackAction.OpenAccountSettings, rejected.action)
+        assertEquals("Open account settings", rejected.actionLabel)
         assertTrue("Settings" in rejected.message && "sign in" in rejected.message, rejected.message)
-        // Every other state still offers a way to check again.
+        // Every other state checks again.
         val others = (DynamicContractFallbackReason.entries - DynamicContractFallbackReason.ServerAuthenticationRequired)
-        assertEquals(emptyList<DynamicContractFallbackReason>(), others.filter { it.fallbackNotice().actionLabel == null })
+        assertEquals(
+            emptyList<DynamicContractFallbackReason>(),
+            others.filter { it.fallbackNotice().action != DynamicContractFallbackAction.CheckAgain },
+        )
         val denied = DynamicContractFallbackReason.ServerPermissionDenied.fallbackNotice()
         assertEquals("Check again", denied.actionLabel)
         assertTrue("administrator grants access" in denied.message, denied.message)

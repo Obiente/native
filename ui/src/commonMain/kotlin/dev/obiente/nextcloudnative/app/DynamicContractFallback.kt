@@ -236,14 +236,20 @@ private val SERVER_PROBE_FALLBACK_REASONS = setOf(
 /** Shown when discovery itself fails before producing even a metadata fallback. */
 internal const val DYNAMIC_DISCOVERY_FAILURE_MESSAGE = "Could not check this app's native API. Try again."
 
+/** What a fallback card's action does. The card shows it only when its screen can perform it. */
+internal enum class DynamicContractFallbackAction {
+    /** Discover the app's contract again. */
+    CheckAgain,
+
+    /** Leave the app for account settings, where the account can be signed out and signed in again. */
+    OpenAccountSettings,
+}
+
 internal data class DynamicContractFallbackNotice(
     val title: String,
     val message: String,
-    /**
-     * The label of the action that checks again, or null when checking again would repeat a request
-     * that cannot succeed, such as one made with credentials the server rejected.
-     */
-    val actionLabel: String?,
+    val actionLabel: String,
+    val action: DynamicContractFallbackAction = DynamicContractFallbackAction.CheckAgain,
 )
 
 /** Product copy for a metadata fallback. It explains what happened and whether checking again can help. */
@@ -283,14 +289,15 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
             "Store offered no verified contract. Check the connection and try again.",
         "Try again",
     )
-    // Checking again would resend the rejected credentials, so no retry is offered. The app has no
-    // in-session reauthentication; signing out from account settings is the way to sign in again.
+    // Checking again would resend the rejected credentials, so the action leads to account settings
+    // instead. The app has no in-session reauthentication; signing out there is how to sign in again.
     DynamicContractFallbackReason.ServerAuthenticationRequired -> DynamicContractFallbackNotice(
         "Sign in again",
         "The server did not accept this account while checking for this app's API, and the App Store " +
             "offered no verified contract. To sign in again, open Settings, then Account, choose Sign out " +
             "and revoke access, and sign in to this server.",
-        null,
+        "Open account settings",
+        DynamicContractFallbackAction.OpenAccountSettings,
     )
     DynamicContractFallbackReason.ServerPermissionDenied -> DynamicContractFallbackNotice(
         "Server API not permitted",

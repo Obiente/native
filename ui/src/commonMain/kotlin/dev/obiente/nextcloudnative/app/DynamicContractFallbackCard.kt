@@ -14,11 +14,27 @@ import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
+/**
+ * The callbacks a fallback card can invoke. A missing callback hides its action, so a screen that
+ * cannot leave for account settings shows only the explanation for that state.
+ */
+internal class DynamicContractFallbackActions(
+    val onCheckAgain: () -> Unit,
+    val onOpenAccountSettings: (() -> Unit)? = null,
+)
+
+/** The callback for [notice]'s action, or null when this screen cannot perform it. */
+internal fun DynamicContractFallbackActions.callbackFor(notice: DynamicContractFallbackNotice): (() -> Unit)? =
+    when (notice.action) {
+        DynamicContractFallbackAction.CheckAgain -> onCheckAgain
+        DynamicContractFallbackAction.OpenAccountSettings -> onOpenAccountSettings
+    }
+
 /** The notice above a metadata fallback: what happened, and the action that can help, if any. */
 @Composable
 internal fun DynamicContractFallbackCard(
     reason: DynamicContractFallbackReason?,
-    onRetryDiscovery: () -> Unit,
+    actions: DynamicContractFallbackActions,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(
@@ -36,9 +52,9 @@ internal fun DynamicContractFallbackCard(
             val notice = reason.fallbackNotice()
             Text(notice.title, style = MaterialTheme.typography.titleSmall)
             Text(notice.message, style = MaterialTheme.typography.bodySmall)
-            notice.actionLabel?.let { label -> TextButton(onClick = onRetryDiscovery) {
-                Text(label)
-            } }
+            actions.callbackFor(notice)?.let { onClick ->
+                TextButton(onClick = onClick) { Text(notice.actionLabel) }
+            }
         }
     }
 }

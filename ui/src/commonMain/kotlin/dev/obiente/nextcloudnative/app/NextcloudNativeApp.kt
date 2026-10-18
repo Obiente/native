@@ -1343,6 +1343,16 @@ private fun AuthenticatedApp(
         }
     }
 
+    /** Leaves the app for account settings, where the account can be signed out and signed in again. */
+    fun openAccountSettings() {
+        if (groupwareMutationInProgress) return
+        inlineEditorNavigation.navigate {
+            leaveAppWorkspace()
+            screen = Screen.Root
+            destination = NextcloudDestination.Settings
+        }
+    }
+
     fun navigateBack() {
         if (inlineEditorNavigation.intercept(::navigateBack)) return
         if (groupwareMutationInProgress) return
@@ -1867,6 +1877,7 @@ private fun AuthenticatedApp(
                         screen = active.copy(navigation = navigation)
                     }
                 },
+                onOpenAccountSettings = ::openAccountSettings,
                 onBack = ::navigateBack,
             )
         }
@@ -2117,6 +2128,7 @@ private fun AppInfoScreen(
     onDiscovery: (DynamicDescriptorDiscovery) -> Unit,
     navigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
+    onOpenAccountSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     if (isOfficeWorkspaceAppId(app.id)) {
@@ -2257,7 +2269,7 @@ private fun AppInfoScreen(
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
-                onRetryDiscovery = ::retryDiscoveryAndServerInfo,
+                fallbackActions = DynamicContractFallbackActions(::retryDiscoveryAndServerInfo, onOpenAccountSettings),
                 onExit = onBack,
                 modifier = Modifier.weight(1f),
             )
@@ -2297,7 +2309,7 @@ private fun DynamicDiscoveredAppScreen(
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
-    onRetryDiscovery: () -> Unit,
+    fallbackActions: DynamicContractFallbackActions,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -4642,7 +4654,7 @@ private fun DynamicDiscoveredAppScreen(
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
                 DynamicContractFallbackCard(
                     reason = discovery.fallbackReason,
-                    onRetryDiscovery = onRetryDiscovery,
+                    actions = fallbackActions,
                 )
         }
             if (failedFormRelationRequests.isNotEmpty()) {

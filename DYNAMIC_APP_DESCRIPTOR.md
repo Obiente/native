@@ -362,9 +362,11 @@ wins among equals:
 
 1. HTTP 401 (`AuthenticationRequired`): the card asks the person to sign in
    again and offers no retry, because checking again would resend the rejected
-   credentials. The app has no reauthentication within a session, so the card
-   names the way to sign in again: Settings, Account, then Sign out and revoke
-   access.
+   credentials. The app has no reauthentication within a session, so its
+   Open account settings action leaves the app for Settings, where Account
+   holds Sign out and revoke access; the card also names that route. The action
+   only navigates, so nothing is signed out until the person chooses to. A
+   screen that cannot open settings shows the explanation without a button.
 2. HTTP 403 (`PermissionDenied`): the account may not read the catalog, which
    may be limited to administrators. Its Check again action stays, and the card
    says that checking again helps only after an administrator grants access or
