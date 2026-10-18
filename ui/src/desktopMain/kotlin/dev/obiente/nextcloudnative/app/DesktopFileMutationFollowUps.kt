@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +21,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * One drain worker refreshes one remote path at a time in submission order. Pending refreshes are
  * coalesced per account and path, keeping only the newest refresh, and at most [maximumPending]
  * paths wait behind a stalled refresh. A path beyond that bound is reported as a local failure
- * instead of growing the queue, both after a confirmed change and after an unknown result.
+ * instead of growing the queue, both after a confirmed change and after an unknown result. Only a
+ * background mutation that no caller waits for refreshes such a path on its own thread instead.
  */
 internal class DesktopFileMutationFollowUps(
     private val scope: CoroutineScope,
@@ -158,6 +160,31 @@ internal class DesktopFileMutationFollowUps(
         mutation(accountId, paths, refresh).onAcceptedOrUnknownResult()
 
     /**
+     * Refreshes [paths] after a server-confirmed mutation that no caller waits for, such as a
+     * folder sync upload or a write through the Linux mount, without blocking the thread that
+     * reported it. When the queue is full, a path is refreshed on the calling thread instead: with
+     * no caller to tell, a dropped refresh would leave local state stale without anyone knowing,
+     * so a stalled queue slows these background writers down rather than losing their refreshes.
+     */
+    fun afterBackgroundMutation(accountId: String, paths: List<String>, refresh: (path: String) -> Throwable?) {
+        paths.distinct().forEach { path ->
+            val queued = submit(Key(accountId, path), { refresh(path) }, waiter = null, previous = null, reportDropped = false)
+            // A closed service runs nothing more; its account state is being torn down.
+            if (queued != null || !scope.isActive) return@forEach
+            recordOutcome(accountId, "inline", "FILE_MUTATION_LOCAL_FOLLOW_UP_QUEUE_FULL")
+            // Fault boundary for one blocking refresh, like the drain worker's.
+            val failure = try {
+                refresh(path)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                failure
+            }
+            failure?.let { recordOutcome(accountId, "failed", "FILE_MUTATION_LOCAL_FOLLOW_UP_FAILED", it) }
+        }
+    }
+
+    /**
      * Drops [accountId]'s queued refreshes at sign-out or account removal; their waiters and those
      * of its running refresh see a local failure. A running refresh cannot be interrupted, and its
      * late completion no longer changes that result. Every refresh also carries the file cache
@@ -189,6 +216,7 @@ internal class DesktopFileMutationFollowUps(
         refresh: () -> Throwable?,
         waiter: Waiter?,
         previous: Pending?,
+        reportDropped: Boolean = true,
     ): Pending? {
         var finished: FileMutationLocalFollowUp? = null
         val entry = synchronized(lock) {
@@ -210,7 +238,7 @@ internal class DesktopFileMutationFollowUps(
             entry
         }
         finished?.let { result -> waiter?.finish(result) }
-        if (entry == null) recordOutcome(key.accountId, "dropped", "FILE_MUTATION_LOCAL_FOLLOW_UP_DROPPED")
+        if (entry == null && reportDropped) recordOutcome(key.accountId, "dropped", "FILE_MUTATION_LOCAL_FOLLOW_UP_DROPPED")
         return entry
     }
 

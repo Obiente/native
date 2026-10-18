@@ -86,11 +86,11 @@ class FileWriteFenceSurfacesTest {
                 )
                 "createDirectoryIfAbsent" -> {
                     calls += "createDirectoryIfAbsent:${args!![2]}"
-                    true
+                    DirectoryCreation(wasCreated = true)
                 }
                 "restoreFileVersion" -> {
                     calls += "restoreFileVersion:${(args!![2] as NextcloudFile).path}"
-                    Unit
+                    FileMutationLocalFollowUp.Completed
                 }
                 else -> error("Unexpected synthetic operation: ${method.name}")
             }
