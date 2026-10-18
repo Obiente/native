@@ -4640,27 +4640,10 @@ private fun DynamicDiscoveredAppScreen(
                 )
             } else Column(modifier = Modifier.fillMaxSize()) {
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Large,
-                    vertical = NextcloudSpacing.Small,
-                ),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Small),
-            ) {
-                Column(
-                    modifier = Modifier.padding(NextcloudSpacing.Medium),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    val notice = discovery.fallbackReason.fallbackNotice()
-                    Text(notice.title, style = MaterialTheme.typography.titleSmall)
-                    Text(notice.message, style = MaterialTheme.typography.bodySmall)
-                    notice.actionLabel?.let { label -> TextButton(onClick = onRetryDiscovery) {
-                        Text(label)
-                    } }
-                }
-            }
+                DynamicContractFallbackCard(
+                    reason = discovery.fallbackReason,
+                    onRetryDiscovery = onRetryDiscovery,
+                )
         }
             if (failedFormRelationRequests.isNotEmpty()) {
                 val failedResources = failedFormRelationRequests
