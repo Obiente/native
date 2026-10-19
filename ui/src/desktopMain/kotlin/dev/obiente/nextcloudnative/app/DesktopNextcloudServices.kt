@@ -25,7 +25,6 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
 import javax.swing.JFileChooser
 import javax.xml.parsers.DocumentBuilderFactory
@@ -50,7 +49,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl
-import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -4442,73 +4440,29 @@ class DesktopNextcloudServices(
         synchronized(fileRangeSessionLock) {
             check(!sessionClearing) { "The account session is closing." }
         }
-        val safeEtag = requireSafeFileRangeEtag(expectedEtag)
         val closed = AtomicBoolean(false)
-        val activeCall = AtomicReference<Call?>(null)
+        val transport = DesktopFileRangeTransport(
+            client = noRedirectHttpClient,
+            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
+            authorization = "Basic " + Base64.getEncoder()
+                .encodeToString("${session.loginName}:${session.appPassword}".toByteArray()),
+            userAgent = USER_AGENT,
+            etag = requireSafeFileRangeEtag(expectedEtag),
+            size = size,
+            closed = closed,
+        ) { started, attempt, failure ->
+            recordDesktopStreamingFailure(session, "file_range", started, attempt, failure)
+        }
         lateinit var rangeSession: NextcloudFileRangeSession
         rangeSession = NextcloudFileRangeSession(
             size = size,
-            readBlock = { offset, length ->
-                withContext(Dispatchers.IO) {
-                    check(!closed.get()) { "The file range session is closed." }
-                    require(offset >= 0L) { "The file range offset must not be negative." }
-                    require(length > 0) { "The file range length must be greater than zero." }
-                    require(offset <= size && length.toLong() <= size - offset) {
-                        "The requested file range exceeds the file size."
-                    }
-                    val endInclusive = Math.addExact(offset, length.toLong() - 1L)
-                    val builder = Request.Builder()
-                        .url(buildNextcloudFileUrl(session.serverUrl, userId, path))
-                        .get()
-                        .header("Accept", "application/octet-stream")
-                        .header("Range", "bytes=$offset-$endInclusive")
-                        .header("If-Match", safeEtag)
-                        .header("User-Agent", USER_AGENT)
-                    val started = System.nanoTime()
-                    val networkAttempt = JvmNetworkRequestAttempt()
-                    builder.tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    val encoded = Base64.getEncoder()
-                        .encodeToString("${session.loginName}:${session.appPassword}".toByteArray())
-                    builder.header("Authorization", "Basic $encoded")
-                    val call = noRedirectHttpClient.newCall(builder.build())
-                    check(activeCall.compareAndSet(null, call)) { "Only one file range read can run at a time." }
-                    if (closed.get()) call.cancel()
-                    try {
-                        call.execute().use { response ->
-                            if (response.code != 206) {
-                                throw NextcloudFileRangeHttpException(response.code)
-                            }
-                            check(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
-                                "The server returned a different file range than requested."
-                            }
-                            val responseBody = response.body
-                            val contentLength = responseBody.contentLength()
-                            if (contentLength in 0 until length.toLong()) {
-                                throw JvmNetworkResponseTruncatedIOException()
-                            }
-                            check(contentLength == -1L || contentLength == length.toLong()) {
-                                "The server returned an incomplete file range."
-                            }
-                            responseBody.byteStream().readBounded(length.toLong())
-                                .requireExactJvmNetworkResponseBytes(length)
-                        }
-                    } catch (failure: Throwable) {
-                        recordDesktopStreamingFailure(
-                            session = session,
-                            streamKind = "file_range",
-                            startedNanos = started,
-                            attempt = networkAttempt,
-                            failure = failure,
-                        )
-                        throw failure
-                    } finally {
-                        activeCall.compareAndSet(call, null)
-                    }
-                }
+            readBlock = { offset, length -> withContext(Dispatchers.IO) { transport.read(offset, length) } },
+            streamBlock = { offset, length, chunkBytes, onChunk ->
+                withContext(Dispatchers.IO) { transport.stream(offset, length, chunkBytes, onChunk) }
             },
             closeBlock = {
                 if (closed.compareAndSet(false, true)) {
-                    activeCall.get()?.cancel()
+                    transport.cancel()
                     synchronized(fileRangeSessionLock) {
                         activeFileRangeSessions.remove(rangeSession)
                     }

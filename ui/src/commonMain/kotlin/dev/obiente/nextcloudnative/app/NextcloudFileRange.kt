@@ -11,12 +11,32 @@ class NextcloudFileRangeSession(
     private val readBlock: suspend (offset: Long, length: Int) -> ByteArray,
     private val closeBlock: () -> Unit = {},
     private val beginUseBlock: () -> (() -> Unit)? = { {} },
+    private val streamBlock: (
+        suspend (offset: Long, length: Long, chunkBytes: Int, onChunk: (Long, ByteArray) -> Unit) -> Unit
+    )? = null,
 ) : AutoCloseable {
     init {
         require(size > 0L) { "A file range session must have a positive size." }
     }
 
     suspend fun read(offset: Long, length: Int): ByteArray = readBlock(offset, length)
+
+    /**
+     * Delivers [length] bytes from [offset] in order, as chunks of [chunkBytes] except a shorter
+     * final chunk. A platform with streaming support serves the whole range with one request;
+     * otherwise this falls back to one bounded read per chunk.
+     */
+    suspend fun stream(offset: Long, length: Long, chunkBytes: Int, onChunk: (offset: Long, bytes: ByteArray) -> Unit) {
+        require(offset >= 0L && length > 0L && chunkBytes > 0) { "The file range stream is invalid." }
+        require(offset <= size && length <= size - offset) { "The requested file range exceeds the file size." }
+        streamBlock?.let { stream -> return stream(offset, length, chunkBytes, onChunk) }
+        var position = 0L
+        while (position < length) {
+            val chunk = minOf(chunkBytes.toLong(), length - position).toInt()
+            onChunk(offset + position, read(offset + position, chunk))
+            position += chunk
+        }
+    }
 
     fun beginUse(): (() -> Unit)? = beginUseBlock()
 
