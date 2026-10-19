@@ -17,7 +17,9 @@ import kotlinx.serialization.json.contentOrNull
  *
  * [rank] orders results when probes disagree: access problems first, because signing in or gaining
  * permission can change every other answer; then inconclusive results that a retry may resolve;
- * then a definitive but unusable contract. A definitive absence, such as 404, records nothing.
+ * then a definitive but unusable contract. Only a definitive absence ([DEFINITIVE_ABSENCE_STATUSES])
+ * records nothing; every other unsuccessful status is classified, so a failed request is never
+ * read as absence.
  */
 enum class DynamicServerProbeFailure(internal val rank: Int) {
     /** The server rejected the account's credentials (HTTP 401). */
@@ -38,11 +40,40 @@ enum class DynamicServerProbeFailure(internal val rank: Int) {
     /** A successful catalog or contract response was not readable JSON or carried no OpenAPI version. */
     UnreadableResponse(2),
 
+    /**
+     * Any other unsuccessful status, such as 400, 405, 408, 409, 412, an unfollowed 3xx redirect, or
+     * a 1xx status. It neither proves absence nor has a more specific meaning.
+     */
+    UnexpectedStatus(2),
+
     /** The server offered a contract that is not OpenAPI 3, such as Swagger 2, or that cannot be compiled. */
     UnsupportedContract(3),
     ;
 
-    internal fun isInconclusive(): Boolean = rank == 2
+    internal fun isInconclusive(): Boolean = when (this) {
+        AuthenticationRequired, PermissionDenied, UnsupportedContract -> false
+        NoResponse, ServerError, Throttled, UnreadableResponse, UnexpectedStatus -> true
+    }
+}
+
+/**
+ * Statuses that prove a probe target is absent. 404 is the server's ordinary answer for a missing
+ * app route or asset. 410 is included because it states the same thing permanently. Every other
+ * unsuccessful status is evidence that the probe failed, not that the contract is absent.
+ */
+internal val DEFINITIVE_ABSENCE_STATUSES = setOf(404, 410)
+
+/**
+ * The typed probe result for an HTTP [status], or null for a success or a definitive absence. Every
+ * other status has a typed kind, so an unrecognized failure is inconclusive rather than absence.
+ */
+internal fun probeFailureForStatus(status: Int): DynamicServerProbeFailure? = when {
+    status in 200..299 || status in DEFINITIVE_ABSENCE_STATUSES -> null
+    status == 401 -> DynamicServerProbeFailure.AuthenticationRequired
+    status == 403 -> DynamicServerProbeFailure.PermissionDenied
+    status == 429 -> DynamicServerProbeFailure.Throttled
+    status in 500..599 -> DynamicServerProbeFailure.ServerError
+    else -> DynamicServerProbeFailure.UnexpectedStatus
 }
 
 /** Keeps the highest-precedence probe result; among equal ranks the first result wins. */
@@ -55,12 +86,7 @@ private class DynamicServerProbe {
     }
 
     fun record(response: NextcloudApiResponse) {
-        when {
-            response.status == 401 -> record(DynamicServerProbeFailure.AuthenticationRequired)
-            response.status == 403 -> record(DynamicServerProbeFailure.PermissionDenied)
-            response.status == 429 -> record(DynamicServerProbeFailure.Throttled)
-            response.status in 500..599 -> record(DynamicServerProbeFailure.ServerError)
-        }
+        probeFailureForStatus(response.status)?.let(::record)
     }
 }
 
@@ -81,7 +107,12 @@ private fun DynamicServerProbeFailure.fallbackReason(): DynamicContractFallbackR
     DynamicServerProbeFailure.AuthenticationRequired -> DynamicContractFallbackReason.ServerAuthenticationRequired
     DynamicServerProbeFailure.PermissionDenied -> DynamicContractFallbackReason.ServerPermissionDenied
     DynamicServerProbeFailure.UnsupportedContract -> DynamicContractFallbackReason.UnsupportedContract
-    else -> DynamicContractFallbackReason.ServerProbeInconclusive
+    DynamicServerProbeFailure.NoResponse,
+    DynamicServerProbeFailure.ServerError,
+    DynamicServerProbeFailure.Throttled,
+    DynamicServerProbeFailure.UnreadableResponse,
+    DynamicServerProbeFailure.UnexpectedStatus,
+    -> DynamicContractFallbackReason.ServerProbeInconclusive
 }
 
 internal suspend fun discoverDynamicAppDescriptor(
@@ -245,7 +276,7 @@ private suspend fun discoverOfficialViewerSpecIds(
             diagnostics += "OCS API Viewer is unavailable (stage: catalog, ${DynamicServerProbeFailure.NoResponse.name})."
         }
         .getOrNull() ?: return emptyList()
-    if (response.status == 404) {
+    if (response.status in DEFINITIVE_ABSENCE_STATUSES) {
         codes += DynamicDiagnosticCode.ApiViewerUnavailable
         diagnostics += "OCS API Viewer is not installed or enabled for this user (stage: catalog, HTTP 4xx)."
         return emptyList()

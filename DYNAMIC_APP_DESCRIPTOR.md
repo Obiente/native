@@ -376,20 +376,27 @@ wins among equals:
    says that checking again helps only after an administrator grants access or
    the App Store adds a release.
 3. Inconclusive results that a retry may resolve: no response, a 5xx status,
-   HTTP 429, or a successful catalog or contract response that is not readable
-   JSON or declares no OpenAPI version (`UnreadableResponse`). An OCS API
+   HTTP 429, any other unsuccessful status that is not a definitive absence
+   (`UnexpectedStatus`, for example 400, 405, 408, 409, 412, an unfollowed 3xx
+   redirect, or a 1xx status), or a successful catalog or contract response
+   that is not readable JSON or declares no OpenAPI version
+   (`UnreadableResponse`). An OCS API
    Viewer entry for the app whose spec list is missing, not an array, or has a
    malformed identifier with no usable one left is also `UnreadableResponse`;
    usable identifiers beside malformed ones are still read. When the catalog
    does not list the app, an element that is not an object or has no string
    `id` may have been the app, as in App Store catalogs, so it is also
    `UnreadableResponse`; such elements beside the app's entry are ignored.
+   Differing records with the app's `id` are `UnreadableResponse` too, and
+   none of them is read; identical copies, compared as JSON values, are read
+   once.
 4. `UnsupportedContract`: a JSON contract that declares a version other than
    OpenAPI 3, such as Swagger 2, or an OpenAPI 3 contract that cannot be
    compiled.
 
-A 404, another definitive status, a non-JSON response at a static contract
-location, an empty OCS API Viewer catalog or one whose entries all name other
+Only 404 and 410 are definitive absence statuses; every other unsuccessful
+status is classified, so a failed request is never read as absence. A 404 or
+410, a non-JSON response at a static contract location, an empty OCS API Viewer catalog or one whose entries all name other
 apps by a string `id`, or a well-formed
 spec list that is empty or names only other apps is absence and
 records nothing. Every App Store path that ends without a usable contract goes
@@ -434,6 +441,8 @@ only genuine client faults remain unexpected. Size limits throw
 | Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
 | Contract module class loading | `LinkageError` | Client fault |
 | Same-origin probes | See the precedence list above | Typed probe result |
+| Same-origin probe status | 404 or 410 | Absence; records nothing |
+| Same-origin probe status | Any other unsuccessful status without a specific kind | Inconclusive (`UnexpectedStatus`); diagnostics carry only the status class |
 | Remaining unexpected failures | XML parser configuration, internal invariants | Client fault |
 
 ## Read failures
