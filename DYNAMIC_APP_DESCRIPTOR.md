@@ -276,8 +276,9 @@ records what one acquisition actually inspected:
 - the entries dropped as malformed, including a top-level element that is not
   an object or has a missing or wrong-typed `id` while the app was not found,
   because that element may have been the app, and differing records that share
-  the app's `id`, because no single one can be trusted (identical copies are
-  read once);
+  the app's `id`, because no single one can be trusted (structurally equal
+  copies are read once; key order does not matter and numbers compare by
+  value, so `1` equals `1.0`);
 - the candidates inspected, and what each provided;
 - whether a linked source refused a request.
 

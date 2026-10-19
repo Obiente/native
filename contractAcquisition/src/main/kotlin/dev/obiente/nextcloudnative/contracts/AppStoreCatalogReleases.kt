@@ -22,7 +22,7 @@ internal enum class MalformedCatalogField {
 
     /**
      * More than one top-level record has the requested app `id` and they differ, so no single record
-     * can be trusted. Identical duplicates are read once.
+     * can be trusted. Structurally equal duplicates ([jsonEquivalent]) are read once.
      */
     DuplicateApp,
     Releases,
@@ -103,7 +103,7 @@ internal fun parseReleases(
         if (candidate == null) unidentified += 1 else if (candidate.stringValue("id") == appId) records += candidate
     }
     // Differing records for this app make every one of them ambiguous; identical copies are read once.
-    if (records.drop(1).any { duplicate -> !duplicate.similar(records.first()) }) {
+    if (records.drop(1).any { duplicate -> !jsonEquivalent(duplicate, records.first()) }) {
         return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.DuplicateApp)))
     }
     val app = records.firstOrNull()
