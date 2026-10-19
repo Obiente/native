@@ -26,8 +26,9 @@ internal enum class InspectedCandidateResult {
  * 3. a catalog document could not be read: [ContractUnavailableReason.UnreadableCatalog];
  * 4. malformed evidence that could have matched: a dropped entry for the exact version or with an
  *    unreadable version in either catalog, a dropped patch-compatible entry in the platform catalog
- *    (the only source of compatible candidates), an app without a readable release list, or a
- *    top-level element whose identity could not be read where the app was not found:
+ *    (the only source of compatible candidates), an app without a readable release list, differing
+ *    duplicate records for the app, or a top-level element whose identity could not be read where
+ *    the app was not found:
  *    [ContractUnavailableReason.MalformedSource];
  * 5. every candidate that could have matched was inspected and none provided a contract:
  *    [ContractUnavailableReason.NoUsableContract];

@@ -275,7 +275,9 @@ records what one acquisition actually inspected:
 - whether each catalog document was readable;
 - the entries dropped as malformed, including a top-level element that is not
   an object or has a missing or wrong-typed `id` while the app was not found,
-  because that element may have been the app;
+  because that element may have been the app, and differing records that share
+  the app's `id`, because no single one can be trusted (identical copies are
+  read once);
 - the candidates inspected, and what each provided;
 - whether a linked source refused a request.
 
@@ -341,7 +343,7 @@ not been superseded ends as follows:
 | No matching release, no usable contract, or malformed entry | Recorded; every older generation is superseded |
 | Refused linked source, unreadable catalog, throttled retry, source or network fault | None |
 | Cancellation | None |
-| Cached contract served without inspecting releases | None |
+| Cached contract served without inspecting releases | None; it is served only while no no-contract result or invalidation is the latest accepted result |
 
 An invalidation supersedes every generation already started. A transient
 ending fences nothing because it proves nothing about the contract, so an
@@ -351,7 +353,9 @@ the newest accepted one: the newer contract, the newer no-contract reason, or,
 after an invalidation, no usable contract. A slower automatic acquisition that
 began before an explicit retry therefore cannot overwrite or contradict the
 retry's result. A no-contract result does not remove a previously cached
-contract. The ordering is kept in memory for each acquirer and never waits for
+contract, but while it or an invalidation is the latest accepted result, a cache
+read reports that result instead of the cached contract. That record is kept in
+memory, so after a restart the cache is served until a refresh records it again. The ordering is kept in memory for each acquirer and never waits for
 another acquisition, so a cancelled or failed acquisition cannot hold back
 later ones.
 
@@ -412,6 +416,7 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
 | Catalog document | Truncated, empty, not JSON, not an array, or only elements without a readable app identity | Unreadable catalog, never cached |
 | Catalog app element | Not an object, or an object with a missing or wrong-typed `id`, while the app is not found | Malformed source, not no matching release |
+| Catalog app records | More than one differing record with the app's `id` | Malformed source; identical copies are read once |
 | Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
 | Candidates exhausted | A catalog was unreadable, or an exact, compatible, or unidentified entry was dropped, and no inspected candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
 | Verified contract publication | A newer generation published a contract or ended without one definitively, or an invalidation happened | Not published; the newest accepted result is reported |

@@ -19,6 +19,12 @@ internal enum class MalformedCatalogField {
      * wrong-typed `id`, so it may have been the requested app.
      */
     App,
+
+    /**
+     * More than one top-level record has the requested app `id` and they differ, so no single record
+     * can be trusted. Identical duplicates are read once.
+     */
+    DuplicateApp,
     Releases,
     Entry,
     Version,
@@ -91,12 +97,16 @@ internal fun parseReleases(
         return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.Document)))
     }
     var unidentified = 0
-    val app = (0 until apps.length()).asSequence()
-        .mapNotNull { index ->
-            apps.optJSONObject(index)?.takeIf { candidate -> candidate.stringValue("id") != null }
-                .also { identified -> if (identified == null) unidentified += 1 }
-        }
-        .firstOrNull { candidate -> candidate.stringValue("id") == appId }
+    val records = mutableListOf<JSONObject>()
+    for (index in 0 until apps.length()) {
+        val candidate = apps.optJSONObject(index)?.takeIf { candidate -> candidate.stringValue("id") != null }
+        if (candidate == null) unidentified += 1 else if (candidate.stringValue("id") == appId) records += candidate
+    }
+    // Differing records for this app make every one of them ambiguous; identical copies are read once.
+    if (records.drop(1).any { duplicate -> !duplicate.similar(records.first()) }) {
+        return CatalogReleases(emptyList(), listOf(MalformedCatalogEntry(null, MalformedCatalogField.DuplicateApp)))
+    }
+    val app = records.firstOrNull()
     if (app == null) {
         // An element whose identity cannot be read may have been the requested app, so absence is unproven.
         val field = when (unidentified) {
