@@ -110,6 +110,19 @@ dependencies {
     androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.4.0")
 }
 
+// ContractModuleAndroidJsonApiTest compares the contract module's org.json references with the
+// platform's own org.json, so unit tests receive the compileSdk boot classpath from the plugin.
+// It is read when the test starts, after the plugin has finalized the compile options.
+val androidSdkComponents = androidComponents.sdkComponents
+tasks.withType<Test>().configureEach {
+    jvmArgumentProviders.add(
+        CommandLineArgumentProvider {
+            val entries = androidSdkComponents.bootClasspath.get().joinToString(File.pathSeparator) { it.asFile.absolutePath }
+            listOf("-Dnative.androidBootClasspath=$entries")
+        },
+    )
+}
+
 val validateReleaseSigning by tasks.registering {
     group = "verification"
     description = "Requires complete protected signing input before producing release artifacts."
