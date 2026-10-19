@@ -24,43 +24,6 @@ import kotlinx.coroutines.runBlocking
 
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOT_ATTEMPTS = 16
 
-internal data class WindowsCloudHydrationRange(val offset: Long, val length: Int) {
-    init {
-        require(offset >= 0L && offset % WINDOWS_CLOUD_ALIGNMENT == 0L)
-        require(length > 0)
-    }
-}
-
-/** Produces CfExecute-compatible chunks; only the final range may end unaligned at EOF. */
-internal fun planWindowsCloudHydration(
-    requiredOffset: Long,
-    requiredLength: Long,
-    fileSize: Long,
-    maximumChunkBytes: Int = 4 * 1024 * 1024,
-): List<WindowsCloudHydrationRange> {
-    require(requiredOffset >= 0L && requiredLength > 0L && fileSize > 0L)
-    require(
-        maximumChunkBytes.toLong() >= WINDOWS_CLOUD_ALIGNMENT &&
-            maximumChunkBytes.toLong() % WINDOWS_CLOUD_ALIGNMENT == 0L,
-    )
-    val requiredEnd = minOf(fileSize, Math.addExact(requiredOffset, requiredLength))
-    require(requiredOffset < requiredEnd)
-    val transferEnd = if (requiredEnd == fileSize) {
-        fileSize
-    } else {
-        minOf(fileSize, Math.addExact(requiredEnd, WINDOWS_CLOUD_ALIGNMENT - 1L) / WINDOWS_CLOUD_ALIGNMENT * WINDOWS_CLOUD_ALIGNMENT)
-    }
-    var cursor = requiredOffset - requiredOffset % WINDOWS_CLOUD_ALIGNMENT
-    return buildList {
-        while (cursor < transferEnd) {
-            val remaining = transferEnd - cursor
-            val length = minOf(maximumChunkBytes.toLong(), remaining).toInt()
-            add(WindowsCloudHydrationRange(cursor, length))
-            cursor += length
-        }
-    }
-}
-
 internal data class WindowsCloudCallbackInfo(
     val connectionKey: Long,
     val transferKey: Long,
@@ -231,11 +194,6 @@ internal interface WindowsCloudFilesApi : AutoCloseable {
     fun dehydrate(path: Path): Long
 }
 
-internal interface WindowsCloudFileReadHandle : AutoCloseable {
-    val size: Long
-    fun read(offset: Long, length: Int): ByteArray
-}
-
 internal data class WindowsCloudFilesSummary(
     val cachedBytes: Long,
     val reclaimableBytes: Long,
@@ -287,6 +245,8 @@ internal class DesktopNextcloudWindowsCloudFilesBackend(
             override val size: Long = source.size
             override fun read(offset: Long, length: Int): ByteArray =
                 runBlocking(Dispatchers.IO) { source.read(offset, length) }
+            override fun stream(offset: Long, length: Long, chunkBytes: Int, onChunk: (Long, ByteArray) -> Unit) =
+                runBlocking(Dispatchers.IO) { source.stream(offset, length, chunkBytes, onChunk) }
             override fun close() = source.close()
         }
     }
@@ -353,7 +313,7 @@ internal class WindowsCloudFilesProvider(
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
-    private val cancelledRequests = ConcurrentHashMap<Long, AtomicBoolean>()
+    private val cancelledRequests = ConcurrentHashMap<Long, WindowsCloudRequestCancellation>()
     private val knownIdentities = ConcurrentHashMap<String, WindowsCloudFileIdentity>()
     private val pathOperations = ConcurrentHashMap.newKeySet<String>()
     private val queuedPathOperations = ConcurrentHashMap<String, () -> Unit>()
@@ -836,7 +796,7 @@ internal class WindowsCloudFilesProvider(
 
     override fun fetchData(info: WindowsCloudCallbackInfo, requiredOffset: Long, requiredLength: Long) {
         if (callbacksPaused.get()) return
-        val cancellation = AtomicBoolean(false)
+        val cancellation = WindowsCloudRequestCancellation()
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
             val identity = runCatching { requireIdentity(info, expectDirectory = false) }.getOrElse { failure ->
@@ -847,11 +807,8 @@ internal class WindowsCloudFilesProvider(
             try {
                 backend.open(identity).use { source ->
                     check(source.size == identity.size) { "The remote file generation has a different size." }
-                    planWindowsCloudHydration(requiredOffset, requiredLength, identity.size).forEach { range ->
-                        if (cancellation.get()) return@execute
-                        val bytes = source.read(range.offset, range.length)
-                        check(bytes.size == range.length) { "The remote file returned an incomplete range." }
-                        api.transferData(info, range.offset, bytes)
+                    hydrateWindowsCloudRange(source, requiredOffset, requiredLength, cancellation) { offset, bytes ->
+                        api.transferData(info, offset, bytes)
                     }
                 }
             } catch (failure: Throwable) {
@@ -865,12 +822,12 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun cancelFetchData(info: WindowsCloudCallbackInfo, offset: Long, length: Long) {
-        cancelledRequests[info.requestKey]?.set(true)
+        cancelledRequests[info.requestKey]?.cancel()
     }
 
     override fun fetchPlaceholders(info: WindowsCloudCallbackInfo, pattern: String?) {
         if (callbacksPaused.get()) return
-        val cancellation = AtomicBoolean(false)
+        val cancellation = WindowsCloudRequestCancellation()
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
             try {
@@ -902,7 +859,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun cancelFetchPlaceholders(info: WindowsCloudCallbackInfo) {
-        cancelledRequests[info.requestKey]?.set(true)
+        cancelledRequests[info.requestKey]?.cancel()
     }
 
     override fun closed(info: WindowsCloudCallbackInfo, deleted: Boolean) {
@@ -1147,7 +1104,7 @@ internal class WindowsCloudFilesProvider(
             api.disconnect(key)
             connection.compareAndSet(key, 0L)
         }
-        cancelledRequests.values.forEach { it.set(true) }
+        cancelledRequests.values.forEach { it.cancel() }
         cancelledRequests.clear()
         stopLocalWatcher()
         queuedPathOperations.clear()
@@ -2292,7 +2249,6 @@ internal class WindowsCloudFilesProvider(
     }
 }
 
-private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
 private const val MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS = 4
 private const val DELAYED_CORRUPT_ROOT_RECOVERY_POLL_MILLIS = 25L
