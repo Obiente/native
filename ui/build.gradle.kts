@@ -1,9 +1,17 @@
 import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 val desktopArchitecture = System.getProperty("os.arch").lowercase()
 val ncDesktopPackageVersion = providers.gradleProperty("ncDesktopPackageVersion").get()
@@ -160,11 +168,48 @@ tasks.configureEach {
 
 apply(from = "desktop-libvlc.gradle.kts")
 
+/**
+ * Names a test that is still running after [threshold]. Only failures are logged, so a hung test
+ * otherwise prints nothing until the task timeout or the CI job limit ends the build.
+ */
+class LongRunningTestReporter(private val taskLogger: Logger, private val threshold: Duration) : TestListener {
+    private val scheduler = ScheduledThreadPoolExecutor(1) { task ->
+        Thread(task, "long-running-test-reporter").apply { isDaemon = true }
+    }.apply {
+        // The thread exits while no test runs, so no idle thread outlives the build.
+        setKeepAliveTime(10, TimeUnit.SECONDS)
+        allowCoreThreadTimeOut(true)
+        removeOnCancelPolicy = true
+    }
+    private val pending = ConcurrentHashMap<TestDescriptor, ScheduledFuture<*>>()
+
+    override fun beforeTest(testDescriptor: TestDescriptor) {
+        pending[testDescriptor] = scheduler.schedule({
+            taskLogger.lifecycle(
+                "Test still running after ${threshold.toMinutes()} minutes: " +
+                    "${testDescriptor.className} > ${testDescriptor.displayName}",
+            )
+        }, threshold.toMillis(), TimeUnit.MILLISECONDS)
+    }
+
+    override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+        pending.remove(testDescriptor)?.cancel(false)
+    }
+
+    override fun beforeSuite(suite: TestDescriptor) = Unit
+
+    override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
+}
+
 tasks.withType<Test>().configureEach {
     testLogging {
         events("failed")
         exceptionFormat = TestExceptionFormat.FULL
     }
+    // A full desktop run takes about five minutes on CI. Stop a stuck run well inside the CI job
+    // limit, after naming the test that is stuck.
+    timeout.set(Duration.ofMinutes(30))
+    addTestListener(LongRunningTestReporter(logger, Duration.ofMinutes(3)))
     // Scene tests must not depend on whether the build machine has VLC installed.
     systemProperty("dev.obiente.nextcloudnative.libvlc", "disabled")
     // Nor may they register with the host's system media controls.
