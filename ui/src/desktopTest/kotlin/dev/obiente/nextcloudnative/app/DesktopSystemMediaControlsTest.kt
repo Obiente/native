@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 
 class DesktopSystemMediaControlsTest {
     private val snapshot = SystemMediaSnapshot(title = "clip.mp4", playing = true, canPrevious = false, canNext = true)
@@ -141,6 +142,8 @@ class DesktopSystemMediaControlsTest {
     /** Drives the native COM handler through its vtable with a synthetic event-args object. */
     @Test
     fun theWindowsButtonHandlerAnswersComAndDispatchesTheButton() {
+        // The COM handler's callbacks use stdcall, which JNA can only create on Windows.
+        assumeTrue(System.getProperty("os.name").startsWith("Windows", ignoreCase = true))
         val handler = WindowsSmtcButtonHandler.instance
         val out = PointerByReference()
         assertEquals(0, handler.com(0, Guid.GUID.fromString("{0557e996-7b23-5bae-aa81-ea0d671143a4}"), out))
