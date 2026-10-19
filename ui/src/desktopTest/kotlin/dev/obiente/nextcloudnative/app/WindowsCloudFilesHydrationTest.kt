@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -39,9 +42,8 @@ class WindowsCloudFilesHydrationTest {
         handle: WindowsCloudFileReadHandle,
         offset: Long = 0L,
         length: Long = content.size.toLong(),
-        cancelled: () -> Boolean = { false },
     ): List<Pair<Long, ByteArray>> = buildList {
-        hydrateWindowsCloudRange(handle, offset, length, cancelled) { at, bytes -> add(at to bytes) }
+        hydrateWindowsCloudRange(handle, offset, length, WindowsCloudRequestCancellation()) { at, bytes -> add(at to bytes) }
     }
 
     @Test
@@ -80,13 +82,61 @@ class WindowsCloudFilesHydrationTest {
     @Test
     fun `cancellation stops the stream before the next chunk is transferred`() {
         val handle = RecordingHandle(streaming = true)
+        val cancellation = WindowsCloudRequestCancellation()
         var transferred = 0
 
         assertFailsWith<CancellationException> {
-            hydrateWindowsCloudRange(handle, 0L, content.size.toLong(), { transferred >= 2 }) { _, _ -> transferred++ }
+            hydrateWindowsCloudRange(handle, 0L, content.size.toLong(), cancellation) { _, _ ->
+                if (++transferred == 2) cancellation.cancel()
+            }
         }
 
         assertEquals(2, transferred)
+    }
+
+    @Test
+    fun `cancellation closes a stream that is blocked waiting for the server`() {
+        val streaming = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        val stalled = object : WindowsCloudFileReadHandle {
+            override val size = content.size.toLong()
+            override fun read(offset: Long, length: Int) = error("Hydration must stream.")
+            override fun stream(offset: Long, length: Long, chunkBytes: Int, onChunk: (Long, ByteArray) -> Unit) {
+                streaming.countDown()
+                // Models a response whose next chunk never arrives until the transport is closed.
+                check(closed.await(30, TimeUnit.SECONDS)) { "The stalled read was never interrupted." }
+                throw java.io.IOException("Canceled")
+            }
+            override fun close() = closed.countDown()
+        }
+        val cancellation = WindowsCloudRequestCancellation()
+        val transfers = mutableListOf<Long>()
+        val canceller = thread {
+            check(streaming.await(5, TimeUnit.SECONDS))
+            cancellation.cancel()
+        }
+        val started = System.nanoTime()
+
+        assertFailsWith<java.io.IOException> {
+            hydrateWindowsCloudRange(stalled, 0L, content.size.toLong(), cancellation) { offset, _ -> transfers += offset }
+        }
+
+        canceller.join()
+        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 5)
+        assertTrue(cancellation.get())
+        assertEquals(emptyList(), transfers)
+    }
+
+    @Test
+    fun `a request cancelled before it starts never opens a stream`() {
+        val handle = RecordingHandle(streaming = true)
+        val cancellation = WindowsCloudRequestCancellation().apply { cancel() }
+
+        assertFailsWith<CancellationException> {
+            hydrateWindowsCloudRange(handle, 0L, content.size.toLong(), cancellation) { _, _ -> error("Nothing may transfer.") }
+        }
+
+        assertEquals(emptyList(), handle.requests)
     }
 
     @Test
@@ -95,7 +145,9 @@ class WindowsCloudFilesHydrationTest {
         val transfers = mutableListOf<Long>()
 
         assertFailsWith<IllegalStateException> {
-            hydrateWindowsCloudRange(handle, 0L, content.size.toLong(), { false }) { offset, _ -> transfers += offset }
+            hydrateWindowsCloudRange(handle, 0L, content.size.toLong(), WindowsCloudRequestCancellation()) { offset, _ ->
+                transfers += offset
+            }
         }
 
         assertEquals(listOf(0L), transfers)

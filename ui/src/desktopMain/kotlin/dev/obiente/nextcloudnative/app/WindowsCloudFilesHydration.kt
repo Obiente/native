@@ -1,11 +1,41 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 internal const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 
 /** Bytes handed to CfExecute at a time; small enough that an opening app sees data early. */
 internal const val WINDOWS_CLOUD_HYDRATION_CHUNK_BYTES = 1024 * 1024
+
+/**
+ * Cancellation for one Cloud Files callback request. [cancel] also closes the read handle that
+ * the request has open, so a hydration blocked on a slow or stalled response stops at once
+ * instead of waiting for the next chunk or a network timeout.
+ */
+internal class WindowsCloudRequestCancellation {
+    private val cancelled = AtomicBoolean(false)
+    private val activeHandle = AtomicReference<AutoCloseable?>(null)
+
+    fun get(): Boolean = cancelled.get()
+
+    fun cancel() {
+        cancelled.set(true)
+        activeHandle.getAndSet(null)?.close()
+    }
+
+    /** Runs [block] with [handle] closable by [cancel]; a request cancelled first never starts. */
+    fun <T> whileOpen(handle: AutoCloseable, block: () -> T): T {
+        activeHandle.set(handle)
+        try {
+            if (cancelled.get()) throw CancellationException("Windows cancelled the request.")
+            return block()
+        } finally {
+            activeHandle.compareAndSet(handle, null)
+        }
+    }
+}
 
 /** Read access to one pinned remote file generation for hydration. */
 internal interface WindowsCloudFileReadHandle : AutoCloseable {
@@ -66,27 +96,30 @@ internal fun planWindowsCloudHydration(
 /**
  * Serves one FETCH_DATA request. Windows asks for a whole file when an application opens it, so
  * the aligned span is fetched as one streamed range rather than one server request per chunk,
- * and each chunk is transferred as soon as it arrives. Cancellation is checked between chunks
- * and surfaces as [CancellationException]; any other mismatch fails the request.
+ * and each chunk is transferred as soon as it arrives. Cancelling closes [source], which stops a
+ * blocked read; a chunk that arrives after cancellation is never transferred. Any other mismatch
+ * fails the request.
  */
 internal fun hydrateWindowsCloudRange(
     source: WindowsCloudFileReadHandle,
     requiredOffset: Long,
     requiredLength: Long,
-    cancelled: () -> Boolean,
+    cancellation: WindowsCloudRequestCancellation,
     transfer: (offset: Long, bytes: ByteArray) -> Unit,
 ) {
     val plan = planWindowsCloudHydration(requiredOffset, requiredLength, source.size)
     val start = plan.first().offset
     val end = plan.last().let { it.offset + it.length }
     var next = 0
-    source.stream(start, end - start, WINDOWS_CLOUD_HYDRATION_CHUNK_BYTES) { offset, bytes ->
-        if (cancelled()) throw CancellationException("Windows cancelled the hydration request.")
-        val expected = plan.getOrNull(next++)
-        check(expected != null && offset == expected.offset && bytes.size == expected.length) {
-            "The remote file returned an incomplete range."
+    cancellation.whileOpen(source) {
+        source.stream(start, end - start, WINDOWS_CLOUD_HYDRATION_CHUNK_BYTES) { offset, bytes ->
+            if (cancellation.get()) throw CancellationException("Windows cancelled the hydration request.")
+            val expected = plan.getOrNull(next++)
+            check(expected != null && offset == expected.offset && bytes.size == expected.length) {
+                "The remote file returned an incomplete range."
+            }
+            transfer(offset, bytes)
         }
-        transfer(offset, bytes)
     }
     check(next == plan.size) { "The remote file returned an incomplete range." }
 }

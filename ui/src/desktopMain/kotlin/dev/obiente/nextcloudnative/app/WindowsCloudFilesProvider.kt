@@ -313,7 +313,7 @@ internal class WindowsCloudFilesProvider(
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
-    private val cancelledRequests = ConcurrentHashMap<Long, AtomicBoolean>()
+    private val cancelledRequests = ConcurrentHashMap<Long, WindowsCloudRequestCancellation>()
     private val knownIdentities = ConcurrentHashMap<String, WindowsCloudFileIdentity>()
     private val pathOperations = ConcurrentHashMap.newKeySet<String>()
     private val queuedPathOperations = ConcurrentHashMap<String, () -> Unit>()
@@ -796,7 +796,7 @@ internal class WindowsCloudFilesProvider(
 
     override fun fetchData(info: WindowsCloudCallbackInfo, requiredOffset: Long, requiredLength: Long) {
         if (callbacksPaused.get()) return
-        val cancellation = AtomicBoolean(false)
+        val cancellation = WindowsCloudRequestCancellation()
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
             val identity = runCatching { requireIdentity(info, expectDirectory = false) }.getOrElse { failure ->
@@ -807,7 +807,7 @@ internal class WindowsCloudFilesProvider(
             try {
                 backend.open(identity).use { source ->
                     check(source.size == identity.size) { "The remote file generation has a different size." }
-                    hydrateWindowsCloudRange(source, requiredOffset, requiredLength, cancellation::get) { offset, bytes ->
+                    hydrateWindowsCloudRange(source, requiredOffset, requiredLength, cancellation) { offset, bytes ->
                         api.transferData(info, offset, bytes)
                     }
                 }
@@ -822,12 +822,12 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun cancelFetchData(info: WindowsCloudCallbackInfo, offset: Long, length: Long) {
-        cancelledRequests[info.requestKey]?.set(true)
+        cancelledRequests[info.requestKey]?.cancel()
     }
 
     override fun fetchPlaceholders(info: WindowsCloudCallbackInfo, pattern: String?) {
         if (callbacksPaused.get()) return
-        val cancellation = AtomicBoolean(false)
+        val cancellation = WindowsCloudRequestCancellation()
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
             try {
@@ -859,7 +859,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     override fun cancelFetchPlaceholders(info: WindowsCloudCallbackInfo) {
-        cancelledRequests[info.requestKey]?.set(true)
+        cancelledRequests[info.requestKey]?.cancel()
     }
 
     override fun closed(info: WindowsCloudCallbackInfo, deleted: Boolean) {
@@ -1104,7 +1104,7 @@ internal class WindowsCloudFilesProvider(
             api.disconnect(key)
             connection.compareAndSet(key, 0L)
         }
-        cancelledRequests.values.forEach { it.set(true) }
+        cancelledRequests.values.forEach { it.cancel() }
         cancelledRequests.clear()
         stopLocalWatcher()
         queuedPathOperations.clear()
