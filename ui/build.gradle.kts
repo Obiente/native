@@ -201,6 +201,8 @@ kotlin {
             kotlin.srcDir("src/jvmMain/kotlin")
         }
         androidMain.dependencies {
+            // Shared jvmMain sources translate contract acquisition failures for both JVM targets.
+            implementation(project(":contractAcquisition"))
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
             implementation(libs.androidx.exifinterface)

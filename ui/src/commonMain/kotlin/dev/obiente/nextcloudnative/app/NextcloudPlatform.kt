@@ -1439,11 +1439,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         error("People mutation transport is unavailable on this platform.")
     }
 
-    suspend fun acquireSignedOpenApiContract(
-        appId: String,
-        serverVersion: String,
-        installedAppVersion: String?,
-    ): AcquiredOpenApiContract?
+    suspend fun acquireSignedOpenApiContract(request: AppStoreContractRequest): AppStoreContractAcquisition
 
     suspend fun listActivities(session: NextcloudSession, limit: Int = DEFAULT_ACTIVITY_LIMIT): List<NextcloudActivity>
 

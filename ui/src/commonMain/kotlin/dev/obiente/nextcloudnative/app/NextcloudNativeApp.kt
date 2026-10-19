@@ -1343,6 +1343,16 @@ private fun AuthenticatedApp(
         }
     }
 
+    /** Leaves the app for account settings, where the account can be signed out and signed in again. */
+    fun openAccountSettings() {
+        if (groupwareMutationInProgress) return
+        inlineEditorNavigation.navigate {
+            leaveAppWorkspace()
+            screen = Screen.Root
+            destination = NextcloudDestination.Settings
+        }
+    }
+
     fun navigateBack() {
         if (inlineEditorNavigation.intercept(::navigateBack)) return
         if (groupwareMutationInProgress) return
@@ -1867,6 +1877,7 @@ private fun AuthenticatedApp(
                         screen = active.copy(navigation = navigation)
                     }
                 },
+                onOpenAccountSettings = ::openAccountSettings,
                 onBack = ::navigateBack,
             )
         }
@@ -2117,6 +2128,7 @@ private fun AppInfoScreen(
     onDiscovery: (DynamicDescriptorDiscovery) -> Unit,
     navigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
+    onOpenAccountSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     if (isOfficeWorkspaceAppId(app.id)) {
@@ -2184,7 +2196,7 @@ private fun AppInfoScreen(
         discoveryError = null
         runCatching {
             discoverDynamicAppDescriptor(
-                services = services,
+                services = services.forDiscoveryAttempt(discoveryAttempt),
                 session = session,
                 app = app,
                 serverVersion = serverVersion,
@@ -2220,7 +2232,7 @@ private fun AppInfoScreen(
                 }
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
                 discoveryError = if (retainedDiscovery == null) {
-                    failure.message ?: "Could not discover this app's native API."
+                    DYNAMIC_DISCOVERY_FAILURE_MESSAGE
                 } else {
                     "Could not verify the current server and app versions. " +
                         "The last verified contract remains available in read-only mode."
@@ -2257,7 +2269,7 @@ private fun AppInfoScreen(
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
-                onRetryDiscovery = ::retryDiscoveryAndServerInfo,
+                fallbackActions = DynamicContractFallbackActions(::retryDiscoveryAndServerInfo, onOpenAccountSettings),
                 onExit = onBack,
                 modifier = Modifier.weight(1f),
             )
@@ -2297,7 +2309,7 @@ private fun DynamicDiscoveredAppScreen(
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
-    onRetryDiscovery: () -> Unit,
+    fallbackActions: DynamicContractFallbackActions,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -4640,29 +4652,10 @@ private fun DynamicDiscoveredAppScreen(
                 )
             } else Column(modifier = Modifier.fillMaxSize()) {
             if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Large,
-                    vertical = NextcloudSpacing.Small,
-                ),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Small),
-            ) {
-                Column(
-                    modifier = Modifier.padding(NextcloudSpacing.Medium),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    Text("App unavailable", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "This app's content could not be loaded. Try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = onRetryDiscovery) {
-                        Text("Try again")
-                    }
-                }
-            }
+                DynamicContractFallbackCard(
+                    reason = discovery.fallbackReason,
+                    actions = fallbackActions,
+                )
         }
             if (failedFormRelationRequests.isNotEmpty()) {
                 val failedResources = failedFormRelationRequests

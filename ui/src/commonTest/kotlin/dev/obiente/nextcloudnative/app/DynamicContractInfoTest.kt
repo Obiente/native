@@ -34,9 +34,9 @@ class DynamicContractInfoTest {
             acquisition = DynamicDescriptorAcquisition.SignedAppStorePackage,
             diagnostics = listOf(
                 "The API viewer is not installed at https://private.example.test/path.",
-                "Verified example and imported openapi.json from its signed App Store package.",
                 "Unclassified private diagnostic content",
             ),
+            diagnosticCodes = listOf(DynamicDiagnosticCode.ApiViewerUnavailable),
         )
 
         val info = discovery.toContractInfo(null)
@@ -56,15 +56,60 @@ class DynamicContractInfoTest {
             descriptor = descriptor(),
             sourcePath = "https://apps.nextcloud.com/packages/deck#appinfo/routes.php",
             acquisition = DynamicDescriptorAcquisition.SignedAppStoreStaticRoutes,
-            diagnostics = listOf(
-                "Verified deck 1.18.2 and derived 24 read-only endpoints from appinfo/routes.php " +
-                    "in its signed App Store package. No writes were inferred.",
-            ),
         ).toContractInfo(null)
 
         assertEquals("Verified signed static read routes", info.acquisition)
         assertEquals("routes.php", info.sourceSpecFile)
         assertEquals(listOf("verified-static-read-routes"), info.diagnosticCodes)
+    }
+
+    @Test
+    fun `diagnostic codes come from typed events and never from diagnostic prose`() {
+        val typed = DynamicDescriptorDiscovery(
+            descriptor = descriptor(),
+            sourcePath = null,
+            acquisition = DynamicDescriptorAcquisition.MetadataFallback,
+            diagnostics = listOf("The server API probe was inconclusive: ServerError."),
+            diagnosticCodes = listOf(DynamicDiagnosticCode.StaticContractUnavailable, DynamicDiagnosticCode.ServerProbeInconclusive),
+        )
+        val reworded = typed.copy(diagnostics = listOf("Completely reworded text.", "Only app metadata is available."))
+        val expected = listOf("static-contract-unavailable", "server-probe-inconclusive")
+        assertEquals(expected, typed.toContractInfo(null).diagnosticCodes)
+        assertEquals(expected, reworded.toContractInfo(null).diagnosticCodes)
+        // Old trigger phrases without typed events produce no codes.
+        val prose = typed.copy(diagnosticCodes = emptyList(), diagnostics = listOf(
+            "OCS API Viewer is not installed", "No valid static OpenAPI document", "contained invalid OpenAPI",
+            "App Store contract acquisition failed: Network.", "Only app metadata is available.",
+        ))
+        assertEquals(emptyList(), prose.toContractInfo(null).diagnosticCodes)
+    }
+
+    @Test
+    fun `every typed code and acquisition import keeps its stable code string`() {
+        assertEquals(
+            listOf(
+                "api-viewer-unavailable", "static-contract-unavailable", "app-store-acquisition-failed",
+                "server-probe-inconclusive", "server-probe-access-denied", "server-contract-unsupported",
+                "verified-static-read-routes", "verified-read-fallbacks", "signed-package-imported",
+                "linked-source-tag-imported", "contract-invalid", "metadata-only",
+            ),
+            DynamicDiagnosticCode.entries.map(DynamicDiagnosticCode::code),
+        )
+        val imports = DynamicDescriptorAcquisition.entries.associateWith { acquisition ->
+            DynamicDescriptorDiscovery(descriptor(), null, acquisition).toContractInfo(null).diagnosticCodes
+        }
+        assertEquals(listOf("signed-package-imported"), imports.getValue(DynamicDescriptorAcquisition.SignedAppStorePackage))
+        assertEquals(listOf("linked-source-tag-imported"), imports.getValue(DynamicDescriptorAcquisition.AppStoreLinkedGitHubTag))
+        assertEquals(listOf("verified-static-read-routes"), imports.getValue(DynamicDescriptorAcquisition.AppStoreLinkedStaticRoutes))
+        assertEquals(listOf("verified-read-fallbacks"), imports.getValue(DynamicDescriptorAcquisition.SignedAppStoreMergedContract))
+        assertEquals(listOf("verified-read-fallbacks"), imports.getValue(DynamicDescriptorAcquisition.AppStoreLinkedMergedContract))
+        for (acquisition in listOf(
+            DynamicDescriptorAcquisition.OcsApiViewer,
+            DynamicDescriptorAcquisition.StaticAppAsset,
+            DynamicDescriptorAcquisition.MetadataFallback,
+        )) {
+            assertEquals(emptyList(), imports.getValue(acquisition), acquisition.name)
+        }
     }
 
     @Test

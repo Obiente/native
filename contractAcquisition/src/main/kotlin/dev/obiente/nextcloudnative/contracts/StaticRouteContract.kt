@@ -402,7 +402,7 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
         val pathItem = paths.optJSONObject(path) ?: return@mapNotNull null
         val operation = pathItem.optJSONObject("get") ?: return@mapNotNull null
         if (!operation.isCollectionRead(document)) return@mapNotNull null
-        val operationId = operation.optString("operationId").takeIf(String::isNotBlank)
+        val operationId = operation.stringValue("operationId")?.takeIf(String::isNotBlank)
             ?: return@mapNotNull null
         CollectionReadContract(
             operationId = operationId,
@@ -419,7 +419,7 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
         val routePathItem = routePaths.optJSONObject(path) ?: return@forEach
         VERIFIED_STATIC_WRITE_METHODS.forEach writeMethod@ { method ->
             val routeWrite = routePathItem.optJSONObject(method)
-                ?.takeIf { operation -> operation.optBoolean(VERIFIED_CRUD_EXTENSION) }
+                ?.takeIf { operation -> operation.booleanValue(VERIFIED_CRUD_EXTENSION, absent = false, wrongType = false) }
                 ?: return@writeMethod
             val targetPathItem = paths.optJSONObject(path) ?: JSONObject().also { paths.put(path, it) }
             if (targetPathItem.optJSONObject(method) == null) {
@@ -432,7 +432,7 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
             }
         }
         val routeOperationalPost = routePathItem.optJSONObject("post")
-            ?.takeIf { operation -> operation.optString(OPERATIONAL_ACTION_EXTENSION) == "refresh" }
+            ?.takeIf { operation -> operation.stringValue(OPERATIONAL_ACTION_EXTENSION) == "refresh" }
         if (routeOperationalPost != null) {
             val targetPathItem = paths.optJSONObject(path) ?: JSONObject().also { paths.put(path, it) }
             if (targetPathItem.optJSONObject("post") == null) {
@@ -457,13 +457,13 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
                     preferred.requiredInputs.sameSemanticInputs(requiredInputs)
             }?.let { preferred ->
                 importedOperation.put(FALLBACK_FOR_OPERATION_EXTENSION, preferred.operationId)
-                val fallbackOperationId = importedOperation.optString("operationId")
+                val fallbackOperationId = importedOperation.stringValue("operationId").orEmpty()
                 if (fallbackOperationId.isNotBlank()) {
                     val fallbacks = preferred.operation.optJSONArray(READ_FALLBACKS_EXTENSION) ?: JSONArray().also {
                         preferred.operation.put(READ_FALLBACKS_EXTENSION, it)
                     }
                     if ((0 until fallbacks.length()).none { index ->
-                            fallbacks.optString(index) == fallbackOperationId
+                            fallbacks.opt(index) == fallbackOperationId
                         }
                     ) {
                         fallbacks.put(fallbackOperationId)
@@ -501,10 +501,10 @@ private fun requiredReadInputs(pathItem: JSONObject, operation: JSONObject): Set
         .forEach { parameters ->
             repeat(parameters.length()) { index ->
                 val parameter = parameters.optJSONObject(index) ?: return@repeat
-                val location = parameter.optString("in")
+                val location = parameter.stringValue("in")
                 if (location != "path" && location != "query") return@repeat
-                if (!parameter.optBoolean("required", location == "path")) return@repeat
-                val name = parameter.optString("name").normalizedSemanticWord()
+                if (!parameter.booleanValue("required", absent = location == "path", wrongType = true)) return@repeat
+                val name = parameter.stringValue("name").orEmpty().normalizedSemanticWord()
                 if (name.isNotBlank()) add("$location:$name")
             }
         }
@@ -547,13 +547,13 @@ private fun JSONObject.collectionShape(
     depth: Int,
 ): Boolean {
     if (depth > 8) return false
-    val reference = optString("${'$'}ref").takeIf { it.startsWith("#/") }
+    val reference = stringValue("${'$'}ref")?.takeIf { it.startsWith("#/") }
     if (reference != null && visitedReferences.add(reference)) {
         val resolved = document.resolveLocalObject(reference)
         if (resolved?.collectionShape(document, visitedReferences, depth + 1) == true) return true
     }
-    if (optString("type") == "array") return true
-    if (optString("type") == "object" && opt("additionalProperties") is JSONObject) return true
+    if (stringValue("type") == "array") return true
+    if (stringValue("type") == "object" && opt("additionalProperties") is JSONObject) return true
     val properties = optJSONObject("properties")
     listOf("ocs", "data").forEach { name ->
         if (properties?.optJSONObject(name)?.collectionShape(document, visitedReferences, depth + 1) == true) {
