@@ -109,12 +109,14 @@ class SignedAppStoreContractAcquirer(
         }
         val cached = verifiedContracts[request] ?: verifiedContractCache.load(request)?.also { verifiedContracts[request] = it }
         // A refresh looks past a cached contract, which stays until a newly verified contract replaces it.
-        if (cached != null && cachePolicy == AcquisitionCachePolicy.UseCache) return ContractAcquisitionOutcome.Acquired(cached)
+        // Every cached return goes through the fence, so a newer accepted result is never contradicted.
+        val serve = { contract: VerifiedOpenApiContract -> publicationFence.serveCached(request, generation, contract) }
+        if (cached != null && cachePolicy == AcquisitionCachePolicy.UseCache) return serve(cached)
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
         val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId, cachePolicy)
         // Nothing fresher than a cached contract can come from a platform catalog the window limited.
-        servedOnLimitedRefresh(cachePolicy, cached, platformCatalog)?.let { return it }
+        servedOnLimitedRefresh(cachePolicy, cached, serve, platformCatalog)?.let { return it }
         val platformReleases = platformCatalog.releases
         val exactPlatformRelease = request.installedAppVersion?.let { installed ->
             platformReleases.firstOrNull { release -> release.version == installed }
@@ -132,7 +134,7 @@ class SignedAppStoreContractAcquirer(
         val releases = listOfNotNull(exactRelease) + compatibleReleases
         // Every no-contract reason below is derived from this record of what was actually inspected.
         val attempt = ContractAcquisitionEvidence(request.installedAppVersion, platformCatalog, allCatalog)
-        if (releases.isEmpty()) return servedOnLimitedRefresh(cachePolicy, cached, allCatalog) ?: attempt.unavailable()
+        if (releases.isEmpty()) return servedOnLimitedRefresh(cachePolicy, cached, serve, allCatalog) ?: attempt.unavailable()
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
         val verifiedRouteFallbacks = mutableListOf<Pair<AppStoreRelease, VerifiedPackageContract>>()
@@ -199,7 +201,7 @@ class SignedAppStoreContractAcquirer(
             }
         }
         val (release, verified) = verifiedRouteFallbacks.firstOrNull()
-            ?: return servedOnLimitedRefresh(cachePolicy, cached, allCatalog) ?: attempt.unavailable()
+            ?: return servedOnLimitedRefresh(cachePolicy, cached, serve, allCatalog) ?: attempt.unavailable()
         return cacheContract(request, generation, verified.asPackageContract(request, release))
     }
 

@@ -15,7 +15,8 @@ package dev.obiente.nextcloudnative.contracts
  * | Definitive Unavailable                         | fenced = g; latest = that outcome           | return latest                |
  * | Transient Unavailable, source or network fault | no change; return or throw its own result   | same                         |
  * | Cancelled                                      | no change; the cancellation propagates      | same                         |
- * | Served a cached contract without inspecting    | no change                                   | same                         |
+ * | Served a cached contract without inspecting    | serve it, unless `latest` is a no-contract  | return latest                |
+ * |                                                | result; then return latest                  |                              |
  * | Invalidation (not a generation)                | fenced = started; latest = invalidated      |                              |
  *
  * Definitive reasons are evidence about the release: [ContractUnavailableReason.NoMatchingRelease],
@@ -23,6 +24,11 @@ package dev.obiente.nextcloudnative.contracts
  * A transient result, such as a refused linked source, an unreadable catalog, a throttled retry, a
  * network fault, or a cancellation, proves nothing about the contract, so it fences nothing: an
  * older acquisition that verifies a contract afterwards may still publish it.
+ *
+ * A cached verified contract is never served against a newer accepted result: once a definitive
+ * no-contract result or an invalidation is the latest accepted result for the key, a cache read
+ * reports that result instead, until a newer contract is published. The fence is in memory, so a
+ * new process starts without that record and serves the cache until a refresh records it again.
  *
  * A superseded acquisition never returns its own result. It returns `latest`: the newer contract,
  * the newer definitive outcome, or, after an invalidation, Unavailable with
@@ -84,6 +90,24 @@ internal class ContractPublicationFence {
         val state = states.getOrPut(request, ::State)
         if (generation <= state.fenced) return state.supersededOutcome()
         outcome.also { accepted -> state.accept(generation, accepted) }
+    }
+
+    /**
+     * Reports [cached], read by [generation] without inspecting releases, unless a newer result was
+     * accepted since the read started, or the latest accepted result says there is no usable contract.
+     */
+    fun serveCached(
+        request: ContractAcquisitionRequest,
+        generation: Long,
+        cached: VerifiedOpenApiContract,
+    ): ContractAcquisitionOutcome = synchronized(states) {
+        val state = states.getOrPut(request, ::State)
+        val latest = state.latest
+        when {
+            generation <= state.fenced -> state.supersededOutcome()
+            latest is ContractAcquisitionOutcome.Unavailable -> latest
+            else -> ContractAcquisitionOutcome.Acquired(cached)
+        }
     }
 
     /** Runs [discard] and supersedes every acquisition for [request] that has already started. */

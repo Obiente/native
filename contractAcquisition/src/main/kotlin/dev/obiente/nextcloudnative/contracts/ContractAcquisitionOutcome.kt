@@ -47,8 +47,9 @@ sealed interface ContractAcquisitionOutcome {
 internal fun servedOnLimitedRefresh(
     cachePolicy: AcquisitionCachePolicy,
     cached: VerifiedOpenApiContract?,
+    serve: (VerifiedOpenApiContract) -> ContractAcquisitionOutcome,
     vararg catalogs: CatalogReleases?,
 ): ContractAcquisitionOutcome? = cached
     ?.takeIf { cachePolicy == AcquisitionCachePolicy.Refresh }
     ?.takeIf { catalogs.any { catalog -> catalog != null && catalog.source != CatalogSource.Downloaded } }
-    ?.let(ContractAcquisitionOutcome::Acquired)
+    ?.let(serve)
