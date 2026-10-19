@@ -1,12 +1,19 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.mutableStateOf
+import java.io.File
+import java.io.FileFilter
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Path
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
+import uk.co.caprica.vlcj.factory.discovery.provider.DirectoryProviderDiscoveryStrategy
 import uk.co.caprica.vlcj.factory.discovery.provider.DiscoveryDirectoryProvider
+import uk.co.caprica.vlcj.factory.discovery.strategy.LinuxNativeDiscoveryStrategy
+import uk.co.caprica.vlcj.factory.discovery.strategy.NativeDiscoveryStrategy
+import uk.co.caprica.vlcj.factory.discovery.strategy.OsxNativeDiscoveryStrategy
+import uk.co.caprica.vlcj.factory.discovery.strategy.WindowsNativeDiscoveryStrategy
 
 /**
  * Finds libVLC once per process and owns the shared player factory.
@@ -26,7 +33,7 @@ internal class DesktopLibVlcRuntime(private val enabled: Boolean) {
     val libraryDirectory: String? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         if (!enabled) return@lazy null
         try {
-            val discovery = NativeDiscovery()
+            val discovery = NativeDiscovery(*desktopLibVlcDiscoveryStrategies())
             // A library already on the default search path reports no directory.
             if (discovery.discover()) discovery.discoveredPath() ?: "" else null
         } catch (_: LinkageError) {
@@ -107,6 +114,53 @@ class DesktopBundledLibVlcDirectoryProvider : DiscoveryDirectoryProvider {
         operatingSystem = System.getProperty("os.name").orEmpty(),
     )
 }
+
+/**
+ * vlcj's own strategies, with each candidate directory checked directly.
+ *
+ * vlcj searches every candidate recursively and follows symbolic links, so without libVLC it walks
+ * all of /usr/lib, /usr/local/lib, and every PATH entry. That takes minutes or longer, and the
+ * viewer hides its external-player fallback until discovery ends. The candidates, their order, and
+ * the per-OS loading and plugin path handling stay vlcj's; only the subdirectory search is gone.
+ */
+internal fun desktopLibVlcDiscoveryStrategies(): Array<NativeDiscoveryStrategy> = arrayOf(
+    DesktopLibVlcDirectDiscoveryStrategy(
+        LinuxNativeDiscoveryStrategy(),
+        listOf(Regex("libvlc\\.so(?:\\.\\d)*"), Regex("libvlccore\\.so(?:\\.\\d)*")),
+    ),
+    DesktopLibVlcDirectDiscoveryStrategy(
+        OsxNativeDiscoveryStrategy(),
+        listOf(Regex("libvlc\\.dylib"), Regex("libvlccore\\.dylib")),
+    ),
+    DesktopLibVlcDirectDiscoveryStrategy(
+        WindowsNativeDiscoveryStrategy(),
+        listOf(Regex("libvlc\\.dll"), Regex("libvlccore\\.dll")),
+    ),
+)
+
+internal class DesktopLibVlcDirectDiscoveryStrategy(
+    private val delegate: DirectoryProviderDiscoveryStrategy,
+    private val libraryNames: List<Regex>,
+    private val candidates: () -> List<String> = delegate::discoveryDirectories,
+) : NativeDiscoveryStrategy {
+    override fun supported(): Boolean = delegate.supported()
+
+    override fun discover(): String? = firstDirectoryContainingLibraries(candidates(), libraryNames)
+
+    override fun onFound(path: String): Boolean = delegate.onFound(path)
+
+    override fun onSetPluginPath(path: String): Boolean = delegate.onSetPluginPath(path)
+}
+
+/** The first of [directories] that itself holds a file matching each of [libraryNames]; subdirectories are never searched. */
+internal fun firstDirectoryContainingLibraries(directories: List<String>, libraryNames: List<Regex>): String? =
+    directories.asSequence()
+        .map(::File)
+        .firstOrNull { directory ->
+            val names = directory.listFiles(FileFilter { it.isFile })?.map(File::getName).orEmpty()
+            libraryNames.all { pattern -> names.any(pattern::matches) }
+        }
+        ?.absolutePath
 
 /**
  * The directory holding the bundled libVLC library, or null when this package carries none.

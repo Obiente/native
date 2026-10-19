@@ -396,7 +396,7 @@ guarantees, not claims about a published installer; the code may have changed.
 
 ### Desktop video playback
 
-**Last reviewed: 2026-10-17.** These are source, deterministic-test, and local
+**Last reviewed: 2026-10-19.** These are source, deterministic-test, and local
 build observations, not claims about a published installer; the code and
 packaging may have changed.
 
@@ -412,7 +412,13 @@ packaging may have changed.
   and L seek 10 seconds, and M mutes. Arrow keys keep moving between media
   items.
 - libVLC is found once per process (`DesktopLibVlcRuntime.kt`). A copy bundled
-  in the package is preferred over a system VLC. Windows and macOS packages
+  in the package is preferred over a system VLC. Discovery uses vlcj's
+  candidate directories and order (the bundled copy, a vlcj configuration
+  file, the JNA library path, the
+  application directory, VLC's install or well-known library directories, and
+  PATH) but checks each directory itself and never searches below it, so a
+  machine without libVLC settles quickly instead of scanning whole system
+  trees. `DesktopLibVlcDiscoveryTest` covers this. Windows and macOS packages
   stage VideoLAN's VLC 3.0.24 release libraries and playback plugins, pinned
   by SHA-256 in `ui/desktop-libvlc.gradle.kts`, with libVLC's LGPL and GPL texts and a
   source link in the packaged `libvlc` folder. Linux packages do not bundle
