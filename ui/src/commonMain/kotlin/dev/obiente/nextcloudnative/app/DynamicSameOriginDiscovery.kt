@@ -264,7 +264,14 @@ private suspend fun discoverOfficialViewerSpecIds(
     }
     // An element that is not an object, or has no string `id`, may have been this app, as in App Store catalogs.
     val identified = catalog.mapNotNull { element -> (element as? JsonObject)?.takeIf { it.viewerAppId() != null } }
-    val appEntry = identified.firstOrNull { entry -> entry.viewerAppId() == appId }
+    // Differing records for this app make every one of them ambiguous; identical copies are read once.
+    val records = identified.filter { entry -> entry.viewerAppId() == appId }.distinct()
+    if (records.size > 1) {
+        probe.record(DynamicServerProbeFailure.UnreadableResponse)
+        diagnostics += "OCS API Viewer listed differing records for $appId (stage: catalog, duplicate app records)."
+        return emptyList()
+    }
+    val appEntry = records.firstOrNull()
     if (appEntry == null) {
         val unidentified = catalog.size - identified.size
         if (unidentified > 0) {
