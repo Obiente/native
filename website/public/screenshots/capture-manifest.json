@@ -521,7 +521,7 @@
         "gradle/wrapper/gradle-wrapper.properties": "aef287d114ce3153c3d535697a61928f5034990d570cbb2e93df549e9671483d",
         "settings.gradle.kts": "0acbe4b907815189abfedb2256c8659558e5a7e6995a3681a2bdfb05e335fd1a",
         "tools/marketing-capture-inputs.txt": "0092b8bc6445328384db348a4fd5eb173c5fe4133d170a193fa7c399dcd411ab",
-        "ui/build.gradle.kts": "ac59459c6765829826db40f60ddab9ca4280a96a54ddb95462d9434704007e0c",
+        "ui/build.gradle.kts": "10b34db1e92891a248ccbbd839fe62c63010bf87e76e3d9e14445080fa708dc9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountHomeWorkspaceStorage.kt": "5e0fa144df65840d15882c7da1dac19041083a302ced40578d07747f8ec7d828",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountPlaybackRetirement.kt": "01069d5a599bbf9dce5c9a152bb771f4bd524de7fb2d74db9c6bf9b774b31cb2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountPrivateMemoryCleanup.kt": "d247d7d310e8579717e243bce827e8ab6d8a8e5a6df011b481e9bc6fc72da862",
