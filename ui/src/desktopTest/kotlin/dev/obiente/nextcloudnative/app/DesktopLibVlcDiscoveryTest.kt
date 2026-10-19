@@ -17,7 +17,7 @@ import uk.co.caprica.vlcj.factory.discovery.strategy.LinuxNativeDiscoveryStrateg
  */
 class DesktopLibVlcDiscoveryTest {
     private val root: Path = Files.createTempDirectory("nc-libvlc-discovery")
-    private val linuxNames = listOf(Regex("libvlc\\.so(?:\\.\\d)*"), Regex("libvlccore\\.so(?:\\.\\d)*"))
+    private val linuxNames = LINUX_LIBVLC_NAMES
 
     @AfterTest
     fun deleteFixture() {
@@ -85,6 +85,82 @@ class DesktopLibVlcDiscoveryTest {
             "Exactly one platform strategy applies on any desktop host.",
         )
     }
+
+    @Test
+    fun aRuntimeOnlyMultiarchInstallOnAnotherArchitectureIsFound() {
+        val usr = root.resolve("usr").toString()
+        val arm = library(root.resolve("usr/lib/aarch64-linux-gnu"), "libvlc.so.5", "libvlccore.so.9")
+            .also { it.resolve("vlc/plugins").createDirectories() }
+        val linux = LinuxNativeDiscoveryStrategy()
+        val strategy = DesktopLibVlcDirectDiscoveryStrategy(linux, linuxNames) {
+            linuxLibVlcCandidates(vlcjLinuxCandidates(usr), "aarch64", usr)
+        }
+
+        assertEquals(arm.toFile().absolutePath, strategy.discover(), "No -dev symlinks are needed.")
+    }
+
+    @Test
+    fun theJvmsOwnTripletIsPreferredOverAnotherArchitecturesCopy() {
+        val usr = root.resolve("usr").toString()
+        val amd = library(root.resolve("usr/lib/x86_64-linux-gnu"), "libvlc.so.5", "libvlccore.so.9")
+        val arm = library(root.resolve("usr/lib/aarch64-linux-gnu"), "libvlc.so.5", "libvlccore.so.9")
+
+        for ((osArch, expected) in listOf("aarch64" to arm, "amd64" to amd)) {
+            assertEquals(
+                expected.toFile().absolutePath,
+                firstDirectoryContainingLibraries(
+                    linuxLibVlcCandidates(vlcjLinuxCandidates(usr), osArch, usr),
+                    linuxNames,
+                ),
+                osArch,
+            )
+        }
+    }
+
+    @Test
+    fun multiarchCandidatesKeepVlcjsOrderAndPutOtherTripletsLast() {
+        val usr = "/usr"
+        val configured = "/opt/configured-vlc"
+        val candidates = linuxLibVlcCandidates(listOf(configured) + vlcjLinuxCandidates(usr) + "/usr/bin", "riscv64", usr)
+
+        assertEquals(listOf(configured, "/usr/lib/riscv64-linux-gnu"), candidates.take(2))
+        assertEquals(vlcjLinuxCandidates(usr) + "/usr/bin", candidates.drop(2).take(7))
+        assertEquals(
+            listOf("aarch64-linux-gnu", "arm-linux-gnueabihf", "powerpc64le-linux-gnu", "s390x-linux-gnu")
+                .map { "/usr/lib/$it" },
+            candidates.drop(9),
+            "Triplets vlcj already names keep their place; nothing appears twice.",
+        )
+        assertEquals(candidates.distinct(), candidates)
+        assertEquals(null, debianMultiarchTriplet("loongarch64"))
+        assertEquals(
+            vlcjLinuxCandidates(usr).size + 5,
+            linuxLibVlcCandidates(vlcjLinuxCandidates(usr), "loongarch64", usr).size,
+            "An unknown architecture only appends the known triplets.",
+        )
+    }
+
+    @Test
+    fun aNonStandardCopyBelowASystemDirectoryIsStillNotWalked() {
+        val usr = root.resolve("usr").toString()
+        library(root.resolve("usr/lib/vlc-custom/lib"), "libvlc.so.5", "libvlccore.so.9")
+        library(root.resolve("usr/lib/x86_64-linux-gnu/nested"), "libvlc.so.5", "libvlccore.so.9")
+        root.resolve("usr/lib64").createDirectories()
+
+        assertNull(
+            firstDirectoryContainingLibraries(linuxLibVlcCandidates(vlcjLinuxCandidates(usr), "amd64", usr), linuxNames),
+        )
+    }
+
+    /** vlcj 4.12.1's Linux well-known directories, in its order, below [usr]. */
+    private fun vlcjLinuxCandidates(usr: String) = listOf(
+        "$usr/lib/x86_64-linux-gnu",
+        "$usr/lib64",
+        "$usr/local/lib64",
+        "$usr/lib/i386-linux-gnu",
+        "$usr/lib",
+        "$usr/local/lib",
+    )
 
     private fun directory(name: String): Path = root.resolve(name).createDirectories()
 

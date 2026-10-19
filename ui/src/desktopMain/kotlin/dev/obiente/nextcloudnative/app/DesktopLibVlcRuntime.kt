@@ -34,7 +34,7 @@ internal class DesktopLibVlcRuntime(private val enabled: Boolean) {
         if (!enabled) return@lazy null
         try {
             val discovery = NativeDiscovery(*desktopLibVlcDiscoveryStrategies())
-            // A library already on the default search path reports no directory.
+            // vlcj 4 has no default-search-path fallback: success always reports a directory.
             if (discovery.discover()) discovery.discoveredPath() ?: "" else null
         } catch (_: LinkageError) {
             null
@@ -122,20 +122,71 @@ class DesktopBundledLibVlcDirectoryProvider : DiscoveryDirectoryProvider {
  * all of /usr/lib, /usr/local/lib, and every PATH entry. That takes minutes or longer, and the
  * viewer hides its external-player fallback until discovery ends. The candidates, their order, and
  * the per-OS loading and plugin path handling stay vlcj's; only the subdirectory search is gone.
+ * Linux also checks the Debian multiarch directories that the recursive search used to reach.
  */
-internal fun desktopLibVlcDiscoveryStrategies(): Array<NativeDiscoveryStrategy> = arrayOf(
-    DesktopLibVlcDirectDiscoveryStrategy(
-        LinuxNativeDiscoveryStrategy(),
-        listOf(Regex("libvlc\\.so(?:\\.\\d)*"), Regex("libvlccore\\.so(?:\\.\\d)*")),
-    ),
-    DesktopLibVlcDirectDiscoveryStrategy(
-        OsxNativeDiscoveryStrategy(),
-        listOf(Regex("libvlc\\.dylib"), Regex("libvlccore\\.dylib")),
-    ),
-    DesktopLibVlcDirectDiscoveryStrategy(
-        WindowsNativeDiscoveryStrategy(),
-        listOf(Regex("libvlc\\.dll"), Regex("libvlccore\\.dll")),
-    ),
+internal fun desktopLibVlcDiscoveryStrategies(
+    osArch: String = System.getProperty("os.arch").orEmpty(),
+): Array<NativeDiscoveryStrategy> {
+    val linux = LinuxNativeDiscoveryStrategy()
+    return arrayOf(
+        DesktopLibVlcDirectDiscoveryStrategy(linux, LINUX_LIBVLC_NAMES) {
+            linuxLibVlcCandidates(linux.discoveryDirectories(), osArch)
+        },
+        DesktopLibVlcDirectDiscoveryStrategy(
+            OsxNativeDiscoveryStrategy(),
+            listOf(Regex("libvlc\\.dylib"), Regex("libvlccore\\.dylib")),
+        ),
+        DesktopLibVlcDirectDiscoveryStrategy(
+            WindowsNativeDiscoveryStrategy(),
+            listOf(Regex("libvlc\\.dll"), Regex("libvlccore\\.dll")),
+        ),
+    )
+}
+
+/** vlcj's Linux names, which accept the versioned runtime files such as `libvlc.so.5`. */
+internal val LINUX_LIBVLC_NAMES = listOf(Regex("libvlc\\.so(?:\\.\\d)*"), Regex("libvlccore\\.so(?:\\.\\d)*"))
+
+/**
+ * vlcj's Linux candidates with Debian multiarch directories added.
+ *
+ * vlcj names only the x86_64 and i386 triplet directories, so on other architectures the distro
+ * libVLC in `/usr/lib/<triplet>` was found only by the recursive search. The JVM's own triplet goes
+ * before vlcj's first system directory. vlcj stops at the first directory holding libVLC even when
+ * that copy cannot load, so the other triplets go last, where they never hide a loadable copy.
+ */
+internal fun linuxLibVlcCandidates(
+    vlcjCandidates: List<String>,
+    osArch: String,
+    usrDirectory: String = "/usr",
+): List<String> {
+    val native = debianMultiarchTriplet(osArch)?.let { "$usrDirectory/lib/$it" }
+    val others = DEBIAN_MULTIARCH_TRIPLETS.map { "$usrDirectory/lib/$it" }
+    val firstSystem = vlcjCandidates.indexOfFirst { it.startsWith("$usrDirectory/") }
+        .takeIf { it >= 0 } ?: vlcjCandidates.size
+    return (vlcjCandidates.take(firstSystem) + listOfNotNull(native) + vlcjCandidates.drop(firstSystem) + others)
+        .distinct()
+}
+
+/** The Debian multiarch triplet for a JVM `os.arch` value, or null when it is not a known one. */
+internal fun debianMultiarchTriplet(osArch: String): String? = when (osArch.lowercase()) {
+    "amd64", "x86_64" -> "x86_64-linux-gnu"
+    "aarch64", "arm64" -> "aarch64-linux-gnu"
+    "arm", "armv7l", "armhf" -> "arm-linux-gnueabihf"
+    "x86", "i386", "i486", "i586", "i686" -> "i386-linux-gnu"
+    "riscv64" -> "riscv64-linux-gnu"
+    "ppc64le" -> "powerpc64le-linux-gnu"
+    "s390x" -> "s390x-linux-gnu"
+    else -> null
+}
+
+private val DEBIAN_MULTIARCH_TRIPLETS = listOf(
+    "x86_64-linux-gnu",
+    "aarch64-linux-gnu",
+    "arm-linux-gnueabihf",
+    "i386-linux-gnu",
+    "riscv64-linux-gnu",
+    "powerpc64le-linux-gnu",
+    "s390x-linux-gnu",
 )
 
 internal class DesktopLibVlcDirectDiscoveryStrategy(

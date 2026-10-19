@@ -414,11 +414,18 @@ packaging may have changed.
 - libVLC is found once per process (`DesktopLibVlcRuntime.kt`). A copy bundled
   in the package is preferred over a system VLC. Discovery uses vlcj's
   candidate directories and order (the bundled copy, a vlcj configuration
-  file, the JNA library path, the
-  application directory, VLC's install or well-known library directories, and
-  PATH) but checks each directory itself and never searches below it, so a
-  machine without libVLC settles quickly instead of scanning whole system
-  trees. `DesktopLibVlcDiscoveryTest` covers this. Windows and macOS packages
+  file, the JNA library path, the application directory, VLC's install or
+  well-known library directories, and PATH) but checks each directory itself
+  and never searches below it, so a machine without libVLC settles quickly
+  instead of scanning whole system trees. On Linux the well-known directories
+  are the JVM's own Debian multiarch directory (for example
+  `/usr/lib/aarch64-linux-gnu`) first, then vlcj's `/usr/lib/x86_64-linux-gnu`,
+  `/usr/lib64`, `/usr/local/lib64`, `/usr/lib/i386-linux-gnu`, `/usr/lib`, and
+  `/usr/local/lib`; the remaining Debian triplet directories come after PATH.
+  Versioned runtime names such as `libvlc.so.5` are accepted, and vlcj sets
+  the plugin path to `<directory>/plugins` or `<directory>/vlc/plugins`
+  unless `VLC_PLUGIN_PATH` is already set.
+  `DesktopLibVlcDiscoveryTest` covers this. Windows and macOS packages
   stage VideoLAN's VLC 3.0.24 release libraries and playback plugins, pinned
   by SHA-256 in `ui/desktop-libvlc.gradle.kts`, with libVLC's LGPL and GPL texts and a
   source link in the packaged `libvlc` folder. Linux packages do not bundle
