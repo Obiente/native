@@ -15,13 +15,27 @@ import org.json.JSONObject
  */
 interface VerifiedContractCache {
     fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract?
-    fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract)
+
+    /**
+     * Persists [contract] for [request]. Returns [VerifiedContractStore.InvalidationNotCleared] without
+     * persisting when an earlier invalidation of the entry cannot be cleared, because a later load
+     * would discard the new contract. Other storage failures throw.
+     */
+    fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract): VerifiedContractStore
 
     /**
      * Forgets only the contract cached for [request]; other entries stay. A discarded entry is never
      * served again, even when it cannot be deleted; the result says how that was ensured.
      */
     fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval
+}
+
+/** Whether a verified contract was persisted. Bounded and typed, for local diagnostics. */
+enum class VerifiedContractStore {
+    Stored,
+
+    /** An invalidation marker for the entry could not be removed, so the contract was not persisted. */
+    InvalidationNotCleared,
 }
 
 /** How a cached verified contract was discarded. Bounded and typed, for local diagnostics. */
@@ -44,8 +58,9 @@ class MemoryVerifiedContractCache : VerifiedContractCache {
 
     override fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract? = entries[request]
 
-    override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) {
+    override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract): VerifiedContractStore {
         entries[request] = contract
+        return VerifiedContractStore.Stored
     }
 
     override fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval {
@@ -89,7 +104,7 @@ class FileVerifiedContractCache internal constructor(
         }
     }
 
-    override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract): Unit =
+    override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract): VerifiedContractStore =
         synchronized(lock) {
             require(contract.appId == request.appId) { "The verified contract belongs to a different app." }
             val bytes = contract.toJson().toString().encodeToByteArray()
@@ -98,6 +113,10 @@ class FileVerifiedContractCache internal constructor(
             }
             check(directory.exists() || directory.mkdirs()) { "Could not create the verified contract cache." }
             val target = cacheFile(request)
+            // A marker is cleared before the replacement is published, so a marker always predates the
+            // entry it invalidates. A marker that cannot be cleared would make the next load delete the
+            // new contract, so the contract is not persisted and the caller keeps it in memory.
+            if (!clearInvalidation(target)) return VerifiedContractStore.InvalidationNotCleared
             val temporary = File(directory, "${target.name}.tmp-${nowMillis()}")
             try {
                 temporary.outputStream().buffered().use { output ->
@@ -107,11 +126,10 @@ class FileVerifiedContractCache internal constructor(
                 check(!target.exists() || files.delete(target)) { "Could not replace the cached verified contract." }
                 check(temporary.renameTo(target)) { "Could not publish the cached verified contract." }
                 check(target.setLastModified(nowMillis())) { "Could not timestamp the cached verified contract." }
-                // A newly verified contract supersedes an earlier invalidation of the same entry.
-                clearInvalidation(target)
             } finally {
                 if (temporary.exists()) temporary.delete()
             }
+            VerifiedContractStore.Stored
         }
 
     override fun remove(request: ContractAcquisitionRequest): VerifiedContractRemoval = synchronized(lock) {
@@ -137,10 +155,15 @@ class FileVerifiedContractCache internal constructor(
         return true
     }
 
-    /** The process record stays while a marker cannot be removed, so the entry remains a miss. */
-    private fun clearInvalidation(file: File) {
+    /**
+     * Removes any invalidation of [file] and returns true when none remains. The process record stays
+     * while a marker cannot be removed, so the entry remains a miss.
+     */
+    private fun clearInvalidation(file: File): Boolean {
         val marker = invalidationMarker(file)
-        if (!marker.exists() || files.delete(marker)) invalidatedForProcess -= file.absolutePath
+        val cleared = !marker.exists() || files.delete(marker)
+        if (cleared) invalidatedForProcess -= file.absolutePath
+        return cleared
     }
 
     private fun invalidationMarker(file: File): File = File(file.parentFile, "${file.name}$INVALIDATION_SUFFIX")

@@ -98,7 +98,8 @@ class VerifiedContractCacheTest {
                 return expected
             }
 
-            override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = Unit
+            override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) =
+                VerifiedContractStore.Stored
 
             override fun remove(request: ContractAcquisitionRequest) = VerifiedContractRemoval.Removed
         }

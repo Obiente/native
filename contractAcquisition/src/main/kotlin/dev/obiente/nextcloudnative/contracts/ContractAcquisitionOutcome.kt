@@ -32,7 +32,11 @@ enum class ContractUnavailableReason {
 
 /** The typed result of [SignedAppStoreContractAcquirer.acquireOutcome]. Failures are thrown instead. */
 sealed interface ContractAcquisitionOutcome {
-    data class Acquired(val contract: VerifiedOpenApiContract) : ContractAcquisitionOutcome
+    /** [cacheStore] says whether the contract was persisted; it is served either way. */
+    data class Acquired(
+        val contract: VerifiedOpenApiContract,
+        val cacheStore: VerifiedContractStore = VerifiedContractStore.Stored,
+    ) : ContractAcquisitionOutcome
 
     data class Unavailable(val reason: ContractUnavailableReason) : ContractAcquisitionOutcome
 }

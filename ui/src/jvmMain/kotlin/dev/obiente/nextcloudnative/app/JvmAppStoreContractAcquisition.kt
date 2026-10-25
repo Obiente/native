@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractRemoval
+import dev.obiente.nextcloudnative.contracts.VerifiedContractStore
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
@@ -27,12 +28,29 @@ fun acquireAppStoreContract(
     onDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
 ): AppStoreContractAcquisition {
     if (request.cachePolicy != AppStoreCachePolicy.DiscardCachedContract) {
-        return acquireAppStoreContract(request, acquirer::acquireOutcome)
+        return acquireAppStoreContract(request) { contractRequest, cachePolicy ->
+            acquirer.acquireOutcome(contractRequest, cachePolicy).also { outcome ->
+                val cacheStore = (outcome as? ContractAcquisitionOutcome.Acquired)?.cacheStore
+                if (cacheStore != null && cacheStore != VerifiedContractStore.Stored) {
+                    onDiagnostic(verifiedContractStoreSkipped(cacheStore))
+                }
+            }
+        }
     }
     val removal = acquirer.invalidateVerifiedContract(request.toContractAcquisitionRequest())
     if (removal != VerifiedContractRemoval.Removed) onDiagnostic(verifiedContractDeletionFailure(removal))
     return AppStoreContractAcquisition.Unavailable(AppStoreContractUnavailableReason.NoUsableContract)
 }
+
+/** A verified contract served from memory because it could not be persisted; only the typed result is recorded. */
+private fun verifiedContractStoreSkipped(cacheStore: VerifiedContractStore) = SupportDiagnosticEventDraft(
+    severity = SupportDiagnosticSeverity.Warning,
+    component = SupportDiagnosticComponent.Cache,
+    operation = "contract.cache.store",
+    outcome = "not_persisted",
+    code = "VERIFIED_CONTRACT_NOT_PERSISTED",
+    fields = listOf(SupportDiagnosticFieldDraft("store", cacheStore.name)),
+)
 
 /** A cached contract that could not be deleted stays invalidated; only the typed removal is recorded. */
 private fun verifiedContractDeletionFailure(removal: VerifiedContractRemoval) = SupportDiagnosticEventDraft(

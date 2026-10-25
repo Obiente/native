@@ -243,9 +243,18 @@ class SignedAppStoreContractAcquirer(
         request: ContractAcquisitionRequest,
         generation: Long,
         contract: VerifiedOpenApiContract,
-    ): ContractAcquisitionOutcome = publicationFence.publish(request, generation, contract) { accepted ->
-        verifiedContracts[request] = accepted
-        runCatching { verifiedContractCache.store(request, accepted) }
+    ): ContractAcquisitionOutcome {
+        var cacheStore = VerifiedContractStore.Stored
+        val outcome = publicationFence.publish(request, generation, contract) { accepted ->
+            verifiedContracts[request] = accepted
+            runCatching { verifiedContractCache.store(request, accepted) }.onSuccess { cacheStore = it }
+        }
+        // The in-memory contract is served even when it could not be persisted; the result says so.
+        return if (outcome is ContractAcquisitionOutcome.Acquired && outcome.contract === contract) {
+            outcome.copy(cacheStore = cacheStore)
+        } else {
+            outcome
+        }
     }
 
     private fun acquireGitHubTagContract(

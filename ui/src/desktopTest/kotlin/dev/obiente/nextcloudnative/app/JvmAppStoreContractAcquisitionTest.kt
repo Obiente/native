@@ -15,6 +15,7 @@ import dev.obiente.nextcloudnative.contracts.VerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractRemoval
 import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
+import dev.obiente.nextcloudnative.contracts.VerifiedContractStore
 import java.net.SocketTimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
@@ -155,7 +156,8 @@ class JvmAppStoreContractAcquisitionTest {
         for (removal in listOf(VerifiedContractRemoval.MarkedInvalid, VerifiedContractRemoval.InvalidatedForProcess)) {
             val cache = object : VerifiedContractCache {
                 override fun load(request: ContractAcquisitionRequest) = null
-                override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = Unit
+                override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) =
+                    VerifiedContractStore.Stored
                 override fun remove(request: ContractAcquisitionRequest) = removal
             }
             val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
