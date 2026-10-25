@@ -25,18 +25,25 @@ class SignedAppStoreContractAcquirer(
     private val appStoreBaseUrl: String = OFFICIAL_APP_STORE_BASE_URL,
     private val requireHttps: Boolean = true,
     private val trustVerifier: AppPackageTrustVerifier = NextcloudAppPackageTrustVerifier(),
-    private val catalogCache: AppStoreCatalogCache = MemoryAppStoreCatalogCache(),
+    catalogCache: AppStoreCatalogCache = MemoryAppStoreCatalogCache(),
     private val verifiedContractCache: VerifiedContractCache = MemoryVerifiedContractCache(),
     private val rawGitHubBaseUrl: String = OFFICIAL_RAW_GITHUB_BASE_URL,
     private val githubApiBaseUrl: String = OFFICIAL_GITHUB_API_BASE_URL,
     private val codeloadGitHubBaseUrl: String = OFFICIAL_CODELOAD_GITHUB_BASE_URL,
-    private val catalogRefreshThrottle: CatalogRefreshThrottle = CatalogRefreshThrottle(),
+    catalogRefreshThrottle: CatalogRefreshThrottle = CatalogRefreshThrottle(),
     private val responseLimits: ContractResponseLimits = ContractResponseLimits(),
 ) {
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
         ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
     private val publicationFence = ContractPublicationFence()
+    private val catalogReader = AppStoreCatalogReader(
+        httpClient,
+        catalogCache,
+        catalogRefreshThrottle,
+        responseLimits.catalogBytes,
+        requireHttps,
+    )
 
     /** Test seam: runs after an acquisition is registered and its generation started. */
     @Volatile
@@ -121,7 +128,7 @@ class SignedAppStoreContractAcquirer(
         if (cached != null && cachePolicy == AcquisitionCachePolicy.UseCache) return serve(cached)
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
-        val platformCatalog = fetchCatalogReleases(compatibleCatalogUrl, request.appId, cachePolicy)
+        val platformCatalog = catalogReader.read(compatibleCatalogUrl, request.appId, cachePolicy)
         // Nothing fresher than a cached contract can come from a platform catalog the window limited.
         servedOnLimitedRefresh(cachePolicy, cached, serve, platformCatalog)?.let { return it }
         val platformReleases = platformCatalog.releases
@@ -129,7 +136,7 @@ class SignedAppStoreContractAcquirer(
             platformReleases.firstOrNull { release -> release.version == installed }
         }
         val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
-            fetchCatalogReleases("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, cachePolicy)
+            catalogReader.read("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, cachePolicy)
         }
         // A refused exact lookup does not end the acquisition: fresh platform candidates are still inspected.
         val exactRelease = exactPlatformRelease
@@ -522,35 +529,6 @@ class SignedAppStoreContractAcquirer(
         }
     }
 
-    private fun fetchCatalogReleases(
-        catalogUrl: String,
-        appId: String,
-        cachePolicy: AcquisitionCachePolicy,
-    ): CatalogReleases {
-        requireSecureUrl(catalogUrl)
-        // A refresh only bypasses the cached copy; the copy stays until a readable catalog replaces it.
-        val refreshAllowed = cachePolicy == AcquisitionCachePolicy.Refresh && catalogRefreshThrottle.tryRefresh(catalogUrl)
-        catalogCache.load(catalogUrl)?.takeUnless { refreshAllowed }?.let { cached ->
-            return parseReleases(cached.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
-                .copy(source = CatalogSource.Cached)
-        }
-        // A retry inside the refresh window never reaches the App Store, even without a cached copy.
-        if (cachePolicy == AcquisitionCachePolicy.Refresh && !refreshAllowed) {
-            return CatalogReleases(emptyList(), source = CatalogSource.RefreshRefused)
-        }
-        val response = execute(Request.Builder().url(catalogUrl).get().build())
-        val bytes = response.use { catalogResponse ->
-            requireSuccessfulSource(catalogResponse) {
-                "Loading the Nextcloud App Store catalog failed (HTTP ${catalogResponse.code})."
-            }
-            requireSecureResponse(catalogResponse)
-            catalogResponse.readBodyLimited(responseLimits.catalogBytes)
-        }
-        // An unreadable document is not cached, so checking again downloads the catalog again.
-        return parseReleases(bytes.decodeToString(), appId, catalogUrl, requireOfficialGitHubHost = requireHttps)
-            .also { parsed -> if (parsed.documentReadable) catalogCache.storeBestEffort(catalogUrl, bytes) }
-    }
-
     private fun execute(request: Request): Response = httpClient.newCall(request).execute()
 
     private fun requireSecureUrl(url: String) {
@@ -752,7 +730,7 @@ internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
     return requiredElement("id") to requiredElement("version")
 }
 
-private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
+internal fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
     val responseBody = body
     val declaredLength = responseBody.contentLength()
     if (declaredLength > maximumBytes) throw ContractSourceTooLargeException(maximumBytes, "The response is too large.")
