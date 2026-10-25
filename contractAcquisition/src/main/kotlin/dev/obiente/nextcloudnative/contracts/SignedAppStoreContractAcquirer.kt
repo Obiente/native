@@ -36,13 +36,15 @@ class SignedAppStoreContractAcquirer(
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
         ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
-    private val publicationFence = ContractPublicationFence()
+    private val catalogFence = CatalogPublicationFence()
+    private val publicationFence = ContractPublicationFence(catalogFence)
     private val catalogReader = AppStoreCatalogReader(
         httpClient,
         catalogCache,
         catalogRefreshThrottle,
         responseLimits.catalogBytes,
         requireHttps,
+        catalogFence,
     )
 
     /** Test seam: runs after an acquisition is registered and its generation started. */
@@ -91,11 +93,7 @@ class SignedAppStoreContractAcquirer(
         }
         return try {
             afterRegistration(request, generation)
-            // Contracts are published through the fence; a no-contract ending is recorded here.
-            when (val outcome = acquireUncoalesced(request, cachePolicy, generation)) {
-                is ContractAcquisitionOutcome.Unavailable -> publicationFence.complete(request, generation, outcome)
-                is ContractAcquisitionOutcome.Acquired -> outcome
-            }.also { acquired -> owner.complete(acquired) }
+            acquireOnCurrentCatalogs(request, cachePolicy, generation).also { acquired -> owner.complete(acquired) }
         } catch (failure: Throwable) {
             owner.completeExceptionally(failure)
             throw failure
@@ -104,11 +102,34 @@ class SignedAppStoreContractAcquirer(
         }
     }
 
-    private fun acquireUncoalesced(
+    /**
+     * Runs the acquisition again while a catalog it read was replaced by a newer, different catalog
+     * before its result was accepted, so no accepted result rests on a superseded catalog.
+     */
+    private fun acquireOnCurrentCatalogs(
         request: ContractAcquisitionRequest,
         cachePolicy: AcquisitionCachePolicy,
         generation: Long,
     ): ContractAcquisitionOutcome {
+        repeat(MAX_CATALOG_ATTEMPTS) {
+            val catalogs = mutableListOf<CatalogObservation>()
+            // Contracts are published through the fence; a no-contract ending is recorded here.
+            when (val outcome = acquireUncoalesced(request, cachePolicy, generation, catalogs)) {
+                is ContractAcquisitionOutcome.Unavailable -> publicationFence.complete(request, generation, outcome, catalogs)
+                else -> outcome
+            }?.let { accepted -> return accepted }
+        }
+        // The catalog kept changing underneath; that proves nothing, so it fences nothing.
+        return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.SourceTemporarilyUnavailable)
+    }
+
+    /** Returns null when a catalog it read was superseded before its contract could be published. */
+    private fun acquireUncoalesced(
+        request: ContractAcquisitionRequest,
+        cachePolicy: AcquisitionCachePolicy,
+        generation: Long,
+        catalogs: MutableList<CatalogObservation>,
+    ): ContractAcquisitionOutcome? {
         requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
         request.installedAppVersion?.let { version ->
@@ -129,6 +150,7 @@ class SignedAppStoreContractAcquirer(
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
         val platformCatalog = catalogReader.read(compatibleCatalogUrl, request.appId, cachePolicy)
+            .also { read -> read.observation?.let(catalogs::add) }
         // Nothing fresher than a cached contract can come from a platform catalog the window limited.
         servedOnLimitedRefresh(cachePolicy, cached, serve, platformCatalog)?.let { return it }
         val platformReleases = platformCatalog.releases
@@ -137,6 +159,7 @@ class SignedAppStoreContractAcquirer(
         }
         val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
             catalogReader.read("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, cachePolicy)
+                .also { read -> read.observation?.let(catalogs::add) }
         }
         // A refused exact lookup does not end the acquisition: fresh platform candidates are still inspected.
         val exactRelease = exactPlatformRelease
@@ -198,6 +221,7 @@ class SignedAppStoreContractAcquirer(
                     return cacheContract(
                         request,
                         generation,
+                        catalogs,
                         linkedContract.mergeVerifiedPackageRoutes(verified),
                     )
                 }
@@ -205,18 +229,18 @@ class SignedAppStoreContractAcquirer(
                 verifiedRouteFallbacks += release to verified
                 continue
             }
-            return cacheContract(request, generation, verified.asPackageContract(request, release))
+            return cacheContract(request, generation, catalogs, verified.asPackageContract(request, release))
         }
 
         for (release in missingPackageContracts) {
             val exact = release.version == request.installedAppVersion
             acquireGitHubTagContract(release, request.installedAppVersion, exact, attempt)?.let { contract ->
-                return cacheContract(request, generation, contract)
+                return cacheContract(request, generation, catalogs, contract)
             }
         }
         val (release, verified) = verifiedRouteFallbacks.firstOrNull()
             ?: return servedOnLimitedRefresh(cachePolicy, cached, serve, allCatalog) ?: attempt.unavailable()
-        return cacheContract(request, generation, verified.asPackageContract(request, release))
+        return cacheContract(request, generation, catalogs, verified.asPackageContract(request, release))
     }
 
     /**
@@ -250,16 +274,18 @@ class SignedAppStoreContractAcquirer(
     )
 
     /**
-     * Publishes [contract] unless [generation] is superseded. A superseded acquisition never reports
-     * its own rejected contract; it reports the newer accepted result. See [ContractPublicationFence].
+     * Publishes [contract], read from [catalogs], unless [generation] is superseded. A superseded
+     * acquisition never reports its own rejected contract; it reports the newer accepted result.
+     * Returns null when a catalog was superseded meanwhile. See [ContractPublicationFence].
      */
     private fun cacheContract(
         request: ContractAcquisitionRequest,
         generation: Long,
+        catalogs: List<CatalogObservation>,
         contract: VerifiedOpenApiContract,
-    ): ContractAcquisitionOutcome {
+    ): ContractAcquisitionOutcome? {
         var cacheStore = VerifiedContractStore.Stored
-        val outcome = publicationFence.publish(request, generation, contract) { accepted ->
+        val outcome = publicationFence.publish(request, generation, contract, catalogs) { accepted ->
             verifiedContracts[request] = accepted
             runCatching { verifiedContractCache.store(request, accepted) }
                 .onSuccess { cacheStore = it }
@@ -556,6 +582,7 @@ class SignedAppStoreContractAcquirer(
         const val OFFICIAL_CODELOAD_GITHUB_BASE_URL = "https://codeload.github.com"
         private val APP_ID_PATTERN = Regex("[A-Za-z0-9_.-]+")
         private val APP_VERSION_PATTERN = Regex("[0-9A-Za-z][0-9A-Za-z.+_-]*")
+        private const val MAX_CATALOG_ATTEMPTS = 3
     }
 }
 

@@ -240,7 +240,7 @@ class ContractPublicationFenceTest {
 
     private fun unavailable(reason: ContractUnavailableReason) = ContractAcquisitionOutcome.Unavailable(reason)
 
-    private fun acquired(outcome: ContractAcquisitionOutcome) = assertIs<ContractAcquisitionOutcome.Acquired>(outcome).contract
+    private fun acquired(outcome: ContractAcquisitionOutcome?) = assertIs<ContractAcquisitionOutcome.Acquired>(outcome).contract
 
     private fun contract(version: Int) = VerifiedOpenApiContract(
         appId = "cospend",

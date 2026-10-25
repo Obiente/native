@@ -21,6 +21,13 @@ package dev.obiente.nextcloudnative.contracts
  * |                                                | `latest` is a no-contract result            |                              |
  * | Invalidation (not a generation)                | fenced = started; latest = invalidated      |                              |
  *
+ * A contract or definitive result also records the catalogs it rests on, and both rows compose with
+ * [CatalogPublicationFence]. A result whose catalog is no longer current, because a download that
+ * started later replaced it with different content, is not accepted: the caller gets null and
+ * acquires again from the newer catalog. A superseded generation whose catalogs are current is
+ * accepted after all when the latest accepted result rests on a catalog that is no longer current,
+ * so a result read from an older catalog never outranks one read from the newer catalog.
+ *
  * Definitive reasons are evidence about the release: [ContractUnavailableReason.NoMatchingRelease],
  * [ContractUnavailableReason.NoUsableContract], and [ContractUnavailableReason.MalformedSource].
  * A transient result, such as a refused linked source, an unreadable catalog, a throttled retry, a
@@ -40,11 +47,12 @@ package dev.obiente.nextcloudnative.contracts
  * cancelled or failed acquisition cannot hold back later ones. A definitive no-contract result does
  * not remove a previously cached contract: a refresh that finds nothing keeps the cached one.
  */
-internal class ContractPublicationFence {
+internal class ContractPublicationFence(private val catalogs: CatalogPublicationFence = CatalogPublicationFence()) {
     private class State {
         var started = 0L
         var fenced = 0L
         var latest: ContractAcquisitionOutcome? = null
+        var latestCatalogs: List<CatalogObservation> = emptyList()
     }
 
     private val states = HashMap<ContractAcquisitionRequest, State>()
@@ -64,34 +72,41 @@ internal class ContractPublicationFence {
     }
 
     /**
-     * Publishes [contract] with [store] unless [generation] is superseded. Returns the outcome the
-     * acquisition reports: its own contract, or the newer accepted result.
+     * Publishes [contract], read from [catalogs], with [store] unless [generation] is superseded.
+     * Returns the outcome the acquisition reports: its own contract, or the newer accepted result.
+     * Returns null when one of [catalogs] is no longer current, so the acquisition must run again.
      */
     fun publish(
         request: ContractAcquisitionRequest,
         generation: Long,
         contract: VerifiedOpenApiContract,
+        catalogs: List<CatalogObservation> = emptyList(),
         store: (VerifiedOpenApiContract) -> Unit,
-    ): ContractAcquisitionOutcome = synchronized(states) {
+    ): ContractAcquisitionOutcome? = synchronized(states) {
+        if (!catalogs.areCurrent()) return null
         val state = states.getOrPut(request, ::State)
-        if (generation <= state.fenced) return state.supersededOutcome()
+        if (state.supersedes(generation)) return state.supersededOutcome()
         store(contract)
-        ContractAcquisitionOutcome.Acquired(contract).also { accepted -> state.accept(generation, accepted) }
+        ContractAcquisitionOutcome.Acquired(contract).also { accepted -> state.accept(generation, accepted, catalogs) }
     }
 
     /**
-     * Records an acquisition that ended without a contract. A definitive outcome fences every older
-     * generation; a transient one changes nothing. Returns the outcome the acquisition reports.
+     * Records an acquisition that ended without a contract after reading [catalogs]. A definitive
+     * outcome fences every older generation; a transient one changes nothing. Returns the outcome the
+     * acquisition reports, or null when a definitive outcome rests on a catalog that is no longer
+     * current, so the acquisition must run again.
      */
     fun complete(
         request: ContractAcquisitionRequest,
         generation: Long,
         outcome: ContractAcquisitionOutcome.Unavailable,
-    ): ContractAcquisitionOutcome = synchronized(states) {
+        catalogs: List<CatalogObservation> = emptyList(),
+    ): ContractAcquisitionOutcome? = synchronized(states) {
         if (!outcome.reason.isDefinitive()) return outcome
+        if (!catalogs.areCurrent()) return null
         val state = states.getOrPut(request, ::State)
-        if (generation <= state.fenced) return state.supersededOutcome()
-        outcome.also { accepted -> state.accept(generation, accepted) }
+        if (state.supersedes(generation)) return state.supersededOutcome()
+        outcome.also { accepted -> state.accept(generation, accepted, catalogs) }
     }
 
     /**
@@ -129,13 +144,20 @@ internal class ContractPublicationFence {
         val state = states.getOrPut(request, ::State)
         state.fenced = maxOf(state.fenced, state.started)
         state.latest = INVALIDATED
+        state.latestCatalogs = emptyList()
         discard()
     }
 
-    private fun State.accept(generation: Long, outcome: ContractAcquisitionOutcome) {
-        fenced = generation
+    /** Whether [generation] is older than the latest accepted result, which still rests on current catalogs. */
+    private fun State.supersedes(generation: Long): Boolean = generation <= fenced && latestCatalogs.areCurrent()
+
+    private fun State.accept(generation: Long, outcome: ContractAcquisitionOutcome, catalogs: List<CatalogObservation>) {
+        fenced = maxOf(fenced, generation)
         latest = outcome
+        latestCatalogs = catalogs
     }
+
+    private fun List<CatalogObservation>.areCurrent(): Boolean = all(catalogs::isCurrent)
 
     /** Only reached after an accepted result or an invalidation, so `latest` is always set. */
     private fun State.supersededOutcome(): ContractAcquisitionOutcome = checkNotNull(latest)

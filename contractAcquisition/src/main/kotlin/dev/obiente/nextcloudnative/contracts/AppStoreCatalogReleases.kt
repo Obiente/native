@@ -58,6 +58,8 @@ internal data class CatalogReleases(
     val releases: List<AppStoreRelease>,
     val malformed: List<MalformedCatalogEntry> = emptyList(),
     val source: CatalogSource = CatalogSource.Downloaded,
+    /** The readable catalog these releases came from, or null when none was read. */
+    val observation: CatalogObservation? = null,
 ) {
     /** False when the whole document was unreadable; such a document must not be cached. */
     val documentReadable: Boolean get() = malformed.none { entry -> entry.field == MalformedCatalogField.Document }

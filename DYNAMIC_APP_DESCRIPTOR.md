@@ -318,7 +318,8 @@ none of them provides a contract does the refused catalog make the result
 `RecentlyChecked`. Automatic discovery
 without a cached catalog downloads it normally. A forced download that fails or
 is unreadable leaves the cached catalog in place, because only a readable
-catalog replaces it.
+catalog replaces it, and an older download never replaces a newer one; see the
+publication order below.
 
 The same policy covers verified contracts. Automatic discovery serves a cached
 verified contract. A refresh looks past it and downloads the package or linked
@@ -391,6 +392,41 @@ a promotion never replaces a contract already in memory. The ordering is kept in
 another acquisition, so a cancelled or failed acquisition cannot hold back
 later ones.
 
+Catalog downloads are ordered per catalog URL by
+[`CatalogPublicationFence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/CatalogPublicationFence.kt).
+A download takes a generation before its request is sent, and its readable
+catalog replaces the cached copy, in memory or on disk, only if no download of
+the same URL that started later was stored first. As for contracts, only
+evidence fences: an unreadable catalog, an HTTP or network fault, a refused
+refresh, or a cancellation stores nothing and fences nothing, so an older
+download that succeeds afterwards is still stored. The fence records the digest
+of the newest catalog it accepted, even when storing it failed, and a cached
+copy that does not match is read as a miss.
+
+The two orderings compose. A contract or definitive no-contract result records
+the catalogs it was read from, and it is accepted only while each of them is
+still the newest catalog for its URL; otherwise the acquisition runs again from
+the newer catalog, up to three times, and then reports the source as
+temporarily unavailable, which fences nothing. A result read from the newer
+catalog outranks an accepted result read from a catalog that was since
+replaced, even if that result's acquisition started later. A catalog download
+that finishes after a refresh therefore cannot bring back a removed release.
+
+Every cache that contract acquisition writes, and what keeps an older writer
+from finishing over a newer one:
+
+| Cache | Key | Writers | Ordering |
+| --- | --- | --- | --- |
+| App Store catalog, in memory or on disk | Catalog URL; a SHA-256 file name on disk | A readable download in `AppStoreCatalogReader` | `CatalogPublicationFence` by download generation; the file cache also holds one lock for every read and write |
+| Verified contract, in memory | App, server version, installed version | Publication, invalidation, and promotion of a disk read | `ContractPublicationFence`: publish, invalidate, and promote each run under its lock and generation rules |
+| Verified contract, on disk | SHA-256 of the same key | Publication stores, invalidation removes; a read deletes only an invalidated entry | Stores and removals run inside the contract fence; the cache holds one lock and the state table above |
+| Refresh window | Catalog URL | `CatalogRefreshThrottle.tryRefresh` at the start of a refresh | One atomic update per URL that also reads the clock, so a caller that read the clock earlier cannot move the window back |
+| Acquisitions in flight | Request and cache policy | Registration and completion in `acquireOutcome` | Registered with its generation under the contract fence lock; removed only by the acquisition that registered it |
+| Fence state | Catalog URL; request | The two fences | Counters only grow, each under its fence's lock |
+
+The fences are in memory for each acquirer, so after a restart the first
+results are ordered from that point on.
+
 [`DynamicSameOriginDiscovery.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicSameOriginDiscovery.kt)
 records same-origin probe results as typed `DynamicServerProbeFailure` values.
 When probes disagree, the highest-precedence result wins, and the first one
@@ -459,7 +495,8 @@ only genuine client faults remain unexpected. Size limits throw
 | Catalog entry | Missing value, a required value of the wrong JSON type, or a download that is not an HTTP URL | Malformed source when it would be selected |
 | Candidates exhausted | A catalog was unreadable, or an exact, compatible, or unidentified entry was dropped, and no inspected candidate has a contract | Unreadable catalog or malformed source, not no usable contract |
 | Verified contract publication | A newer generation published a contract or ended without one definitively, or an invalidation happened | Not published; the newest accepted result is reported |
-| Catalog cache write | Local storage failure | Ignored |
+| Catalog cache write | Local storage failure | Ignored; the next read of the older cached copy is a miss |
+| Catalog cache write | A download of the same URL that started later was already stored | Not stored; a result read from it is not accepted and the acquisition runs again |
 | Explicit retry inside the refresh window without a cached copy | None | No request for that catalog; candidates from the other catalog are still inspected, and recently checked only if none provides a contract |
 | Package verification | The package's signature, certificate, chain, revocation, identity, archive structure, or app metadata rejected | Verification failed |
 | Package verification | Bundled root certificate or revocation list missing, unreadable, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
