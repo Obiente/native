@@ -1,11 +1,12 @@
 package dev.obiente.nextcloudnative.contracts
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -13,7 +14,10 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 
-/** An invalidation marker is cleared before a replacement is published, never after. */
+/**
+ * A store deletes an invalidated entry before it clears the invalidation, and clears the invalidation
+ * before it writes the replacement, so no failure can make an invalidated or replaced entry readable.
+ */
 class VerifiedContractStoreOrderTest {
     private val directory: File = Files.createTempDirectory("verified-contract-store-order").toFile()
     private val request = ContractAcquisitionRequest("cospend", "34.0.3", "4.0.2")
@@ -24,80 +28,191 @@ class VerifiedContractStoreOrderTest {
     }
 
     @Test
-    fun `a marker is cleared before the replacement is published, and the replacement survives a restart`() {
-        val files = RecordingFiles(deletable = false)
-        val cache = FileVerifiedContractCache(directory, { NOW }, files)
-        cache.store(request, contract("old"))
-        assertEquals(VerifiedContractRemoval.MarkedInvalid, cache.remove(request))
+    fun `the invalidated entry is deleted before its marker, and the replacement survives a restart`() {
+        val files = ScriptedFiles()
+        val cache = invalidatedOldEntry(files)
 
-        files.deletable = true
         assertEquals(VerifiedContractStore.Stored, cache.store(request, contract("new")))
-        // When the marker was deleted, the new contract had not been published yet.
-        assertEquals(listOf("marker deleted while the entry held: old"), files.markerDeletions)
-        assertTrue(directory.listFiles().orEmpty().none { it.name.endsWith(".invalid") })
-        assertEquals("new", FileVerifiedContractCache(directory, { NOW }).load(request)?.document)
+        assertEquals(listOf("delete entry", "delete marker", "write temporary"), files.events)
+        assertEquals(listOf("entry"), kinds())
+        assertEquals("new", restarted().load(request)?.document)
     }
 
     @Test
-    fun `a marker that cannot be cleared leaves the replacement unpersisted instead of self-discarding`() {
-        val files = RecordingFiles(deletable = false)
-        val cache = FileVerifiedContractCache(directory, { NOW }, files)
-        cache.store(request, contract("old"))
-        assertEquals(VerifiedContractRemoval.MarkedInvalid, cache.remove(request))
+    fun `an invalidated entry that cannot be deleted keeps its invalidation and nothing is written`() {
+        val files = ScriptedFiles()
+        val cache = invalidatedOldEntry(files)
+        files.entryDeletable = false
 
         assertEquals(VerifiedContractStore.InvalidationNotCleared, cache.store(request, contract("new")))
-        // The new contract was never written where the next load would delete it.
-        val entries = directory.listFiles().orEmpty().filterNot { it.name.endsWith(".invalid") }
-        assertEquals(listOf("old"), entries.map { org.json.JSONObject(it.readText()).getString("document") })
-        assertNull(FileVerifiedContractCache(directory, { NOW }, files).load(request))
+        assertEquals(listOf("delete entry (failed)"), files.events)
+        assertEquals(listOf("entry", "marker"), kinds())
+        assertEquals(listOf("old"), documents())
+        assertNull(cache.load(request))
+        // The in-process record was kept as well: losing the marker does not expose the entry here.
+        markers().forEach(File::delete)
+        assertNull(cache.load(request))
     }
 
     @Test
-    fun `the acquirer serves an unpersisted contract from memory and reports it`() {
-        MockWebServer().use { server ->
-            server.start()
-            val files = RecordingFiles(deletable = false)
-            val cache = FileVerifiedContractCache(directory, { NOW }, files)
-            cache.store(request, contract("old"))
-            cache.remove(request)
-            val acquirer = acquirer(server, cache)
-            enqueueCatalogAndPackage(server)
+    fun `a full disk after the invalidated entry is deleted leaves nothing readable, even after a restart`() {
+        val files = ScriptedFiles()
+        val cache = invalidatedOldEntry(files)
+        files.writable = false
 
-            val outcome = assertIs<ContractAcquisitionOutcome.Acquired>(acquirer.acquireOutcome(request))
-            assertEquals("{}", outcome.contract.document)
-            assertEquals(VerifiedContractStore.InvalidationNotCleared, outcome.cacheStore)
-            // The next automatic discovery is served from memory without a request.
-            val requests = server.requestCount
-            assertEquals("{}", assertIs<ContractAcquisitionOutcome.Acquired>(acquirer.acquireOutcome(request)).contract.document)
-            assertEquals(requests, server.requestCount)
-        }
+        assertFailsWith<IOException> { cache.store(request, contract("new")) }
+        assertEquals(listOf("delete entry", "delete marker", "write temporary (failed)"), files.events)
+        // No invalidated entry remains, so no marker is needed, and no temporary file is left.
+        assertEquals(emptyList<String>(), kinds())
+        assertNull(cache.load(request))
+        assertNull(restarted().load(request))
+
+        files.writable = true
+        assertEquals(VerifiedContractStore.Stored, cache.store(request, contract("newer")))
+        assertEquals("newer", restarted().load(request)?.document)
+    }
+
+    @Test
+    fun `a marker left without its entry is cleared before the replacement is written`() {
+        val files = ScriptedFiles()
+        invalidatedOldEntry(files)
+        // The process died after a store deleted the invalidated entry but before it cleared the marker.
+        entries().forEach(File::delete)
+        val cache = FileVerifiedContractCache(directory, { NOW }, files)
+
+        invalidatedMarkerOnly()
+        assertEquals(VerifiedContractStore.Stored, cache.store(request, contract("new")))
+        assertEquals(listOf("delete marker", "write temporary"), files.events)
+        assertEquals("new", restarted().load(request)?.document)
+    }
+
+    @Test
+    fun `a marker without its entry that cannot be cleared refuses the store`() {
+        val files = ScriptedFiles()
+        invalidatedOldEntry(files)
+        entries().forEach(File::delete)
+        files.markerDeletable = false
+        val cache = FileVerifiedContractCache(directory, { NOW }, files)
+
+        assertEquals(VerifiedContractStore.InvalidationNotCleared, cache.store(request, contract("new")))
+        assertEquals(listOf("delete marker (failed)"), files.events)
+        assertEquals(listOf("marker"), kinds())
     }
 
     @Test
     fun `a store without any invalidation is unchanged`() {
-        val files = RecordingFiles(deletable = true)
+        val files = ScriptedFiles()
         val cache = FileVerifiedContractCache(directory, { NOW }, files)
         assertEquals(VerifiedContractStore.Stored, cache.store(request, contract("first")))
         assertEquals(VerifiedContractStore.Stored, cache.store(request, contract("second")))
-        assertEquals(emptyList<String>(), files.markerDeletions)
-        assertEquals("second", FileVerifiedContractCache(directory, { NOW }).load(request)?.document)
-        assertFalse(directory.listFiles().orEmpty().any { it.name.endsWith(".invalid") })
+        assertEquals(listOf("write temporary", "write temporary", "delete entry"), files.events)
+        assertEquals(listOf("entry"), kinds())
+        assertEquals("second", restarted().load(request)?.document)
     }
 
-    private class RecordingFiles(var deletable: Boolean) : VerifiedContractFileOperations {
-        val markerDeletions = mutableListOf<String>()
+    @Test
+    fun `a valid entry that cannot be replaced is invalidated instead of outliving the newer contract`() {
+        val files = ScriptedFiles()
+        val cache = FileVerifiedContractCache(directory, { NOW }, files)
+        cache.store(request, contract("old"))
+        files.entryDeletable = false
+
+        assertFailsWith<IllegalStateException> { cache.store(request, contract("new")) }
+        assertEquals(listOf("entry", "marker"), kinds())
+        assertNull(cache.load(request))
+        assertNull(FileVerifiedContractCache(directory, { NOW }, files).load(request))
+    }
+
+    @Test
+    fun `a full disk while replacing a valid entry deletes the older entry`() {
+        val files = ScriptedFiles()
+        val cache = FileVerifiedContractCache(directory, { NOW }, files)
+        cache.store(request, contract("old"))
+        files.writable = false
+
+        assertFailsWith<IOException> { cache.store(request, contract("new")) }
+        assertEquals(emptyList<String>(), kinds())
+        assertNull(restarted().load(request))
+    }
+
+    @Test
+    fun `the acquirer serves an unpersisted contract from memory and reports why`() {
+        for ((breakStore, expected) in listOf(
+            { files: ScriptedFiles -> files.entryDeletable = false } to VerifiedContractStore.InvalidationNotCleared,
+            { files: ScriptedFiles -> files.writable = false } to VerifiedContractStore.Failed,
+        )) {
+            directory.listFiles().orEmpty().forEach(File::delete)
+            MockWebServer().use { server ->
+                server.start()
+                val files = ScriptedFiles()
+                val cache = invalidatedOldEntry(files)
+                breakStore(files)
+                val acquirer = acquirer(server, cache)
+                enqueueCatalogAndPackage(server)
+
+                val outcome = assertIs<ContractAcquisitionOutcome.Acquired>(acquirer.acquireOutcome(request))
+                assertEquals("{}", outcome.contract.document)
+                assertEquals(expected, outcome.cacheStore)
+                // The next automatic discovery is served from memory without a request.
+                val requests = server.requestCount
+                val next = assertIs<ContractAcquisitionOutcome.Acquired>(acquirer.acquireOutcome(request))
+                assertEquals("{}", next.contract.document)
+                assertEquals(requests, server.requestCount)
+            }
+        }
+    }
+
+    /** Stores "old", fails to delete it on invalidation so it is marked, and returns that cache. */
+    private fun invalidatedOldEntry(files: ScriptedFiles): FileVerifiedContractCache {
+        val cache = FileVerifiedContractCache(directory, { NOW }, files)
+        cache.store(request, contract("old"))
+        files.entryDeletable = false
+        assertEquals(VerifiedContractRemoval.MarkedInvalid, cache.remove(request))
+        files.entryDeletable = true
+        files.events.clear()
+        return cache
+    }
+
+    private fun invalidatedMarkerOnly() = assertEquals(listOf("marker"), kinds())
+
+    private fun restarted() = FileVerifiedContractCache(directory, { NOW })
+
+    private fun markers() = directory.listFiles().orEmpty().filter { it.name.endsWith(".invalid") }
+
+    private fun entries() = directory.listFiles().orEmpty().filter { it.name.endsWith(".json") }
+
+    private fun documents() = entries().map { org.json.JSONObject(it.readText()).getString("document") }
+
+    /** The kinds of files left in the cache directory, so a leftover temporary file is visible too. */
+    private fun kinds() = directory.listFiles().orEmpty().map { file ->
+        when {
+            file.name.endsWith(".invalid") -> "marker"
+            file.name.endsWith(".json") -> "entry"
+            else -> "other: ${file.name}"
+        }
+    }.sorted()
+
+    /** File operations whose deletions and writes can be made to fail, recording each attempt. */
+    private class ScriptedFiles : VerifiedContractFileOperations {
+        var entryDeletable = true
+        var markerDeletable = true
+        var writable = true
+        val events = mutableListOf<String>()
 
         override fun delete(file: File): Boolean {
-            if (!deletable) return false
-            if (file.name.endsWith(".invalid")) {
-                val entry = File(file.parentFile, file.name.removeSuffix(".invalid"))
-                val document = entry.takeIf(File::isFile)?.let { org.json.JSONObject(it.readText()).getString("document") }
-                markerDeletions += "marker deleted while the entry held: $document"
-            }
-            return file.delete()
+            val marker = file.name.endsWith(".invalid")
+            val allowed = if (marker) markerDeletable else entryDeletable
+            events += (if (marker) "delete marker" else "delete entry") + if (allowed) "" else " (failed)"
+            return allowed && file.delete()
         }
 
         override fun createMarker(file: File): Boolean = file.createNewFile()
+
+        override fun write(file: File, bytes: ByteArray) {
+            events += "write temporary" + if (writable) "" else " (failed)"
+            if (!writable) throw IOException("No space left on device.")
+            super.write(file, bytes)
+        }
     }
 
     private fun contract(document: String) = VerifiedOpenApiContract(

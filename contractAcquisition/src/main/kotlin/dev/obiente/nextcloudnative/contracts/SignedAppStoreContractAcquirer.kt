@@ -247,7 +247,9 @@ class SignedAppStoreContractAcquirer(
         var cacheStore = VerifiedContractStore.Stored
         val outcome = publicationFence.publish(request, generation, contract) { accepted ->
             verifiedContracts[request] = accepted
-            runCatching { verifiedContractCache.store(request, accepted) }.onSuccess { cacheStore = it }
+            runCatching { verifiedContractCache.store(request, accepted) }
+                .onSuccess { cacheStore = it }
+                .onFailure { cacheStore = VerifiedContractStore.Failed }
         }
         // The in-memory contract is served even when it could not be persisted; the result says so.
         return if (outcome is ContractAcquisitionOutcome.Acquired && outcome.contract === contract) {

@@ -333,10 +333,30 @@ invalidation marker beside it, or, when that also fails, a record kept for the
 life of the process, makes every later read a miss, and each later read or
 store retries the deletion. A `VERIFIED_CONTRACT_DELETION_FAILED` warning
 diagnostic records which of the two applied, with no path or exception text.
-A store removes any marker before it publishes the replacement, so a marker
-always predates the entry it invalidates. When the marker cannot be removed, the
-new contract is not written where the next load would delete it: it is served
-from memory, and a `VERIFIED_CONTRACT_NOT_PERSISTED` warning records that.
+
+Each cache key has an entry file, an optional invalidation marker, an optional
+in-process record, and, while a store runs, a temporary file that reads ignore.
+[`VerifiedContractCache.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/VerifiedContractCache.kt)
+holds one lock for every operation and moves between these states:
+
+| State | Read | Invalidation | Store |
+| --- | --- | --- | --- |
+| Absent | Miss | No change | Write the temporary file, then move it into place |
+| Valid entry | Hit | Delete the entry; if that fails, add the record and write the marker | Write the temporary file, delete the entry, move the file into place; if a step fails before the move, delete the older entry or else invalidate it |
+| Entry with marker or record | Delete the entry, then clear the marker and record; miss | Retry the deletion; stays invalidated until the entry is gone | Delete the entry first; if that fails, change nothing and refuse. Then clear the marker and record; if that fails, refuse. Then write and move |
+| Marker without entry | Clear the marker and record; miss | Clear the marker and record | Clear the marker and record (if that fails, refuse), then write and move |
+| Leftover temporary file | Ignored | Ignored | Ignored; each store uses a new name |
+
+An invalidation is removed only after the invalidated entry is gone, and a new
+entry is written only after the invalidation is gone. Process death or a failed
+write, such as a full disk, at any step therefore leaves either the invalidated
+entry with its marker, or no invalidated entry; an invalidated contract never
+becomes readable again. A valid entry that cannot be replaced is deleted or
+invalidated, so an older contract is not served after a restart in place of a
+newer one. Only an entry whose deletion and marker both failed relies on the
+in-process record alone, which a restart loses. A refused or failed store keeps
+the contract in memory, and a `VERIFIED_CONTRACT_NOT_PERSISTED` warning
+records `InvalidationNotCleared` or `Failed`.
 
 Results are ordered per app, server version, and installed version by
 [`ContractPublicationFence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractPublicationFence.kt).
@@ -447,7 +467,8 @@ only genuine client faults remain unexpected. Size limits throw
 | Linked JSON or YAML documents | Unreadable | Skipped |
 | Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract; that cached contract is discarded |
 | Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
-| Verified contract cache store | An invalidation marker for the entry cannot be removed | Not persisted; served from memory; `VERIFIED_CONTRACT_NOT_PERSISTED` warning |
+| Verified contract cache store | An invalidated entry or its marker cannot be removed | Nothing written; the invalidation stays; served from memory; `VERIFIED_CONTRACT_NOT_PERSISTED` warning (`InvalidationNotCleared`) |
+| Verified contract cache store | The temporary file cannot be written or moved into place, for example on a full disk | No invalidated or replaced entry stays readable; served from memory; `VERIFIED_CONTRACT_NOT_PERSISTED` warning (`Failed`) |
 | Contract module class loading | `LinkageError` | Client fault |
 | Same-origin probes | See the precedence list above | Typed probe result |
 | Same-origin probe status | 404 or 410 | Absence; records nothing |

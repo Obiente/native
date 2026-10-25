@@ -18,8 +18,8 @@ interface VerifiedContractCache {
 
     /**
      * Persists [contract] for [request]. Returns [VerifiedContractStore.InvalidationNotCleared] without
-     * persisting when an earlier invalidation of the entry cannot be cleared, because a later load
-     * would discard the new contract. Other storage failures throw.
+     * writing when an invalidated earlier entry or its invalidation cannot be removed. Other storage
+     * failures throw, and never leave an invalidated or replaced entry readable.
      */
     fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract): VerifiedContractStore
 
@@ -34,8 +34,14 @@ interface VerifiedContractCache {
 enum class VerifiedContractStore {
     Stored,
 
-    /** An invalidation marker for the entry could not be removed, so the contract was not persisted. */
+    /**
+     * An invalidated earlier entry, or its marker, could not be removed, so nothing was written and
+     * the invalidation stays in force.
+     */
     InvalidationNotCleared,
+
+    /** Writing or moving the new entry failed, for example on a full disk; it is served from memory. */
+    Failed,
 }
 
 /** How a cached verified contract was discarded. Bounded and typed, for local diagnostics. */
@@ -76,6 +82,30 @@ class MemoryVerifiedContractCache : VerifiedContractCache {
  * Reusing the verified result makes the first app open after a process restart local and
  * deterministic. Entries expire after seven days and are keyed with SHA-256 rather than exposing
  * app or version details in filenames.
+ *
+ * Each key has an entry file E, an optional `.invalid` marker M beside it, an optional in-process
+ * record P, and, while a store runs, a temporary file T that loads never read. All operations hold
+ * one lock, so a concurrent refresh in this process is serialized with them.
+ *
+ * | State          | Load                   | Invalidate                    | Store                                       |
+ * |----------------|------------------------|-------------------------------|---------------------------------------------|
+ * | Absent         | miss                   | no change                     | write T, move T to E: valid                 |
+ * | Valid E        | hit                    | delete E: absent. If that     | write T, delete E, move T to E: valid. If   |
+ * |                |                        | fails, add P and write M:     | any step fails before the move, delete the  |
+ * |                |                        | invalidated                   | old E, or else invalidate it; then throw    |
+ * | E + M and/or P | delete E, then clear M | retry as for a valid E; stays | delete E; if that fails: no change, refused |
+ * |                | and P; miss            | invalidated until E is gone   | Then clear M and P; if that fails: M only,  |
+ * |                |                        |                               | refused. Then write T and move T to E       |
+ * | M without E    | clear M and P; miss    | clear M and P                 | clear M and P (if that fails: refused),     |
+ * |                |                        |                               | then write T and move T to E                |
+ * | Leftover T     | ignored                | ignored                       | ignored; each store uses a new T            |
+ *
+ * The invalidation is removed only after the invalidated entry is gone, and a new entry is written
+ * only after the invalidation is gone. So process death or a failed write (such as a full disk) at
+ * any step leaves either the invalidated entry with its marker, or no invalidated entry at all; an
+ * invalidated contract never becomes readable again. When a valid entry cannot be replaced, it is
+ * deleted or invalidated, so an older contract is not served after a restart in place of a newer
+ * one. Only an entry whose deletion and marker both failed relies on the in-process record alone.
  */
 class FileVerifiedContractCache internal constructor(
     private val directory: File,
@@ -113,19 +143,24 @@ class FileVerifiedContractCache internal constructor(
             }
             check(directory.exists() || directory.mkdirs()) { "Could not create the verified contract cache." }
             val target = cacheFile(request)
-            // A marker is cleared before the replacement is published, so a marker always predates the
-            // entry it invalidates. A marker that cannot be cleared would make the next load delete the
-            // new contract, so the contract is not persisted and the caller keeps it in memory.
-            if (!clearInvalidation(target)) return VerifiedContractStore.InvalidationNotCleared
+            if (isInvalidated(target)) {
+                // The invalidated entry goes first, and its invalidation stays until it is gone.
+                if (target.exists() && !files.delete(target)) return VerifiedContractStore.InvalidationNotCleared
+                // A marker left with no entry is harmless, but a new entry beside it would be deleted.
+                if (!clearInvalidation(target)) return VerifiedContractStore.InvalidationNotCleared
+            }
             val temporary = File(directory, "${target.name}.tmp-${nowMillis()}")
+            var published = false
             try {
-                temporary.outputStream().buffered().use { output ->
-                    output.write(bytes)
-                    output.flush()
-                }
+                files.write(temporary, bytes)
                 check(!target.exists() || files.delete(target)) { "Could not replace the cached verified contract." }
                 check(temporary.renameTo(target)) { "Could not publish the cached verified contract." }
+                published = true
                 check(target.setLastModified(nowMillis())) { "Could not timestamp the cached verified contract." }
+            } catch (failure: Exception) {
+                // An older valid entry that could not be replaced must not outlive the newer contract.
+                if (!published && !discard(target)) invalidate(target)
+                throw failure
             } finally {
                 if (temporary.exists()) temporary.delete()
             }
@@ -136,9 +171,14 @@ class FileVerifiedContractCache internal constructor(
         val file = cacheFile(request)
         if (discard(file)) return VerifiedContractRemoval.Removed
         // Deletion failed, so the entry must not be served again until it is gone.
+        invalidate(file)
+    }
+
+    /** Records that [file] must not be read: in this process always, and on disk when the marker can be written. */
+    private fun invalidate(file: File): VerifiedContractRemoval {
         invalidatedForProcess += file.absolutePath
         val marker = invalidationMarker(file)
-        if (marker.exists() || files.createMarker(marker)) {
+        return if (marker.exists() || files.createMarker(marker)) {
             VerifiedContractRemoval.MarkedInvalid
         } else {
             VerifiedContractRemoval.InvalidatedForProcess
@@ -189,10 +229,18 @@ class FileVerifiedContractCache internal constructor(
     }
 }
 
-/** File operations that can fail without throwing; a seam for deletion failures in tests. */
+/** File operations, a seam for deletion, marker, and write failures in tests. */
 internal interface VerifiedContractFileOperations {
     fun delete(file: File): Boolean
     fun createMarker(file: File): Boolean
+
+    /** Writes [bytes] to [file]; a failure such as a full disk throws [IOException]. */
+    fun write(file: File, bytes: ByteArray) {
+        file.outputStream().buffered().use { output ->
+            output.write(bytes)
+            output.flush()
+        }
+    }
 
     object Default : VerifiedContractFileOperations {
         override fun delete(file: File): Boolean = try {

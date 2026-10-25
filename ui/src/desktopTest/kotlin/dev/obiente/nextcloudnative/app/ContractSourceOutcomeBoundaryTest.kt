@@ -38,12 +38,19 @@ class ContractSourceOutcomeBoundaryTest {
 
     @Test
     fun `a contract served without being persisted is recorded as a typed diagnostic`() {
+        val refused = { VerifiedContractStore.InvalidationNotCleared }
+        val diskFull: () -> VerifiedContractStore = { throw java.io.IOException("No space left on device.") }
+        for ((store, expected) in listOf(refused to "InvalidationNotCleared", diskFull to "Failed")) {
+            assertNotPersistedDiagnostic(store, expected)
+        }
+    }
+
+    private fun assertNotPersistedDiagnostic(store: () -> VerifiedContractStore, expected: String) {
         MockWebServer().use { server ->
             server.start()
             val cache = object : VerifiedContractCache {
                 override fun load(request: ContractAcquisitionRequest): VerifiedOpenApiContract? = null
-                override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) =
-                    VerifiedContractStore.InvalidationNotCleared
+                override fun store(request: ContractAcquisitionRequest, contract: VerifiedOpenApiContract) = store()
                 override fun remove(request: ContractAcquisitionRequest) = VerifiedContractRemoval.Removed
             }
             val download = server.url("downloads/example-1.0.0.tar.gz")
@@ -69,7 +76,7 @@ class ContractSourceOutcomeBoundaryTest {
             val diagnostic = diagnostics.single()
             assertEquals(SupportDiagnosticComponent.Cache, diagnostic.component)
             assertEquals("VERIFIED_CONTRACT_NOT_PERSISTED", diagnostic.code)
-            assertEquals(listOf(SupportDiagnosticFieldDraft("store", "InvalidationNotCleared")), diagnostic.fields)
+            assertEquals(listOf(SupportDiagnosticFieldDraft("store", expected)), diagnostic.fields)
             assertEquals(null, diagnostic.message)
         }
     }
