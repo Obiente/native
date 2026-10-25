@@ -19,6 +19,7 @@ class DynamicContractFallbackDiscoveryTest {
     fun everyTypedAcquisitionFailureBecomesAnExplainedMetadataFallback() = runBlocking {
         val expected = mapOf(
             AppStoreContractFailureKind.Network to DynamicContractFallbackReason.AppStoreUnreachable,
+            AppStoreContractFailureKind.LinkedSourceUnreachable to DynamicContractFallbackReason.LinkedSourceUnreachable,
             AppStoreContractFailureKind.SourceUnavailable to DynamicContractFallbackReason.AppStoreUnavailable,
             AppStoreContractFailureKind.VerificationFailed to DynamicContractFallbackReason.VerificationFailed,
             AppStoreContractFailureKind.InvalidRequest to DynamicContractFallbackReason.VersionUnavailable,
