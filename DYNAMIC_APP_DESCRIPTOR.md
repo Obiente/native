@@ -383,7 +383,11 @@ began before an explicit retry therefore cannot overwrite or contradict the
 retry's result. A no-contract result does not remove a previously cached
 contract, but while it or an invalidation is the latest accepted result, a cache
 read reports that result instead of the cached contract. That record is kept in
-memory, so after a restart the cache is served until a refresh records it again. The ordering is kept in memory for each acquirer and never waits for
+memory, so after a restart the cache is served until a refresh records it again.
+A contract read from the persistent cache enters the in-memory cache only
+through the same ordering: a read that a newer accepted result superseded, or
+that follows a no-contract result or an invalidation, does not promote it, and
+a promotion never replaces a contract already in memory. The ordering is kept in memory for each acquirer and never waits for
 another acquisition, so a cancelled or failed acquisition cannot hold back
 later ones.
 

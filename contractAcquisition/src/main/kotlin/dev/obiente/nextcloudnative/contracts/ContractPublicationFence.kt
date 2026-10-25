@@ -17,6 +17,8 @@ package dev.obiente.nextcloudnative.contracts
  * | Cancelled                                      | no change; the cancellation propagates      | same                         |
  * | Served a cached contract without inspecting    | serve it, unless `latest` is a no-contract  | return latest                |
  * |                                                | result; then return latest                  |                              |
+ * | Read a contract from disk into memory          | promote it unless memory holds one, or      | not promoted                 |
+ * |                                                | `latest` is a no-contract result            |                              |
  * | Invalidation (not a generation)                | fenced = started; latest = invalidated      |                              |
  *
  * Definitive reasons are evidence about the release: [ContractUnavailableReason.NoMatchingRelease],
@@ -107,6 +109,18 @@ internal class ContractPublicationFence {
             generation <= state.fenced -> state.supersededOutcome()
             latest is ContractAcquisitionOutcome.Unavailable -> latest
             else -> ContractAcquisitionOutcome.Acquired(cached)
+        }
+    }
+
+    /**
+     * Runs [promote] for a contract that [generation] read from the persistent cache, unless a newer
+     * result was accepted since the read started, or the latest accepted result says there is no
+     * usable contract. A read that a newer result superseded can therefore never replace it in memory.
+     */
+    fun promote(request: ContractAcquisitionRequest, generation: Long, promote: () -> Unit) {
+        synchronized(states) {
+            val state = states.getOrPut(request, ::State)
+            if (generation > state.fenced && state.latest !is ContractAcquisitionOutcome.Unavailable) promote()
         }
     }
 

@@ -107,7 +107,14 @@ class SignedAppStoreContractAcquirer(
         request.installedAppVersion?.let { version ->
             requireValidRequest(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
         }
-        val cached = verifiedContracts[request] ?: verifiedContractCache.load(request)?.also { verifiedContracts[request] = it }
+        val cached = verifiedContracts[request] ?: verifiedContractCache.load(request)?.let { loaded ->
+            // A contract read from disk reaches memory only through the fence, never over a newer result.
+            var current = loaded
+            publicationFence.promote(request, generation) {
+                current = verifiedContracts.putIfAbsent(request, loaded) ?: loaded
+            }
+            current
+        }
         // A refresh looks past a cached contract, which stays until a newly verified contract replaces it.
         // Every cached return goes through the fence, so a newer accepted result is never contradicted.
         val serve = { contract: VerifiedOpenApiContract -> publicationFence.serveCached(request, generation, contract) }
