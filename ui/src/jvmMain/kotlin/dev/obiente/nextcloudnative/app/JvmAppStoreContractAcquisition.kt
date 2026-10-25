@@ -102,6 +102,7 @@ private fun AppStoreContractRequest.toContractAcquisitionRequest() =
 
 private fun ContractAcquisitionFailureKind.toAppStoreKind(): AppStoreContractFailureKind = when (this) {
     ContractAcquisitionFailureKind.Network -> AppStoreContractFailureKind.Network
+    ContractAcquisitionFailureKind.LinkedSourceUnreachable -> AppStoreContractFailureKind.LinkedSourceUnreachable
     ContractAcquisitionFailureKind.SourceUnavailable -> AppStoreContractFailureKind.SourceUnavailable
     ContractAcquisitionFailureKind.VerificationFailed -> AppStoreContractFailureKind.VerificationFailed
     ContractAcquisitionFailureKind.InvalidRequest -> AppStoreContractFailureKind.InvalidRequest

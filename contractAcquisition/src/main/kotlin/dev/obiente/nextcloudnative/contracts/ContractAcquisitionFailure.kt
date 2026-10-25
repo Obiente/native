@@ -12,8 +12,14 @@ import okhttp3.Response
  * names are local diagnostics only and never become a stable identifier.
  */
 enum class ContractAcquisitionFailureKind {
-    /** No response arrived from a contract source: DNS, TLS, connection, or timeout failure. */
+    /** No response arrived from the App Store: DNS, TLS, connection, or timeout failure. */
     Network,
+
+    /**
+     * No response arrived from the app's linked source repository (its tag metadata, tree, files,
+     * or archive) after the App Store itself answered.
+     */
+    LinkedSourceUnreachable,
 
     /** The App Store or an App Store-linked source answered with a non-success HTTP status. */
     SourceUnavailable,
@@ -57,6 +63,13 @@ class ContractTrustResourceMissingException(message: String) : RuntimeException(
 class ContractTrustMaterialInvalidException(cause: Throwable) :
     RuntimeException("The bundled Nextcloud trust material is unusable.", cause)
 
+/**
+ * A request to the app's linked source repository produced no response. It is classified where the
+ * source is known, never from exception text, so the failure is not reported as an App Store outage.
+ */
+class ContractLinkedSourceNetworkException(cause: IOException) :
+    IOException("The app's linked source repository could not be reached.", cause)
+
 /** A package or source failed verification. The original failure stays available as the cause. */
 class ContractSourceVerificationException(message: String, cause: Throwable? = null) :
     SecurityException(message, cause)
@@ -76,6 +89,7 @@ fun classifyContractAcquisitionFailure(failure: Throwable): ContractAcquisitionF
     is ContractSourceTooLargeException -> ContractAcquisitionFailureKind.SourceUnusable
     is ContractSourceVerificationException -> ContractAcquisitionFailureKind.VerificationFailed
     is ContractAcquisitionRequestException -> ContractAcquisitionFailureKind.InvalidRequest
+    is ContractLinkedSourceNetworkException -> ContractAcquisitionFailureKind.LinkedSourceUnreachable
     is IOException -> ContractAcquisitionFailureKind.Network
     is GeneralSecurityException -> ContractAcquisitionFailureKind.VerificationFailed
     is LinkageError -> ContractAcquisitionFailureKind.RuntimeIncompatible

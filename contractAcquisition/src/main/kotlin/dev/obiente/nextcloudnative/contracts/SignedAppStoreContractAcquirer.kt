@@ -477,6 +477,24 @@ class SignedAppStoreContractAcquirer(
         onRecoverableStatus: () -> Unit = {},
     ): ByteArray? {
         requireSecureUrl(url)
+        return try {
+            fetchLinkedResource(url, expectedBaseUrl, maximumBytes, accept, recoverableStatusCodes, onRecoverableStatus)
+        } catch (failure: ContractLinkedSourceNetworkException) {
+            throw failure
+        } catch (failure: IOException) {
+            // The App Store already answered; only the linked source failed to respond.
+            throw ContractLinkedSourceNetworkException(failure)
+        }
+    }
+
+    private fun fetchLinkedResource(
+        url: String,
+        expectedBaseUrl: String,
+        maximumBytes: Long,
+        accept: String,
+        recoverableStatusCodes: Set<Int>,
+        onRecoverableStatus: () -> Unit,
+    ): ByteArray? {
         val response = execute(Request.Builder().url(url).header("Accept", accept).get().build())
         return response.use { githubResponse ->
             if (githubResponse.code == 404) return@use null

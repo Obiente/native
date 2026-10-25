@@ -4,8 +4,11 @@ import kotlinx.serialization.Serializable
 
 /** Typed reason an App Store contract could not be acquired. Product copy derives from this value. */
 enum class AppStoreContractFailureKind {
-    /** The App Store or a linked source could not be reached. */
+    /** The App Store could not be reached. */
     Network,
+
+    /** The App Store answered, but the app's linked source repository could not be reached. */
+    LinkedSourceUnreachable,
 
     /** A contract source answered without the requested release or resource. */
     SourceUnavailable,
@@ -126,6 +129,9 @@ enum class DynamicContractFallbackReason {
     ServerPermissionDenied,
     VersionUnavailable,
     AppStoreUnreachable,
+
+    /** The App Store answered, but the app's linked source repository could not be reached. */
+    LinkedSourceUnreachable,
     AppStoreUnavailable,
     VerificationFailed,
     UnsupportedContract,
@@ -134,6 +140,7 @@ enum class DynamicContractFallbackReason {
 
 internal fun AppStoreContractFailureKind.fallbackReason(): DynamicContractFallbackReason = when (this) {
     AppStoreContractFailureKind.Network -> DynamicContractFallbackReason.AppStoreUnreachable
+    AppStoreContractFailureKind.LinkedSourceUnreachable -> DynamicContractFallbackReason.LinkedSourceUnreachable
     AppStoreContractFailureKind.SourceUnavailable -> DynamicContractFallbackReason.AppStoreUnavailable
     AppStoreContractFailureKind.VerificationFailed -> DynamicContractFallbackReason.VerificationFailed
     AppStoreContractFailureKind.InvalidRequest -> DynamicContractFallbackReason.VersionUnavailable
@@ -334,6 +341,11 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
         "App Store not reachable",
         "The Nextcloud App Store could not be reached to verify this app's API. " +
             "Check the connection and try again.",
+        "Try again",
+    )
+    DynamicContractFallbackReason.LinkedSourceUnreachable -> DynamicContractFallbackNotice(
+        "App source not reachable",
+        "Could not reach the app's linked source repository. The App Store was reachable; try again later.",
         "Try again",
     )
     DynamicContractFallbackReason.AppStoreUnavailable -> DynamicContractFallbackNotice(

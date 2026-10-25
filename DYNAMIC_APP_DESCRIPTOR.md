@@ -213,6 +213,9 @@ The fallback card derives its title, explanation, and action from that reason:
   such as a Swagger 2 document;
 - the server or app version could not be confirmed;
 - the App Store could not be reached, or did not provide the release;
+- the App Store answered, but the app's linked source repository could not be
+  reached; this is kept apart from an App Store outage where the linked request
+  is made, never inferred from exception text;
 - the package or its source failed verification;
 - the client could not complete the check.
 
@@ -330,6 +333,10 @@ invalidation marker beside it, or, when that also fails, a record kept for the
 life of the process, makes every later read a miss, and each later read or
 store retries the deletion. A `VERIFIED_CONTRACT_DELETION_FAILED` warning
 diagnostic records which of the two applied, with no path or exception text.
+A store removes any marker before it publishes the replacement, so a marker
+always predates the entry it invalidates. When the marker cannot be removed, the
+new contract is not written where the next load would delete it: it is served
+from memory, and a `VERIFIED_CONTRACT_NOT_PERSISTED` warning records that.
 
 Results are ordered per app, server version, and installed version by
 [`ContractPublicationFence.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/ContractPublicationFence.kt).
@@ -420,7 +427,7 @@ only genuine client faults remain unexpected. Size limits throw
 | --- | --- | --- |
 | Request validation | Malformed app ID, server version, or installed version | Invalid request, shown as an unconfirmed version |
 | Verified contract cache | Missing, expired, or unreadable entry | Ignored; acquisition continues |
-| Catalog and package requests | No response; non-success status; redirect away from HTTPS | Network; source unavailable; verification failed |
+| Catalog and package requests | No response; non-success status; redirect away from HTTPS | App Store unreachable (network); source unavailable; verification failed |
 | Catalog and package bodies | Declared or streamed size over the limit | Source unusable |
 | Catalog document | Truncated, empty, not JSON, not an array, or only elements without a readable app identity | Unreadable catalog, never cached |
 | Catalog app element | Not an object, or an object with a missing or wrong-typed `id`, while the app is not found | Malformed source, not no matching release |
@@ -434,12 +441,13 @@ only genuine client faults remain unexpected. Size limits throw
 | Package verification | Bundled root certificate or revocation list missing, unreadable, corrupt, expired, of an unsupported format, or inconsistent | Client fault (runtime incompatible); retrying cannot repair it |
 | Package archive limits | Entry, expanded, path, or metadata-count limit exceeded | Source unusable |
 | Package OpenAPI JSON or YAML | Unreadable or not OpenAPI 3 | Candidate skipped |
-| Linked metadata, tree, spec, and schema requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; network |
+| Linked metadata, tree, spec, schema, and archive requests | 404; size over the limit; other status; no response | Skipped; skipped; source unavailable; linked source unreachable, never App Store unreachable or no usable contract |
 | Linked archive request | HTTP 403 or 429 | Source temporarily unavailable |
 | Linked archive content | Corrupt, unsafe path, identity mismatch, malformed or misencoded `info.xml`, size limit | No candidate |
 | Linked JSON or YAML documents | Unreadable | Skipped |
 | Acquired contract | Unreadable JSON or a descriptor that cannot be compiled | Unsupported contract; that cached contract is discarded |
 | Verified contract cache discard | The cached file cannot be deleted | Marked invalid, or invalidated for the process; never served again |
+| Verified contract cache store | An invalidation marker for the entry cannot be removed | Not persisted; served from memory; `VERIFIED_CONTRACT_NOT_PERSISTED` warning |
 | Contract module class loading | `LinkageError` | Client fault |
 | Same-origin probes | See the precedence list above | Typed probe result |
 | Same-origin probe status | 404 or 410 | Absence; records nothing |

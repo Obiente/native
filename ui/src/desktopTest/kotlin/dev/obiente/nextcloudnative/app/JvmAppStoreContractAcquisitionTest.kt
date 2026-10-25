@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.contracts.ContractUnavailableReason
 import dev.obiente.nextcloudnative.contracts.MemoryVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequestException
+import dev.obiente.nextcloudnative.contracts.ContractLinkedSourceNetworkException
 import dev.obiente.nextcloudnative.contracts.ContractSourceHttpException
 import dev.obiente.nextcloudnative.contracts.ContractSourceTooLargeException
 import dev.obiente.nextcloudnative.contracts.ContractSourceVerificationException
@@ -14,8 +15,8 @@ import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.contracts.VerifiedContractRemoval
-import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
 import dev.obiente.nextcloudnative.contracts.VerifiedContractStore
+import dev.obiente.nextcloudnative.contracts.VerifiedOpenApiContract
 import java.net.SocketTimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
@@ -74,6 +75,8 @@ class JvmAppStoreContractAcquisitionTest {
     fun acquisitionFailuresBecomeTypedFailuresWithTheirOriginalCause() {
         for ((failure, expected) in listOf(
             SocketTimeoutException("synthetic") to AppStoreContractFailureKind.Network,
+            ContractLinkedSourceNetworkException(SocketTimeoutException("synthetic")) to
+                AppStoreContractFailureKind.LinkedSourceUnreachable,
             ContractSourceHttpException(503, "synthetic") to AppStoreContractFailureKind.SourceUnavailable,
             ContractSourceVerificationException("synthetic") to AppStoreContractFailureKind.VerificationFailed,
             ContractAcquisitionRequestException("synthetic") to AppStoreContractFailureKind.InvalidRequest,
