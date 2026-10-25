@@ -46,9 +46,11 @@ class CatalogRefreshThrottle(
 
     /** Returns true, and starts a new window, when [url] may be downloaded again now. */
     fun tryRefresh(url: String): Boolean {
-        val now = nowMillis()
         var allowed = false
+        // The time is read inside the atomic update, so a caller that read the clock earlier cannot
+        // finish later and move the window back.
         lastRefresh.compute(url) { _, previous ->
+            val now = nowMillis()
             if (previous == null || now - previous !in 0 until intervalMillis) now.also { allowed = true } else previous
         }
         return allowed
