@@ -591,7 +591,9 @@ same-origin transport.
   scroll position is held above the list and reader switch, so returning from
   the compact reader keeps the reading position. The open article is kept apart
   from the list, so a refresh that drops it from the list (an opened article
-  is read and leaves Unread) does not close the reader. Only the
+  is read and leaves Unread) does not close the reader. The reader's scroll
+  position belongs to the open article, so returning to News resumes where
+  the reader stopped, and another article starts at the top. Only the
   selected view is saved across process recreation; the open article is not
   restored, because a fresh Unread list no longer contains an article that
   opening marked read.

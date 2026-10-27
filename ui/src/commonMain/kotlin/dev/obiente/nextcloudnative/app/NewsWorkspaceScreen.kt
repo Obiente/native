@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.runtime.CompositionLocalProvider
-import com.mohamedrejeb.richeditor.model.rememberRichTextState
+import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.material3.RichText
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
@@ -358,12 +358,14 @@ private fun NewsArticleReader(
     val sanitizedBody = remember(item.id, item.bodyHtml) {
         item.bodyHtml.takeIf(String::isNotBlank)?.let(::sanitizeNativeMailHtml)
     }
-    val richText = rememberRichTextState()
-    LaunchedEffect(sanitizedBody) {
-        if (!sanitizedBody.isNullOrBlank()) richText.setHtml(sanitizedBody)
+    // The body is set before the first layout, so a restored scroll position is not clamped to a
+    // still-empty reader.
+    val richText = remember(sanitizedBody) {
+        RichTextState().apply { sanitizedBody?.takeIf(String::isNotBlank)?.let(::setHtml) }
     }
-    val scrollState = rememberScrollState()
-    LaunchedEffect(item.id) { scrollState.scrollTo(0) }
+    // Scoped to the article: another article starts at the top, while returning to News restores
+    // the position in the same one.
+    val scrollState = key(item.id) { rememberScrollState() }
     Column(
         modifier = Modifier
             .fillMaxSize()
