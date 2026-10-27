@@ -405,3 +405,35 @@ item routes keep the native fallback until a reviewed typed route mapping
 exists; no endpoint or parameter is synthesized from the URL. The navigation
 rules are in
 [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md#activity-and-search-navigation).
+
+### Compact record summaries
+
+Card subtitles and inline facts show a few values without much context, so
+[`NativeSummaryFieldPolicy.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSummaryFieldPolicy.kt)
+keeps values that cannot explain themselves out of those slots. The excluded
+fields stay available in the record's Details section.
+
+- An integer named as a point in time, such as `lastUpdated`, `lockedUntil`, or
+  `created_at`, is excluded unless a reviewed adapter declared its epoch unit.
+  The unit is never guessed from the value's magnitude.
+- An integer status, state, type, mode, or access-level code is excluded unless
+  the contract declares labels for its values. A bare integer is never a
+  subtitle.
+- Response bookkeeping such as integrity hashes, partial-object flags, lock
+  holders, trash counters, and negative configuration flags such as
+  `deletiondisabled` is excluded.
+- A count without a noun, such as `2 items`, and a single-character code are
+  not subtitles. Sort-order configuration fields are excluded.
+- Count labels drop API prefixes, so `Nb Bills` reads as `Bills`.
+
+`NativeSummaryFieldPolicyTest` covers these rules with Forms- and
+Cospend-shaped records.
+
+### Auxiliary protocol destinations
+
+Session, token, connection-test, and keep-alive reads exist for web clients.
+[`DynamicAuxiliaryDestinations.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAuxiliaryDestinations.kt)
+removes them from root and contextual navigation tabs. It matches whole words in
+the resource ID and label, never substrings or the app ID, and never removes the
+only remaining destination. `DynamicAuxiliaryDestinationsTest` covers the
+matching and the last-destination rule.

@@ -145,7 +145,7 @@ fun DynamicAppDescriptor.isSecondaryTechnicalDestination(
     val child = (
         destination.resourceId + " " + destination.label + " " + destination.actionId
     ).navigationSemanticIdentity()
-    if (SECONDARY_CHILD_CONCEPTS.any(child::hasNavigationConcept)) return true
+    if (SECONDARY_CHILD_CONCEPTS.any(child::hasNavigationConcept) || destination.isAuxiliaryProtocolDestination()) return true
     val parentIsMessage = parent.hasNavigationConcept("message") || parent.hasNavigationConcept("email")
     return parentIsMessage && MESSAGE_HELPER_CHILD_CONCEPTS.any(child::hasNavigationConcept)
 }
@@ -387,7 +387,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
             }.thenBy(DynamicNavigationDestination::label)
                 .thenBy(DynamicNavigationDestination::layoutId),
         )
-        .toList()
+        .toList().withoutAuxiliaryProtocolDestinations()
     val rootResourceIds = rootDestinations.mapTo(linkedSetOf()) { it.resourceId }
     val rootForms = forms.mapNotNull { form ->
         val action = actionsById[form.actionId] ?: return@mapNotNull null
@@ -457,7 +457,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
         }
         .distinctBy(DynamicNavigationDestination::actionId)
         .sortedWith(compareBy(DynamicNavigationDestination::label, DynamicNavigationDestination::layoutId))
-        .toList()
+        .toList().withoutAuxiliaryProtocolDestinations()
     val contextualForms = forms
         .takeIf { selectedRecord.actionBindingProvenanceValid }
         .orEmpty()
