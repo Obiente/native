@@ -760,7 +760,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeVideoTransportControls.kt": "32efafc275496cba94da9fadb8f57775c3a266661ba7c88b7efb8a954dab3361",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsApi.kt": "50b046276b43396280d58add5dcdff7364c3b4c7e9d90fee1cebf6d17c11897b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsPresentation.kt": "61f90c41f998b0f81d877e73c6dc3fa86c6574565721fa1de4643f93aa24a0ce",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsWorkspace.kt": "cb4abe62023dc860c6e9dd5a99daa2ac25cb85307d00fa774908491631d67c3f",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsWorkspace.kt": "c5419918be5d4c9bc1d3020f3590920c5fc2659ba588976fcb6a6913d9d80652",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsWorkspaceScreen.kt": "b307f542ab7c342bd751f95ebcda7f34ab76b33c24385a55f77e0bc0621eec2e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudAccountCredentialServices.kt": "0886c2513430f6940fd4eefe6f85091215122ef7129d9c218ab6a00823a59434",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudAccountIdentity.kt": "99315e08ee2d9abbdcee0527abd61e614201a2ac81e39c180c34f2ff23480afe",
