@@ -25,6 +25,8 @@ class NewsWorkspaceControllerTest {
         var foldersStatus = 200
         var stateStatus = 200
         var stateFailure: Exception? = null
+        var feedsBody = """{"starredCount":1,"feeds":[{"id":5,"title":"Example","url":"https://example.test/feed","folderId":1,"unreadCount":30}]}"""
+        var stateGate: CompletableDeferred<Unit>? = null
         var itemPages: (Map<String, String>) -> String = { query ->
             if (query["offset"] == "0") items(30L downTo 1L) else items(LongRange.EMPTY)
         }
@@ -38,12 +40,10 @@ class NewsWorkspaceControllerTest {
             return when {
                 path.isEmpty() -> response(apiLevelsStatus, apiLevels)
                 path == "/v1-3/folders" -> response(foldersStatus, """{"folders":[{"id":1,"name":"Tech"}]}""")
-                path == "/v1-3/feeds" -> response(
-                    200,
-                    """{"starredCount":1,"feeds":[{"id":5,"title":"Example","url":"https://example.test/feed","folderId":1,"unreadCount":30}]}""",
-                )
+                path == "/v1-3/feeds" -> response(200, feedsBody)
                 path == "/v1-3/items" -> response(200, itemPages(request.queryParameters))
                 request.method == NextcloudApiMethod.POST -> {
+                    stateGate?.await()
                     stateFailure?.let { throw it }
                     response(stateStatus, "[]")
                 }
@@ -60,8 +60,8 @@ class NewsWorkspaceControllerTest {
         }
     }
 
-    private fun controller(server: FakeNewsServer) =
-        NewsWorkspaceController(scope, server::execute, parseDispatcher = Dispatchers.Unconfined)
+    private fun controller(server: FakeNewsServer, initialSelection: NewsSelection = NewsSelection.Unread) =
+        NewsWorkspaceController(scope, server::execute, parseDispatcher = Dispatchers.Unconfined, initialSelection = initialSelection)
 
     @Test
     fun `start loads subscriptions and the unread list`() {
@@ -159,6 +159,60 @@ class NewsWorkspaceControllerTest {
         assertTrue(controller.state.stateChangeNotice!!.contains("did not confirm"))
         controller.dismissNotice()
         assertNull(controller.state.stateChangeNotice)
+    }
+
+    @Test
+    fun `a refresh that races a pending change keeps the requested state`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        val confirm = CompletableDeferred<Unit>()
+        server.stateGate = confirm
+        controller.toggleStar(item)
+        controller.refresh()
+        val refreshed = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
+        assertTrue(refreshed.starred, "The stale page must not erase the pending star.")
+        confirm.complete(Unit)
+        val confirmed = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
+        assertTrue(confirmed.starred)
+        assertTrue(controller.state.pendingItemIds.isEmpty())
+        controller.refresh()
+        val afterConfirm = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
+        assertFalse(afterConfirm.starred, "Once confirmed, later pages are shown as the server sends them.")
+    }
+
+    @Test
+    fun `a removed feed falls back to Unread and loads it instead of the stale feed page`() {
+        val server = FakeNewsServer()
+        server.itemPages = { query ->
+            when (query["type"]) {
+                "0" -> FakeNewsServer.items(LongRange.EMPTY)
+                else -> FakeNewsServer.items(30L downTo 1L)
+            }
+        }
+        val controller = controller(server, initialSelection = NewsSelection.Feed(5))
+        val subscriptionReads = CompletableDeferred<Unit>()
+        val removedFeedPage = CompletableDeferred<Unit>()
+        server.gates["null:null"] = subscriptionReads
+        server.gates["0:5"] = removedFeedPage
+        server.feedsBody = """{"starredCount":0,"feeds":[]}"""
+        controller.start()
+        subscriptionReads.complete(Unit)
+        assertEquals(NewsSelection.Unread, controller.state.selection)
+        removedFeedPage.complete(Unit)
+        val articles = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertEquals(30, articles.items.size, "The removed feed's empty page must not replace the Unread list.")
+        assertEquals("3", server.requests.last { it.relativePath.endsWith("/items") }.queryParameters["type"])
+    }
+
+    @Test
+    fun `a restored selection is loaded first`() {
+        val server = FakeNewsServer()
+        val controller = controller(server, initialSelection = NewsSelection.Starred)
+        controller.start()
+        assertEquals(NewsSelection.Starred, controller.state.selection)
+        assertEquals("2", server.requests.first { it.relativePath.endsWith("/items") }.queryParameters["type"])
     }
 
     @Test

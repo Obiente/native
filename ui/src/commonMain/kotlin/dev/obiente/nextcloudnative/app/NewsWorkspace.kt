@@ -91,15 +91,19 @@ internal data class NewsWorkspaceUiState(
  * Every load is fenced by a generation so a slow response for a previous selection, refresh, or
  * page cannot overwrite newer state. Article state changes are idempotent News operations; an
  * optimistic change is rolled back only for the affected article and field when the server does
- * not confirm it.
+ * not confirm it. While a change is pending, fetched pages show the requested state, because a
+ * read that raced the change may still carry the old server state.
  */
 internal class NewsWorkspaceController(
     private val scope: CoroutineScope,
     private val execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     private val parseDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    initialSelection: NewsSelection = NewsSelection.Unread,
 ) {
-    var state by mutableStateOf(NewsWorkspaceUiState())
+    var state by mutableStateOf(NewsWorkspaceUiState(selection = initialSelection))
         private set
+
+    private val pendingChanges = mutableMapOf<Long, NewsItemStateChange>()
 
     private var subscriptionGeneration = 0L
     private var articleGeneration = 0L
@@ -139,7 +143,7 @@ internal class NewsWorkspaceController(
                 articles = when (result) {
                     is NewsRead.Success -> {
                         val known = current.items.mapTo(HashSet(), NewsItem::id)
-                        val next = result.value.filterNot { it.id in known }
+                        val next = result.value.filterNot { it.id in known }.withPendingChanges()
                         current.copy(
                             items = current.items + next,
                             endReached = result.value.size < NEWS_ITEM_PAGE_SIZE || next.isEmpty(),
@@ -175,6 +179,7 @@ internal class NewsWorkspaceController(
     private fun change(item: NewsItem, change: NewsItemStateChange) {
         if (item.id in state.pendingItemIds) return
         applyItemChange(item.id, item.feedId, change)
+        pendingChanges[item.id] = change
         state = state.copy(pendingItemIds = state.pendingItemIds + item.id)
         scope.launch {
             val outcome = try {
@@ -193,8 +198,12 @@ internal class NewsWorkspaceController(
                 // the operation is idempotent, but the local copy must not claim it succeeded.
                 "${change.failureLabel()} The server did not confirm the change."
             }
+            pendingChanges -= item.id
             state = state.copy(pendingItemIds = state.pendingItemIds - item.id)
-            if (outcome != null) {
+            if (outcome == null) {
+                // Idempotent: corrects a copy that a page fetched before this change replaced.
+                applyItemChange(item.id, item.feedId, change)
+            } else {
                 applyItemChange(item.id, item.feedId, change.inverse())
                 state = state.copy(stateChangeNotice = outcome)
             }
@@ -237,14 +246,21 @@ internal class NewsWorkspaceController(
         subscriptionJob = scope.launch {
             val result = readSubscriptions()
             if (generation != subscriptionGeneration) return@launch
-            state = when (result) {
-                is NewsRead.Success -> state.copy(
-                    subscriptions = result.value,
-                    subscriptionsFailure = null,
-                    refreshing = false,
-                    selection = state.selection.takeIfStillPresent(result.value),
-                )
-                is NewsRead.Failure -> state.copy(subscriptionsFailure = result.failure, refreshing = false)
+            when (result) {
+                is NewsRead.Success -> {
+                    val selection = state.selection.takeIfStillPresent(result.value)
+                    val selectionRemoved = selection != state.selection
+                    state = state.copy(
+                        subscriptions = result.value,
+                        subscriptionsFailure = null,
+                        refreshing = false,
+                        selection = selection,
+                        openItemId = state.openItemId.takeUnless { selectionRemoved },
+                    )
+                    // The removed feed or folder's pending page must not fill the fallback view.
+                    if (selectionRemoved) loadArticles(selection, keepVisibleItems = false)
+                }
+                is NewsRead.Failure -> state = state.copy(subscriptionsFailure = result.failure, refreshing = false)
             }
         }
     }
@@ -260,7 +276,7 @@ internal class NewsWorkspaceController(
             state = state.copy(
                 articles = when (result) {
                     is NewsRead.Success -> NewsArticlesState.Loaded(
-                        items = result.value,
+                        items = result.value.withPendingChanges(),
                         endReached = result.value.size < NEWS_ITEM_PAGE_SIZE,
                     )
                     is NewsRead.Failure -> if (keepVisibleItems && previous != null) {
@@ -272,6 +288,9 @@ internal class NewsWorkspaceController(
             )
         }
     }
+
+    private fun List<NewsItem>.withPendingChanges(): List<NewsItem> =
+        if (pendingChanges.isEmpty()) this else map { item -> pendingChanges[item.id]?.let(item::applying) ?: item }
 
     private suspend fun readSubscriptions(): NewsRead<NewsSubscriptions> {
         val levels = read(newsApiLevelsRequest(), ::parseNewsApiLevels)

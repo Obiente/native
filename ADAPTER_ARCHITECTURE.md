@@ -569,14 +569,24 @@ same-origin transport.
   the publisher.
 - The only writes are the idempotent per-article read, unread, star, and unstar
   routes. A change is applied optimistically and rolled back for that article
-  alone when the server rejects it or does not confirm it. Feed, folder,
-  filter, and mark-all operations stay in the web interface.
+  alone when the server rejects it or does not confirm it. While a change is
+  pending, refreshed or newly selected pages show the requested state, and a
+  confirmed change is reapplied, so a read that raced the change cannot show
+  the opposite of the server state. Feed, folder, filter, and mark-all
+  operations stay in the web interface.
 - `NewsWorkspaceController` fences every load by generation, so a late response
-  for an earlier selection, refresh, or page cannot overwrite newer state.
+  for an earlier selection, refresh, or page cannot overwrite newer state. When
+  a refresh finds that the selected feed or folder was removed, it falls back
+  to Unread and loads it, invalidating the removed selection's page.
+- The account shell retains the controller, so switching to another app and
+  back keeps the selected view, the open article, and loaded pages. Only the
+  selected view is saved across process recreation; the open article is not
+  restored, because a fresh Unread list no longer contains an article that
+  opening marked read.
 
 `NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
 request shapes, parsing of malformed and adversarial input, stale completion,
-rollback, and paging.
+pending changes racing a refresh, removed selections, rollback, and paging.
 
 ### Administration visibility
 

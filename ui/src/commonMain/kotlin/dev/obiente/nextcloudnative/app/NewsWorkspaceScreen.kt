@@ -34,11 +34,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -70,7 +72,43 @@ import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.nativeui.runtime.sanitizeNativeMailHtml
 import kotlin.time.Clock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
+
+/**
+ * Retains the account's News reading state outside the workspace composition, so switching to
+ * another app and back keeps the selected view, open article, and loaded pages. Call it from the
+ * account shell, not from the News route. Only the selected view survives process recreation:
+ * the open article is not restored because a fresh Unread list no longer contains it once read.
+ */
+@Composable
+internal fun rememberNewsWorkspaceController(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+): NewsWorkspaceController {
+    val currentServices by rememberUpdatedState(services)
+    val currentSession by rememberUpdatedState(session)
+    var savedSelection by rememberSaveable(session.accountId) { mutableStateOf(NewsSelection.Unread.destinationId()) }
+    val parent = rememberCoroutineScope()
+    val scope = remember(session.accountId) {
+        CoroutineScope(parent.coroutineContext + SupervisorJob(parent.coroutineContext[Job]))
+    }
+    DisposableEffect(scope) { onDispose { scope.cancel() } }
+    val controller = remember(scope) {
+        NewsWorkspaceController(
+            scope,
+            execute = { request -> currentServices.executeNextcloudApi(currentSession, request) },
+            initialSelection = newsSelectionForDestination(savedSelection) ?: NewsSelection.Unread,
+        )
+    }
+    LaunchedEffect(controller) {
+        snapshotFlow { controller.state.selection.destinationId() }.collect { savedSelection = it }
+    }
+    return controller
+}
 
 /**
  * Native News reader: subscriptions on the left (or in a sheet), the article list, and a reader.
@@ -81,13 +119,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 @Composable
 internal fun NewsWorkspaceScreen(
     services: NextcloudPlatformServices,
-    session: NextcloudSession,
+    controller: NewsWorkspaceController,
     onBack: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    val controller = remember(session.accountId) {
-        NewsWorkspaceController(scope, execute = { request -> services.executeNextcloudApi(session, request) })
-    }
     LaunchedEffect(controller) { controller.start() }
     val state = controller.state
     PlatformBackHandler(enabled = state.openItemId != null, onBack = controller::closeArticle)

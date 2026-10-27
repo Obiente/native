@@ -684,6 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    val newsController = rememberNewsWorkspaceController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -1694,9 +1695,7 @@ private fun AuthenticatedApp(
             installedApps = serverInfo?.apps.orEmpty(),
             pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
-            onOpenLink = { link ->
-                launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
-            },
+            onOpenLink = { link -> launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp) },
             onOpenStatus = serverInfo?.apps
                 ?.firstOrNull { it.id == "user_status" }
                 ?.let { statusApp ->
@@ -1736,7 +1735,7 @@ private fun AuthenticatedApp(
             pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
-        Screen.News -> NewsWorkspaceScreen(services = services, session = session, onBack = ::navigateBack)
+        Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
