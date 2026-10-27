@@ -273,9 +273,15 @@ internal class NewsWorkspaceController(
     private fun loadArticles(selection: NewsSelection, keepVisibleItems: Boolean) {
         val generation = ++articleGeneration
         articleJob?.cancel()
-        if (!keepVisibleItems || state.articles !is NewsArticlesState.Loaded) {
-            state = state.copy(articles = NewsArticlesState.Loading)
-        }
+        val visible = state.articles as? NewsArticlesState.Loaded
+        state = state.copy(
+            articles = if (!keepVisibleItems || visible == null) {
+                NewsArticlesState.Loading
+            } else {
+                // The older-page request was cancelled above; it must not leave paging blocked.
+                visible.copy(loadingMore = false, pageFailure = null)
+            },
+        )
         articleJob = scope.launch {
             val result = readItems(selection, olderThanItemId = null)
             if (generation != articleGeneration) return@launch

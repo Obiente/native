@@ -31,11 +31,13 @@ class NewsWorkspaceControllerTest {
             if (query["offset"] == "0") items(30L downTo 1L) else items(LongRange.EMPTY)
         }
         val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
+        val offsetGates = mutableMapOf<String, CompletableDeferred<Unit>>()
         val requests = mutableListOf<NextcloudApiRequest>()
 
         suspend fun execute(request: NextcloudApiRequest): NextcloudApiResponse {
             requests += request
             gates[request.queryParameters["type"] + ":" + request.queryParameters["id"]]?.await()
+            request.queryParameters["offset"]?.let { offset -> offsetGates[offset]?.await() }
             val path = request.relativePath.removePrefix("/index.php/apps/news/api")
             return when {
                 path.isEmpty() -> response(apiLevelsStatus, apiLevels)
@@ -252,6 +254,33 @@ class NewsWorkspaceControllerTest {
         server.itemPages = { FakeNewsServer.items(30L downTo 1L) }
         controller.refresh()
         assertNull((controller.state.articles as NewsArticlesState.Loaded).refreshFailure)
+    }
+
+    @Test
+    fun `a refresh that cancels an older-page load leaves paging usable even when it fails`() {
+        val server = FakeNewsServer()
+        val olderPages: (Map<String, String>) -> String = { query ->
+            when (query["offset"]) {
+                "0" -> FakeNewsServer.items(100L downTo 61L)
+                "61" -> FakeNewsServer.items(60L downTo 50L)
+                else -> FakeNewsServer.items(LongRange.EMPTY)
+            }
+        }
+        server.itemPages = olderPages
+        val controller = controller(server)
+        controller.start()
+        server.offsetGates["61"] = CompletableDeferred()
+        controller.loadMore()
+        assertTrue((controller.state.articles as NewsArticlesState.Loaded).loadingMore)
+        server.itemPages = { throw IllegalStateException("offline") }
+        controller.refresh()
+        val afterFailure = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertFalse(afterFailure.loadingMore, "The cancelled page must not leave a spinner behind.")
+        assertEquals(NewsFailureKind.Offline, afterFailure.refreshFailure?.kind)
+        server.itemPages = olderPages
+        server.offsetGates.clear()
+        controller.loadMore()
+        assertEquals(51, (controller.state.articles as NewsArticlesState.Loaded).items.size)
     }
 
     @Test
