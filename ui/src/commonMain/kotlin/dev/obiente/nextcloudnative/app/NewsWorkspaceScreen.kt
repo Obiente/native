@@ -164,10 +164,17 @@ internal fun NewsWorkspaceScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 state.stateChangeNotice?.let { notice ->
-                    NewsNotice(notice, onDismiss = controller::dismissNotice)
+                    NewsNotice(notice, actionLabel = "Dismiss", onAction = controller::dismissNotice)
                 }
                 state.subscriptionsFailure?.takeIf { state.subscriptions != null }?.let { failure ->
-                    NewsNotice("${failure.title}. Showing the last loaded subscriptions.", onDismiss = null)
+                    NewsNotice("${failure.title}. Showing the last loaded subscriptions.")
+                }
+                (state.articles as? NewsArticlesState.Loaded)?.refreshFailure?.let { failure ->
+                    NewsNotice(
+                        "${failure.title}. Showing the articles loaded earlier.",
+                        actionLabel = "Try again",
+                        onAction = controller::refresh.takeIf { failure.canRetry },
+                    )
                 }
                 when {
                     state.subscriptions == null && state.subscriptionsFailure != null ->
@@ -509,14 +516,14 @@ private fun NewsFailurePane(failure: NewsFailure, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun NewsNotice(message: String, onDismiss: (() -> Unit)?) {
+private fun NewsNotice(message: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-            onDismiss?.let { dismiss -> TextButton(onClick = dismiss) { Text("Dismiss") } }
+            if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel) }
         }
     }
 }

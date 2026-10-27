@@ -577,7 +577,9 @@ same-origin transport.
 - `NewsWorkspaceController` fences every load by generation, so a late response
   for an earlier selection, refresh, or page cannot overwrite newer state. When
   a refresh finds that the selected feed or folder was removed, it falls back
-  to Unread and loads it, invalidating the removed selection's page.
+  to Unread and loads it, invalidating the removed selection's page. A failed
+  refresh keeps the articles as they are, including changes made while it ran,
+  and offers a refresh retry separately from the older-page retry.
 - The account shell retains the controller, so switching to another app and
   back keeps the selected view, the open article, and loaded pages. Only the
   selected view is saved across process recreation; the open article is not
@@ -586,7 +588,8 @@ same-origin transport.
 
 `NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
 request shapes, parsing of malformed and adversarial input, stale completion,
-pending changes racing a refresh, removed selections, rollback, and paging.
+pending changes racing a refresh, failed refreshes, removed selections,
+rollback, and paging.
 
 ### Administration visibility
 

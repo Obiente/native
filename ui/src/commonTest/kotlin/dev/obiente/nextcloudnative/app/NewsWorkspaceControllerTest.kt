@@ -247,7 +247,28 @@ class NewsWorkspaceControllerTest {
         controller.refresh()
         val loaded = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
         assertEquals(30, loaded.items.size)
-        assertEquals(NewsFailureKind.Offline, loaded.pageFailure?.kind)
+        assertEquals(NewsFailureKind.Offline, loaded.refreshFailure?.kind)
+        assertNull(loaded.pageFailure, "A failed refresh is retried by refreshing, not by paging.")
+        server.itemPages = { FakeNewsServer.items(30L downTo 1L) }
+        controller.refresh()
+        assertNull((controller.state.articles as NewsArticlesState.Loaded).refreshFailure)
+    }
+
+    @Test
+    fun `a failed refresh keeps changes made while it was running`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        val refreshPage = CompletableDeferred<Unit>()
+        server.gates["3:0"] = refreshPage
+        server.itemPages = { throw IllegalStateException("offline") }
+        controller.refresh()
+        controller.toggleStar(item)
+        refreshPage.complete(Unit)
+        val loaded = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertTrue(loaded.items.first { it.id == item.id }.starred, "The confirmed star must survive the failed refresh.")
+        assertEquals(NewsFailureKind.Offline, loaded.refreshFailure?.kind)
     }
 
     @Test

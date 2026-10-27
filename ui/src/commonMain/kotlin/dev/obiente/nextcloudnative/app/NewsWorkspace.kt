@@ -61,11 +61,16 @@ internal fun newsFailureForStatus(status: Int): NewsFailure? = when (status) {
 
 internal sealed interface NewsArticlesState {
     data object Loading : NewsArticlesState
+    /**
+     * [pageFailure] belongs to loading an older page and is retried by paging again.
+     * [refreshFailure] belongs to reloading the first page and is retried by refreshing.
+     */
     data class Loaded(
         val items: List<NewsItem>,
         val endReached: Boolean,
         val loadingMore: Boolean = false,
         val pageFailure: NewsFailure? = null,
+        val refreshFailure: NewsFailure? = null,
     ) : NewsArticlesState
     data class Failed(val failure: NewsFailure) : NewsArticlesState
 }
@@ -268,8 +273,9 @@ internal class NewsWorkspaceController(
     private fun loadArticles(selection: NewsSelection, keepVisibleItems: Boolean) {
         val generation = ++articleGeneration
         articleJob?.cancel()
-        val previous = state.articles as? NewsArticlesState.Loaded
-        if (!keepVisibleItems || previous == null) state = state.copy(articles = NewsArticlesState.Loading)
+        if (!keepVisibleItems || state.articles !is NewsArticlesState.Loaded) {
+            state = state.copy(articles = NewsArticlesState.Loading)
+        }
         articleJob = scope.launch {
             val result = readItems(selection, olderThanItemId = null)
             if (generation != articleGeneration) return@launch
@@ -279,11 +285,11 @@ internal class NewsWorkspaceController(
                         items = result.value.withPendingChanges(),
                         endReached = result.value.size < NEWS_ITEM_PAGE_SIZE,
                     )
-                    is NewsRead.Failure -> if (keepVisibleItems && previous != null) {
-                        previous.copy(pageFailure = result.failure, loadingMore = false)
-                    } else {
-                        NewsArticlesState.Failed(result.failure)
-                    }
+                    // Keep the articles as they are now, including state changes made during the
+                    // refresh, rather than the list captured when it started.
+                    is NewsRead.Failure -> (state.articles as? NewsArticlesState.Loaded)
+                        ?.copy(refreshFailure = result.failure)
+                        ?: NewsArticlesState.Failed(result.failure)
                 },
             )
         }
