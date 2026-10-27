@@ -572,7 +572,10 @@ same-origin transport.
   alone when the server rejects it or does not confirm it. While a change is
   pending, refreshed or newly selected pages show the requested state, and a
   confirmed change is reapplied, so a read that raced the change cannot show
-  the opposite of the server state. Feed, folder, filter, and mark-all
+  the opposite of the server state. Each pending change records the unread
+  and starred count adjustment it made, so a rejection reverses the counts
+  even after the user moved to another view, and counts read during the
+  change still include it. Feed, folder, filter, and mark-all
   operations stay in the web interface.
 - `NewsWorkspaceController` fences every load by generation, so a late response
   for an earlier selection, refresh, or page cannot overwrite newer state. When
@@ -581,7 +584,9 @@ same-origin transport.
   refresh keeps the articles as they are, including changes made while it ran,
   and offers a refresh retry separately from the older-page retry.
 - The account shell retains the controller, so switching to another app and
-  back keeps the selected view, the open article, and loaded pages. Only the
+  back keeps the selected view, the open article, and loaded pages. The list
+  scroll position is held above the list and reader switch, so returning from
+  the compact reader keeps the reading position. Only the
   selected view is saved across process recreation; the open article is not
   restored, because a fresh Unread list no longer contains an article that
   opening marked read.

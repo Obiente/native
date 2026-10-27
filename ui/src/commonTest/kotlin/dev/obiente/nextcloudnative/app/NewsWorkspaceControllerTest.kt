@@ -151,6 +151,24 @@ class NewsWorkspaceControllerTest {
     }
 
     @Test
+    fun `a rejected change restores counts after the user moved to another view`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        val reply = CompletableDeferred<Unit>()
+        server.stateGate = reply
+        controller.toggleRead(item)
+        assertEquals(29, controller.state.subscriptions?.totalUnread)
+        server.itemPages = { FakeNewsServer.items(LongRange.EMPTY) }
+        controller.select(NewsSelection.Starred)
+        server.stateStatus = 403
+        reply.complete(Unit)
+        assertEquals(30, controller.state.subscriptions?.totalUnread, "The rejected read no longer counts.")
+        assertTrue(controller.state.pendingItemIds.isEmpty())
+    }
+
+    @Test
     fun `an unconfirmed change is rolled back and never claimed as done`() {
         val server = FakeNewsServer().apply { stateFailure = IllegalStateException("connection reset") }
         val controller = controller(server)
@@ -179,6 +197,7 @@ class NewsWorkspaceControllerTest {
         val confirmed = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
         assertTrue(confirmed.starred)
         assertTrue(controller.state.pendingItemIds.isEmpty())
+        assertEquals(2, controller.state.subscriptions?.starredCount, "Counts read during the change still include it.")
         controller.refresh()
         val afterConfirm = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
         assertFalse(afterConfirm.starred, "Once confirmed, later pages are shown as the server sends them.")

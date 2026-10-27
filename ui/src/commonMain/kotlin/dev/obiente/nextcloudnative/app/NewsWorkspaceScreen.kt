@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -37,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -124,6 +126,8 @@ internal fun NewsWorkspaceScreen(
 ) {
     LaunchedEffect(controller) { controller.start() }
     val state = controller.state
+    // Owned here, above the list/reader switch, so returning from the compact reader keeps the position.
+    val listState = key(state.selection) { rememberLazyListState() }
     PlatformBackHandler(enabled = state.openItemId != null, onBack = controller::closeArticle)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -181,7 +185,7 @@ internal fun NewsWorkspaceScreen(
                         NewsFailurePane(state.subscriptionsFailure, onRetry = controller::refresh)
                     twoPane -> Row(modifier = Modifier.fillMaxSize()) {
                         Box(modifier = Modifier.weight(0.42f).fillMaxHeight()) {
-                            NewsArticleList(state, controller)
+                            NewsArticleList(state, listState, controller)
                         }
                         VerticalDivider()
                         Box(modifier = Modifier.weight(0.58f).fillMaxHeight()) {
@@ -193,7 +197,7 @@ internal fun NewsWorkspaceScreen(
                         }
                     }
                     openItem != null -> NewsArticleReader(openItem, state, controller, services)
-                    else -> NewsArticleList(state, controller)
+                    else -> NewsArticleList(state, listState, controller)
                 }
             }
         }
@@ -201,7 +205,7 @@ internal fun NewsWorkspaceScreen(
 }
 
 @Composable
-private fun NewsArticleList(state: NewsWorkspaceUiState, controller: NewsWorkspaceController) {
+private fun NewsArticleList(state: NewsWorkspaceUiState, listState: LazyListState, controller: NewsWorkspaceController) {
     when (val articles = state.articles) {
         NewsArticlesState.Loading -> LoadingMessage("Loading articles...")
         is NewsArticlesState.Failed -> NewsFailurePane(articles.failure, onRetry = controller::refresh)
@@ -210,7 +214,6 @@ private fun NewsArticleList(state: NewsWorkspaceUiState, controller: NewsWorkspa
                 NewsEmptyState(state)
                 return
             }
-            val listState = rememberLazyListState()
             LaunchedEffect(listState, articles.endReached) {
                 if (articles.endReached) return@LaunchedEffect
                 snapshotFlow {
