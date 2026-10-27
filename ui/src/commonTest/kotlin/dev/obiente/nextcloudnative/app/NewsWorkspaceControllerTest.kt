@@ -1,0 +1,208 @@
+package dev.obiente.nextcloudnative.app
+
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class NewsWorkspaceControllerTest {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @AfterTest
+    fun cancelScope() = scope.cancel()
+
+    private class FakeNewsServer {
+        var apiLevels = """{"apiLevels":["v1-2","v1-3","v2"]}"""
+        var apiLevelsStatus = 200
+        var foldersStatus = 200
+        var stateStatus = 200
+        var stateFailure: Exception? = null
+        var itemPages: (Map<String, String>) -> String = { query ->
+            if (query["offset"] == "0") items(30L downTo 1L) else items(LongRange.EMPTY)
+        }
+        val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
+        val requests = mutableListOf<NextcloudApiRequest>()
+
+        suspend fun execute(request: NextcloudApiRequest): NextcloudApiResponse {
+            requests += request
+            gates[request.queryParameters["type"] + ":" + request.queryParameters["id"]]?.await()
+            val path = request.relativePath.removePrefix("/index.php/apps/news/api")
+            return when {
+                path.isEmpty() -> response(apiLevelsStatus, apiLevels)
+                path == "/v1-3/folders" -> response(foldersStatus, """{"folders":[{"id":1,"name":"Tech"}]}""")
+                path == "/v1-3/feeds" -> response(
+                    200,
+                    """{"starredCount":1,"feeds":[{"id":5,"title":"Example","url":"https://example.test/feed","folderId":1,"unreadCount":30}]}""",
+                )
+                path == "/v1-3/items" -> response(200, itemPages(request.queryParameters))
+                request.method == NextcloudApiMethod.POST -> {
+                    stateFailure?.let { throw it }
+                    response(stateStatus, "[]")
+                }
+                else -> response(404, "")
+            }
+        }
+
+        companion object {
+            fun items(ids: LongProgression): String = ids.joinToString(prefix = """{"items":[""", postfix = "]}") { id ->
+                """{"id":$id,"feedId":5,"title":"Article $id","body":"<p>Body $id</p>","unread":true,"starred":false}"""
+            }
+
+            fun response(status: Int, body: String) = NextcloudApiResponse(status, body.encodeToByteArray(), "application/json", null)
+        }
+    }
+
+    private fun controller(server: FakeNewsServer) =
+        NewsWorkspaceController(scope, server::execute, parseDispatcher = Dispatchers.Unconfined)
+
+    @Test
+    fun `start loads subscriptions and the unread list`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val state = controller.state
+        assertFalse(state.refreshing)
+        assertEquals(30, state.subscriptions?.totalUnread)
+        assertEquals(1, state.subscriptions?.starredCount)
+        val articles = assertIs<NewsArticlesState.Loaded>(state.articles)
+        assertEquals(30, articles.items.size)
+        assertTrue(articles.endReached, "A short first page has no further pages.")
+        assertEquals("false", server.requests.last { it.relativePath.endsWith("/items") }.queryParameters["getRead"])
+    }
+
+    @Test
+    fun `servers without the v1-3 API are reported as unsupported and not retried`() {
+        val server = FakeNewsServer().apply { apiLevels = """{"apiLevels":["v1-2"]}""" }
+        val controller = controller(server)
+        controller.start()
+        assertEquals(NewsFailureKind.UnsupportedVersion, controller.state.subscriptionsFailure?.kind)
+        assertFalse(controller.state.subscriptionsFailure!!.canRetry)
+    }
+
+    @Test
+    fun `missing version index and folders means unsupported, not offline`() {
+        val server = FakeNewsServer().apply { apiLevelsStatus = 404; foldersStatus = 404 }
+        val controller = controller(server)
+        controller.start()
+        assertEquals(NewsFailureKind.UnsupportedVersion, controller.state.subscriptionsFailure?.kind)
+    }
+
+    @Test
+    fun `a slow response for an earlier selection cannot replace the current list`() {
+        val server = FakeNewsServer()
+        server.itemPages = { query ->
+            when (query["type"]) {
+                "0" -> FakeNewsServer.items(500L downTo 499L)
+                else -> FakeNewsServer.items(30L downTo 1L)
+            }
+        }
+        val controller = controller(server)
+        controller.start()
+        val slowFeed = CompletableDeferred<Unit>()
+        server.gates["0:5"] = slowFeed
+        controller.select(NewsSelection.Feed(5))
+        controller.select(NewsSelection.Starred)
+        slowFeed.complete(Unit)
+        assertEquals(NewsSelection.Starred, controller.state.selection)
+        val articles = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertEquals(30, articles.items.size, "The cancelled feed page must not overwrite the starred list.")
+    }
+
+    @Test
+    fun `opening an unread article marks it read and updates the feed count`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        controller.open(item)
+        assertEquals(item.id, controller.state.openItemId)
+        assertFalse(controller.state.openItem!!.unread)
+        assertEquals(29, controller.state.subscriptions?.totalUnread)
+        assertTrue(controller.state.pendingItemIds.isEmpty())
+        assertTrue(server.requests.any { it.relativePath.endsWith("/items/${item.id}/read") })
+    }
+
+    @Test
+    fun `a rejected change rolls back only the affected article`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val items = (controller.state.articles as NewsArticlesState.Loaded).items
+        controller.toggleStar(items[1])
+        assertTrue(controller.state.openItemId == null)
+        server.stateStatus = 403
+        controller.toggleRead(items[0])
+        val after = (controller.state.articles as NewsArticlesState.Loaded).items
+        assertTrue(after[0].unread, "The rejected read is rolled back.")
+        assertTrue(after[1].starred, "The earlier confirmed star is kept.")
+        assertEquals(30, controller.state.subscriptions?.totalUnread)
+        assertEquals(2, controller.state.subscriptions?.starredCount)
+        assertTrue(controller.state.stateChangeNotice!!.startsWith("Couldn't mark the article as read."))
+    }
+
+    @Test
+    fun `an unconfirmed change is rolled back and never claimed as done`() {
+        val server = FakeNewsServer().apply { stateFailure = IllegalStateException("connection reset") }
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        controller.toggleStar(item)
+        assertFalse((controller.state.articles as NewsArticlesState.Loaded).items.first().starred)
+        assertTrue(controller.state.stateChangeNotice!!.contains("did not confirm"))
+        controller.dismissNotice()
+        assertNull(controller.state.stateChangeNotice)
+    }
+
+    @Test
+    fun `paging appends older articles once and stops at the end`() {
+        val server = FakeNewsServer()
+        server.itemPages = { query ->
+            when (query["offset"]) {
+                "0" -> FakeNewsServer.items(100L downTo 61L)
+                "61" -> FakeNewsServer.items(60L downTo 50L)
+                else -> FakeNewsServer.items(LongRange.EMPTY)
+            }
+        }
+        val controller = controller(server)
+        controller.start()
+        assertFalse((controller.state.articles as NewsArticlesState.Loaded).endReached)
+        controller.loadMore()
+        val loaded = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertEquals(51, loaded.items.size)
+        assertEquals(loaded.items.map(NewsItem::id).distinct(), loaded.items.map(NewsItem::id))
+        assertTrue(loaded.endReached)
+        val pageRequests = server.requests.count { it.relativePath.endsWith("/items") }
+        controller.loadMore()
+        assertEquals(pageRequests, server.requests.count { it.relativePath.endsWith("/items") })
+    }
+
+    @Test
+    fun `transport failures keep visible articles during refresh`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        server.itemPages = { throw IllegalStateException("offline") }
+        controller.refresh()
+        val loaded = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertEquals(30, loaded.items.size)
+        assertEquals(NewsFailureKind.Offline, loaded.pageFailure?.kind)
+    }
+
+    @Test
+    fun `http statuses map to typed failures`() {
+        assertNull(newsFailureForStatus(204))
+        assertEquals(NewsFailureKind.Unauthorized, newsFailureForStatus(401)?.kind)
+        assertEquals(NewsFailureKind.Forbidden, newsFailureForStatus(403)?.kind)
+        assertEquals(NewsFailureKind.Unavailable, newsFailureForStatus(404)?.kind)
+        assertEquals(NewsFailureKind.Throttled, newsFailureForStatus(429)?.kind)
+        assertEquals(NewsFailureKind.Server, newsFailureForStatus(500)?.kind)
+    }
+}

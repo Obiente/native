@@ -964,6 +964,7 @@ private fun AuthenticatedApp(
             "contacts" -> Screen.Contacts
             "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
+            NEWS_APP_ID -> Screen.News
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -1367,6 +1368,7 @@ private fun AuthenticatedApp(
             Screen.Contacts,
             Screen.Tasks,
             Screen.Deck,
+            Screen.News,
             is Screen.AppInfo,
             -> {
                 leaveAppWorkspace()
@@ -1734,6 +1736,7 @@ private fun AuthenticatedApp(
             pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
+        Screen.News -> NewsWorkspaceScreen(services = services, session = session, onBack = ::navigateBack)
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -10964,22 +10967,6 @@ private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
-    "dashboard", "github" -> "dashboard and timeline"
-    "activity" -> "activity timeline"
-    "mail" -> "mailbox and composer"
-    "contacts" -> "contact list"
-    "calendar" -> "calendar and agenda"
-    "cospend", "budget", "money" -> "collection, totals and form"
-    "notes", "office", "richdocuments", "collectives" -> "document editor"
-    "music", "audioplayer" -> "media library"
-    "deck" -> "board and cards"
-    "tasks", "chores" -> "task list"
-    "tables" -> "typed data table"
-    "cookbook" -> "recipe collection"
-    else -> "adaptive collection"
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024

@@ -12,6 +12,7 @@ cookbook             native   required     Recipe collections
 music                native   required     Artists albums playlists and playback
 pantry               native   required     Houses checklists and products
 mail                 native   required     Accounts mailboxes messages and composer
+news                 native   optional     Folders feeds articles and read state
 memories             native   optional     Photo timeline albums and editing handoff
 recognize            native   optional     Face and media recognition APIs
 richdocuments        embedded required     Document-only Android editor; desktop browser handoff

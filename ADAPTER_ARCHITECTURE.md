@@ -549,6 +549,35 @@ Invalid actionable links reject the response; invalid optional widget, item,
 and overlay icons are omitted. This policy does not change transport consent
 or authorize requests to another HTTP origin.
 
+### News reading
+
+News publishes no OpenAPI document. Its verified route contract lets the
+generic workspace list feeds, folders, and items as records, but it cannot
+express a reading workflow: unread and starred views, an article reader, and
+read state. A reviewed adapter in
+[`NewsApi.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsApi.kt)
+therefore implements the documented
+[v1-3 API](https://nextcloud.github.io/news/api/api-v1-3/) through the shared
+same-origin transport.
+
+- The adapter first reads the API version index and reports an unsupported
+  version, without retrying, when `v1-3` is absent.
+- Feeds, folders, and article pages are typed and bounded. Feed text is
+  normalized; only HTTP(S) article, favicon, and enclosure links are kept.
+- Article bodies render through the same HTML sanitizer as Mail, so scripts,
+  forms, embeds, and images are removed and opening an article does not contact
+  the publisher.
+- The only writes are the idempotent per-article read, unread, star, and unstar
+  routes. A change is applied optimistically and rolled back for that article
+  alone when the server rejects it or does not confirm it. Feed, folder,
+  filter, and mark-all operations stay in the web interface.
+- `NewsWorkspaceController` fences every load by generation, so a late response
+  for an earlier selection, refresh, or page cannot overwrite newer state.
+
+`NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
+request shapes, parsing of malformed and adversarial input, stale completion,
+rollback, and paging.
+
 ### Administration visibility
 
 `AdministrationAccessRepository` owns session-scoped, in-memory permission
@@ -833,3 +862,4 @@ recovery.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
+- [News external API v1-3](https://nextcloud.github.io/news/api/api-v1-3/)

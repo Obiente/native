@@ -31,6 +31,9 @@ import androidx.compose.material.icons.outlined.Checkroom
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Poll
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Cloud
@@ -233,6 +236,9 @@ object NextcloudIcons {
         "chores" -> Icons.Outlined.CleaningServices
         "money" -> Icons.Outlined.AttachMoney
         "forms" -> Icons.Outlined.Checklist
+        "news" -> Icons.Outlined.RssFeed
+        "bookmarks" -> Icons.Outlined.Bookmarks
+        "polls" -> Icons.Outlined.Poll
         else -> Icons.Outlined.Apps
     }
 
