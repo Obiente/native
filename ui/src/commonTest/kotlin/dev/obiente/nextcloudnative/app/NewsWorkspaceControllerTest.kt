@@ -188,6 +188,26 @@ class NewsWorkspaceControllerTest {
     }
 
     @Test
+    fun `opening an article while its star is pending still marks it read`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        val reply = CompletableDeferred<Unit>()
+        server.stateGate = reply
+        controller.toggleStar(item)
+        controller.open(item)
+        reply.complete(Unit)
+        val opened = controller.state.openItem!!
+        assertTrue(opened.starred)
+        assertFalse(opened.unread, "The automatic read must not be dropped behind the star.")
+        assertTrue(server.requests.any { it.relativePath.endsWith("/items/${item.id}/read") })
+        assertEquals(29, controller.state.subscriptions?.totalUnread)
+        assertEquals(2, controller.state.subscriptions?.starredCount)
+        assertTrue(controller.state.pendingItemIds.isEmpty())
+    }
+
+    @Test
     fun `a rejected change restores counts after the user moved to another view`() {
         val server = FakeNewsServer()
         val controller = controller(server)

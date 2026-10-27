@@ -569,7 +569,9 @@ same-origin transport.
   the publisher.
 - The only writes are the idempotent per-article read, unread, star, and unstar
   routes. A change is applied optimistically and rolled back for that article
-  alone when the server rejects it or does not confirm it. While a change is
+  alone when the server rejects it or does not confirm it. Read state and star
+  state change independently, so opening an article while its star is
+  pending still marks it read. While a change is
   pending, refreshed or newly selected pages show the requested state, and a
   confirmed change is reapplied, so a read that raced the change cannot show
   the opposite of the server state. Each pending change records the unread

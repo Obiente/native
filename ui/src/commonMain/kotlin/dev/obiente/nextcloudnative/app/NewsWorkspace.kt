@@ -123,7 +123,8 @@ internal class NewsWorkspaceController(
     var state by mutableStateOf(NewsWorkspaceUiState(selection = initialSelection))
         private set
 
-    private val pendingChanges = mutableMapOf<Long, PendingNewsChange>()
+    /** At most one change per article and field, so a pending star never blocks marking it read. */
+    private val pendingChanges = mutableMapOf<PendingNewsKey, PendingNewsChange>()
     private var settledChanges = 0L
     private var countsReloadNeeded = false
 
@@ -199,10 +200,11 @@ internal class NewsWorkspaceController(
     }
 
     private fun change(item: NewsItem, change: NewsItemStateChange) {
-        if (item.id in state.pendingItemIds) return
+        val key = PendingNewsKey(item.id, change.marksRead())
+        if (key in pendingChanges) return
         val current = (state.articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == item.id } ?: item
         val pending = PendingNewsChange(change, item.feedId, current.unreadDelta(change), current.starredDelta(change))
-        pendingChanges[item.id] = pending
+        pendingChanges[key] = pending
         state = state.applying(item.id, change).copy(
             subscriptions = state.subscriptions?.adjustedBy(pending, sign = 1),
             pendingItemIds = state.pendingItemIds + item.id,
@@ -224,11 +226,13 @@ internal class NewsWorkspaceController(
                 // the operation is idempotent, but the local copy must not claim it succeeded.
                 "${change.failureLabel()} The server did not confirm the change."
             }
-            val settled = pendingChanges.remove(item.id) ?: pending
+            val settled = pendingChanges.remove(key) ?: pending
+            val stillPending = pendingChanges.keys.any { it.itemId == item.id }
+            val pendingItemIds = if (stillPending) state.pendingItemIds else state.pendingItemIds - item.id
             settledChanges++
             state = if (outcome == null) {
                 // Idempotent: corrects a copy that a page fetched before this change replaced.
-                state.applying(item.id, change).copy(pendingItemIds = state.pendingItemIds - item.id)
+                state.applying(item.id, change).copy(pendingItemIds = pendingItemIds)
             } else {
                 // Counts are reversed from the recorded adjustment, so a rejection after the user
                 // moved to another view still restores them. Counts read from the server since the
@@ -239,7 +243,7 @@ internal class NewsWorkspaceController(
                     } else {
                         state.subscriptions
                     },
-                    pendingItemIds = state.pendingItemIds - item.id,
+                    pendingItemIds = pendingItemIds,
                     stateChangeNotice = outcome,
                 )
             }
@@ -318,7 +322,15 @@ internal class NewsWorkspaceController(
     }
 
     private fun List<NewsItem>.withPendingChanges(): List<NewsItem> =
-        if (pendingChanges.isEmpty()) this else map { item -> pendingChanges[item.id]?.let { item.applying(it.change) } ?: item }
+        if (pendingChanges.isEmpty()) {
+            this
+        } else {
+            map { item ->
+                pendingChanges.entries.fold(item) { current, (key, pending) ->
+                    if (key.itemId == item.id) current.applying(pending.change) else current
+                }
+            }
+        }
 
     private suspend fun readSubscriptions(): NewsRead<NewsSubscriptions> {
         val levels = read(newsApiLevelsRequest(), ::parseNewsApiLevels)
@@ -363,6 +375,12 @@ private sealed interface NewsRead<out T> {
     data class Success<T>(val value: T) : NewsRead<T>
     data class Failure(val failure: NewsFailure) : NewsRead<Nothing>
 }
+
+/** Identifies the read field ([readField] true) or the star field of one article. */
+private data class PendingNewsKey(val itemId: Long, val readField: Boolean)
+
+private fun NewsItemStateChange.marksRead(): Boolean =
+    this == NewsItemStateChange.Read || this == NewsItemStateChange.Unread
 
 /**
  * One in-flight article change and the count adjustment applied when it started. [countsApplied]
