@@ -151,6 +151,43 @@ class NewsWorkspaceControllerTest {
     }
 
     @Test
+    fun `counts that already include an in-flight change are not adjusted twice`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        val reply = CompletableDeferred<Unit>()
+        server.stateGate = reply
+        controller.toggleRead(item)
+        assertEquals(29, controller.state.subscriptions?.totalUnread)
+        server.feedsBody = server.feedsBody.replace("\"unreadCount\":30", "\"unreadCount\":29")
+        controller.refresh()
+        assertEquals(29, controller.state.subscriptions?.totalUnread, "The server already applied the read.")
+        reply.complete(Unit)
+        assertEquals(29, controller.state.subscriptions?.totalUnread)
+        val countReads = server.requests.count { it.relativePath.endsWith("/feeds") }
+        assertEquals(3, countReads, "Counts are read once more after the change settles, and only once.")
+    }
+
+    @Test
+    fun `the open article stays in the reader when a refresh drops it from the list`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        controller.open(item)
+        server.itemPages = { query -> if (query["offset"] == "0") FakeNewsServer.items(29L downTo 1L) else FakeNewsServer.items(LongRange.EMPTY) }
+        controller.refresh()
+        val loaded = assertIs<NewsArticlesState.Loaded>(controller.state.articles)
+        assertTrue(loaded.items.none { it.id == item.id })
+        assertEquals(item.id, controller.state.openItem?.id, "Reading continues until the article is closed.")
+        controller.toggleStar(controller.state.openItem!!)
+        assertTrue(controller.state.openItem!!.starred, "Changes still reach the article in the reader.")
+        controller.closeArticle()
+        assertNull(controller.state.openItem)
+    }
+
+    @Test
     fun `a rejected change restores counts after the user moved to another view`() {
         val server = FakeNewsServer()
         val controller = controller(server)
@@ -193,11 +230,12 @@ class NewsWorkspaceControllerTest {
         controller.refresh()
         val refreshed = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
         assertTrue(refreshed.starred, "The stale page must not erase the pending star.")
+        server.feedsBody = server.feedsBody.replace("\"starredCount\":1", "\"starredCount\":2")
         confirm.complete(Unit)
         val confirmed = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
         assertTrue(confirmed.starred)
         assertTrue(controller.state.pendingItemIds.isEmpty())
-        assertEquals(2, controller.state.subscriptions?.starredCount, "Counts read during the change still include it.")
+        assertEquals(2, controller.state.subscriptions?.starredCount, "Counts are read again once the change settles.")
         controller.refresh()
         val afterConfirm = (controller.state.articles as NewsArticlesState.Loaded).items.first { it.id == item.id }
         assertFalse(afterConfirm.starred, "Once confirmed, later pages are shown as the server sends them.")

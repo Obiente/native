@@ -81,13 +81,28 @@ internal data class NewsWorkspaceUiState(
     val refreshing: Boolean = true,
     val selection: NewsSelection = NewsSelection.Unread,
     val articles: NewsArticlesState = NewsArticlesState.Loading,
-    val openItemId: Long? = null,
+    /**
+     * The article in the reader. It is kept apart from the list, because a refresh can drop it from
+     * the list (an opened article is read, so Unread no longer contains it) while it is being read.
+     */
+    val openedItem: NewsItem? = null,
     val pendingItemIds: Set<Long> = emptySet(),
     val stateChangeNotice: String? = null,
 ) {
-    val openItem: NewsItem? get() = openItemId?.let { id ->
-        (articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == id }
+    val openItemId: Long? get() = openedItem?.id
+
+    /** The list's copy when it has one, since it is the most recently read from the server. */
+    val openItem: NewsItem? get() = openedItem?.let { opened ->
+        (articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == opened.id } ?: opened
     }
+
+    /** Applies a read or star change to every local copy of one article. */
+    fun applying(itemId: Long, change: NewsItemStateChange): NewsWorkspaceUiState = copy(
+        articles = (articles as? NewsArticlesState.Loaded)
+            ?.let { loaded -> loaded.copy(items = loaded.items.map { if (it.id == itemId) it.applying(change) else it }) }
+            ?: articles,
+        openedItem = openedItem?.let { if (it.id == itemId) it.applying(change) else it },
+    )
 }
 
 /**
@@ -109,6 +124,8 @@ internal class NewsWorkspaceController(
         private set
 
     private val pendingChanges = mutableMapOf<Long, PendingNewsChange>()
+    private var settledChanges = 0L
+    private var countsReloadNeeded = false
 
     private var subscriptionGeneration = 0L
     private var articleGeneration = 0L
@@ -126,10 +143,10 @@ internal class NewsWorkspaceController(
 
     fun select(selection: NewsSelection) {
         if (selection == state.selection && state.articles !is NewsArticlesState.Failed) {
-            state = state.copy(openItemId = null)
+            state = state.copy(openedItem = null)
             return
         }
-        state = state.copy(selection = selection, openItemId = null, stateChangeNotice = null)
+        state = state.copy(selection = selection, openedItem = null, stateChangeNotice = null)
         loadArticles(selection, keepVisibleItems = false)
     }
 
@@ -163,12 +180,12 @@ internal class NewsWorkspaceController(
 
     /** Opens an article and marks it read, as the News web interface does. */
     fun open(item: NewsItem) {
-        state = state.copy(openItemId = item.id, stateChangeNotice = null)
+        state = state.copy(openedItem = item, stateChangeNotice = null)
         if (item.unread) change(item, NewsItemStateChange.Read)
     }
 
     fun closeArticle() {
-        state = state.copy(openItemId = null)
+        state = state.copy(openedItem = null)
     }
 
     fun toggleRead(item: NewsItem) =
@@ -186,8 +203,7 @@ internal class NewsWorkspaceController(
         val current = (state.articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == item.id } ?: item
         val pending = PendingNewsChange(change, item.feedId, current.unreadDelta(change), current.starredDelta(change))
         pendingChanges[item.id] = pending
-        state = state.copy(
-            articles = articlesApplying(item.id, change),
+        state = state.applying(item.id, change).copy(
             subscriptions = state.subscriptions?.adjustedBy(pending, sign = 1),
             pendingItemIds = state.pendingItemIds + item.id,
         )
@@ -208,48 +224,62 @@ internal class NewsWorkspaceController(
                 // the operation is idempotent, but the local copy must not claim it succeeded.
                 "${change.failureLabel()} The server did not confirm the change."
             }
-            pendingChanges -= item.id
+            val settled = pendingChanges.remove(item.id) ?: pending
+            settledChanges++
             state = if (outcome == null) {
                 // Idempotent: corrects a copy that a page fetched before this change replaced.
-                state.copy(articles = articlesApplying(item.id, change), pendingItemIds = state.pendingItemIds - item.id)
+                state.applying(item.id, change).copy(pendingItemIds = state.pendingItemIds - item.id)
             } else {
                 // Counts are reversed from the recorded adjustment, so a rejection after the user
-                // moved to another view still restores them.
-                state.copy(
-                    articles = articlesApplying(item.id, change.inverse()),
-                    subscriptions = state.subscriptions?.adjustedBy(pending, sign = -1),
+                // moved to another view still restores them. Counts read from the server since the
+                // change started no longer contain the adjustment and are reloaded instead.
+                state.applying(item.id, change.inverse()).copy(
+                    subscriptions = if (settled.countsApplied) {
+                        state.subscriptions?.adjustedBy(settled, sign = -1)
+                    } else {
+                        state.subscriptions
+                    },
                     pendingItemIds = state.pendingItemIds - item.id,
                     stateChangeNotice = outcome,
                 )
             }
+            if (pendingChanges.isEmpty() && countsReloadNeeded) loadSubscriptions()
         }
-    }
-
-    private fun articlesApplying(itemId: Long, change: NewsItemStateChange): NewsArticlesState {
-        val loaded = state.articles as? NewsArticlesState.Loaded ?: return state.articles
-        return loaded.copy(items = loaded.items.map { if (it.id == itemId) it.applying(change) else it })
     }
 
     private fun loadSubscriptions() {
         val generation = ++subscriptionGeneration
         subscriptionJob?.cancel()
+        countsReloadNeeded = false
+        val changesActiveAtStart = pendingChanges.isNotEmpty()
+        val settledAtStart = settledChanges
         state = state.copy(refreshing = true)
         subscriptionJob = scope.launch {
             val result = readSubscriptions()
             if (generation != subscriptionGeneration) return@launch
             when (result) {
                 is NewsRead.Success -> {
+                    // A change in flight may or may not be included in these counts, so neither
+                    // adding nor omitting its adjustment is safe. Show the server counts and read
+                    // them again once every change has settled.
+                    val countsUncertain = changesActiveAtStart || pendingChanges.isNotEmpty() ||
+                        settledChanges != settledAtStart
+                    if (countsUncertain) {
+                        pendingChanges.entries.forEach { entry -> entry.setValue(entry.value.copy(countsApplied = false)) }
+                        countsReloadNeeded = true
+                    }
                     val selection = state.selection.takeIfStillPresent(result.value)
                     val selectionRemoved = selection != state.selection
                     state = state.copy(
-                        subscriptions = result.value.withPendingCounts(),
+                        subscriptions = result.value,
                         subscriptionsFailure = null,
                         refreshing = false,
                         selection = selection,
-                        openItemId = state.openItemId.takeUnless { selectionRemoved },
+                        openedItem = state.openedItem.takeUnless { selectionRemoved },
                     )
                     // The removed feed or folder's pending page must not fill the fallback view.
                     if (selectionRemoved) loadArticles(selection, keepVisibleItems = false)
+                    if (countsUncertain && pendingChanges.isEmpty()) loadSubscriptions()
                 }
                 is NewsRead.Failure -> state = state.copy(subscriptionsFailure = result.failure, refreshing = false)
             }
@@ -289,10 +319,6 @@ internal class NewsWorkspaceController(
 
     private fun List<NewsItem>.withPendingChanges(): List<NewsItem> =
         if (pendingChanges.isEmpty()) this else map { item -> pendingChanges[item.id]?.let { item.applying(it.change) } ?: item }
-
-    /** Counts read while a change is pending are treated as not yet including it. */
-    private fun NewsSubscriptions.withPendingCounts(): NewsSubscriptions =
-        pendingChanges.values.fold(this) { counts, pending -> counts.adjustedBy(pending, sign = 1) }
 
     private suspend fun readSubscriptions(): NewsRead<NewsSubscriptions> {
         val levels = read(newsApiLevelsRequest(), ::parseNewsApiLevels)
@@ -338,12 +364,17 @@ private sealed interface NewsRead<out T> {
     data class Failure(val failure: NewsFailure) : NewsRead<Nothing>
 }
 
-/** One in-flight article change and the count adjustment applied when it started. */
+/**
+ * One in-flight article change and the count adjustment applied when it started. [countsApplied]
+ * turns false once server counts replace the adjusted ones, so a rejection does not reverse an
+ * adjustment that is no longer shown.
+ */
 private data class PendingNewsChange(
     val change: NewsItemStateChange,
     val feedId: Long,
     val unreadDelta: Int,
     val starredDelta: Int,
+    val countsApplied: Boolean = true,
 )
 
 private fun NewsItem.unreadDelta(change: NewsItemStateChange): Int = when {
