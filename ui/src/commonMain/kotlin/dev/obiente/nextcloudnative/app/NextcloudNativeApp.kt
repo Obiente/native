@@ -4639,31 +4639,6 @@ private fun DynamicDiscoveredAppScreen(
                     },
                 )
             } else Column(modifier = Modifier.fillMaxSize()) {
-            if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Large,
-                    vertical = NextcloudSpacing.Small,
-                ),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Small),
-            ) {
-                Column(
-                    modifier = Modifier.padding(NextcloudSpacing.Medium),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    Text("App unavailable", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "This app's content could not be loaded. Try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = onRetryDiscovery) {
-                        Text("Try again")
-                    }
-                }
-            }
-        }
             if (failedFormRelationRequests.isNotEmpty()) {
                 val failedResources = failedFormRelationRequests
                     .map { request ->
@@ -4827,7 +4802,9 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             Box(modifier = Modifier.weight(1f)) {
-                if (musicWorkspaceIntent == null) {
+                if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
+                    DynamicMetadataFallbackNotice(descriptor.app.id, descriptor.app.name, onRetryDiscovery)
+                } else if (musicWorkspaceIntent == null) {
                     dynamicScreenContent()
                 } else {
                     NativeMusicAdaptiveNavigationLayout(

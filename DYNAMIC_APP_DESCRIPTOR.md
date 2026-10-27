@@ -437,3 +437,11 @@ removes them from root and contextual navigation tabs. It matches whole words in
 the resource ID and label, never substrings or the app ID, and never removes the
 only remaining destination. `DynamicAuxiliaryDestinationsTest` covers the
 matching and the last-destination rule.
+
+### Metadata-only fallback
+
+When discovery finds no verified contract, the workspace explains that the
+installed version publishes no interface the client can verify and offers
+**Check again**. It does not render the app identity record as content, and it
+does not show discovery diagnostics, which can contain exception text; those
+stay in support diagnostics.
