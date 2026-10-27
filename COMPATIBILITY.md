@@ -6,7 +6,7 @@ capability, because opening an app does not prove it is compatible. Read it
 before claiming support for an app or platform, and update it when you gather
 new device or server evidence.
 
-**Last reviewed: 2026-10-02.** Implementation, server APIs, and app behavior
+**Last reviewed: 2026-10-25.** Implementation, server APIs, and app behavior
 may have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published compatibility limitations. Planned work
 and acceptance gates live in [ROADMAP.md](ROADMAP.md); platform status lives in
@@ -47,6 +47,7 @@ server or app version.
 | Dashboard and User Status | Widget and item feeds, native app routing, a short-lived account-private cache, and capability-gated status editing |
 | Contacts, Calendar, and Tasks | CardDAV and CalDAV collections with native lists, editors, recurrence, and ETag-guarded writes |
 | Deck | Native boards, lanes, and cards with drafts, attachments, and mutation recovery |
+| News | Reviewed v1-3 adapter: Unread, Starred, and All views, folders and feeds, an article reader that removes images and scripts, and per-article read and star changes. Feed and folder management stays in the web interface. |
 | Office | Native document browser and preview; Direct Editing handoff as described in [ADR 0001](docs/architecture-decisions/0001-android-office-web-integration.md) |
 | Unified Search | Provider-driven search with native routing for exact Files results |
 | Other installed apps | Discovered at runtime and rendered through the [dynamic descriptor](DYNAMIC_APP_DESCRIPTOR.md), with reviewed presentation for apps such as Mail, Music, Budget, Tables, Pantry, Cookbook, Cospend, and Chores. Writes require verified provenance. |
@@ -148,6 +149,42 @@ The build passed 120 selected desktop tests and produced a Dev APK and desktop
 distributable. This does not qualify Pantry completion writes, Tables row
 editing, or all advertised app actions.
 
+## App presentation follow-up
+
+**Last observed: 2026-10-25.** These local development observations may have
+changed. A fresh API 36 emulator ran a debug build against the disposable
+Nextcloud 34.0.3 instance with the imported read-only test account. Writes were
+allowed only for one scoped path, the News article-state API, and touched only
+that instance's synthetic and public-feed data. This is not release
+qualification, and desktop was covered by deterministic tests only.
+
+**Installed for this pass:** News 29.0.0, Bookmarks 16.2.7, Forms 5.4.1, and
+Polls 9.3.0, alongside the representative suite above.
+
+- News opened as a native reader. Unread, Starred, All articles, a folder, and
+  three feeds were navigable from the section sheet and, in landscape, the
+  rail. Articles showed feed, relative date, and a plain-text excerpt; the
+  reader rendered sanitized text without images. With the scoped write, mark
+  read, unstar, and star changed the server state, confirmed by a follow-up API
+  read. Under the read-only guard the same action was rolled back and
+  explained.
+- Forms cards showed the form title and submission count instead of raw epoch
+  values, an unlabeled state code, and a partial-object flag. Its token read
+  and the Polls session read no longer appeared as tabs, nor did Mail's
+  account connection test.
+- Cospend project cards showed bill counts and totals instead of change
+  stamps, access-level codes, and trash counters. The insight label no longer
+  repeats "total".
+- Bookmarks 16.2.7 has no verified contract. It now explains that it cannot be
+  shown natively instead of reporting a load failure and listing its app ID,
+  name, and version.
+- Mail listed the synthetic INBOX after its local mail server was restarted
+  and reseeded.
+
+Not qualified: Bookmarks, Forms, and Polls workflows beyond their list
+screens, News feed and folder management, News paging beyond one page on a
+device, and desktop News on a real window.
+
 ## Whole-app parity contract
 
 Compatibility is not complete when an app merely opens. For every installed
@@ -169,6 +206,7 @@ authoritative; this table defines the workspace each feature belongs in.
 | Mail | Account/folder/message workspace and composer | Accounts, folders, messages, threads, search, compose, drafts, recipients and attachments |
 | Memories | Timeline and media collections | Date groups, albums, people, places, maps, favorites, RAW previews and selection actions |
 | Music | Library navigator, queue and player | Artists, albums, tracks, playlists, genres, search, queue and playback controls |
+| News | Feed navigator, article list and reader | Folders, feeds, unread and starred views, articles, read state, starring and feed management |
 | Office | Document browser and collaborative editor | New/open, format-specific editing, save state, locking, collaboration and version-safe handoff |
 | Pantry | Contract-derived collection hierarchy | Every verified collection, relationship, detail, form, action and summary exposed by the installed version |
 | Photos | Timeline and album gallery | Timeline, albums, favorites, shared media, tags, locations, selection and sharing |
