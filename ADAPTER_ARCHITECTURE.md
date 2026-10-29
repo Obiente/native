@@ -621,8 +621,9 @@ same-origin transport.
   is read and leaves Unread) does not close the reader. Each fetched page that
   contains the open article updates the reader's copy, so it keeps the latest
   server state after a later page omits it. The reader's scroll
-  position belongs to the open article, so returning to News resumes where
-  the reader stopped, and another article starts at the top. Only the
+  position belongs to the open article and is held above the pane-layout
+  switch, so returning to News or resizing across the two-pane width resumes
+  where the reader stopped, and another article starts at the top. Only the
   selected view is saved across process recreation; the open article is not
   restored, because a fresh Unread list no longer contains an article that
   opening marked read.

@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -126,8 +127,11 @@ internal fun NewsWorkspaceScreen(
 ) {
     LaunchedEffect(controller) { controller.start() }
     val state = controller.state
-    // Owned here, above the list/reader switch, so returning from the compact reader keeps the position.
+    // Owned here, above the list/reader and pane-layout switches, so returning from the compact
+    // reader or resizing across the two-pane width keeps both positions. The reader position is
+    // scoped to the article: another article starts at the top.
     val listState = key(state.selection) { rememberLazyListState() }
+    val readerScrollState = key(state.openItemId) { rememberScrollState() }
     PlatformBackHandler(enabled = state.openItemId != null, onBack = controller::closeArticle)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -190,13 +194,13 @@ internal fun NewsWorkspaceScreen(
                         VerticalDivider()
                         Box(modifier = Modifier.weight(0.58f).fillMaxHeight()) {
                             if (openItem != null) {
-                                NewsArticleReader(openItem, state, controller, services)
+                                NewsArticleReader(openItem, readerScrollState, state, controller, services)
                             } else {
                                 NewsReaderPlaceholder(state)
                             }
                         }
                     }
-                    openItem != null -> NewsArticleReader(openItem, state, controller, services)
+                    openItem != null -> NewsArticleReader(openItem, readerScrollState, state, controller, services)
                     else -> NewsArticleList(state, listState, controller)
                 }
             }
@@ -349,6 +353,7 @@ private fun newsArticleActions(
 @Composable
 private fun NewsArticleReader(
     item: NewsItem,
+    scrollState: ScrollState,
     state: NewsWorkspaceUiState,
     controller: NewsWorkspaceController,
     services: NextcloudPlatformServices,
@@ -363,9 +368,6 @@ private fun NewsArticleReader(
     val richText = remember(sanitizedBody) {
         RichTextState().apply { sanitizedBody?.takeIf(String::isNotBlank)?.let(::setHtml) }
     }
-    // Scoped to the article: another article starts at the top, while returning to News restores
-    // the position in the same one.
-    val scrollState = key(item.id) { rememberScrollState() }
     Column(
         modifier = Modifier
             .fillMaxSize()
