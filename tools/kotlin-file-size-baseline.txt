@@ -54,8 +54,8 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1023
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2275
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCacheTest.kt|2479
-ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2888
+ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2883
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystemTest.kt|2149
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProviderTest.kt|3204
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/PantryLiveContractCompatibilityTest.kt|1202
-ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2543
+ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2498

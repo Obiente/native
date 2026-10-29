@@ -5,8 +5,14 @@ internal const val SUPPORT_RUNTIME_DIAGNOSTICS_DISCLOSURE =
         "direct and mapped buffers, process uptime, thread counts, and garbage collection. Unavailable " +
         "measurements are identified as unavailable."
 
+internal const val SUPPORT_REPORT_RETENTION_DISCLOSURE =
+    "Your report and diagnostic attachment are kept until you delete them or Obiente Support deletes them " +
+        "after your request is resolved."
+
+internal const val SUPPORT_REPORT_RETENTION_SHORT_DISCLOSURE = "Kept until you or Obiente Support delete it."
+
 internal const val SUPPORT_SEND_DIAGNOSTICS_DISCLOSURE =
     "Obiente Support receives the text you reviewed, sanitized event history, a bounded runtime snapshot, and " +
         "release details. Runtime measurements cover memory, buffers, uptime, threads, and garbage collection " +
         "when available. A stable pseudonymous account scope links reports from the same account on this " +
-        "installation. Authorized maintainers can read it. Retention is 30 days unless you delete it first."
+        "installation. Authorized maintainers can read it. " + SUPPORT_REPORT_RETENTION_DISCLOSURE

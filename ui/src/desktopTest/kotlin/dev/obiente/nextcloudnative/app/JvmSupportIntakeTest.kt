@@ -303,7 +303,6 @@ class JvmSupportIntakeTest {
             val report = submitted.reports.single()
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
             assertEquals(report.recordId, submitted.recordId)
-            assertTrue(Instant.parse(report.createdAt).isBefore(Instant.parse(report.retentionUntil)))
             assertFalse(report.toString().contains(fixture.statusUrl))
             assertEquals(1, fixture.completedDescriptors().size)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
@@ -379,19 +378,20 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun deletionFailureFallsBackToIdleWhenTheReceiptExpiresInFlight() = runBlocking {
+    fun deletionFailureKeepsTheReceiptWhenItsRetentionDatePassesInFlight() = runBlocking {
         testFixture().use { fixture ->
-            val retentionUntil = Instant.now().plusSeconds(3)
+            val retentionUntil = Instant.now().plusSeconds(2)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             fixture.server.enqueue(
-                MockResponse.Builder().code(503).body("{}").headersDelay(4, TimeUnit.SECONDS).build(),
+                MockResponse.Builder().code(503).body("{}").headersDelay(3, TimeUnit.SECONDS).build(),
             )
 
             val result = fixture.intake.deleteCompletedReport(fixture.intake.submittedRecordId())
 
             assertIs<SupportDiagnosticsDeletionResult.Failed>(result)
-            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.completedDescriptors().size)
         }
         Unit
     }
@@ -1219,22 +1219,17 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
+    fun keepsCompletedReceiptAfterItsRetentionDatePassesWhileTheProcessRemainsOpen() = runBlocking {
         testFixture().use { fixture ->
-            val retentionUntil = Instant.now().plusSeconds(10)
+            val retentionUntil = Instant.now().plusSeconds(1)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
 
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
 
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            delay(2_000)
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertEquals(1, fixture.completedDescriptors().size)
-            withTimeout(15_000) {
-                fixture.intake.states().first { it is SupportDiagnosticsSubmissionState.Idle }
-            }
-            withTimeout(15_000) {
-                while (fixture.completedDescriptors().isNotEmpty()) delay(10)
-            }
-            assertTrue(fixture.completedDescriptors().isEmpty())
         }
     }
 

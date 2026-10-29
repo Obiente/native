@@ -253,7 +253,6 @@ sealed interface SupportDiagnosticsSubmissionState {
         val recordId: String,
         val supportCode: String,
         val createdAt: String,
-        val retentionUntil: String,
         val status: String,
         val updatedAt: String? = null,
         val messages: List<SupportDiagnosticsMessage> = emptyList(),
@@ -270,7 +269,6 @@ sealed interface SupportDiagnosticsSubmissionState {
 
         val supportCode: String get() = reports.first().supportCode
         val recordId: String get() = reports.first().recordId
-        val retentionUntil: String get() = reports.first().retentionUntil
     }
     data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
 }
