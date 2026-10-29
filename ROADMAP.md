@@ -578,7 +578,8 @@ typed read-only repository and adaptive native components
 ### Rules
 
 - Navigation proves only that an app is visible, not that an API exists.
-- Metadata-only fallback emits a native detail screen and zero actions.
+- Metadata-only fallback emits zero actions and an explanatory native notice.
+  It does not present the app's identity record (ID, name, version) as content.
 - OpenAPI operations may produce read actions. Inferred writes remain disabled until their permission, confirmation, conflict, and idempotency policies are verified.
 - Local AI may propose labels, field roles, and reusable components. It cannot add or alter endpoints, methods, auth, payload fields, or confidence `verified`.
 - The generated schema is cached by server URL hash, server/app version, API/capability fingerprint, compiler version, and adapter version.

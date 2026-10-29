@@ -684,6 +684,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
+    val newsController = rememberNewsWorkspaceController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -964,6 +965,7 @@ private fun AuthenticatedApp(
             "contacts" -> Screen.Contacts
             "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
+            NEWS_APP_ID -> Screen.News
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -1367,6 +1369,7 @@ private fun AuthenticatedApp(
             Screen.Contacts,
             Screen.Tasks,
             Screen.Deck,
+            Screen.News,
             is Screen.AppInfo,
             -> {
                 leaveAppWorkspace()
@@ -1692,9 +1695,7 @@ private fun AuthenticatedApp(
             installedApps = serverInfo?.apps.orEmpty(),
             pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
-            onOpenLink = { link ->
-                launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
-            },
+            onOpenLink = { link -> launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp) },
             onOpenStatus = serverInfo?.apps
                 ?.firstOrNull { it.id == "user_status" }
                 ?.let { statusApp ->
@@ -1734,6 +1735,7 @@ private fun AuthenticatedApp(
             pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
+        Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -4639,31 +4641,6 @@ private fun DynamicDiscoveredAppScreen(
                     },
                 )
             } else Column(modifier = Modifier.fillMaxSize()) {
-            if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Large,
-                    vertical = NextcloudSpacing.Small,
-                ),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                shape = RoundedCornerShape(NextcloudRadii.Small),
-            ) {
-                Column(
-                    modifier = Modifier.padding(NextcloudSpacing.Medium),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    Text("App unavailable", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "This app's content could not be loaded. Try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = onRetryDiscovery) {
-                        Text("Try again")
-                    }
-                }
-            }
-        }
             if (failedFormRelationRequests.isNotEmpty()) {
                 val failedResources = failedFormRelationRequests
                     .map { request ->
@@ -4827,7 +4804,9 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             Box(modifier = Modifier.weight(1f)) {
-                if (musicWorkspaceIntent == null) {
+                if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
+                    DynamicMetadataFallbackNotice(descriptor.app.id, descriptor.app.name, onRetryDiscovery)
+                } else if (musicWorkspaceIntent == null) {
                     dynamicScreenContent()
                 } else {
                     NativeMusicAdaptiveNavigationLayout(
@@ -10986,22 +10965,6 @@ private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
-    "dashboard", "github" -> "dashboard and timeline"
-    "activity" -> "activity timeline"
-    "mail" -> "mailbox and composer"
-    "contacts" -> "contact list"
-    "calendar" -> "calendar and agenda"
-    "cospend", "budget", "money" -> "collection, totals and form"
-    "notes", "office", "richdocuments", "collectives" -> "document editor"
-    "music", "audioplayer" -> "media library"
-    "deck" -> "board and cards"
-    "tasks", "chores" -> "task list"
-    "tables" -> "typed data table"
-    "cookbook" -> "recipe collection"
-    else -> "adaptive collection"
 }
 
 private const val MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH = 1_024

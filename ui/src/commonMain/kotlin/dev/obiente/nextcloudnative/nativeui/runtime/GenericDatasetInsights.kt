@@ -231,7 +231,7 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
             ) {
                 Column {
                     Text(
-                        "Total ${insights.measure.label.lowercase()}",
+                        nativeTotalLabel(insights.measure.label),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -253,7 +253,7 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
                 DatasetMetricCard(
-                    label = "Total ${insights.measure.label.lowercase()}",
+                    label = nativeTotalLabel(insights.measure.label),
                     value = formatNativeMetric(insights.measure, insights.total),
                 )
                 DatasetMetricCard(

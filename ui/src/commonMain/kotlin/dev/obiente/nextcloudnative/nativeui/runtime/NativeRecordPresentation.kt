@@ -41,6 +41,8 @@ internal fun nativeRecordPresentation(resource: ResourceSpec, record: NativeReco
                     !value.equals(title, ignoreCase = true) &&
                     !value.equals(record.id, ignoreCase = true) &&
                     value != "Structured data" &&
+                    !value.isUnlabeledItemCount() &&
+                    value.trim().length > 1 &&
                     !value.isPresentationMimeType()
             }
         }
@@ -128,7 +130,9 @@ private fun FieldSpec.titlePriority(): Int {
 }
 
 private fun FieldSpec.subtitlePriority(): Int {
-    if (isTechnicalPresentationField() || isBinaryPresentationField()) return 0
+    if (isTechnicalPresentationField() || isBinaryPresentationField() || isUnreadableSummaryField()) return 0
+    // A bare number without its label ("0", "4") cannot explain itself in a subtitle.
+    if (kind == FieldKind.integer && enumLabels.isNullOrEmpty()) return 0
     val normalized = id.lowercase().replace("_", "").replace("-", "")
     val semantic = when (normalized) {
         "description", "summary", "subtitle", "note", "notes" -> 500

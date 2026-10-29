@@ -39,6 +39,7 @@ private fun Screen.workspaceStateKind(): String = when (this) {
     Screen.Contacts -> "contacts"
     Screen.Tasks -> "tasks"
     Screen.Deck -> "deck"
+    Screen.News -> "news"
     Screen.AdminApps -> "admin-apps"
     Screen.OfflineCenter -> "offline-center"
     Screen.Transfers -> "transfers"
