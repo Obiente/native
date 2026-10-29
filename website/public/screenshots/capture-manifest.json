@@ -1102,7 +1102,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "6067c48c85d8896963546cc948d3717f3421c6fdab00f50abdc9ec814a18f2aa"
+            "sha256": "d058015262719da153562a8f57c72e195b98b716a61db4deb1cae6ff9acee0bd"
         },
         {
             "scenario": "shared-controls-desktop-light",
@@ -1118,7 +1118,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "39133ddf338d806395b5546386655b5cbbef4773c2948947b9b8eeeb0768b327"
+            "sha256": "7750a0e012fa5c8d33de0b45a6e6144408fd1fed017332c460cc3ac4e8f77238"
         },
         {
             "scenario": "shared-controls-mobile",
@@ -1134,7 +1134,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "phone",
-            "sha256": "f47f98f8674a997f44850a59578d3e4642927ff72afbb83b34710b8a1c324852"
+            "sha256": "41e82896d67d7ba3c83a790150f2f23eda68248afc774740690f36e5afd60222"
         },
         {
             "scenario": "shared-controls-mobile-light",
@@ -1150,7 +1150,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "phone",
-            "sha256": "253a146f4ad541c83c9241e6ebf6ce4f604e45649c477a5817b2afc7bb8809ab"
+            "sha256": "92fdb515dd1e0f176dc05911be6a07784ca325273008438e41ef9cf8a48a98c0"
         },
         {
             "scenario": "shell-compact-desktop",
@@ -1166,7 +1166,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "compact",
-            "sha256": "b491876496ad5a80c5852f0af3707dbeb63ae4631b43cd0ccd38a1a77692164e"
+            "sha256": "556a0c992df0fe15ff717ad2b64908f3219f0b23b5d9f7cdd1b4d523288695a8"
         },
         {
             "scenario": "shell-compact-desktop-light",
@@ -1182,7 +1182,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "compact",
-            "sha256": "82097f6a5f84cea26dd8c68ca041f25d064502e30fbd1c7459c0c47e094d5727"
+            "sha256": "2e70f7ee3b11032238303ccc48b25d52b00b5d310031625d763fb59db100ad8e"
         },
         {
             "scenario": "shell-app-switcher-mobile",
@@ -1198,7 +1198,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "phone",
-            "sha256": "45cbd681ae1ba7bebbc5c28d151b891ffbf8b6499736bb4240347f04f2332316"
+            "sha256": "625e6163a28ac26761f6c33642da4bd01605f2ce76d9118053c35c3e01f35a73"
         },
         {
             "scenario": "shell-app-switcher-mobile-light",
@@ -1214,7 +1214,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "phone",
-            "sha256": "d7c45d3ee62dcf8b1e18a42fab89632c60599f7389a641ab300e0c52a591b924"
+            "sha256": "f1522256e056bfe01d52688b230041439abc8c38595a561b8d3a6ca61b6e2753"
         },
         {
             "scenario": "shell-tablet",
@@ -1230,7 +1230,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "tablet",
-            "sha256": "1dcf037dcc4b665527b56842ee9c8648aaee751e891eb8c069fb51fd6d0217f2"
+            "sha256": "d51254238058f6b070c296d9575237897b8573fb30b67a8a70f363f58c795732"
         },
         {
             "scenario": "shell-tablet-light",
@@ -1246,7 +1246,7 @@
             "purpose": "state-coverage",
             "platform": "android",
             "viewport": "tablet",
-            "sha256": "b04183ef8b0d5fe5c430023374a2cc8140a4be7a52f7c2541ba6160a08d55635"
+            "sha256": "06ce1f0ec737c3630bf83d42918119cf8b5827cdc21ade768a7b415607206fc4"
         },
         {
             "scenario": "homepage-overview-desktop-dark",
@@ -1262,7 +1262,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ee0c694913b8a464b4c1c1b6db9ba670f5c376089c379656bbe77c85d2b92fe7"
+            "sha256": "b95bf36cb3028c8ef3e7f2e067e3ff34fc02c0037510794a723c6f7d39cf7151"
         },
         {
             "scenario": "homepage-overview-desktop-light",
@@ -1278,7 +1278,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "58eb2d3ab289cb790abe77c8e86032fa2d0a4c845d1812b786c15e3efcc4c735"
+            "sha256": "0febb5434fd539818327b2eb3b11bd888527baa25fad8f9b2c21fcaf5b83627a"
         },
         {
             "scenario": "homepage-overview-mobile-dark",
@@ -1294,7 +1294,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "4b065d719635e59bc28cb528fd2671b4814b390c141004f039b1d3e6184ee328"
+            "sha256": "70c3f9363ac6e240f3a40e0b16ea83a5d2c5a137e51ca8018c0bc6f01d4e4a60"
         },
         {
             "scenario": "homepage-overview-mobile-light",
@@ -1310,7 +1310,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "bf226564df906433bf25d250ac1d2c4fda32060b0d74502400ff4a4d440fd0ab"
+            "sha256": "fca15598ca924368195c3ed63e161794cd1eb9c23220ea32af1a2163ee0ec0e7"
         },
         {
             "scenario": "homepage-files-desktop-dark",
@@ -1326,7 +1326,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "4b7c3d525566d88c7d7ea916976ebcec25ffd8b5c6918a5826528f1113272224"
+            "sha256": "239c548bc47470a5d804046170d405fae842816bb7a9cf85008b9eb7d7f123a4"
         },
         {
             "scenario": "homepage-files-desktop-light",
@@ -1342,7 +1342,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "23cbd57133fc249bfde70366cb8fdda87e65a2f1fa4989da1167f30f508a994b"
+            "sha256": "27c580ab4f2e966a25619a7438eb982059949871cd19d8cd79e081d623e0ce00"
         },
         {
             "scenario": "homepage-files-mobile-dark",
@@ -1358,7 +1358,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "5d72f9e74fa984ce6478dad2d65ba19422253e67fc85ab9e496e72caed43ca35"
+            "sha256": "387d6a616fcf345603a77ceea3d315497f260f6a9d43f8d31de70e0f335b1886"
         },
         {
             "scenario": "homepage-files-mobile-light",
@@ -1374,7 +1374,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "75432a3a89d791949eba9c058acde9573fd82a273d9bcecaf1978c61fc118e03"
+            "sha256": "13c451a917b0b4e7672a89faf196315b7480f30eedf32a06605bdb49a51d914e"
         },
         {
             "scenario": "homepage-photos-desktop-dark",
@@ -1390,7 +1390,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "82f62a6d472836c8ba7cbb6485bee0f159cb893f39b9ba7e73977e446f73c1e7"
+            "sha256": "36df95bfa772537853d46af64c6a8d2873e3865c341ce37246cc2f08303d1060"
         },
         {
             "scenario": "homepage-photos-desktop-light",
@@ -1406,7 +1406,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "7a538e866bb2869e216616cbb992f0cb7d31876ebcec2f2e84bb47a2c75aecf6"
+            "sha256": "1a83d3386c49f19c52b53b4e340fde4798ae9a5e6ffa529a81463c6fb81d0a62"
         },
         {
             "scenario": "homepage-conversations-desktop-dark",
@@ -1422,7 +1422,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "aecfb6edb490fc120271c5c484d34d71b5e333d8ff9ed089d1abdbe7895debbf"
+            "sha256": "345f631130c17a161864c0b4e1cc3b8a3dd4399cdabd964df410feab8d6a3597"
         },
         {
             "scenario": "homepage-conversations-desktop-light",
@@ -1438,7 +1438,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "fc6fd4dbb3c49c566865cf85750580564e04ad11eb51fcf6fd0b1a7ec4ba733b"
+            "sha256": "20b80aff4669a9010ca6bf6d7caac3ee8f655a861f7bf83f939052b80e76bf08"
         },
         {
             "scenario": "homepage-planning-desktop-dark",
@@ -1454,7 +1454,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "34e3b8568fcf88d937f8419269d00a6cd3693741613c5bd3342493fa876beb03"
+            "sha256": "a7f26f44189005e4cf1fe0133a6e47ad4bce1b4d6fd621ec32526440c27d0e24"
         },
         {
             "scenario": "homepage-planning-desktop-light",
@@ -1470,7 +1470,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5fd89b80f02447a1bccf7bde7e7844844917b434afadefe0c3a7e68592d8f1ca"
+            "sha256": "492e42413463435829cc4b3513f20f068262e23d535b0f66b40d2dd554f2c5f3"
         },
         {
             "scenario": "homepage-apps-desktop-dark",
@@ -1486,7 +1486,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "e3ffc643966dadd77f718598c6b8ca394e18606ea08d499958352b0a00319843"
+            "sha256": "fd2ab9a5a2560c0f6ad7872ee9cfc954d179bd8fa9814c2a4bd418de5886a19f"
         },
         {
             "scenario": "homepage-apps-desktop-light",
@@ -1502,7 +1502,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f6291f578a474a047b0a57a7915afc853b15ed4526933ab6f86609fdaddf3287"
+            "sha256": "6b00ff7df64528008de7b2217068182ac2be89fedc95ac7d9807ff142829240b"
         },
         {
             "scenario": "apps-workspace-desktop-dark",
@@ -1518,7 +1518,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a15f5074acd7ec8933d12f93e3049a9bf063aad1ef09f274c5ed18aa3dce9480"
+            "sha256": "35bbcc68af51c17f280817002fbc772b941999fae600e8792ca7e9d921166589"
         },
         {
             "scenario": "apps-workspace-desktop-light",
@@ -1534,7 +1534,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "08bf96f6abb34216ff2c61b54474fb98298b55279fc1d45964bb7948bb7d36b6"
+            "sha256": "68152da73061da02880c8cad1e9298a746ccd4ee83ae68dbf609ba28e205a178"
         },
         {
             "scenario": "calendar-workspace-desktop-dark",
@@ -1551,7 +1551,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "pullRequest": 273,
-            "sha256": "f63640c9e2a02be02f28587c4b19025dc4ce065afe819210b483ed2ed0f2e03b"
+            "sha256": "82a03820f1ba2fc382fb58180e1a16abb5f32f1cb7093a0d2d7616a1290c6ce6"
         },
         {
             "scenario": "calendar-workspace-desktop-light",
@@ -1568,7 +1568,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "pullRequest": 273,
-            "sha256": "6d54f7bc5ba869c96f3a2ba3605eb007843e0f357eb0767429ffe63ba2de3fa7"
+            "sha256": "70f0c56def1f3b892b3b8583a94af7e59f5b6b60cd7c5e15fe93e78fd724bb05"
         },
         {
             "scenario": "calendar-workspace-mobile-dark",
@@ -1585,7 +1585,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "pullRequest": 273,
-            "sha256": "549f7ef929594989ea7fa5cf2ea06478321c396957ec9aee9c938d59c2e0c76f"
+            "sha256": "1d06714d6411ae4b9285903c9541d68a034158966436124b9caea5a12cc7c89a"
         },
         {
             "scenario": "calendar-workspace-mobile-light",
@@ -1602,7 +1602,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "pullRequest": 273,
-            "sha256": "9d13a1adb46c2275bbfc344447e27f5a4b1b0e3be56fcb6bf04cd0d7c7da30b9"
+            "sha256": "7c4eaf6dcdf9f318d9f37a9a9de715c7a2bd69ef54a5b9672c4f07dc9b0ab2da"
         },
         {
             "scenario": "calendar-month-mobile",
@@ -1618,7 +1618,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "fa698af798682a89f3ddffd4b443429a9fb90505b0490f1a5ff7e74bc8a9766a"
+            "sha256": "c912d9c676e6c28336d6231487448ffee3a749c32dae8f26291b6f7a65199de5"
         },
         {
             "scenario": "calendar-month-mobile-light",
@@ -1634,7 +1634,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7828f5f7860104bdea431b0c70c7a8b5861fcca011fd57a80ea65931e0b71da6"
+            "sha256": "69c1fa1751b4aea68ac0d26dc332a913268544f0a9ad99c8bc38ba740428ad10"
         },
         {
             "scenario": "calendar-event-editor-mobile",
@@ -1650,7 +1650,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e119ea063f2ac29f6b87993fa3cbf03c4e3ef77ed02f78552a290b2bfc033687"
+            "sha256": "d5bafea73f83891a325102d84fb2335bcbc0366c0990a0bf0d200bd69a31d172"
         },
         {
             "scenario": "calendar-event-editor-mobile-light",
@@ -1666,7 +1666,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "6eb3113de05c82a15a9f096f94530c96367fcfee48fff3f1927e3cad84ed1ca5"
+            "sha256": "2c14428a50e9653eca8917ef28c40594859d379d406788e4407fa8282d5f99fe"
         },
         {
             "scenario": "calendar-week-mobile",
@@ -1682,7 +1682,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "5fdf126519f047536a8e3ccaf3b09f85a456c14c5c9a856a417234261ecb8f43"
+            "sha256": "ba0e477633c3e31409f57930f0f29c11bc81c4ceb1411e9189f9cebf91e83b17"
         },
         {
             "scenario": "calendar-week-mobile-light",
@@ -1698,7 +1698,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "a438a004fd75a2583e63cbb5425a24ef0344371d00048481c9dfc2367f08210f"
+            "sha256": "26235e5984e6b93676c3545e7b16303a8350720e171424f046d2918e22f7b4fe"
         },
         {
             "scenario": "calendar-week-desktop",
@@ -1714,7 +1714,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "dc909a6dca9bba814fc4e055a4d5099793a2d9fb2af9b0f4479fd770a686f9a0"
+            "sha256": "79b601ecf02d47700f565c052dfd7f79e5c5a56ef10221f99db8f3fc46966fba"
         },
         {
             "scenario": "calendar-week-desktop-light",
@@ -1730,7 +1730,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "288771cef1888be35aa2bdb283896fe3ac506420e02778ef302e0157b1c6c134"
+            "sha256": "5ac7f702592e4d463cc693510920fa582826abc408daa3571afe95d158138cf3"
         },
         {
             "scenario": "calendar-event-editor-desktop",
@@ -1746,7 +1746,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8c48c04f0f0dc73fa7de9224164b2e21c90bc4c62ebc8d4998dc2e8ee2a244c6"
+            "sha256": "7dd3b3d7a74468e6931b5734e74f2d21ab0bc23b6f4766d8122492f6921decd2"
         },
         {
             "scenario": "calendar-event-editor-desktop-light",
@@ -1762,7 +1762,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f5392faeb94261d1f69c9397b5e08ffcaf58422e8b948c37d0bd42dff2bf31d9"
+            "sha256": "ca98f87711475c47a3b0516dc076a7125fd093f5bb40ef46fb45ce72641d8f21"
         },
         {
             "scenario": "desktop-home",
@@ -1778,7 +1778,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "3546681fdde5b462f7151c55130c437f6ed0480ae3846047c4558bacda47f476"
+            "sha256": "10a9e022525c861a82789dac433d8ac2cb6d3a3dafecc1217712a218ea01f025"
         },
         {
             "scenario": "desktop-home-light",
@@ -1794,7 +1794,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "055c4552303a6ad0f11f159bd817cf08015d9a83185407d24f96630dc3d9d657"
+            "sha256": "5937232daf902a3277bca39b77f6e0f40a4dfcb56fe4ee32811f69a4e9adc464"
         },
         {
             "scenario": "mobile-home",
@@ -1810,7 +1810,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f2f6fb256c396ba65df9aa22bb58e37598800352fdfb6c055dabd255e2386cff"
+            "sha256": "80d732ccfa1cb4f97e261ce7f9cd9b1290424bd818fd67fc8c0b299dc6e92fd9"
         },
         {
             "scenario": "mobile-home-light",
@@ -1826,7 +1826,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f931a9a60d301c3f9da800e708a36e622d224e38c71f124ed8acef1ed23fe9f2"
+            "sha256": "6883def8a233a47a637cad274f0a9cefad2efdaddeefc626c875d9b22cd60d7c"
         },
         {
             "scenario": "obsidian-vault-sync",
@@ -1842,7 +1842,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "7e860f0d6e11c9ae78dfb25ae8e125786915cf1f9b90c0a90cc01e31ce805cbd"
+            "sha256": "dc626a51a2ceafd9a0e5639fe36c9730ac6beb82c5f65604e1ab43ad1f9d2250"
         },
         {
             "scenario": "obsidian-vault-sync-light",
@@ -1858,7 +1858,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-compact",
-            "sha256": "b46b0d59090797d224ad31fdba1bca5c31e05c9c3b0b9c1d81c311be644d7840"
+            "sha256": "9a9336d460303f76ab10fdfd614ea94fea3b6ab7291b073461be1c5b641b05a6"
         },
         {
             "scenario": "media-backup-queue",
@@ -1874,7 +1874,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "83b2b1768c0f40285be65e0646a561f9f898492e897265dba61f1a586257ce5f"
+            "sha256": "0374b9973a70a4f06a0f62a9013df3452552b1d916d14cfb73c85f870acfa596"
         },
         {
             "scenario": "media-backup-queue-light",
@@ -1890,7 +1890,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "1fe7118be9c2fc209c5c725cf91f708d291e184ae6e1cef467e1765189946d82"
+            "sha256": "b1d79b5e2de732e1bfc4725f2e399a54c516bbbea44bcf62a133f686cdd76f29"
         },
         {
             "scenario": "file-sync-rules-mobile",
@@ -1906,7 +1906,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "356f951e64318d22c5c23b1f7ae4095de41e15891780e5f58fefe38735169ea0"
+            "sha256": "db47de845ac90f9ef3768051f40e3305cba8645825e121f8445300374b9f3d7a"
         },
         {
             "scenario": "file-sync-rules-mobile-light",
@@ -1922,7 +1922,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "06bc90583962fd0d42e0a7113a86a559adf5dedffbec061aecd13e4d92fe9514"
+            "sha256": "621f3792369e23db2a23a0d9239634cf42c6ddcb0dd4085907ade3e1e45e64a0"
         },
         {
             "scenario": "file-sync-status-mobile",
@@ -1938,7 +1938,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "a0f177c480ebede0c915836c589c9268f21ed6262ad67d65d79705ddd5c4a447"
+            "sha256": "5060d2477217ea4cefe15557bfd116bd0e01c312f59b3c90dbb6fb1c19f070cd"
         },
         {
             "scenario": "file-sync-status-mobile-light",
@@ -1954,7 +1954,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "a4616822fd0a374475f03ef68f61b1a75aa54cad170e7be9bc4bbc14752c9383"
+            "sha256": "99d37350712ead227c301bc4b606cfc44813576ab1cd80e19693d5ca0f140204"
         },
         {
             "scenario": "file-sync-status-desktop",
@@ -1970,7 +1970,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "3e6310fef6fd4aa40de084167a15615966a623bdbe6468530a4f5fe97178b08b"
+            "sha256": "3317af8e305bd845380573279ee10e8f7d8dc7b398c708627b52a835acd885b1"
         },
         {
             "scenario": "file-sync-status-desktop-light",
@@ -1986,7 +1986,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "45e54d0610548be69a032dc5cab043c8a74f1d0a694561cb1faf43c2805660f6"
+            "sha256": "27615ebca32c534c5b4c3fb7c5ed3c696eb1a80a0dcf2559b670aaa9649421eb"
         },
         {
             "scenario": "activity-workspace-desktop",
@@ -2002,7 +2002,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "242f3bcd3e1bad5f245fac11898a6e46990d4a3391e77d28d1622c9bcb28d973"
+            "sha256": "04b9df2d0faa43d0d754ac2823d2062a8941260fbe92f350c3fb92f5f388d199"
         },
         {
             "scenario": "activity-workspace-desktop-light",
@@ -2018,7 +2018,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "797bea35dbf338e61b0296c4237a2c6fc168df55def13983af4bfe620db22967"
+            "sha256": "02301c56a720fa3cde0ca7147f3ac9952605c387533ad91e2f3059710bb92131"
         },
         {
             "scenario": "activity-workspace-mobile-dark",
@@ -2034,7 +2034,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "4eb8c7c2f9a4c79ccc8d88aa9b49820228ba7b69f5a1dd6ffc12ead20134fb96"
+            "sha256": "dcdd156ec09db5c04abcaa160b8a6c79858e7cd0c9ca596a9707f816302750d9"
         },
         {
             "scenario": "activity-workspace-mobile-light",
@@ -2050,7 +2050,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7d529e2ef85e11894be7d887f94972fe404cfd391015e38e40965156511e9015"
+            "sha256": "dcb42c336eb330308dc619edaf4c09cdabe7caf61883ae46b89f5d1395fe9830"
         },
         {
             "scenario": "budget-dashboard-desktop-dark",
@@ -2066,7 +2066,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "94c27dbb7782efb17749b3a044b0a121f372b829f37854783a36b1014920e3d4"
+            "sha256": "09d29be7a4544684ab30e924d2b7459bb2ee6aff6623de92f369423d645ca734"
         },
         {
             "scenario": "budget-dashboard-desktop-light",
@@ -2082,7 +2082,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "e4a747e0d5132d86ec07de2e4ae3ffeedf91ff78bf22d4e49f71e2b2acb5cc7c"
+            "sha256": "0fca129fa2740bc278eaf8dc5e152da02f4958020e66995c9ca0544b484e253b"
         },
         {
             "scenario": "budget-dashboard-mobile-dark",
@@ -2098,7 +2098,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "d13affe6a327d5eca5cb27081de450ac5a1fbd20d1817eda944d286013ef1040"
+            "sha256": "0a2c57a190b1eddc2eef03b58a0d49e0beadaaa952b40af4a41479f58c6ce95a"
         },
         {
             "scenario": "budget-dashboard-mobile-light",
@@ -2114,7 +2114,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "aa364479043ce9d656f4cf6f12fe9bd7de409f395ccc510c8fa1a32d701f32ed"
+            "sha256": "452017733e6be039b24845265b4266f9b38f74c1f971ee47cf880ca910be962f"
         },
         {
             "scenario": "budget-transactions-desktop",
@@ -2130,7 +2130,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "576b015e61433bde6f13a39529585770733526bc7d9001be2d47fd5bad2378b5"
+            "sha256": "25aa4a8771ae23d017a6f4ba342e1412a104a2d6e3bd91f931f8a1aa3974808b"
         },
         {
             "scenario": "budget-transactions-desktop-light",
@@ -2146,7 +2146,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "9156f7f0ffeeb1fbfd9c7d7cd08faf85c4de962481e4c4b2ed7279a1b128d5f9"
+            "sha256": "4799722bbe68f584e0ad3d01a3274ee7b67f3b2023818b0c32c447138060c4a3"
         },
         {
             "scenario": "budget-transactions-mobile",
@@ -2162,7 +2162,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "77a8f14c9a41f6ce744ed50315255104b1a7d8652fa755c3ab18da5ee5f5ee39"
+            "sha256": "30579882208bbdbe8fa117557d6b94fff228c6211c8ce5d654fec0af5a059ded"
         },
         {
             "scenario": "budget-transactions-mobile-light",
@@ -2178,7 +2178,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "36832e0baf885e3bc5f1dde2d325b157526b2e9482791399161935d127fdf944"
+            "sha256": "4cbddaabe8f6637409455b89da735a5684db820fef5f849f85665996156c475d"
         },
         {
             "scenario": "budget-accounts-desktop",
@@ -2194,7 +2194,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ec025f3d1fc991b23538c25bf8771907ea1b82487e68f64585e7470ee753507e"
+            "sha256": "7a6af4d51dd5726736acad2f8a6576c55e1113b4c4232a801c34b136531ac677"
         },
         {
             "scenario": "budget-accounts-desktop-light",
@@ -2210,7 +2210,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "dfaba949db4d960439c8a975e69c54ce674bcab99be2cc1b02d9bed46dd72097"
+            "sha256": "776423f27b38c944b0df21c20a9e7efceeab5989c4cb8de8a5016f131a92b8cb"
         },
         {
             "scenario": "budget-accounts-mobile",
@@ -2226,7 +2226,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f61163fcbcf77737d086e76fb0303ee57294f536703ac3b9dfce1d135dada120"
+            "sha256": "fb63b032d7c92498de8910c2fbe250aa2ca7db34d308be5905d0314479fb8c48"
         },
         {
             "scenario": "budget-accounts-mobile-light",
@@ -2242,7 +2242,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "209192f77a44d6f87572ac5614df3efa5abcbbff4027d6bd5a0b2fcc50a93ab2"
+            "sha256": "8e5905d4c59364a3f7f1188893504f643266bf900681145c926b224bb537aeb5"
         },
         {
             "scenario": "budget-categories-desktop",
@@ -2258,7 +2258,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "03e7c3ab1eb0aec1e372afac9eff62e85cd4c3e347f66cf969513e1112229cea"
+            "sha256": "268d2398c7ea1f1733d7460a03fe02fdb9b0fe600d7882924fce2ac79ac06d1b"
         },
         {
             "scenario": "budget-categories-desktop-light",
@@ -2274,7 +2274,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "150255ed4764df33c5f2cee94ef1558888a6ed2019e17317dc7c3ff4c2b85eca"
+            "sha256": "3baeefff6eac83846645fa19ffef706c197cc2205e9df0ea4f344c206b50c6b8"
         },
         {
             "scenario": "budget-categories-mobile",
@@ -2290,7 +2290,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "0884fec4b241ebee97137075a016769a09e19156a4c6842a486f7f4982af32e9"
+            "sha256": "61a9c9eefc1909a87e8bbc793494f73cecb73f356cde72a6ff47224c9b5a3fd9"
         },
         {
             "scenario": "budget-categories-mobile-light",
@@ -2306,7 +2306,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "aa70d5778819c39b5cc6f166f0c8fcd0f7baaf03e124e0c9510accbbd2ab2000"
+            "sha256": "c29d7a7f7496518839f227301c3d11e4ab2366449562c0668a3ca122266c5370"
         },
         {
             "scenario": "budget-plan-desktop",
@@ -2322,7 +2322,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "555325478562561c61606950ab539d71cf706d3cac170e2396308d74861810a2"
+            "sha256": "de74eac356cf1f1f8aeb83d1279da358d1efa49a884dedfe8247cf7de7a1a80d"
         },
         {
             "scenario": "budget-plan-desktop-light",
@@ -2338,7 +2338,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "78eb17b7d8e0b3ec670bbdd4ae0e759913f22ad786d22eb5a573f364790cb26a"
+            "sha256": "a7f5c8f15c2365f8d36e10f3d151e7ccc273c700376dea1b2a746649b700240c"
         },
         {
             "scenario": "budget-plan-mobile",
@@ -2354,7 +2354,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "82343ffe50a62911e55f76f7e69449e719aa8a1f0d9c86732bebad84f0fa3bba"
+            "sha256": "ead3c68c51cefc6bf980e0926377698814d13150f47ecf0821a6a144612a3466"
         },
         {
             "scenario": "budget-plan-mobile-light",
@@ -2370,7 +2370,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "0dbb7d7d1b223425dd0e82a237320d3ff7e4fa70bc2bcd8359d0927047762c61"
+            "sha256": "14bb25f638eacc7ededbdae17e53f5245c1f5c3c9bcdd347235c622fc78680e7"
         },
         {
             "scenario": "file-sync-setup-desktop",
@@ -2386,7 +2386,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "2f4854a98e07550bdeae9bce9aa7741a834c333c172335c09d98dbdffda7c676"
+            "sha256": "4305fbb0413ac97b52ba004a1a387b14698f1db75e7801d5b78e22dad808a0c5"
         },
         {
             "scenario": "file-sync-setup-desktop-light",
@@ -2402,7 +2402,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "1391cab5f38311571d19917b5c3b0378d666a537e920b4189e1b05e47529ed0d"
+            "sha256": "95bb596ce836649a14b4fed9d28a6c7a3235bd054848bd83278cb1cc346ca157"
         },
         {
             "scenario": "file-sync-selection-desktop",
@@ -2418,7 +2418,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "572b0d4cf49db74e6a2e8a1383a03d4ac4e440accb00f37a9807ec3bc3a2676e"
+            "sha256": "9b3954998be99fc7ca71e20c9082532895d36f2ebbf736c33a503c75a1eb912c"
         },
         {
             "scenario": "file-sync-selection-desktop-light",
@@ -2434,7 +2434,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "504e6ed32f763b5e463e0c1557b7204a780ff95e5406154ad3c03cf3e5452775"
+            "sha256": "562bc5b2b6a48165b6eb91fc9bf3b910cf8b602c80b2ff725aff4c1cef2dc0e9"
         },
         {
             "scenario": "file-sync-selection-mobile",
@@ -2450,7 +2450,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "73679aea40c5c658b92e5b35c197959d83219e79870c66dee5b64861de274b69"
+            "sha256": "ae770102dfcd6dac730e442b97682bdf643b6e5630f7842f68a3507072cff3ee"
         },
         {
             "scenario": "file-sync-selection-mobile-light",
@@ -2466,7 +2466,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "36830fb50c9a69ac69da65301212ab78cf6f1532c78496e09a66a1b5ff5c4541"
+            "sha256": "2cc2a9f6abff993ded67e690aadeb1b5df3883f64ba3b73695f0da46420086b0"
         },
         {
             "scenario": "virtual-file-storage-mobile",
@@ -2482,7 +2482,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "78c5d917d6199a5f9c6d853f976b42f40109fd6a3cda11ff341d88235cef9ff8"
+            "sha256": "ded8e3cc95afbe4c7e96343e8cd758c0397bb8e350ffec9ca810610b5b0fb102"
         },
         {
             "scenario": "virtual-file-storage-mobile-light",
@@ -2498,7 +2498,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "401be8d2d0fa4a6fe3f802a729b87154a3341e17ecfa1e250426c10af4da0004"
+            "sha256": "94fd5203bea76f3f40077cddf5b604b9359fef28884aef2bc72b111fef01b473"
         },
         {
             "scenario": "virtual-file-storage-desktop",
@@ -2514,7 +2514,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "9312d2b46f6c982cf25a53695ca7ee1ee8a4b3752651af413c199cf180fdbd96"
+            "sha256": "219643393d6596dd1baf2d6da8bc8079c5cbb5f23865f9d3897fbae972fde012"
         },
         {
             "scenario": "virtual-file-storage-desktop-light",
@@ -2530,7 +2530,7 @@
             "purpose": "state-coverage",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "305ec67cf98f783bf89c9485f1193890a773ec91b150b7f794130e2feced175c"
+            "sha256": "cd665913d7af2dc8ba6995681019b7489e1a0ec44139d8d7786e76622609ab0e"
         },
         {
             "scenario": "windows-cloud-files-storage-desktop",
@@ -2546,7 +2546,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "0f376b8963d482033e7224a74fac05927eaa462289c419f6cb60635f24219f80"
+            "sha256": "675d00bbd5c1d5e4ff36349645b76495de01bbd40d1babbdf6473ce00420825d"
         },
         {
             "scenario": "windows-cloud-files-storage-desktop-light",
@@ -2562,7 +2562,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "1ab5f98c7d47cbc4df36ee111a74383858a7a603b5cbb9daad7e289cdfc2db53"
+            "sha256": "d8d73b5a863a2be62eece0a8e47aa7834ce0b09dd60a9bfd62116ecab336645e"
         },
         {
             "scenario": "windows-cloud-files-recovery-desktop",
@@ -2578,7 +2578,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "832f5199322045433cd28ec152e2c21b82199699dcf0fe5d053f67b39253bc9d"
+            "sha256": "66d0f54ea1a79482b0f6136bd44d08dec6cec414840e685ceb50f7e71ed6c76c"
         },
         {
             "scenario": "windows-cloud-files-recovery-desktop-light",
@@ -2594,7 +2594,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "caf2c595e6b09e18349318bfb5b8fa8fb2ef807800ae7c93534ab89847fa6afa"
+            "sha256": "ba750457ee1228c7c2fc4fd6ce04384a830156888cdbb2fdefd58c93ac6468e5"
         },
         {
             "scenario": "desktop-startup-settings",
@@ -2610,7 +2610,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8a85099666da44ef4c47631e183566994581bd495ff67c1e7fe0ba682dd5ed2b"
+            "sha256": "5005285cad7e135f417f80f004fb85d40ba60209bb6bf78acf051120c8a21d6f"
         },
         {
             "scenario": "desktop-startup-settings-light",
@@ -2626,7 +2626,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "4e110dc9bded133475ee7f9205a0966248b84221c2e65860e3eef7d6a128ab44"
+            "sha256": "91fb528a02fbf52fbb2d11eea22c3aba9c065c77c416e86251cba2d3b2816517"
         },
         {
             "scenario": "tables-insights-desktop",
@@ -2642,7 +2642,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2173ecceba05b22fb9cfc2046efdde31b8f334dd9d7eddfb7344c440ba57ff36"
+            "sha256": "e3bddf004db9ccecea5462c556324e958d03502f94167c9caa5d4ef79b40168d"
         },
         {
             "scenario": "tables-insights-desktop-light",
@@ -2658,7 +2658,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "e3a43955c7b290ea39a57ccc6fac517103d659cfc29c386c1f77e5f2d9e635fd"
+            "sha256": "2a8c30ab2d6e9c435f157bdabfb48153e101e3e2b2c845123010d2d22c5fba3b"
         },
         {
             "scenario": "tables-rows-desktop",
@@ -2674,7 +2674,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "02b586405e024920d6a59e702a7f607291a9c9fc368624bc8312ef5b17c4a0fe"
+            "sha256": "2859512dd23e74c92a114296b84dd879da82063b45e2a6a6288644a212eca5e9"
         },
         {
             "scenario": "tables-rows-desktop-light",
@@ -2690,7 +2690,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "c810254fbf6e3c2204506f862aba7032a734db30bd133572314a861ccfa41fa2"
+            "sha256": "6099213980a6c7ec1181f138943805b46872313aa1282feb3c06b22985e60e8f"
         },
         {
             "scenario": "tables-row-form-desktop",
@@ -2706,7 +2706,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "847e4ac75ec4342b3702de83680a086a19bb46b6f45b7a34ca6df7ba14821073"
+            "sha256": "0f889657d40af312aec24e8cf3c6b2fe27a9a68189642c04425519b7fb932a19"
         },
         {
             "scenario": "tables-row-form-desktop-light",
@@ -2722,7 +2722,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "9deef2118b8156ba87410564d4a16aa2c19962c9fa7c80293c9896dacde826b8"
+            "sha256": "09a8bf575edc3bdd2457980e7954657f30c9ac8680855ee9cca843f980134b7e"
         },
         {
             "scenario": "inline-record-edit-desktop",
@@ -2738,7 +2738,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a6ce210f68d1e549401fda8b9c46cff6d20a26bb598f06d325f4f55f476ccb42"
+            "sha256": "d0c41e5298bbd00b4286c864c8f3a555b868242f328191143856d90506971cae"
         },
         {
             "scenario": "inline-record-edit-desktop-light",
@@ -2754,7 +2754,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a7aad93a13595987b6cc766f816db5493d509e4ac5fafa27a9c1d64024544172"
+            "sha256": "84b16b10bcaff47ec9368496952df2ec4acf8e43150b74fa5e3004db5e5c5c00"
         },
         {
             "scenario": "inline-record-edit-mobile",
@@ -2770,7 +2770,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "09151d5edd5d0ef10757fc7c621d861c169d38408ec6054272754ba6fa4550a6"
+            "sha256": "cd02bd43ea862d3c648e8964692382f9115cea2d1c0bd25198eb7540b5096e22"
         },
         {
             "scenario": "inline-record-edit-mobile-light",
@@ -2786,7 +2786,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "2e54e65695a083b5e3cbc1d07f6132cef284a47c91f60578d94d116e2c9f1158"
+            "sha256": "6b259b4aa8fd0e78386ec92d34c075f80c7c950db00daa4d6fd658265955bc7e"
         },
         {
             "scenario": "tables-columns-desktop",
@@ -2802,7 +2802,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8114cef0858b15fd0fc2839d18421a13c404c5f6eb5f3535c0b355a07234cd66"
+            "sha256": "2c651730e207034cf71b060ef0498598cb490c6b02023d2e9306428c9f890719"
         },
         {
             "scenario": "tables-columns-desktop-light",
@@ -2818,7 +2818,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2e00b99613e673edc6d8c9d9b58665216a7a7991bc2b7f3d418b7611aff35aa9"
+            "sha256": "9ddfaf6b0c4a6601b885ab5c40fd02fdaefb72f202d092aae1eca8521352b024"
         },
         {
             "scenario": "tables-views-desktop",
@@ -2834,7 +2834,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "7f0da7620fb9632211bbdc5900b128f1546291c55ae2fa68e1241a05ac149072"
+            "sha256": "a0c3e9e7c66b5b172a395419d4afb0b17c5669c33b230c70a756282b359edfbe"
         },
         {
             "scenario": "tables-views-desktop-light",
@@ -2850,7 +2850,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a52ac38c36a92637fc5fc1b87a420da21b12057c6f5bc400310c2a60c99f95c4"
+            "sha256": "5cdbe6025cc45d00aa8f8c198660ac9ff420eb22d7544110fc3b2e8fe9dc439b"
         },
         {
             "scenario": "tables-shares-desktop",
@@ -2866,7 +2866,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "49e4b080de5e2ab3ef5cf6ae1ebb55369b4e4472d3d3b47f1fb2fac598f2a9e3"
+            "sha256": "449c2c3f385b28c4b7e3a0338804ebb8ae4c7647e63295eda8198898e4a19db9"
         },
         {
             "scenario": "tables-shares-desktop-light",
@@ -2882,7 +2882,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "af7203db1c73ce1b2c68539b487d2be72177c8b17ed5a2d43b528fb892b4faa3"
+            "sha256": "3f6c667baac80708df3931dc95181c896e7bc3bdb98edb5071078f738e45f230"
         },
         {
             "scenario": "tables-row-form-mobile",
@@ -2898,7 +2898,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "5f104ca5684b49ca8be05511e2d20f07fae3a71d81c625190264a660e2daa95e"
+            "sha256": "2b1dd8f7a32f3cc26c5511fbcbfbb24a5efafa13f6440730eef2e66444b508b4"
         },
         {
             "scenario": "tables-row-form-mobile-light",
@@ -2914,7 +2914,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "94739d718f83b502c8d5de2f3441b7cfa52557671ffe9e1258eaf38a15e398bb"
+            "sha256": "47ef5b1a9bba5ce945b4b3e2ca1d7f8bd65d04ad566a359b6110aee0a4c35ac8"
         },
         {
             "scenario": "tables-rows-mobile",
@@ -2930,7 +2930,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "65e7fa130365de5c66e6cd3667163315b568c75d092e18c3734a6f4b2a866ec0"
+            "sha256": "ea68b85e2a422704105aaa35395d25e57d97c8a383e9348e02013b19265d53c4"
         },
         {
             "scenario": "tables-rows-mobile-light",
@@ -2946,7 +2946,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "66666ba9c94153e348cdcb9ef713b8ed78718d90cd057452e1581a13df93cc57"
+            "sha256": "257edfb0eabef65eb34a17f473fce0baa39fb56b3ca76d39227e7398e150ae94"
         },
         {
             "scenario": "tables-overview-mobile",
@@ -2962,7 +2962,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "314f95c6515a9a5672be611432235e255ea0b6fa68e386ad86e6a070657e3e74"
+            "sha256": "2a002c103f74d1e6d7e8072cc455c6ed9dca5621a55e65cb3b48b324142d186e"
         },
         {
             "scenario": "tables-overview-mobile-light",
@@ -2978,7 +2978,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "af333d335e623004e4289d309f46d7786e9a817559a278cd7433107d7f1ba809"
+            "sha256": "27706a1294ae07a7a073299589dcd93f9b3d7f5abc43611749f80676f0635402"
         },
         {
             "scenario": "tables-columns-mobile",
@@ -2994,7 +2994,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "152eb814638e796cb600e36d5e76e895c66618ffb2ff70bfdd594b000e1f64fd"
+            "sha256": "c95d11db2ce54021ce01f15be0e22adcfa6a6e2f84157f4f0de3c0fdffd870ec"
         },
         {
             "scenario": "tables-columns-mobile-light",
@@ -3010,7 +3010,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "f94980456c4a69ff7ed08453f11cafe64fb22e11b9a99eb0d979561186581ba5"
+            "sha256": "8604a6fd1fcd3e2bd9cd9ab24394abbf4d36cc1b8f1a1039375f568c18872f3f"
         },
         {
             "scenario": "tables-views-mobile",
@@ -3026,7 +3026,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "31101f6b6677c86cf7baff75e2f8f2cdf2404de6ddb6d8acede9b9fcccce1943"
+            "sha256": "460ef51bd37ca7696c0b12ada7b1772da286aed475f53b7c753a666cc4ecc2fe"
         },
         {
             "scenario": "tables-views-mobile-light",
@@ -3042,7 +3042,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "c40efea44a10c94b8a2a11ed496263d584ee63ef2d78aeaac03156e641976e3d"
+            "sha256": "352a8b8bc12a5c98b4a0c61b0d6b6e12a885a4840a5fdb8e9420ef03922a34dd"
         },
         {
             "scenario": "tables-shares-mobile",
@@ -3058,7 +3058,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "42d1b0a442fefa89ce9a59c6a5bb4726553ab7b1fd2ffee751f6f3758bfadb36"
+            "sha256": "2929987e002d34b60b153928391483d253963d91ed92dc4286ab03a4bcf51e3c"
         },
         {
             "scenario": "tables-shares-mobile-light",
@@ -3074,7 +3074,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "8f09068d22237cab91852804c3f11bcee97ff5f135483476e6fa955566d73e10"
+            "sha256": "bd27bb4a1e11cba79b1750c753f5214a590c21347e83522ddbc693231ee9d4dd"
         },
         {
             "scenario": "mail-workspace-desktop",
@@ -3091,7 +3091,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "681d162a206084efdc567443089b0903919b1f2810f483cd48acf70e4a45c3f0"
+            "sha256": "90aaa97afef9b45f02f4494ede571b6220884f987485e7c1d8c633e110ec4812"
         },
         {
             "scenario": "mail-workspace-desktop-light",
@@ -3108,7 +3108,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "7067a602174a5823060b933f20e7a12b7d9fb7eef77c86432078b38e0f13a9d0"
+            "sha256": "bae76ebdf498da67c8475ad82a4beb5d0d53688677748620d079db14aaf3290a"
         },
         {
             "scenario": "mail-workspace-mobile",
@@ -3125,7 +3125,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "000cf6b1fa40bc4fc3d6945ccf948d15363dd6e41b4dd6a33904eb8a2d63bccf"
+            "sha256": "b8238d2cc271050c9044a332ed4d8c47e8babaac2e11d2cfbd6b6adc00185809"
         },
         {
             "scenario": "mail-workspace-mobile-light",
@@ -3142,7 +3142,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "0fc4d16eb1bf1a6a2701da5362624475236d360ec54cee4f5560df19a0e89b70"
+            "sha256": "4a0d5db135ce20c58f85f05d433309feb7a5988f6a383c3a962303d9cb5a4e22"
         },
         {
             "scenario": "mail-message-body-mobile",
@@ -3159,7 +3159,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "02735e16a09848b24069a2989e9744facb7d0970cb8f401c7d69f1029b4c18d7"
+            "sha256": "10008cb2e8ca950a6e633e0258694acdd13a49bc6492209a4b196a0f51b05f8b"
         },
         {
             "scenario": "mail-message-body-mobile-light",
@@ -3176,7 +3176,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "0bbf9fc37c440f5c4ab4a92c55e065ae7fbe381bcd8567794dc70a16aeae25cf"
+            "sha256": "899214a75ff0e459315873f3893471712d44982aa38c9bcaf99ffd419ab52063"
         },
         {
             "scenario": "mail-workspace-loading-mobile",
@@ -3193,7 +3193,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "10b6d365ed495b79eaa4d79aff59955b4d0c9fa1e9f32adaf7a22e8e48190eac"
+            "sha256": "5292ab66382a6b340b76cdfed2bc9bc268c7a7ccc95cf12ac518fc3cc861e276"
         },
         {
             "scenario": "mail-workspace-loading-mobile-light",
@@ -3210,7 +3210,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "19db89e177129680a094e15ab30e4da1c0d074e5e839143ba0eb93ed27eba33f"
+            "sha256": "8724cf1fcd9be16377f6bb722df29934a5a7dcaf834ef27478647f1c19610b29"
         },
         {
             "scenario": "mail-workspace-empty-mobile",
@@ -3227,7 +3227,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "4eb1c95a4429d39fcfe05f32ae6856fe884f30130c051aacfeddf6f0c3b85125"
+            "sha256": "8ed2a72fab449fde1fc559ceb721f06151c9e976e7466927d91f71dc9821d34b"
         },
         {
             "scenario": "mail-workspace-empty-mobile-light",
@@ -3244,7 +3244,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "60ac3d6b24a12ae3a72e2e3b9735c9d1f9f1b42145b40ba05d83dbb003dce54e"
+            "sha256": "fe42c3856fc2e77c59f25dd85b604a52da142607642311cee3e3303894bbf84b"
         },
         {
             "scenario": "mail-workspace-error-desktop",
@@ -3261,7 +3261,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "943ca4604fe214c0634f5144252ebdf295e203644612bb975f606d81bdd58da6"
+            "sha256": "f25126ab171a3c7c8de66dabe415b8450e5efa54b14e41aad86274885eddc3b8"
         },
         {
             "scenario": "mail-workspace-error-desktop-light",
@@ -3278,7 +3278,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "352c7211c1217668305de001a2631fd8c9cb68bc534b8251821db32375198c9c"
+            "sha256": "581fad6c57daa59202b890069bbc16cb990166b2cd6b9a6762d3b325d3f61da5"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile",
@@ -3296,7 +3296,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "f9630d113f705f54858c9db6312dc00e8dbea58aed833a88d5ddf3b1642c1b24"
+            "sha256": "1ee263511d5be8a358bd1d7854fee572b21c99be9acb9d3c44871f6b0eb19b57"
         },
         {
             "scenario": "photo-timeline-revalidation-error-mobile-light",
@@ -3314,7 +3314,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "482969bbb79c30d6af1d8c425f83eb2bb124efec0038482f6c61d5b85ba546ab"
+            "sha256": "b8ea0f8eaa91cbd4cae0a0f34de114c87979479bafbb51f8146f9e1b329872ce"
         },
         {
             "scenario": "photo-timeline-return-to-newest-error-mobile",
@@ -3332,7 +3332,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "adc3ae9d6db919bebb44d6df66a46847744a0d6104edffdf96b1a3750f8361c9"
+            "sha256": "19174e0f272c0a85c80eac8ca1ea1fdc3c6bc046cf7ee5e3e3dbc51c3017335d"
         },
         {
             "scenario": "photo-timeline-return-to-newest-error-mobile-light",
@@ -3350,7 +3350,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 246,
             "issue": 242,
-            "sha256": "be17f4eeffa4937609e4a0c668cc59536ec952f456e6227c9dcc2d08afd209f0"
+            "sha256": "d31037c9b2496ae41fed45daff55651cc593873fc600df7fce966a186cfa42df"
         },
         {
             "scenario": "photo-timeline-raw-retry-mobile",
@@ -3368,7 +3368,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 249,
             "issue": 248,
-            "sha256": "424355d5a7f335aa456f72898fffa5fe75d168fc3d8683b0a9dee2d521239769"
+            "sha256": "398be62672641b6b3c487c1789ee10b993cd18aafd645a94e1ca2bf9f1e18539"
         },
         {
             "scenario": "photo-timeline-raw-retry-mobile-light",
@@ -3386,7 +3386,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 249,
             "issue": 248,
-            "sha256": "bf92b98794b0992d81f1b61052ef7a343db92d3df554566f8199979854c78a1f"
+            "sha256": "12949acfb0c97df7cb710b657f4584bb6f2e520039b58ce0a039a95c407a0b65"
         },
         {
             "scenario": "photo-folder-browser-mobile",
@@ -3404,7 +3404,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "0a4ab6df4382b51f4512adac5e4638c150a28c907ee842990e6518008c622401"
+            "sha256": "89c4f858346b10127dd758773fd323c31af1dcdebe94fdc33a190d24cc8f297c"
         },
         {
             "scenario": "photo-folder-browser-mobile-light",
@@ -3422,7 +3422,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "41f003b56ef1fd8532e415ee8a85f31af0050c9c8b9d0af80083b2704f2049b2"
+            "sha256": "c28c7569539eaf95050fe0f7c73fe54ed8b2087c08c9cee22b0c942108d0ce21"
         },
         {
             "scenario": "photo-folder-browser-desktop",
@@ -3440,7 +3440,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "82f62a6d472836c8ba7cbb6485bee0f159cb893f39b9ba7e73977e446f73c1e7"
+            "sha256": "36df95bfa772537853d46af64c6a8d2873e3865c341ce37246cc2f08303d1060"
         },
         {
             "scenario": "photo-folder-browser-desktop-light",
@@ -3458,7 +3458,7 @@
             "viewport": "wide",
             "pullRequest": 245,
             "issue": 243,
-            "sha256": "7a538e866bb2869e216616cbb992f0cb7d31876ebcec2f2e84bb47a2c75aecf6"
+            "sha256": "1a83d3386c49f19c52b53b4e340fde4798ae9a5e6ffa529a81463c6fb81d0a62"
         },
         {
             "scenario": "raw-preview-loading-mobile",
@@ -3476,7 +3476,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "e43dcc9ed8e809d3d62ffcd7317d0e079877c5cb645ceb29d4630db84dbbe8eb"
+            "sha256": "88b47847b114395b258276e8f4a1c9999b2af3129f6ce3d58d804ac7c8b2917d"
         },
         {
             "scenario": "raw-preview-loading-mobile-light",
@@ -3494,7 +3494,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "e43dcc9ed8e809d3d62ffcd7317d0e079877c5cb645ceb29d4630db84dbbe8eb"
+            "sha256": "88b47847b114395b258276e8f4a1c9999b2af3129f6ce3d58d804ac7c8b2917d"
         },
         {
             "scenario": "raw-preview-error-mobile",
@@ -3512,7 +3512,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "c2b97514a3da285f99febf1aeb98fe5153e429b4709052b53553b793bede37a9"
+            "sha256": "9a1bb7d2f882db36b74f6ae08b4f37c1457e0f6d5fe37d97e54258b854cd29d4"
         },
         {
             "scenario": "raw-preview-error-mobile-light",
@@ -3530,7 +3530,7 @@
             "viewport": "phone-compact",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "40be21a494874edd60d0a1291fa8ad3ded0078a050695a0bbbda2daa3365bda4"
+            "sha256": "3a04162e0a56805d33e11b74e2f1e5e9502e8a52a401a75adc22b1d90ff875ee"
         },
         {
             "scenario": "raw-preview-memories-ready-mobile",
@@ -3548,7 +3548,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "214642cb4139abb4622779d3836948ea0a5b9c754a7d02a4aabbc2049b129bf8"
+            "sha256": "984d6eff156e91f0eec7e64d07896402e871a1df86d5d0459cd6fff6b3d11734"
         },
         {
             "scenario": "raw-preview-memories-ready-mobile-light",
@@ -3566,7 +3566,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "214642cb4139abb4622779d3836948ea0a5b9c754a7d02a4aabbc2049b129bf8"
+            "sha256": "984d6eff156e91f0eec7e64d07896402e871a1df86d5d0459cd6fff6b3d11734"
         },
         {
             "scenario": "raw-preview-high-detail-desktop",
@@ -3584,7 +3584,7 @@
             "viewport": "wide",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "3045640117f3356b2996dac3998ef061b2882598e2ccaf377feb48cb347f78d9"
+            "sha256": "0316f8310bcd2e958e623070ab12b53211a8aa98113b59dca10e6b5d808ed908"
         },
         {
             "scenario": "raw-preview-high-detail-desktop-light",
@@ -3602,7 +3602,7 @@
             "viewport": "wide",
             "pullRequest": 218,
             "issue": 85,
-            "sha256": "3045640117f3356b2996dac3998ef061b2882598e2ccaf377feb48cb347f78d9"
+            "sha256": "0316f8310bcd2e958e623070ab12b53211a8aa98113b59dca10e6b5d808ed908"
         },
         {
             "scenario": "live-photo-motion-failure-mobile",
@@ -3620,7 +3620,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 182,
-            "sha256": "67740b0b54941f31af0e77189f137775dafa9ade86279950784922939e10da73"
+            "sha256": "a09716f43386eb70593869e3887939e72d7053ab736c9632e36d20cc6b3a4b73"
         },
         {
             "scenario": "live-photo-motion-failure-mobile-light",
@@ -3638,7 +3638,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 182,
-            "sha256": "67740b0b54941f31af0e77189f137775dafa9ade86279950784922939e10da73"
+            "sha256": "a09716f43386eb70593869e3887939e72d7053ab736c9632e36d20cc6b3a4b73"
         },
         {
             "scenario": "native-tiff-preview-mobile",
@@ -3656,7 +3656,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 84,
-            "sha256": "79d9dbc3d841d85d6350e6ab6b809024210960ef76a36c2a602dba53a5f9c27c"
+            "sha256": "239efa91dad47eedfd6fd3f525d302126101eaca4391135fb00c25df70a897c5"
         },
         {
             "scenario": "native-tiff-preview-mobile-light",
@@ -3674,7 +3674,7 @@
             "viewport": "phone-compact",
             "pullRequest": 249,
             "issue": 84,
-            "sha256": "79d9dbc3d841d85d6350e6ab6b809024210960ef76a36c2a602dba53a5f9c27c"
+            "sha256": "239efa91dad47eedfd6fd3f525d302126101eaca4391135fb00c25df70a897c5"
         },
         {
             "scenario": "file-share-user-mobile",
@@ -3692,7 +3692,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "0280625af55c212bbea3353f8a7c4bc6cac66b70a66558dc9f31c486bada6202"
+            "sha256": "35f28795e62e6cf0cd23aac36003a6fda3706790e506025fbe50933da24475bf"
         },
         {
             "scenario": "file-share-user-mobile-light",
@@ -3710,7 +3710,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "68c3c469e4b31a42e0f0786f313af9ef1b3cbf2bab4e701b5a3fd95dccc00914"
+            "sha256": "2d63168cca6da478cde4db750d42e8c75cb00adcb93b4666a41cdfd24161867b"
         },
         {
             "scenario": "file-share-group-desktop",
@@ -3728,7 +3728,7 @@
             "viewport": "wide",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "e4e051d5c8ff0389c08f8abc72e8ea44d0b2f7361941c111a249940c56577fa9"
+            "sha256": "b5c8fdfc73ae6ef83ba97bbd0f8b1f63111ea35905be64621d8ec81b486812b8"
         },
         {
             "scenario": "file-share-group-desktop-light",
@@ -3746,7 +3746,7 @@
             "viewport": "wide",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "329851dcf4ece45cb8b4e081f5e05d47b833673996cea6f5d2e0d5c09cfb69a9"
+            "sha256": "a6f4749f67cbb09260669d39c05cbf5b149d3479996aac395e12e1662af57bb6"
         },
         {
             "scenario": "file-share-loading-mobile",
@@ -3764,7 +3764,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "ae4b23bbd098986c0c93491a6da0e5b0f84d30dcf5ddd1ccb1b8f4160f44cf6c"
+            "sha256": "8a1b683bdc5c75dd545aadeb0c55501a5120fd466e7a2720f6b5d4c35333ffb4"
         },
         {
             "scenario": "file-share-loading-mobile-light",
@@ -3782,7 +3782,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "c5944c11769e9b3f6dc656311aad19d1efbabb5813ee8608214f34a87a2c0d81"
+            "sha256": "9b5acab69a091f97641f73448669a980a2d7bff57844684e2ff91351d09fa931"
         },
         {
             "scenario": "file-share-error-mobile",
@@ -3800,7 +3800,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "b2bb280840ae7b9c9a4bfc89b51d440529b4bfdc8a61bf6230113efec9f59f5a"
+            "sha256": "87a7efaea3af9dea4561d18a83880d302dcefc15e49ee39d9eed9a60efb3d308"
         },
         {
             "scenario": "file-share-error-mobile-light",
@@ -3818,7 +3818,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 219,
             "issue": 124,
-            "sha256": "21caa6ce28f2c9570b0f6a33c4f4aeeaebc688de907fccb97bc50908df296de7"
+            "sha256": "8100c33e0e9368988431a8116b76cab051a1e72549c08edcd3a4d29bd860f109"
         },
         {
             "scenario": "transfer-mobile-pending",
@@ -3836,7 +3836,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "6b69d42a693ba365190912df20dfa12a7163a88fd8b67554b7bccb8b627cffd5"
+            "sha256": "a80b9633ac7619c2d570a40a76ccf0a61e49a3efbf9f57a0f9037f88a6b00165"
         },
         {
             "scenario": "transfer-mobile-pending-light",
@@ -3854,7 +3854,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "b2f5f2294f1840b3ca7c76c62c6a057ebe74ac8da7a73536f14afb5346b14b04"
+            "sha256": "0aea2def6109ee68485752102aa34492a35e4474197460a5e1821139608a331e"
         },
         {
             "scenario": "transfer-mobile-failed-cached",
@@ -3872,7 +3872,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "d3146d69f6478160a9c3382aad76739944a2e985c70c117da6c2f9b426987937"
+            "sha256": "716eeed5fcc8410ddca3d9da91a29c2079b9a5fb3c1b5fbe4c367bd4a8e01149"
         },
         {
             "scenario": "transfer-mobile-failed-cached-light",
@@ -3890,7 +3890,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "86f1f95df7bc2874e3ecc412571f86ad915113779e969e13f2f97739a21ff3ad"
+            "sha256": "72677841fce94966769b3300514227bfd3947a3d9e488d6175795fb7cf4bbaf3"
         },
         {
             "scenario": "transfer-desktop-active",
@@ -3908,7 +3908,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "8da0ea379b338c4f1dd328a03c95de62c44d07498983a03b938147a19b086016"
+            "sha256": "b62d601f0ca01b76060a49ab59a075581b381b3f27fa0d42a7c7ee1d62687283"
         },
         {
             "scenario": "transfer-desktop-active-light",
@@ -3926,7 +3926,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "9e28115d986daa54f3cc74af243fe7b8bf1944f744c10922ca90bf1227a3b602"
+            "sha256": "16149b59d1d5695110dc3ceb5ad3b668dda26d2dce2cd3b1e97a31e5392f80e9"
         },
         {
             "scenario": "transfer-desktop-completed-page",
@@ -3944,7 +3944,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "c0ca4fbe07f73c43fbae91f0e8b2c54a7f2eae204c488519e5f9ae4e10390f8c"
+            "sha256": "5a44c00d8b1f2161cee45f847fec4e489794c97d801b14d409a8fc5dc13bb4a1"
         },
         {
             "scenario": "transfer-desktop-completed-page-light",
@@ -3962,7 +3962,7 @@
             "viewport": "wide",
             "pullRequest": 220,
             "issue": 168,
-            "sha256": "144e83bcb20a659fb12d91dd1c586106619f7ba53ec6aabbbfb65c732efceb12"
+            "sha256": "d3f0e2ec07c5badfcf2208b498a5fbbbd0ee0a28873b830640518267916779c1"
         },
         {
             "scenario": "deck-board-desktop",
@@ -3980,7 +3980,7 @@
             "viewport": "wide",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "34e3b8568fcf88d937f8419269d00a6cd3693741613c5bd3342493fa876beb03"
+            "sha256": "a7f26f44189005e4cf1fe0133a6e47ad4bce1b4d6fd621ec32526440c27d0e24"
         },
         {
             "scenario": "deck-board-desktop-light",
@@ -3998,7 +3998,7 @@
             "viewport": "wide",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "5fd89b80f02447a1bccf7bde7e7844844917b434afadefe0c3a7e68592d8f1ca"
+            "sha256": "492e42413463435829cc4b3513f20f068262e23d535b0f66b40d2dd554f2c5f3"
         },
         {
             "scenario": "deck-board-mobile",
@@ -4016,7 +4016,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "9bc48c5b90838426b45ce48e604840afe5bfd7beae175560a56ef35e80085640"
+            "sha256": "5731552fb5cb7c66604f6493300e852633259d4ce96059fc410f3d1be6d813e2"
         },
         {
             "scenario": "deck-board-mobile-light",
@@ -4034,7 +4034,7 @@
             "viewport": "phone-portrait",
             "pullRequest": 221,
             "issue": 52,
-            "sha256": "ac9fadf88b173c5783db13b58345a42720025676fc93603f7d9982e5e73f486c"
+            "sha256": "7ecb6e74e7c16f73b8817541e3b7a4aeaeca237ebd1cf16f46c3b78e919851a4"
         },
         {
             "scenario": "music-library-album-tracks-mobile",
@@ -4051,7 +4051,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 56,
-            "sha256": "9d7a07c1f5bbc574fea8f4fcdc11baed9deff52db84339e91c292a5e1a37e93c"
+            "sha256": "cd14549e73e67d96e0aa966aa2711fecbf676d3c31325ed3b0dc5d37e5f26e50"
         },
         {
             "scenario": "music-library-album-tracks-mobile-light",
@@ -4068,7 +4068,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 56,
-            "sha256": "85f7687ae617d185e0fc24b2d74dfe2720c20bcc727e3b0ed5cfce03455e86ad"
+            "sha256": "04441320de3207f6d39505055d26399de84abe7bfce64cb43d7656e72b545e57"
         },
         {
             "scenario": "music-library-playback-error-desktop",
@@ -4085,7 +4085,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 56,
-            "sha256": "5f0f377fdb5bf44e73cd5150cce724facb18179ba32fd55d672050c0ac2909c5"
+            "sha256": "a3e635f7cf63de1929e4e94ee6a5993bec3f2f162e9385a4752389e3bd158fa2"
         },
         {
             "scenario": "music-library-playback-error-desktop-light",
@@ -4102,7 +4102,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 56,
-            "sha256": "57f3e710ebe46f9d093352c30decc6c162d505f30114bf6afa56865520e81eec"
+            "sha256": "c8ddf9683b0c2f1b11cc471b7dd9aec8c0dfd77acd470a5f7d3927dbbec95e2c"
         },
         {
             "scenario": "guide-android-getting-started-home",
@@ -4118,7 +4118,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "4b065d719635e59bc28cb528fd2671b4814b390c141004f039b1d3e6184ee328"
+            "sha256": "70c3f9363ac6e240f3a40e0b16ea83a5d2c5a137e51ca8018c0bc6f01d4e4a60"
         },
         {
             "scenario": "guide-android-getting-started-home-light",
@@ -4134,7 +4134,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "bf226564df906433bf25d250ac1d2c4fda32060b0d74502400ff4a4d440fd0ab"
+            "sha256": "fca15598ca924368195c3ed63e161794cd1eb9c23220ea32af1a2163ee0ec0e7"
         },
         {
             "scenario": "guide-android-getting-started-files",
@@ -4150,7 +4150,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "5d72f9e74fa984ce6478dad2d65ba19422253e67fc85ab9e496e72caed43ca35"
+            "sha256": "387d6a616fcf345603a77ceea3d315497f260f6a9d43f8d31de70e0f335b1886"
         },
         {
             "scenario": "guide-android-getting-started-files-light",
@@ -4166,7 +4166,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "75432a3a89d791949eba9c058acde9573fd82a273d9bcecaf1978c61fc118e03"
+            "sha256": "13c451a917b0b4e7672a89faf196315b7480f30eedf32a06605bdb49a51d914e"
         },
         {
             "scenario": "guide-android-getting-started-calendar",
@@ -4182,7 +4182,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "549f7ef929594989ea7fa5cf2ea06478321c396957ec9aee9c938d59c2e0c76f"
+            "sha256": "1d06714d6411ae4b9285903c9541d68a034158966436124b9caea5a12cc7c89a"
         },
         {
             "scenario": "guide-android-getting-started-calendar-light",
@@ -4198,7 +4198,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "9d13a1adb46c2275bbfc344447e27f5a4b1b0e3be56fcb6bf04cd0d7c7da30b9"
+            "sha256": "7c4eaf6dcdf9f318d9f37a9a9de715c7a2bd69ef54a5b9672c4f07dc9b0ab2da"
         },
         {
             "scenario": "guide-desktop-getting-started-home",
@@ -4214,7 +4214,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "ee0c694913b8a464b4c1c1b6db9ba670f5c376089c379656bbe77c85d2b92fe7"
+            "sha256": "b95bf36cb3028c8ef3e7f2e067e3ff34fc02c0037510794a723c6f7d39cf7151"
         },
         {
             "scenario": "guide-desktop-getting-started-home-light",
@@ -4230,7 +4230,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "58eb2d3ab289cb790abe77c8e86032fa2d0a4c845d1812b786c15e3efcc4c735"
+            "sha256": "0febb5434fd539818327b2eb3b11bd888527baa25fad8f9b2c21fcaf5b83627a"
         },
         {
             "scenario": "guide-desktop-getting-started-apps",
@@ -4246,7 +4246,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a15f5074acd7ec8933d12f93e3049a9bf063aad1ef09f274c5ed18aa3dce9480"
+            "sha256": "35bbcc68af51c17f280817002fbc772b941999fae600e8792ca7e9d921166589"
         },
         {
             "scenario": "guide-desktop-getting-started-apps-light",
@@ -4262,7 +4262,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "08bf96f6abb34216ff2c61b54474fb98298b55279fc1d45964bb7948bb7d36b6"
+            "sha256": "68152da73061da02880c8cad1e9298a746ccd4ee83ae68dbf609ba28e205a178"
         },
         {
             "scenario": "guide-desktop-getting-started-settings",
@@ -4278,7 +4278,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8a85099666da44ef4c47631e183566994581bd495ff67c1e7fe0ba682dd5ed2b"
+            "sha256": "5005285cad7e135f417f80f004fb85d40ba60209bb6bf78acf051120c8a21d6f"
         },
         {
             "scenario": "guide-desktop-getting-started-settings-light",
@@ -4294,7 +4294,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "4e110dc9bded133475ee7f9205a0966248b84221c2e65860e3eef7d6a128ab44"
+            "sha256": "91fb528a02fbf52fbb2d11eea22c3aba9c065c77c416e86251cba2d3b2816517"
         },
         {
             "scenario": "guide-android-offline-files-browse",
@@ -4310,7 +4310,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "5d72f9e74fa984ce6478dad2d65ba19422253e67fc85ab9e496e72caed43ca35"
+            "sha256": "387d6a616fcf345603a77ceea3d315497f260f6a9d43f8d31de70e0f335b1886"
         },
         {
             "scenario": "guide-android-offline-files-browse-light",
@@ -4326,7 +4326,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "75432a3a89d791949eba9c058acde9573fd82a273d9bcecaf1978c61fc118e03"
+            "sha256": "13c451a917b0b4e7672a89faf196315b7480f30eedf32a06605bdb49a51d914e"
         },
         {
             "scenario": "guide-android-offline-files-storage",
@@ -4342,7 +4342,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "cf8467bd2c5c5570fa9badbe40710ba5714becece80c4ccdff0fab221b2c1e5d"
+            "sha256": "e2b607ece492243f308fb5dd2eee274f2c6dd520b8259f47fd1af7bd56af3ef7"
         },
         {
             "scenario": "guide-android-offline-files-storage-light",
@@ -4358,7 +4358,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "927fc17bf3ca6d411d146878641656a7b8827c188aec7c0d92bbc79ba77d8710"
+            "sha256": "46c1b035e29a3e467d8d5a5a798b3f554312f33e912cb3dec8eb34de741c9293"
         },
         {
             "scenario": "guide-android-offline-files-transfers",
@@ -4374,7 +4374,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "bcf8aa51d6c729c399ed0e48e7c6f999578f63f57ab73538ad0d917982476f00"
+            "sha256": "173f40998d76b348bc8b73acd869aa3dac46e88a43b2ad7246f7fe82b138589e"
         },
         {
             "scenario": "guide-android-offline-files-transfers-light",
@@ -4390,7 +4390,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "a1a777675771af6a82b8ffb3eefe0e8b417a605d03d0a78e927a3efc2da55bbf"
+            "sha256": "dda6446add045d3e1bbd6f7750239cd4773480e1abd26bcc83e3c13e998a9885"
         },
         {
             "scenario": "guide-android-folder-sync-locations",
@@ -4406,7 +4406,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "e51d3fe4801e52e1a690e957c035557db3d09481f10d1129436a5052b6e1a196"
+            "sha256": "123855789bd786a9e033c946f3601a1e0de1376a0eaf9a52aee6efa3a729d5b5"
         },
         {
             "scenario": "guide-android-folder-sync-locations-light",
@@ -4422,7 +4422,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "64fc1923b3eb3d3059abc3cdc1f263154b778ffaeebec80978158503c80a7ee3"
+            "sha256": "a5bd103d433f530b1f4ebe5b3ca4bdd1996a1bb10c71cb75328ce82930fbd0b1"
         },
         {
             "scenario": "guide-android-folder-sync-rules",
@@ -4438,7 +4438,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "4d9bab83073f37979d70d76448cff369a5260f3199d897fd72e2ed9e1d7e6886"
+            "sha256": "7f95a0ef466429e42faa5e55d0c9da7391731cfec640a22b17b60b5e2f098965"
         },
         {
             "scenario": "guide-android-folder-sync-rules-light",
@@ -4454,7 +4454,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "c6e3291d2db5a8e0ee67ed7ac22d64ef4871291c2f32d87f10da3b1fbba0cd8a"
+            "sha256": "d6bdece1e405cc419cb31541590a9d73b1d1479874a237964ea87086a0c5aa8a"
         },
         {
             "scenario": "guide-android-folder-sync-status",
@@ -4470,7 +4470,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "a0f177c480ebede0c915836c589c9268f21ed6262ad67d65d79705ddd5c4a447"
+            "sha256": "5060d2477217ea4cefe15557bfd116bd0e01c312f59b3c90dbb6fb1c19f070cd"
         },
         {
             "scenario": "guide-android-folder-sync-status-light",
@@ -4486,7 +4486,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "a4616822fd0a374475f03ef68f61b1a75aa54cad170e7be9bc4bbc14752c9383"
+            "sha256": "99d37350712ead227c301bc4b606cfc44813576ab1cd80e19693d5ca0f140204"
         },
         {
             "scenario": "guide-linux-folder-sync-workspace",
@@ -4502,7 +4502,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "a06005c64a296705b885ccdc4b12a2b9533ad96c90187eaf9396027e6f05d5ca"
+            "sha256": "d313011cd343248da8ee04b9d1a0f91a3fd8efbdc5c59c457769b32545cfb639"
         },
         {
             "scenario": "guide-linux-folder-sync-workspace-light",
@@ -4518,7 +4518,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "c059a38023ab6e0b97387aed6fa8ac916567ee1158ea584f2a96bfe19721f971"
+            "sha256": "dc0d848102c82acadfa55d1928cdec2fd03c84c9eaa0bd69c08bf9d41bcddce8"
         },
         {
             "scenario": "guide-linux-folder-sync-locations",
@@ -4534,7 +4534,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "24b4e4c556e2feed058deebe2e0dca893b7a62e1358a11615e128754fd1e7acc"
+            "sha256": "699fb58514d41cf99f990e0955cd4d3af4b65b9346a62d4a64e48e9ba7d794d0"
         },
         {
             "scenario": "guide-linux-folder-sync-locations-light",
@@ -4550,7 +4550,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "d3c004bf2f7e5826e4ebdb7b6facfa73005a30f77d0e290726e3155e6f9b77ff"
+            "sha256": "14f77dfa2637e7c44756d4856179ee08dde8bf84ac4f44433f55746f988a3e05"
         },
         {
             "scenario": "guide-linux-folder-sync-rules",
@@ -4566,7 +4566,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "0a6e4e1e84fa0703fbdeae34bf78953f4b7a54addf6aa8e71c74e87688417de9"
+            "sha256": "140b1d765d6e8de213113bdbd9d4963718602fa02b1f09ed1485a2f9b8c6c5db"
         },
         {
             "scenario": "guide-linux-folder-sync-rules-light",
@@ -4582,7 +4582,7 @@
             "purpose": "showcase",
             "platform": "linux",
             "viewport": "wide",
-            "sha256": "cdafc8e584c1060acd30734449629011f7eed91d9ec4b42fa9cedb2f996ded7b"
+            "sha256": "b6f33a4d825fa4b8a5a0102f081cacf39719ff118f067e6c3f4e2b042d9e0091"
         },
         {
             "scenario": "guide-windows-cloud-files-settings",
@@ -4598,7 +4598,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "41b1a4e54cfe92625fab16f38d6ba30effae937d943c1e318f06219e9d6b0011"
+            "sha256": "8b3478046685977c535b81b1215a2f38b55f74625dab1799aa6b3d69cf392af0"
         },
         {
             "scenario": "guide-windows-cloud-files-settings-light",
@@ -4614,7 +4614,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "d11af086432b040dbeade14b3daf963f371fd8fa310ff98e18665f60e2967f71"
+            "sha256": "9e256a5a11d4b6aae3a5b37b8350941b3281c3560de1e8f4c8289d4dde137cea"
         },
         {
             "scenario": "guide-windows-cloud-files-storage",
@@ -4630,7 +4630,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "0f376b8963d482033e7224a74fac05927eaa462289c419f6cb60635f24219f80"
+            "sha256": "675d00bbd5c1d5e4ff36349645b76495de01bbd40d1babbdf6473ce00420825d"
         },
         {
             "scenario": "guide-windows-cloud-files-storage-light",
@@ -4646,7 +4646,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "1ab5f98c7d47cbc4df36ee111a74383858a7a603b5cbb9daad7e289cdfc2db53"
+            "sha256": "d8d73b5a863a2be62eece0a8e47aa7834ce0b09dd60a9bfd62116ecab336645e"
         },
         {
             "scenario": "guide-windows-cloud-files-recovery",
@@ -4662,7 +4662,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "832f5199322045433cd28ec152e2c21b82199699dcf0fe5d053f67b39253bc9d"
+            "sha256": "66d0f54ea1a79482b0f6136bd44d08dec6cec414840e685ceb50f7e71ed6c76c"
         },
         {
             "scenario": "guide-windows-cloud-files-recovery-light",
@@ -4678,7 +4678,7 @@
             "purpose": "showcase",
             "platform": "windows",
             "viewport": "wide",
-            "sha256": "caf2c595e6b09e18349318bfb5b8fa8fb2ef807800ae7c93534ab89847fa6afa"
+            "sha256": "ba750457ee1228c7c2fc4fd6ce04384a830156888cdbb2fdefd58c93ac6468e5"
         },
         {
             "scenario": "guide-android-photo-backup-folders",
@@ -4694,7 +4694,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "83b2b1768c0f40285be65e0646a561f9f898492e897265dba61f1a586257ce5f"
+            "sha256": "0374b9973a70a4f06a0f62a9013df3452552b1d916d14cfb73c85f870acfa596"
         },
         {
             "scenario": "guide-android-photo-backup-folders-light",
@@ -4710,7 +4710,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "1fe7118be9c2fc209c5c725cf91f708d291e184ae6e1cef467e1765189946d82"
+            "sha256": "b1d79b5e2de732e1bfc4725f2e399a54c516bbbea44bcf62a133f686cdd76f29"
         },
         {
             "scenario": "guide-android-photo-backup-queue",
@@ -4726,7 +4726,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "6b69d42a693ba365190912df20dfa12a7163a88fd8b67554b7bccb8b627cffd5"
+            "sha256": "a80b9633ac7619c2d570a40a76ccf0a61e49a3efbf9f57a0f9037f88a6b00165"
         },
         {
             "scenario": "guide-android-photo-backup-queue-light",
@@ -4742,7 +4742,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "b2f5f2294f1840b3ca7c76c62c6a057ebe74ac8da7a73536f14afb5346b14b04"
+            "sha256": "0aea2def6109ee68485752102aa34492a35e4474197460a5e1821139608a331e"
         },
         {
             "scenario": "guide-android-photo-backup-library",
@@ -4758,7 +4758,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "1b90af23db5fd258e1df650362155a01ff15fd07bbc8016aeb05f3054e3dd8ba"
+            "sha256": "3760aee3d8fd91d5a6423862f36961039e0b598af283104301a12ba08bc14f78"
         },
         {
             "scenario": "guide-android-photo-backup-library-light",
@@ -4774,7 +4774,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "3b6bc8076df0a5098ef36b7c6aae59cc9b0ceeab3b34afa2b6c21ca0a44bb0be"
+            "sha256": "991113a9d84e85776199fb17e24d13f0bdd40b8fea8a29a80028f37b57b59f70"
         },
         {
             "scenario": "guide-android-calendar-month",
@@ -4790,7 +4790,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "fa698af798682a89f3ddffd4b443429a9fb90505b0490f1a5ff7e74bc8a9766a"
+            "sha256": "c912d9c676e6c28336d6231487448ffee3a749c32dae8f26291b6f7a65199de5"
         },
         {
             "scenario": "guide-android-calendar-month-light",
@@ -4806,7 +4806,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "7828f5f7860104bdea431b0c70c7a8b5861fcca011fd57a80ea65931e0b71da6"
+            "sha256": "69c1fa1751b4aea68ac0d26dc332a913268544f0a9ad99c8bc38ba740428ad10"
         },
         {
             "scenario": "guide-android-calendar-agenda",
@@ -4822,7 +4822,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "549f7ef929594989ea7fa5cf2ea06478321c396957ec9aee9c938d59c2e0c76f"
+            "sha256": "1d06714d6411ae4b9285903c9541d68a034158966436124b9caea5a12cc7c89a"
         },
         {
             "scenario": "guide-android-calendar-agenda-light",
@@ -4838,7 +4838,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "9d13a1adb46c2275bbfc344447e27f5a4b1b0e3be56fcb6bf04cd0d7c7da30b9"
+            "sha256": "7c4eaf6dcdf9f318d9f37a9a9de715c7a2bd69ef54a5b9672c4f07dc9b0ab2da"
         },
         {
             "scenario": "guide-android-calendar-edit",
@@ -4854,7 +4854,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "76295934eba46168a45ae69de1563f9d83cb8ec76cb74a72f3550d85601e9ab9"
+            "sha256": "c7b6219386a1022a99f7682c201f7c7af36f8a11cb4b280d45c72360600f9587"
         },
         {
             "scenario": "guide-android-calendar-edit-light",
@@ -4870,7 +4870,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "cb4e7a6f7af61694fd0ba5cda548eeb0c4c62ff24cb5398786a3e5c100790880"
+            "sha256": "a4cd2a75e08038574ee14b7f4d3251e416a0e3adc7ab900e8c2473a2d708e6ff"
         },
         {
             "scenario": "guide-desktop-calendar-month",
@@ -4886,7 +4886,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f63640c9e2a02be02f28587c4b19025dc4ce065afe819210b483ed2ed0f2e03b"
+            "sha256": "82a03820f1ba2fc382fb58180e1a16abb5f32f1cb7093a0d2d7616a1290c6ce6"
         },
         {
             "scenario": "guide-desktop-calendar-month-light",
@@ -4902,7 +4902,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "6d54f7bc5ba869c96f3a2ba3605eb007843e0f357eb0767429ffe63ba2de3fa7"
+            "sha256": "70f0c56def1f3b892b3b8583a94af7e59f5b6b60cd7c5e15fe93e78fd724bb05"
         },
         {
             "scenario": "guide-desktop-calendar-sources",
@@ -4918,7 +4918,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f63640c9e2a02be02f28587c4b19025dc4ce065afe819210b483ed2ed0f2e03b"
+            "sha256": "82a03820f1ba2fc382fb58180e1a16abb5f32f1cb7093a0d2d7616a1290c6ce6"
         },
         {
             "scenario": "guide-desktop-calendar-sources-light",
@@ -4934,7 +4934,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "6d54f7bc5ba869c96f3a2ba3605eb007843e0f357eb0767429ffe63ba2de3fa7"
+            "sha256": "70f0c56def1f3b892b3b8583a94af7e59f5b6b60cd7c5e15fe93e78fd724bb05"
         },
         {
             "scenario": "guide-desktop-calendar-edit",
@@ -4950,7 +4950,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "8c48c04f0f0dc73fa7de9224164b2e21c90bc4c62ebc8d4998dc2e8ee2a244c6"
+            "sha256": "7dd3b3d7a74468e6931b5734e74f2d21ab0bc23b6f4766d8122492f6921decd2"
         },
         {
             "scenario": "guide-desktop-calendar-edit-light",
@@ -4966,7 +4966,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "f5392faeb94261d1f69c9397b5e08ffcaf58422e8b948c37d0bd42dff2bf31d9"
+            "sha256": "ca98f87711475c47a3b0516dc076a7125fd093f5bb40ef46fb45ce72641d8f21"
         },
         {
             "scenario": "guide-desktop-switch-apps-catalog",
@@ -4982,7 +4982,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "a15f5074acd7ec8933d12f93e3049a9bf063aad1ef09f274c5ed18aa3dce9480"
+            "sha256": "35bbcc68af51c17f280817002fbc772b941999fae600e8792ca7e9d921166589"
         },
         {
             "scenario": "guide-desktop-switch-apps-catalog-light",
@@ -4998,7 +4998,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "08bf96f6abb34216ff2c61b54474fb98298b55279fc1d45964bb7948bb7d36b6"
+            "sha256": "68152da73061da02880c8cad1e9298a746ccd4ee83ae68dbf609ba28e205a178"
         },
         {
             "scenario": "guide-desktop-switch-apps-sidebar",
@@ -5014,7 +5014,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "82f62a6d472836c8ba7cbb6485bee0f159cb893f39b9ba7e73977e446f73c1e7"
+            "sha256": "36df95bfa772537853d46af64c6a8d2873e3865c341ce37246cc2f08303d1060"
         },
         {
             "scenario": "guide-desktop-switch-apps-sidebar-light",
@@ -5030,7 +5030,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "7a538e866bb2869e216616cbb992f0cb7d31876ebcec2f2e84bb47a2c75aecf6"
+            "sha256": "1a83d3386c49f19c52b53b4e340fde4798ae9a5e6ffa529a81463c6fb81d0a62"
         },
         {
             "scenario": "guide-desktop-switch-apps-nested",
@@ -5046,7 +5046,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "2173ecceba05b22fb9cfc2046efdde31b8f334dd9d7eddfb7344c440ba57ff36"
+            "sha256": "e3bddf004db9ccecea5462c556324e958d03502f94167c9caa5d4ef79b40168d"
         },
         {
             "scenario": "guide-desktop-switch-apps-nested-light",
@@ -5062,7 +5062,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "e3a43955c7b290ea39a57ccc6fac517103d659cfc29c386c1f77e5f2d9e635fd"
+            "sha256": "2a8c30ab2d6e9c435f157bdabfb48153e101e3e2b2c845123010d2d22c5fba3b"
         }
     ]
 }
