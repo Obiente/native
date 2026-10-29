@@ -25,6 +25,22 @@ class FileVersionHistoryTest {
     }
 
     @Test
+    fun `a restored version reports incomplete local status instead of plain success`() {
+        assertEquals(
+            "Version restored. Refreshing the current file...",
+            fileVersionRestoredMessage(FileMutationLocalFollowUp.Completed),
+        )
+        assertEquals(
+            "Version restored. Local file status is still updating in the background.",
+            fileVersionRestoredMessage(FileMutationLocalFollowUp.StillRunning),
+        )
+        assertEquals(
+            "Version restored. Local file status could not be updated; refresh the folder if it looks out of date.",
+            fileVersionRestoredMessage(FileMutationLocalFollowUp.Failed),
+        )
+    }
+
+    @Test
     fun `plans official bounded versions DAV discovery`() {
         val request = fileVersionHistoryRequest("person@example.test", 42L)
         val body = requireNotNull(request.body).decodeToString()

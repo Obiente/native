@@ -19,6 +19,7 @@ import dev.obiente.nextcloudnative.app.acquireAppStoreContract
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.DeckAttachmentOpenTarget
 import dev.obiente.nextcloudnative.app.DeckCardDraftKey
+import dev.obiente.nextcloudnative.app.DirectoryCreation
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
@@ -1394,8 +1395,12 @@ internal class AndroidNextcloudServices(
         check(response.status == 200 || response.status == 207 && fileFavoriteUpdateSucceeded(response.body)) {
             "The server did not confirm the favorite change."
         }
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), safePath) }
-        Unit
+        invalidateAfterConfirmedWrite(session, safePath)
+    }
+
+    /** Invalidates cached content after a confirmed write of [paths] and reports whether that succeeded. */
+    private fun invalidateAfterConfirmedWrite(session: NextcloudSession, vararg paths: String?) = NextcloudDocumentIds.accountKey(session).let { id ->
+        invalidateAfterConfirmedFileMutation(paths.filterNotNull(), { recordSupportDiagnosticForAccountIdentity(id, it) }) { fileReadCache.invalidate(id, it) }
     }
 
     override suspend fun loadFileOfflineAvailability(
@@ -2562,7 +2567,7 @@ internal class AndroidNextcloudServices(
         userId: String,
         file: NextcloudFile,
         version: NextcloudFileVersion,
-    ): Unit = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) {
         val specification = fileVersionRestoreRequest(userId, file, version)
         val response = request(
             method = specification.method,
@@ -2576,7 +2581,7 @@ internal class AndroidNextcloudServices(
             client = noRedirectHttpClient,
         )
         when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
-            FileVersionRestoreHttpResult.Restored -> Unit
+            FileVersionRestoreHttpResult.Restored -> invalidateAfterConfirmedWrite(session, file.path)
             is FileVersionRestoreHttpResult.Rejected -> error(result.message)
         }
     }
@@ -2646,8 +2651,7 @@ internal class AndroidNextcloudServices(
                     if (failure is CancellationException) throw failure
                     null
                 }
-                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
-                SavedTextFile(etag, confirmation.created)
+                SavedTextFile(etag, confirmation.created, invalidateAfterConfirmedWrite(currentSession, path))
             }
         }
     }
@@ -2673,12 +2677,11 @@ internal class AndroidNextcloudServices(
             if (response.status == 412) return@withAndroidAuthenticatedFileMutation SavedTextFile(null, false)
             check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
             check(response.status == 201) { "The server did not confirm that a new text file was created." }
-            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
-            SavedTextFile(response.etag, wasCreated = true)
+            SavedTextFile(response.etag, wasCreated = true, invalidateAfterConfirmedWrite(currentSession, path))
         }
     }
 
-    override suspend fun createDirectoryIfAbsent(session: NextcloudSession, userId: String, path: String): Boolean =
+    override suspend fun createDirectoryIfAbsent(session: NextcloudSession, userId: String, path: String): DirectoryCreation =
         withContext(Dispatchers.IO) {
             withAndroidAuthenticatedFileMutation(
                 accountMutationLeaseHeld, session, accountCredentials::loadSession,
@@ -2691,11 +2694,10 @@ internal class AndroidNextcloudServices(
                     maxResponseBytes = 64 * 1024,
                     accountMutationSerialized = accountMutationSerialized,
                 )
-                if (response.status in setOf(405, 412)) return@withAndroidAuthenticatedFileMutation false
+                if (response.status in setOf(405, 412)) return@withAndroidAuthenticatedFileMutation DirectoryCreation(false)
                 if (response.status !in 200..299) throw fileOperationException(response.status)
                 check(response.status == 201) { "The server did not confirm that a new folder was created." }
-                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
-                true
+                DirectoryCreation(wasCreated = true, invalidateAfterConfirmedWrite(currentSession, path))
             }
         }
 
@@ -2718,9 +2720,7 @@ internal class AndroidNextcloudServices(
                         put("Overwrite", if (spec.overwrite) "T" else "F")
                     }
                 }
-                val accountId = NextcloudDocumentIds.accountKey(currentSession)
-                fun invalidateLocal() = invalidateAfterConfirmedFileMutation(listOfNotNull(spec.sourcePath, spec.destinationPath),
-                    { event -> recordSupportDiagnosticForAccountIdentity(accountId, event) }) { path -> fileReadCache.invalidate(accountId, path) }
+                fun invalidateLocal() = invalidateAfterConfirmedWrite(currentSession, spec.sourcePath, spec.destinationPath)
                 val response = dev.obiente.nextcloudnative.app.reportingUnknownFileMutationResult(::invalidateLocal) { request(
                     method = spec.method,
                     url = buildNextcloudFileUrl(currentSession.serverUrl, userId, spec.sourcePath),

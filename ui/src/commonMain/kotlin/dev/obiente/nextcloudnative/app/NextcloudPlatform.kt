@@ -187,11 +187,6 @@ data class NextcloudFileContent(
     val etag: String?,
 )
 
-data class SavedTextFile(
-    val etag: String?,
-    val wasCreated: Boolean,
-)
-
 enum class NextcloudApiMethod {
     GET,
     POST,
@@ -785,13 +780,13 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         scopePath: String = "",
     ): List<NextcloudFile> = listFiles(session, userId, scopePath).filter(NextcloudFile::favorite)
 
-    /** Updates the server-backed favorite property and returns only after DAV confirms the write. */
+    /** Returns only after DAV confirms the favorite write; local bookkeeping is reported separately. */
     suspend fun setFileFavorite(
         session: NextcloudSession,
         userId: String,
         file: NextcloudFile,
         favorite: Boolean,
-    ) {
+    ): FileMutationLocalFollowUp {
         error("File favorites are not supported on this platform.")
     }
 
@@ -1275,7 +1270,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         userId: String,
         file: NextcloudFile,
         version: NextcloudFileVersion,
-    ) {
+    ): FileMutationLocalFollowUp {
         error("File version restoration is not supported on this platform.")
     }
 
@@ -1316,7 +1311,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         session: NextcloudSession,
         userId: String,
         path: String,
-    ): Boolean
+    ): DirectoryCreation
 
     suspend fun executeFileMutation(
         session: NextcloudSession,

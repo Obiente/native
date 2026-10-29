@@ -362,6 +362,33 @@ dialog owns only the temporary name and destination choice. The parent captures
 an immutable validated destination for the typed mutation, and the transport
 keeps the source ETag and no-overwrite preconditions.
 
+### Local follow-up after file writes
+
+The server result of a file write is authoritative. Folder and text file
+creation, text saves, favorites, version restores, and rename, move, copy, and
+delete return it with a separate `FileMutationLocalFollowUp`, and surfaces
+show an incomplete one with the shared `reportFor` copy instead of plain
+success.
+
+- Desktop writes go through `DesktopFileWrites`. Local cache and virtual-file
+  bookkeeping can wait on the virtual-file provider lock, which Windows Cloud
+  Files activation, recovery, or storage summaries can hold for a long time,
+  so it never runs on the caller's coroutine. `DesktopFileMutationFollowUps` queues it when the server
+  accepts the request or its result becomes unknown, refreshes one path at a
+  time, and coalesces repeated paths. The caller waits a bounded time and
+  receives `StillRunning` after that; caller cancellation leaves the queued
+  refresh running.
+- A full queue reports `Failed`, whose copy asks for a folder refresh, and an
+  unknown result whose reconciliation could not be queued says so. Folder sync
+  uploads and Linux mount writes have no waiting caller: they queue the same
+  refresh without blocking, and refresh on their own thread when the queue is
+  full rather than dropping it.
+- Sign-out and account removal abandon the account's queued refreshes; waiting
+  callers see `Failed`, and a refresh that was already running cannot change
+  that result when it finishes.
+- Android invalidates its read cache after the confirmed write and reports a
+  failed invalidation the same way.
+
 ### Files delete write fence
 
 Each account's write blocks and its `FileDeleteCoordinator` live in an
