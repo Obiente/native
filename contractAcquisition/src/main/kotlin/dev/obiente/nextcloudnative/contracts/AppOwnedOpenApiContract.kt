@@ -47,7 +47,7 @@ internal fun isAppOwnedOpenApiDocument(
         servers != null &&
         (0 until servers.length()).asSequence()
             .mapNotNull(servers::optJSONObject)
-            .map { server -> server.optString("url") }
+            .mapNotNull { server -> server.stringValue("url") }
             .any { serverUrl -> portableOpenApiServerPath(serverUrl)?.referencesOwnedApp() == true }
     ) {
         return true

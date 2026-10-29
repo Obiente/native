@@ -1345,6 +1345,16 @@ private fun AuthenticatedApp(
         }
     }
 
+    /** Leaves the app for account settings, where the account can be signed out and signed in again. */
+    fun openAccountSettings() {
+        if (groupwareMutationInProgress) return
+        inlineEditorNavigation.navigate {
+            leaveAppWorkspace()
+            screen = Screen.Root
+            destination = NextcloudDestination.Settings
+        }
+    }
+
     fun navigateBack() {
         if (inlineEditorNavigation.intercept(::navigateBack)) return
         if (groupwareMutationInProgress) return
@@ -1869,6 +1879,7 @@ private fun AuthenticatedApp(
                         screen = active.copy(navigation = navigation)
                     }
                 },
+                onOpenAccountSettings = ::openAccountSettings,
                 onBack = ::navigateBack,
             )
         }
@@ -2119,6 +2130,7 @@ private fun AppInfoScreen(
     onDiscovery: (DynamicDescriptorDiscovery) -> Unit,
     navigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
+    onOpenAccountSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     if (isOfficeWorkspaceAppId(app.id)) {
@@ -2186,7 +2198,7 @@ private fun AppInfoScreen(
         discoveryError = null
         runCatching {
             discoverDynamicAppDescriptor(
-                services = services,
+                services = services.forDiscoveryAttempt(discoveryAttempt),
                 session = session,
                 app = app,
                 serverVersion = serverVersion,
@@ -2222,7 +2234,7 @@ private fun AppInfoScreen(
                 }
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
                 discoveryError = if (retainedDiscovery == null) {
-                    failure.message ?: "Could not discover this app's native API."
+                    DYNAMIC_DISCOVERY_FAILURE_MESSAGE
                 } else {
                     "Could not verify the current server and app versions. " +
                         "The last verified contract remains available in read-only mode."
@@ -2259,33 +2271,9 @@ private fun AppInfoScreen(
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
-                onRetryDiscovery = ::retryDiscoveryAndServerInfo,
+                fallbackActions = DynamicContractFallbackActions(::retryDiscoveryAndServerInfo, onOpenAccountSettings),
                 onExit = onBack,
                 modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun DynamicAppOpeningState(
-    appName: String,
-    message: String,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.XLarge),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
-            Text(appName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(
-                message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
             )
         }
     }
@@ -2299,7 +2287,7 @@ private fun DynamicDiscoveredAppScreen(
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
-    onRetryDiscovery: () -> Unit,
+    fallbackActions: DynamicContractFallbackActions,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -4805,7 +4793,7 @@ private fun DynamicDiscoveredAppScreen(
             }
             Box(modifier = Modifier.weight(1f)) {
                 if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback) {
-                    DynamicMetadataFallbackNotice(descriptor.app.id, descriptor.app.name, onRetryDiscovery)
+                    DynamicMetadataFallbackNotice(descriptor.app.id, descriptor.app.name, discovery.fallbackReason, fallbackActions)
                 } else if (musicWorkspaceIntent == null) {
                     dynamicScreenContent()
                 } else {
