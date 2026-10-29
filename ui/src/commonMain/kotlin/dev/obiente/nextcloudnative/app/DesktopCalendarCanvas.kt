@@ -293,7 +293,8 @@ private fun DesktopCalendarGridEvent(
             Box(Modifier.size(3.dp, 18.dp).background(color, CircleShape))
             if (!event.allDay) Text(event.start.compactTime(), style = MaterialTheme.typography.labelSmall)
             Text(
-                event.title, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
+                event.title, Modifier.weight(1f).sharedElement(SharedElementKeys.calendarEventTitle(event.instanceId)),
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -306,7 +307,8 @@ private fun DesktopCalendarGridEvent(
         ) {
             Text(event.displayTimeRange(), style = MaterialTheme.typography.labelSmall)
             Text(
-                event.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium,
+                event.title, Modifier.sharedElement(SharedElementKeys.calendarEventTitle(event.instanceId)),
+                style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium,
                 maxLines = 3, overflow = TextOverflow.Ellipsis,
             )
         }

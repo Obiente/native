@@ -121,52 +121,54 @@ internal fun GenericRecordTable(
             modifier = Modifier.weight(1f),
         ) {
             items(projectedRecords, key = NativeRecord::id) { record ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier,
-                        )
-                        .heightIn(min = 50.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    frozenField?.let { field ->
-                        val plan = nativeCellEditPlan(schema, resource, projection, record, field)
-                        GenericTableValueCell(
-                            field = field,
-                            rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
-                            editPlan = plan,
-                            width = field.nativeTableColumnWidth(),
-                            emphasized = true,
-                            onEdit = cellEdits::begin,
-                        )
-                    }
+                Column(genericRecordItemMotion()) {
                     Row(
-                        modifier = Modifier.weight(1f).horizontalScroll(horizontalState),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier,
+                            )
+                            .heightIn(min = 50.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        scrollingFields.forEachIndexed { index, field ->
+                        frozenField?.let { field ->
                             val plan = nativeCellEditPlan(schema, resource, projection, record, field)
                             GenericTableValueCell(
                                 field = field,
                                 rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
                                 editPlan = plan,
                                 width = field.nativeTableColumnWidth(),
-                                emphasized = frozenField == null && index == 0,
+                                emphasized = true,
                                 onEdit = cellEdits::begin,
                             )
                         }
-                        if (onSelectRecord != null) {
-                            Icon(
-                                NextcloudIcons.ChevronRight,
-                                contentDescription = "Open ${nativeRecordPresentation(projectedResource, record).title}",
-                                modifier = Modifier.width(actionWidth).padding(NextcloudSpacing.Small),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        Row(
+                            modifier = Modifier.weight(1f).horizontalScroll(horizontalState),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            scrollingFields.forEachIndexed { index, field ->
+                                val plan = nativeCellEditPlan(schema, resource, projection, record, field)
+                                GenericTableValueCell(
+                                    field = field,
+                                    rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
+                                    editPlan = plan,
+                                    width = field.nativeTableColumnWidth(),
+                                    emphasized = frozenField == null && index == 0,
+                                    onEdit = cellEdits::begin,
+                                )
+                            }
+                            if (onSelectRecord != null) {
+                                Icon(
+                                    NextcloudIcons.ChevronRight,
+                                    contentDescription = "Open ${nativeRecordPresentation(projectedResource, record).title}",
+                                    modifier = Modifier.width(actionWidth).padding(NextcloudSpacing.Small),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
             NativeCollectionPagingFooter(
                 loadingMore = loadingMore,

@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -23,7 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -59,6 +60,7 @@ internal fun GenericRecipeCollection(
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     loadMoreError: String? = null,
+    resource: ResourceSpec? = null,
 ) {
     val gridState = rememberLazyGridState()
     var query by remember { mutableStateOf("") }
@@ -91,13 +93,13 @@ internal fun GenericRecipeCollection(
                 ),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
-                FilterChip(
+                NextcloudFilterChip(
                     selected = category == null,
                     onClick = { category = null },
                     label = { Text("All") },
                 )
                 categories.forEach { candidate ->
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = category.equals(candidate, ignoreCase = true),
                         onClick = { category = candidate },
                         label = { Text(candidate) },
@@ -145,6 +147,7 @@ internal fun GenericRecipeCollection(
                         ) {
                             Text(
                                 recipe.title,
+                                modifier = Modifier.genericSharedElement(resource?.let { genericRecordTitleKey(it, record) }),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 2,
@@ -195,6 +198,7 @@ internal fun GenericRecipeCollection(
 @Composable
 internal fun GenericRecipeDetailHeader(
     recipe: NativeRecipePresentation,
+    titleKey: String? = null,
     imageLoader: NativeImageLoader?,
     baseServings: Double?,
     selectedServings: Double?,
@@ -211,6 +215,7 @@ internal fun GenericRecipeDetailHeader(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
         Text(
             recipe.title,
+            modifier = Modifier.genericSharedElement(titleKey),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
         )
@@ -382,7 +387,7 @@ private fun RecipeImage(
                 Image(
                     bitmap = bitmap,
                     contentDescription = title,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().genericFadeInOnLoad(),
                     contentScale = ContentScale.Crop,
                 )
             } ?: Icon(

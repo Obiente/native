@@ -34,43 +34,51 @@ internal fun NextcloudAdaptiveShell(
     var switcherOpen by remember(identity?.accountScopeKey, activeAppId, selected) { mutableStateOf(false) }
     val activeApp = nextcloudShellAppItems(identity, activeAppId).active
     val latestContent by rememberUpdatedState(content)
-    val workspace = remember(identity?.accountScopeKey) { movableContentOf { latestContent() } }
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val layout = resolveNextcloudRootShellLayout(
-            NextcloudPresentation.Adaptive, maxWidth.value.toInt(),
-            if (activeAppId != null) NextcloudDestination.Apps else selected,
-        )
-        if (layout.navigationStyle == NextcloudNavigationStyle.BottomBar) {
-            Column(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxWidth()) { workspace() }
-                NextcloudBottomNavigation(
-                    selected, onSelected, enabled = navigationEnabled,
-                    activeApp = activeApp, onSwitchApp = { switcherOpen = true },
-                )
-            }
-        } else {
-            Row(Modifier.fillMaxSize()) {
-                NextcloudNavigationRail(
-                    selected, onSelected, enabled = navigationEnabled,
-                    activeApp = activeApp, onSwitchApp = { switcherOpen = true },
-                )
-                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                    Box(Modifier.fillMaxHeight().widthIn(max = requireNotNull(layout.contentMaximumWidthDp).dp).fillMaxWidth()) {
-                        workspace()
+    // The entrance moves with the workspace, so a bar/rail layout change never replays it.
+    val workspace = remember(identity?.accountScopeKey) {
+        movableContentOf { key: NextcloudShellDestinationKey ->
+            NextcloudDestinationEntrance(key, Modifier.fillMaxSize()) { latestContent() }
+        }
+    }
+    val destinationKey = nextcloudShellDestinationKey(selected, activeAppId)
+    NextcloudAppAccentScope(destinationKey) {
+        BoxWithConstraints(modifier.fillMaxSize()) {
+            val layout = resolveNextcloudRootShellLayout(
+                NextcloudPresentation.Adaptive, maxWidth.value.toInt(),
+                if (activeAppId != null) NextcloudDestination.Apps else selected,
+            )
+            if (layout.navigationStyle == NextcloudNavigationStyle.BottomBar) {
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) { workspace(destinationKey) }
+                    NextcloudBottomNavigation(
+                        selected, onSelected, enabled = navigationEnabled,
+                        activeApp = activeApp, onSwitchApp = { switcherOpen = true },
+                    )
+                }
+            } else {
+                Row(Modifier.fillMaxSize()) {
+                    NextcloudNavigationRail(
+                        selected, onSelected, enabled = navigationEnabled,
+                        activeApp = activeApp, onSwitchApp = { switcherOpen = true },
+                    )
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+                        Box(Modifier.fillMaxHeight().widthIn(max = requireNotNull(layout.contentMaximumWidthDp).dp).fillMaxWidth()) {
+                            workspace(destinationKey)
+                        }
                     }
                 }
             }
-        }
-        if (switcherOpen) {
-            NextcloudAppSwitcher(
-                identity = identity,
-                activeAppId = activeAppId,
-                selectedDestination = selected,
-                enabled = navigationEnabled,
-                onOpenApp = onOpenApp,
-                onSelected = onSelected,
-                onDismiss = { switcherOpen = false },
-            )
+            if (switcherOpen) {
+                NextcloudAppSwitcher(
+                    identity = identity,
+                    activeAppId = activeAppId,
+                    selectedDestination = selected,
+                    enabled = navigationEnabled,
+                    onOpenApp = onOpenApp,
+                    onSelected = onSelected,
+                    onDismiss = { switcherOpen = false },
+                )
+            }
         }
     }
 }

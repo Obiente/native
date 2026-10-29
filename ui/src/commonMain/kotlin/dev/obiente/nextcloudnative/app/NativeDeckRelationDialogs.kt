@@ -24,7 +24,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -145,7 +145,7 @@ fun DeckUiMoveCardDialog(
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                     items(DeckUiCardPlacement.entries) { candidate ->
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = placement == candidate,
                             enabled = !busy,
                             onClick = { placement = candidate },
@@ -916,11 +916,11 @@ private fun DeckUiSelectionRow(
         enabled = enabled,
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
+            containerColor = animatedColor(if (selected) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.52f)
             } else {
                 NextcloudTheme.colors.appTile
-            },
+            }),
         ),
     ) {
         Row(

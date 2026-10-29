@@ -213,12 +213,12 @@ private fun RecognizedFaceTile(
     }
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else NextcloudTheme.colors.appTile,
-        contentColor = if (selected) {
+        color = animatedColor(if (selected) MaterialTheme.colorScheme.primaryContainer else NextcloudTheme.colors.appTile),
+        contentColor = animatedColor(if (selected) {
             MaterialTheme.colorScheme.onPrimaryContainer
         } else {
             MaterialTheme.colorScheme.onSurface
-        },
+        }),
         shape = RoundedCornerShape(NextcloudRadii.Medium),
     ) {
         Column {

@@ -27,7 +27,30 @@ data class NextcloudExtendedColors(
     val success: Color,
     val warning: Color,
     val scrim: Color,
+    val appAccents: NextcloudAppAccents,
 )
+
+/** Accent roles one app family contributes to Material's primary color roles. */
+@Immutable
+data class NextcloudAccentTones(
+    val primary: Color,
+    val onPrimary: Color,
+    val primaryContainer: Color,
+    val onPrimaryContainer: Color,
+)
+
+/**
+ * Per-app accents, derived from the website's oklch hues and tuned so each tone keeps WCAG AA
+ * contrast on the theme's backgrounds and its own containers. Status colors are separate roles
+ * and never take an app accent.
+ */
+@Immutable
+class NextcloudAppAccents internal constructor(
+    private val brand: NextcloudAccentTones,
+    private val families: Map<NextcloudAppAccentFamily, NextcloudAccentTones>,
+) {
+    fun tones(family: NextcloudAppAccentFamily): NextcloudAccentTones = families[family] ?: brand
+}
 
 private object NextcloudPalette {
     val Mint = Color(0xFF52E0B4)
@@ -125,6 +148,64 @@ val NextcloudDarkColorScheme = darkColorScheme(
     scrim = Color(0xCC000000),
 )
 
+private val LightAppAccents = NextcloudAppAccents(
+    brand = NextcloudAccentTones(
+        primary = NextcloudPalette.MintDark,
+        onPrimary = NextcloudPalette.White,
+        primaryContainer = Color(0xFFDFF7EF),
+        onPrimaryContainer = Color(0xFF073D31),
+    ),
+    families = mapOf(
+        NextcloudAppAccentFamily.Photos to NextcloudAccentTones(
+            Color(0xFFAD5C15), NextcloudPalette.White, Color(0xFFFFEADD), Color(0xFF482304),
+        ),
+        NextcloudAppAccentFamily.Talk to NextcloudAccentTones(
+            Color(0xFF1174B4), NextcloudPalette.White, Color(0xFFE1F1FF), Color(0xFF05304E),
+        ),
+        NextcloudAppAccentFamily.Calendar to NextcloudAccentTones(
+            Color(0xFFB45057), NextcloudPalette.White, Color(0xFFFEE9E9), Color(0xFF4B1D20),
+        ),
+        NextcloudAppAccentFamily.Deck to NextcloudAccentTones(
+            Color(0xFF7B62B8), NextcloudPalette.White, Color(0xFFEFECFE), Color(0xFF31254D),
+        ),
+        NextcloudAppAccentFamily.FolderSync to NextcloudAccentTones(
+            Color(0xFF027C7C), NextcloudPalette.White, Color(0xFFD5F6F6), Color(0xFF023536),
+        ),
+        NextcloudAppAccentFamily.Apps to NextcloudAccentTones(
+            Color(0xFF017A9B), NextcloudPalette.White, Color(0xFFDAF3FE), Color(0xFF013343),
+        ),
+    ),
+)
+
+private val DarkAppAccents = NextcloudAppAccents(
+    brand = NextcloudAccentTones(
+        primary = NextcloudPalette.Mint,
+        onPrimary = Color(0xFF063E30),
+        primaryContainer = Color(0xFF153E34),
+        onPrimaryContainer = Color(0xFFDFF7EF),
+    ),
+    families = mapOf(
+        NextcloudAppAccentFamily.Photos to NextcloudAccentTones(
+            Color(0xFFFEA668), Color(0xFF3C1D05), Color(0xFF4D2C15), Color(0xFFFFE6D6),
+        ),
+        NextcloudAppAccentFamily.Talk to NextcloudAccentTones(
+            Color(0xFF80C5FF), Color(0xFF062942), Color(0xFF173852), Color(0xFFDCEEFE),
+        ),
+        NextcloudAppAccentFamily.Calendar to NextcloudAccentTones(
+            Color(0xFFFF9FA2), Color(0xFF3F191B), Color(0xFF50282A), Color(0xFFFEE4E4),
+        ),
+        NextcloudAppAccentFamily.Deck to NextcloudAccentTones(
+            Color(0xFFC3AFFE), Color(0xFF292040), Color(0xFF382F51), Color(0xFFECE8FE),
+        ),
+        NextcloudAppAccentFamily.FolderSync to NextcloudAccentTones(
+            Color(0xFF2AD7D7), Color(0xFF002D2D), Color(0xFF013E3E), Color(0xFFD1F3F2),
+        ),
+        NextcloudAppAccentFamily.Apps to NextcloudAccentTones(
+            Color(0xFF49CFFC), Color(0xFF012B39), Color(0xFF043B4C), Color(0xFFD3F1FD),
+        ),
+    ),
+)
+
 private val LightExtendedColors = NextcloudExtendedColors(
     appTile = NextcloudPalette.White,
     appTileSelected = Color(0xFFDFF7EF),
@@ -133,6 +214,7 @@ private val LightExtendedColors = NextcloudExtendedColors(
     success = Color(0xFF176B5C),
     warning = Color(0xFF8A5200),
     scrim = Color(0x6607131D),
+    appAccents = LightAppAccents,
 )
 
 private val DarkExtendedColors = NextcloudExtendedColors(
@@ -143,9 +225,14 @@ private val DarkExtendedColors = NextcloudExtendedColors(
     success = NextcloudPalette.Green,
     warning = NextcloudPalette.Amber,
     scrim = Color(0xB30D0F13),
+    appAccents = DarkAppAccents,
 )
 
 private val LocalNextcloudExtendedColors = staticCompositionLocalOf { LightExtendedColors }
+
+/** Theme-specific app accents, for contrast checks outside composition. */
+internal fun nextcloudAppAccents(darkTheme: Boolean): NextcloudAppAccents =
+    if (darkTheme) DarkAppAccents else LightAppAccents
 
 object NextcloudTheme {
     val colors: NextcloudExtendedColors

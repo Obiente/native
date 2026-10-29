@@ -484,6 +484,7 @@ internal fun GenericRecordBoard(
                                 }
                                 val movePlan = actions.move
                                 GenericBoardCard(
+                                    modifier = genericRecordItemMotion(dragActive = draggedRecord != null),
                                     resource = resource,
                                     record = record,
                                     actions = actions,

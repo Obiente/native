@@ -58,6 +58,7 @@ internal fun GenericBoardCard(
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
     onDirectAction: (NativeBoardDirectActionPlan) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val presentation = nativeRecordPresentation(resource, record)
     var actionMenuExpanded by remember(record.id) { mutableStateOf(false) }
@@ -76,7 +77,7 @@ internal fun GenericBoardCard(
         }
     }
     Card(
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
             .graphicsLayer {
                 alpha = if (dragging) 0.18f else 1f
             }
@@ -111,7 +112,7 @@ internal fun GenericBoardCard(
                 }
                 Text(
                     presentation.title,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).genericRecordTitle(resource, record),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 3,

@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -159,7 +160,7 @@ private fun LayoutControl(layout: FileLayout, onChanged: (FileLayout) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(if (layout == FileLayout.Grid) NextcloudIcons.Apps else NextcloudIcons.ListView, contentDescription = "Layout: ${layout.name}. Change view")
+            NextcloudAnimatedIcon(if (layout == FileLayout.Grid) NextcloudIcons.Apps else NextcloudIcons.ListView, contentDescription = "Layout: ${layout.name}. Change view")
         }
         DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
             FileLayout.entries.forEach { candidate ->

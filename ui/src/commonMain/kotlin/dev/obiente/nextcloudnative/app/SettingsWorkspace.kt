@@ -48,6 +48,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -212,13 +214,15 @@ internal fun DesktopSettingsWorkspace(
                     }
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                NextcloudContentEntrance(selected, NextcloudEntranceAxis.Vertical, Modifier.weight(1f).fillMaxHeight(), order = selected.ordinal) {
                 detailStateHolder.SaveableStateProvider(selected.name) {
                     Column(
-                        modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                             .padding(NextcloudSpacing.Large),
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
-                        Text(selected.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                        Text(selected.title, Modifier.sharedElement(SharedElementKeys.settingsSectionTitle(selected.name)),
+                            style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                         Text(
                             selected.description,
                             style = MaterialTheme.typography.bodyMedium,
@@ -228,6 +232,7 @@ internal fun DesktopSettingsWorkspace(
                         content(selected)
                         Spacer(Modifier.height(NextcloudSpacing.Large))
                     }
+                }
                 }
             }
         }
@@ -334,8 +339,8 @@ private fun SettingsSectionRow(
             Text(
                 section.description.substringBefore(','),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .74f)
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = animatedColor(if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .74f)
+                else MaterialTheme.colorScheme.onSurfaceVariant),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

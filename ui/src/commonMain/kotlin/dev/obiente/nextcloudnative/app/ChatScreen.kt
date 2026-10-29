@@ -19,7 +19,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -35,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -122,7 +122,7 @@ internal fun ChatScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        ScreenHeader(room.displayName, "Talk", onBack)
+        ScreenHeader(room.displayName, "Talk", onBack, titleSharedKey = SharedElementKeys.talkRoomTitle(room.token))
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
                 error != null && messages == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
@@ -209,11 +209,7 @@ internal fun ChatScreen(
                     }
                 }
             }
-            if (refreshing) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                )
-            }
+            NextcloudRefreshBar(refreshing, Modifier.fillMaxWidth().align(Alignment.TopCenter))
             if (error != null && messages != null) {
                 RetainedContentNotice(
                     message = requireNotNull(error),

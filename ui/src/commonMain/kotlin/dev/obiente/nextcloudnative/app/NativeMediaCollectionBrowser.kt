@@ -28,7 +28,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -107,13 +108,13 @@ fun NativeMediaCollectionBrowser(
             ),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
-            FilterChip(
+            NextcloudFilterChip(
                 selected = state.section == NativeMediaCollectionSection.Albums,
                 onClick = { onStateChange(state.copy(section = NativeMediaCollectionSection.Albums)) },
                 label = { Text("Albums (${catalog.albums.count { state.showHiddenAlbums || !it.isHidden }})") },
                 leadingIcon = { Icon(NextcloudIcons.Photo, contentDescription = null, Modifier.size(18.dp)) },
             )
-            FilterChip(
+            NextcloudFilterChip(
                 selected = state.section == NativeMediaCollectionSection.Tags,
                 onClick = { onStateChange(state.copy(section = NativeMediaCollectionSection.Tags)) },
                 label = { Text("Tags (${catalog.tags.size})") },
@@ -155,7 +156,7 @@ fun NativeMediaCollectionBrowser(
             shape = RoundedCornerShape(NextcloudRadii.Card),
         )
         if (state.section == NativeMediaCollectionSection.Albums && catalog.albums.any { it.isHidden }) {
-            FilterChip(
+            NextcloudFilterChip(
                 selected = state.showHiddenAlbums,
                 onClick = { onStateChange(state.copy(showHiddenAlbums = !state.showHiddenAlbums)) },
                 label = { Text("Show hidden albums") },
@@ -283,7 +284,7 @@ fun NativeMediaCollectionCover(
             Image(
                 bitmap = bitmap,
                 contentDescription = "Cover for ${collection.name}",
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad(),
                 contentScale = ContentScale.Crop,
             )
         } ?: Icon(
@@ -415,7 +416,7 @@ private fun NativeMediaItemTile(
             Image(
                 bitmap = bitmap,
                 contentDescription = media.name,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad().mediaZoomSource(file.path, bitmap, cropped = true),
                 contentScale = ContentScale.Crop,
             )
         } ?: Icon(

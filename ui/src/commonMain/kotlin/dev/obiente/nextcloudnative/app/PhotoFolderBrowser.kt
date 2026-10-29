@@ -56,6 +56,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -583,7 +584,7 @@ private fun PhotoFolderPreviewImage(
         Image(
             bitmap = bitmap,
             contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad(),
             contentScale = ContentScale.Crop,
         )
     }
@@ -680,7 +681,7 @@ private fun PhotoFolderMediaListItem(
                     Image(
                         bitmap = it,
                         contentDescription = stack.cover.name,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad().mediaZoomSource(stack.cover.path, it, cropped = true),
                         contentScale = ContentScale.Crop,
                     )
                 } ?: Icon(

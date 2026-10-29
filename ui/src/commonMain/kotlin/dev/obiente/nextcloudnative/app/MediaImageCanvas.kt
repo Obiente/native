@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,6 +105,9 @@ internal fun MediaImageCanvas(
         currentOnTransform(currentTransform.bounded(viewport, imageSize))
     }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    // The viewer's own image now covers the zoomed thumbnail that stood in for it.
+    val zoomPresence = LocalMediaViewerZoomPresence.current
+    SideEffect { zoomPresence?.imageShown = true }
 
     Box(modifier.clipToBounds()) {
         Box(

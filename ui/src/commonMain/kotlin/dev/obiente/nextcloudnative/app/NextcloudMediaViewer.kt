@@ -472,7 +472,7 @@ internal fun NextcloudMediaViewer(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(ViewerBackground)
+            .background(if (LocalMediaViewerZoomPresence.current != null) Color.Transparent else ViewerBackground)
             .testTag(MEDIA_VIEWER_ROOT_TEST_TAG)
             .semantics {
                 stateDescription = mediaViewerStateObservation(

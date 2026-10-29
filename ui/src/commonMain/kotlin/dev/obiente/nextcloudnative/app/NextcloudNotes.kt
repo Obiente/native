@@ -821,7 +821,7 @@ private fun NoteCard(note: NextcloudNote, enabled: Boolean, onClick: () -> Unit)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val markdown = remember(note.content) { note.markdownMetadata() }
                 Text(
-                    note.title,
+                    note.title, Modifier.sharedElement(SharedElementKeys.noteTitle(note.id)),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -1137,7 +1137,7 @@ internal fun NextcloudNoteEditor(
                         onClick = { favorite = !favorite },
                         enabled = contentAvailable && !readOnly && !mutationInProgress,
                     ) {
-                        Icon(
+                        dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon(
                             if (favorite) NextcloudIcons.Favorite else NextcloudIcons.FavoriteBorder,
                             contentDescription = if (favorite) "Remove favorite" else "Add favorite",
                             tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1170,7 +1170,7 @@ internal fun NextcloudNoteEditor(
                 CircularProgressIndicator()
             }
             else -> NoteEditorContent(
-                title = title, category = category, content = content, folderOptions = folderOptions,
+                title = title, titleSharedKey = SharedElementKeys.noteTitle(note.id), category = category, content = content, folderOptions = folderOptions,
                 viewMode = viewMode, readOnly = readOnly, mutationInProgress = mutationInProgress,
                 canSave = dirty && !readOnly && !mutationInProgress && contentBytes <= MAX_NOTE_BYTES,
                 saving = saving, previewAvailable = previewAvailable, contentBytes = contentBytes,

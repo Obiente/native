@@ -1,5 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +68,14 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.runtime.CompositionLocalProvider
 import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.material3.RichText
+import dev.obiente.nextcloudnative.app.design.nextcloudSharedElement
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
+import dev.obiente.nextcloudnative.app.design.nextcloudAnimatedColor
+import dev.obiente.nextcloudnative.app.design.NextcloudMotion
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -192,7 +206,8 @@ internal fun NewsWorkspaceScreen(
                             NewsArticleList(state, listState, controller)
                         }
                         VerticalDivider()
-                        Box(modifier = Modifier.weight(0.58f).fillMaxHeight()) {
+                        // Another article eases in beside the list; its title carries over from the row.
+                        NextcloudContentEntrance(openItem?.id, NextcloudEntranceAxis.Fade, Modifier.weight(0.58f).fillMaxHeight()) {
                             if (openItem != null) {
                                 NewsArticleReader(openItem, readerScrollState, state, controller, services)
                             } else {
@@ -200,8 +215,17 @@ internal fun NewsWorkspaceScreen(
                             }
                         }
                     }
-                    openItem != null -> NewsArticleReader(openItem, readerScrollState, state, controller, services)
-                    else -> NewsArticleList(state, listState, controller)
+                    // On one pane the reader slides in over the list and back out the way it came.
+                    else -> NextcloudContentEntrance(
+                        openItem?.id, NextcloudEntranceAxis.Horizontal, Modifier.fillMaxSize(),
+                        directional = true, distance = NextcloudMotion.RouteEntranceOffset,
+                    ) {
+                        if (openItem != null) {
+                            NewsArticleReader(openItem, readerScrollState, state, controller, services)
+                        } else {
+                            NewsArticleList(state, listState, controller)
+                        }
+                    }
                 }
             }
         }
@@ -227,15 +251,17 @@ private fun NewsArticleList(state: NewsWorkspaceUiState, listState: LazyListStat
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(articles.items, key = NewsItem::id) { item ->
-                    NewsArticleRow(
-                        item = item,
-                        feed = state.subscriptions?.feed(item.feedId),
-                        selected = item.id == state.openItemId,
-                        pending = item.id in state.pendingItemIds,
-                        showFeed = state.selection !is NewsSelection.Feed,
-                        controller = controller,
-                    )
-                    HorizontalDivider()
+                    Column(nextcloudItemMotion()) {
+                        NewsArticleRow(
+                            item = item,
+                            feed = state.subscriptions?.feed(item.feedId),
+                            selected = item.id == state.openItemId,
+                            pending = item.id in state.pendingItemIds,
+                            showFeed = state.selection !is NewsSelection.Feed,
+                            controller = controller,
+                        )
+                        HorizontalDivider()
+                    }
                 }
                 item(key = "news-list-footer") {
                     NewsListFooter(articles, onRetry = controller::loadMore)
@@ -261,7 +287,7 @@ private fun NewsArticleRow(
         item.publishedAtEpochSeconds?.let { newsPublishedLabel(it, Clock.System.now().epochSeconds) },
     ).joinToString(" - ")
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        color = nextcloudAnimatedColor(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -283,16 +309,19 @@ private fun NewsArticleRow(
             verticalAlignment = Alignment.Top,
         ) {
             Box(modifier = Modifier.padding(top = 7.dp, end = NextcloudSpacing.Medium).size(8.dp)) {
-                if (item.unread) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
-                }
+                // The unread dot fades out as the article is read instead of vanishing.
+                val dot = nextcloudAnimatedColor(if (item.unread) MaterialTheme.colorScheme.primary else Color.Transparent)
+                Box(Modifier.fillMaxSize().background(dot, CircleShape))
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     item.title,
+                    modifier = Modifier.nextcloudSharedElement(SharedElementKeys.newsArticleTitle(item.id)),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = if (item.unread) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (item.unread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = nextcloudAnimatedColor(
+                        if (item.unread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -315,7 +344,7 @@ private fun NewsArticleRow(
                     )
                 }
             }
-            if (item.starred) {
+            AnimatedVisibility(item.starred, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
                 Icon(
                     Icons.Outlined.Star,
                     contentDescription = null,
@@ -382,7 +411,7 @@ private fun NewsArticleReader(
             Text(
                 item.title,
                 style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.semantics { heading() },
+                modifier = Modifier.semantics { heading() }.nextcloudSharedElement(SharedElementKeys.newsArticleTitle(item.id)),
             )
             val byline = listOfNotNull(
                 item.author,
@@ -457,7 +486,7 @@ private fun NewsReaderAction(
         enabled = enabled,
         modifier = Modifier.semantics { contentDescription = description },
     ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        NextcloudAnimatedIcon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
         Text(label, modifier = Modifier.padding(start = NextcloudSpacing.XSmall))
     }
 }
@@ -524,7 +553,7 @@ private fun NewsFailurePane(failure: NewsFailure, onRetry: () -> Unit) {
 
 @Composable
 private fun NewsNotice(message: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
-    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth().nextcloudFadeInOnLoad()) {
         Row(
             modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,

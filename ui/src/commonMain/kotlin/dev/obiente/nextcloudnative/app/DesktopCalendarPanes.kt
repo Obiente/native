@@ -118,7 +118,7 @@ internal fun DesktopCalendarInspectorPane(
                         Text(calendar?.displayName ?: "Calendar", style = MaterialTheme.typography.labelLarge)
                     }
                     Text(
-                        event.title, Modifier.padding(top = 10.dp),
+                        event.title, Modifier.padding(top = 10.dp).sharedElement(SharedElementKeys.calendarEventTitle(event.instanceId)),
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                     )
                 }

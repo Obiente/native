@@ -791,8 +791,8 @@ fun GenericNativeAppScreen(
                     },
                 )
             }
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
+            GenericRendererEntrance(view.id, presentedSurface, selectedRecordId, inlineRecordForm,
+                state is NativeScreenState.Loading, selectedRecordResourceId, Modifier.weight(1f).fillMaxWidth()) { when {
             inlineRecordForm -> recordFormContent(requireNotNull(pendingRecordFormAction))
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
             choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
@@ -874,7 +874,7 @@ fun GenericNativeAppScreen(
                         mailWorkspaceSearchable
                     },
                 )
-            state is NativeScreenState.Loading -> GenericRendererLoading(view.title)
+            state is NativeScreenState.Loading -> GenericRendererLoading(view.title, presentedSurface.loadingSkeleton())
             state is NativeScreenState.Error -> GenericRendererError(
                 state.message,
                 state.retry,
@@ -2246,7 +2246,7 @@ private fun GenericRecordCollection(
         nativeRecipeCollectionPresentations(resource, records)
     }
     if (recipes != null) {
-        GenericRecipeCollection(recipes, onSelectRecord, imageLoader, onLoadMore, loadingMore, loadMoreError)
+        GenericRecipeCollection(recipes, onSelectRecord, imageLoader, onLoadMore, loadingMore, loadMoreError, resource)
         return
     }
     val tasks = remember(resource, authoritativeRecordsKey) {
@@ -2282,7 +2282,7 @@ private fun GenericRecordCollection(
         nativeGroupwareCollectionPresentations(resource, records)
     }
     if (groupware != null) {
-        GenericGroupwareCollection(groupware, onSelectRecord)
+        GenericGroupwareCollection(groupware, onSelectRecord, resource)
         return
     }
     val categories = remember(resource, records) {
@@ -3507,7 +3507,7 @@ private fun GenericTaskCollection(
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                     ) {
                         Text(
-                            task.title,
+                            task.title, Modifier.genericRecordTitle(resource, record),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
@@ -3745,7 +3745,7 @@ private fun GenericMailboxCollection(
                     ) {
                         Text(
                             nativeMailSenderLabel(presentation.sender) ?: presentation.title,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).genericSharedElement(genericRecordTitleKey(resource, record).takeIf { nativeMailSenderLabel(presentation.sender) == null }),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = if (presentation.unread) FontWeight.Bold else FontWeight.Medium,
                             ),
@@ -3773,7 +3773,7 @@ private fun GenericMailboxCollection(
                     }
                     if (nativeMailSenderLabel(presentation.sender) != null) {
                         Text(
-                            presentation.title,
+                            presentation.title, Modifier.genericRecordTitle(resource, record),
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = if (presentation.unread) FontWeight.SemiBold else FontWeight.Normal,
                             ),
@@ -3859,7 +3859,7 @@ private fun GenericRecordGrid(
                 else -> Color.White
             }
             Card(
-                modifier = interaction.fillMaxWidth().heightIn(min = if (dense) 92.dp else 112.dp),
+                modifier = genericRecordItemMotion().then(interaction).fillMaxWidth().heightIn(min = if (dense) 92.dp else 112.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = containerColor,
                     contentColor = contentColor,
@@ -3871,7 +3871,7 @@ private fun GenericRecordGrid(
                         Image(
                             bitmap = requireNotNull(recordImage).image,
                             contentDescription = requireNotNull(recordImage).contentDescription,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f),
+                            modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f).genericFadeInOnLoad(),
                             contentScale = ContentScale.Crop,
                         )
                         Column(
@@ -4008,7 +4008,7 @@ private fun GenericRecordDetail(
     imageLoader: NativeImageLoader?,
 ) {
     val tableDetail = remember(schema, resource, record, datasetContext) { nativeTableRecordDetail(schema, resource, record, datasetContext) }
-    if (tableDetail != null) { NativeTableRecordDetail(tableDetail); return }
+    if (tableDetail != null) { NativeTableRecordDetail(tableDetail, genericDetailTitleKey(resource, record)); return }
     val mailTarget = remember(schema, resource, record, datasetContext) {
         nativeMailMessageRenderTarget(schema, resource, record, datasetContext)
     }
@@ -4037,7 +4037,7 @@ private fun GenericRecordDetail(
     }
     val groupware = remember(resource, record) { nativeGroupwarePresentation(resource, record) }
     if (groupware != null && groupware.kind != NativeGroupwareItemKind.Task) {
-        GenericGroupwareDetail(groupware, onOpenLink)
+        GenericGroupwareDetail(groupware, onOpenLink, genericDetailTitleKey(resource, record))
         return
     }
     val accessSummary = remember(resource, record) { nativePermissionSummary(resource, record) }
@@ -4074,7 +4074,7 @@ private fun GenericRecordDetail(
     ) {
         if (recipe != null) {
             GenericRecipeDetailHeader(
-                recipe = recipe,
+                recipe = recipe, titleKey = genericDetailTitleKey(resource, record),
                 imageLoader = imageLoader,
                 baseServings = baseRecipeServings,
                 selectedServings = adjustedRecipeServings,
@@ -4083,7 +4083,7 @@ private fun GenericRecordDetail(
                 },
             )
         } else if (finance != null) {
-            GenericFinanceDetailHeader(resource, finance)
+            GenericFinanceDetailHeader(resource, finance, genericDetailTitleKey(resource, record))
         } else {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -4097,7 +4097,7 @@ private fun GenericRecordDetail(
                     large = true,
                 )
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(presentation.title, style = MaterialTheme.typography.headlineSmall)
+                    Text(presentation.title, Modifier.genericDetailTitle(resource, record), style = MaterialTheme.typography.headlineSmall)
                     Text(
                         resource.name,
                         style = MaterialTheme.typography.bodyMedium,

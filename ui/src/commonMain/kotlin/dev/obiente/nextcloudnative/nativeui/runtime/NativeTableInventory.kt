@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -10,9 +12,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.nextcloudDisclosureChevron
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 
@@ -55,7 +62,7 @@ internal fun nativeTableInventoryPresentation(
 @Composable
 internal fun NativeTableInventoryContent(presentation: NativeTableInventoryPresentation) {
     var expanded by remember(presentation) { mutableStateOf(false) }
-    Text(presentation.title, style = MaterialTheme.typography.titleMedium,
+    Text(presentation.title, Modifier.genericCardTitle(), style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
     presentation.description?.let { Text(it, style = MaterialTheme.typography.bodySmall,
         maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -64,11 +71,16 @@ internal fun NativeTableInventoryContent(presentation: NativeTableInventoryPrese
     if (presentation.states.isNotEmpty()) Text(presentation.states.joinToString(" | "),
         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
     if (presentation.details.isNotEmpty()) {
-        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide details" else "Details") }
-        if (expanded) Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-            presentation.details.forEach { field ->
-                Text("${field.formatted.label}: ${field.formatted.displayValue}",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(if (expanded) "Hide details" else "Details")
+            Icon(NextcloudIcons.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp).nextcloudDisclosureChevron(expanded))
+        }
+        NextcloudDisclosureContent(expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
+                presentation.details.forEach { field ->
+                    Text("${field.formatted.label}: ${field.formatted.displayValue}",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

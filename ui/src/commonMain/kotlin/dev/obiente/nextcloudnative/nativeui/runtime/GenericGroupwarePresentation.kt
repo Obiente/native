@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 internal fun GenericGroupwareCollection(
     rows: List<Pair<NativeRecord, NativeGroupwarePresentation>>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    resource: ResourceSpec? = null,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -96,6 +98,7 @@ internal fun GenericGroupwareCollection(
                     ) {
                         Text(
                             presentation.title,
+                            modifier = Modifier.genericSharedElement(resource?.let { genericRecordTitleKey(it, record) }),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
@@ -139,6 +142,7 @@ private fun String.nativeContactInitials(): String = trim()
 internal fun GenericGroupwareDetail(
     presentation: NativeGroupwarePresentation,
     onOpenLink: ((String) -> Unit)?,
+    titleKey: String? = null,
 ) {
     val emailUri = remember(presentation.primaryEmail) {
         nativeContactEmailUri(presentation.primaryEmail)
@@ -179,6 +183,7 @@ internal fun GenericGroupwareDetail(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     presentation.title,
+                    modifier = Modifier.genericSharedElement(titleKey),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
                 )

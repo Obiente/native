@@ -132,6 +132,7 @@ internal fun GenericMediaLibraryCollection(
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             presentation.title,
+                            modifier = Modifier.genericRecordTitle(resource, record),
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium,
                             maxLines = 2,
@@ -234,6 +235,7 @@ internal fun GenericMediaLibraryCollection(
                         }
                         Text(
                             presentation.title,
+                            modifier = Modifier.genericRecordTitle(resource, record),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
@@ -396,7 +398,7 @@ private fun NativeMediaArtworkThumbnail(
             Image(
                 bitmap = bitmap,
                 contentDescription = "Artwork for $title",
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().genericFadeInOnLoad(),
                 contentScale = ContentScale.Crop,
             )
         } ?: Box(contentAlignment = Alignment.Center) {

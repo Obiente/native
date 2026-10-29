@@ -167,6 +167,14 @@ What the source does today
   server and installed app version have been checked again. When the installed
   app version is known and differs from the cached contract's version, the
   cached contract is not shown.
+- A contract already verified in this session stays verified on screen while
+  it is checked again
+  ([`DynamicAppDiscoveryRefresh.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicAppDiscoveryRefresh.kt)),
+  so its write actions do not disappear and return. A write started during the
+  check waits in `DynamicContractWriteGate` before any request is sent. It
+  continues only if the check verifies the same contract; a failed, changed,
+  or abandoned check rejects it, and an unverified result falls back to
+  read-only as before.
 
 The persisted entry is not yet keyed by OpenAPI or capability fingerprints.
 Until it is, the read-only restore and the live installed-version check are what

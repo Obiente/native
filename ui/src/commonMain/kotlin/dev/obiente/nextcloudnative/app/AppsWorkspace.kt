@@ -25,7 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -236,6 +237,7 @@ private fun DesktopAppsWorkspace(
                         } else {
                             items(presentation.entries, key = { it.app.id }) { entry ->
                                 AppWorkspaceCard(
+                                    modifier = nextcloudItemMotion(),
                                     entry = entry,
                                     selected = false,
                                     onSelect = { onSelected(entry) },
@@ -300,7 +302,7 @@ private fun CompactAppsWorkspace(
                     item(key = "categories", span = { GridItemSpan(maxLineSpan) }) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                             items(presentation.visibleCategories, key = AppWorkspaceCategory::name) { item ->
-                                FilterChip(selected = category == item, onClick = { onCategorySelected(item) },
+                                NextcloudFilterChip(selected = category == item, onClick = { onCategorySelected(item) },
                                     label = { Text(item.title) })
                             }
                         }
@@ -332,7 +334,7 @@ private fun CompactAppsWorkspace(
                     }
                     items(presentation.entries, key = { it.app.id }) { entry ->
                         CompactAppRow(entry, { onSelected(entry) }, { onOpenApp(entry.app) },
-                            { onTogglePinnedApp(entry.app.id) }, canPinMore)
+                            { onTogglePinnedApp(entry.app.id) }, canPinMore, nextcloudItemMotion())
                     }
                 }
             }
@@ -347,10 +349,11 @@ private fun CompactAppRow(
     onOpen: () -> Unit,
     onTogglePinned: () -> Unit,
     canPin: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember(entry.app.id) { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+        modifier = modifier.fillMaxWidth().nextcloudCardInteractions(
             onOpen = onOpen, onShowActions = { expanded = true },
             openLabel = "Open ${entry.app.name}", actionsLabel = "Actions for ${entry.app.name}"),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -452,7 +455,7 @@ private fun AppsToolbar(
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
             items(categories, key = AppWorkspaceCategory::name) { category ->
-                FilterChip(
+                NextcloudFilterChip(
                     selected = selectedCategory == category,
                     onClick = { onCategorySelected(category) },
                     label = { Text(category.title) },
@@ -515,18 +518,19 @@ private fun AppWorkspaceCard(
     onTogglePinned: () -> Unit,
     canPin: Boolean,
     primaryActionLabel: String,
+    modifier: Modifier = Modifier,
 ) {
     var actionsExpanded by remember(entry.app.id) { mutableStateOf(false) }
     Card(
-        modifier = Modifier.nextcloudCardInteractions(
+        modifier = modifier.nextcloudCardInteractions(
             onOpen = onOpen,
             onShowActions = { actionsExpanded = true },
             openLabel = primaryActionLabel,
             actionsLabel = "Actions for ${entry.app.name}",
         ),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = animatedColor(if (selected) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerLow),
         ),
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {

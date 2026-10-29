@@ -32,6 +32,9 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -79,7 +82,7 @@ internal fun MobileGroupwareCalendarWorkspace(
             IconButton(onClick = {
                 if (searchVisible || query.isNotEmpty()) { onQueryChanged(""); searchVisible = false }
                 else searchVisible = true
-            }) { Icon(if (searchVisible || query.isNotEmpty()) NextcloudIcons.Close else NextcloudIcons.Search,
+            }) { NextcloudAnimatedIcon(if (searchVisible || query.isNotEmpty()) NextcloudIcons.Close else NextcloudIcons.Search,
                 if (searchVisible || query.isNotEmpty()) "Close search" else "Search events") }
             IconButton(onClick = { sourcesVisible = true }) {
                 Icon(NextcloudIcons.Filter, "Choose visible calendars")
@@ -106,17 +109,17 @@ internal fun MobileGroupwareCalendarWorkspace(
             CalendarAgenda(matches, onSelectEvent, Modifier.weight(1f), calendarByHref = calendarByHref,
                 earliestDisplayDate = if (view == CalendarWorkspaceView.Week) presentation.weekDates.firstOrNull() else "${month.isoPrefix}01",
                 searching = true)
-        } else when (view) {
+        } else NextcloudContentEntrance(view, NextcloudEntranceAxis.Horizontal, Modifier.weight(1f), order = view.ordinal) { when (view) {
             CalendarWorkspaceView.Month -> MonthCalendar(month, selectedDate, presentation.visibleEvents,
-                onSelectDate, onSelectEvent, Modifier.weight(1f), calendarByHref, todayDate)
+                onSelectDate, onSelectEvent, Modifier.fillMaxSize(), calendarByHref, todayDate)
             CalendarWorkspaceView.Week -> CalendarWeekSchedule(
                 presentation.weekDates, selectedDate, presentation.eventsByDate, calendarByHref,
-                todayDate, onSelectDate, onSelectEvent, Modifier.weight(1f),
+                todayDate, onSelectDate, onSelectEvent, Modifier.fillMaxSize(),
             )
             CalendarWorkspaceView.Agenda -> CalendarAgenda(presentation.visibleEvents, onSelectEvent,
-                Modifier.weight(1f), calendarByHref = calendarByHref,
+                Modifier.fillMaxSize(), calendarByHref = calendarByHref,
                 earliestDisplayDate = "${month.isoPrefix}01", searching = query.isNotBlank())
-        }
+        } }
     }
     if (sourcesVisible) ModalBottomSheet(
         onDismissRequest = { sourcesVisible = false },

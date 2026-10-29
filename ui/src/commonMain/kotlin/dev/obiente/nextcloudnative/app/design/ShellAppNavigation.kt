@@ -69,3 +69,20 @@ internal fun filterNextcloudShellApps(
 ): List<NextcloudDesktopSidebarApp> = apps.filter {
     query.isBlank() || it.label.contains(query.trim(), ignoreCase = true)
 }
+
+/**
+ * Identity of the workspace the shell shows: an open app wins over the root destination it was
+ * opened from, and app aliases share one identity. Motion and the sidebar highlight key on this
+ * value, so recomposition or sub-screen navigation inside an app never counts as a switch.
+ */
+internal sealed interface NextcloudShellDestinationKey {
+    data class Root(val destination: NextcloudDestination) : NextcloudShellDestinationKey
+    data class App(val canonicalAppId: String) : NextcloudShellDestinationKey
+}
+
+internal fun nextcloudShellDestinationKey(
+    selected: NextcloudDestination,
+    activeAppId: String?,
+): NextcloudShellDestinationKey =
+    activeAppId?.let { NextcloudShellDestinationKey.App(canonicalAppWorkspaceId(it)) }
+        ?: NextcloudShellDestinationKey.Root(selected)

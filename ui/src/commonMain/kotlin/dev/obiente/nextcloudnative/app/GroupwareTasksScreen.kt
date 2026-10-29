@@ -19,10 +19,9 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -43,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -308,7 +308,7 @@ fun NativeGroupwareTasksScreen(
         },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            NextcloudRefreshBar(refreshing)
             val statusMessage = if (unreadableRecovery) {
                 "A saved task recovery record cannot be read. The server result is unknown; discard the record only after checking the task on another client."
             } else {
@@ -363,7 +363,7 @@ fun NativeGroupwareTasksScreen(
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
                 TaskFilter.entries.forEach { candidate ->
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = filter == candidate,
                         onClick = { filter = candidate },
                         label = { Text(candidate.name) },

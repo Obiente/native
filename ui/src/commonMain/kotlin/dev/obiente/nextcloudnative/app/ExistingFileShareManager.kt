@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -82,14 +82,14 @@ internal fun ExistingFileShareManager(
         )
         if (editing) {
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                FilterChip(selected = true, enabled = false, onClick = {}, label = { Text("Can view") })
-                FilterChip(
+                NextcloudFilterChip(selected = true, enabled = false, onClick = {}, label = { Text("Can view") })
+                NextcloudFilterChip(
                     selected = draft.allowEditing,
                     enabled = !running,
                     onClick = { draft = draft.copy(allowEditing = !draft.allowEditing) },
                     label = { Text("Can edit") },
                 )
-                FilterChip(
+                NextcloudFilterChip(
                     selected = draft.allowResharing,
                     enabled = !running,
                     onClick = { draft = draft.copy(allowResharing = !draft.allowResharing) },
@@ -118,7 +118,7 @@ internal fun ExistingFileShareManager(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (share.passwordProtected && !passwordPolicy.enforced) {
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = draft.removePassword,
                         enabled = !running,
                         onClick = {

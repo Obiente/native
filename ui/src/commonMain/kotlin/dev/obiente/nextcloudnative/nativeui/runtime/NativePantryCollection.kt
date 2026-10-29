@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.MaterialTheme
@@ -56,7 +57,7 @@ internal fun nativePantryRecordPresentation(kind: NativePantryCollectionKind, re
 @Composable
 internal fun NativePantryRecordContent(kind: NativePantryCollectionKind, record: NativeRecord) {
     val row = nativePantryRecordPresentation(kind, record)
-    Text(row.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+    Text(row.title, Modifier.genericCardTitle(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
         maxLines = 3, overflow = TextOverflow.Ellipsis)
     row.description?.let {
         Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,

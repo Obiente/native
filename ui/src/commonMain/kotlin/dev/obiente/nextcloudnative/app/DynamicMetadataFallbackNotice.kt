@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 
 /**
  * Shown instead of the app-identity record when discovery found no verified API for an app.
@@ -36,7 +37,7 @@ internal fun DynamicMetadataFallbackNotice(
     onCheckAgain: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.XLarge),
+        modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.XLarge),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium, Alignment.CenterVertically),
     ) {

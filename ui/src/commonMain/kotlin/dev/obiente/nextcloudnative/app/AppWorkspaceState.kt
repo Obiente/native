@@ -1,9 +1,15 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.SaveableStateHolder
+import androidx.compose.ui.Modifier
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudMotion
 
 /** Moves only workspace content; application chrome keeps its independent state. */
 @Composable
@@ -21,7 +27,19 @@ internal fun rememberAppWorkspaceContent(
             if (stateKey == null) render() else holder.SaveableStateProvider(stateKey) { render() }
         }
     }
-    return { movable(content) }
+    return {
+        // Routes inside one app slide forward and back; switching apps or destinations starts a fresh
+        // entrance here, so the shell's own transition is never doubled.
+        key(appId) {
+            NextcloudContentEntrance(
+                key = if (screen.usesPersistentAppNavigation()) screen.routeTransitionKey() else null,
+                axis = NextcloudEntranceAxis.Horizontal,
+                modifier = Modifier.fillMaxSize(),
+                directional = true,
+                distance = NextcloudMotion.RouteEntranceOffset,
+            ) { movable(content) }
+        }
+    }
 }
 
 /** Keys contain route kinds, never private paths, selected records, or editor content. */

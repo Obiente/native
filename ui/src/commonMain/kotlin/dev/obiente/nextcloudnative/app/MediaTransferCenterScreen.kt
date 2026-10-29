@@ -18,7 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -155,6 +156,7 @@ internal fun MediaTransferCenterScreen(
                 contentType = { "media-transfer" },
             ) { record ->
                 MediaTransferCard(
+                    modifier = nextcloudItemMotion(fadeOut = false),
                     record = record,
                     busy = busyLocalKey == record.localKey,
                     visibleActions = visibleActions(record),
@@ -264,7 +266,7 @@ private fun MediaTransferFilters(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         MediaTransferSection.entries.forEach { section ->
-            FilterChip(
+            NextcloudFilterChip(
                 selected = selected == section,
                 onClick = { onSelect(section) },
                 label = { Text("${section.label()} ${summary.count(section)}") },
@@ -294,6 +296,7 @@ private fun MediaTransferCard(
     busy: Boolean,
     visibleActions: Set<MediaTransferAction>,
     onAction: (MediaTransferAction) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(record.localKey) { mutableStateOf(false) }
     val label = record.local?.displayName
@@ -308,7 +311,7 @@ private fun MediaTransferCard(
         )
     }
     Surface(
-        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+        modifier = modifier.fillMaxWidth().nextcloudCardInteractions(
             onOpen = { onAction(MediaTransferAction.Details) },
             onShowActions = { menuExpanded = true },
             openLabel = "Open details for $label",

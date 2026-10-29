@@ -20,7 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -347,13 +347,13 @@ private fun ProviderFilterRow(
         ),
         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
-        FilterChip(
+        NextcloudFilterChip(
             selected = selectedIds.isEmpty(),
             onClick = { onSelectionChanged(emptySet()) },
             label = { Text("All") },
         )
         providers.forEach { provider ->
-            FilterChip(
+            NextcloudFilterChip(
                 selected = provider.id in selectedIds,
                 onClick = {
                     onSelectionChanged(

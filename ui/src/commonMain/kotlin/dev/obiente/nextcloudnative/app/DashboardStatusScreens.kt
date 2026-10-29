@@ -30,11 +30,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -61,6 +60,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
 import dev.obiente.nextcloudnative.app.design.NextcloudVerticalDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
@@ -1482,7 +1482,7 @@ internal fun NativeUserStatusScreen(
             onBack = onBack,
             onRefresh = { refreshAttempt += 1 },
         )
-        if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        NextcloudRefreshBar(refreshing)
         refreshError?.let { message ->
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(
@@ -1524,7 +1524,7 @@ internal fun NativeUserStatusScreen(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
                         items(availableUserPresences(current.capabilities)) { presence ->
-                            FilterChip(
+                            NextcloudFilterChip(
                                 selected = current.status.presence == presence,
                                 onClick = {
                                     pendingEdit = NativeUserStatusEdit.Presence(presence)
@@ -1610,7 +1610,7 @@ internal fun NativeUserStatusScreen(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
                         items(StatusExpiryChoice.entries) { choice ->
-                            FilterChip(
+                            NextcloudFilterChip(
                                 selected = expiryChoice == choice,
                                 onClick = { expiryChoiceName = choice.name },
                                 label = { Text(choice.label) },

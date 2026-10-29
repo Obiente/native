@@ -19,10 +19,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -396,7 +396,7 @@ fun NativeGroupwareContactsScreen(
         },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            NextcloudRefreshBar(refreshing)
             refreshError?.let { message ->
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(
@@ -899,7 +899,7 @@ private fun ContactEditorDialog(
                     Text("Address book", style = MaterialTheme.typography.labelLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                         addressBooks.forEach { candidate ->
-                            FilterChip(
+                            NextcloudFilterChip(
                                 selected = candidate == addressBook,
                                 onClick = { selectedAddressBookHref = candidate.href },
                                 label = { Text(candidate.displayName) },

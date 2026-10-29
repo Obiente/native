@@ -12,12 +12,21 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+
+/**
+ * Shared element keys for the header text, given by the screen that knows which record the title
+ * or subtitle names, so opening that record carries its name up into the header.
+ */
+internal data class NextcloudCollectionHeaderSharedKeys(val title: String? = null, val subtitle: String? = null)
+
+internal val LocalNextcloudCollectionHeaderSharedKeys = staticCompositionLocalOf { NextcloudCollectionHeaderSharedKeys() }
 
 @Composable
 internal fun NextcloudCollectionHeader(
@@ -61,6 +70,7 @@ internal fun NextcloudCollectionHeader(
                 Icon(NextcloudIcons.Back, contentDescription = "Back")
             }
         }
+        val sharedKeys = LocalNextcloudCollectionHeaderSharedKeys.current
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -68,7 +78,7 @@ internal fun NextcloudCollectionHeader(
         ) {
             if (titleContent != null) titleContent() else Text(
                 text = title,
-                modifier = Modifier.semantics { heading() },
+                modifier = Modifier.semantics { heading() }.nextcloudSharedElement(sharedKeys.title),
                 style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -76,6 +86,7 @@ internal fun NextcloudCollectionHeader(
             subtitle?.let { supportingText ->
                 Text(
                     text = supportingText,
+                    modifier = Modifier.nextcloudSharedElement(sharedKeys.subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

@@ -126,7 +126,7 @@ internal fun GenericMailMessageDetail(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
     ) {
-        Text(message.subject, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(message.subject, Modifier.genericDetailTitle(resource, record), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

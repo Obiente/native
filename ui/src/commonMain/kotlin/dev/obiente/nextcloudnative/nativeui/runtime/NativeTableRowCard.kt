@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,8 +22,8 @@ internal fun nativeTableRowCardPresentation(resource: ResourceSpec, record: Nati
 
 @Composable
 internal fun NativeTableRowCardContent(detail: NativeTableRecordDetailPresentation) {
-    Text(detail.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-        maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Text(detail.title, Modifier.genericCardTitle(), style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
     detail.detailFields.take(3).forEach { field ->
         Text("${field.formatted.label}: ${field.formatted.displayValue}",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
