@@ -32,7 +32,7 @@ internal fun nativeRecordFacts(
                 if (value == presentation.title || value == presentation.subtitle || value == "Structured data") {
                     null
                 } else {
-                    NativeRecordFact(field.id, field.label, value)
+                    NativeRecordFact(field.id, nativeSummaryLabel(field.label), value)
                 }
             }
         }
@@ -43,7 +43,8 @@ internal fun nativeRecordFacts(
 private fun FieldSpec.recordFactPriority(): Int {
     val key = id.lowercase().filter(Char::isLetterOrDigit)
     if (key in setOf("id", "uuid", "token", "etag", "order", "orderweight", "sortorder", "orderindex", "position", "sort", "index") ||
-        isNativeTechnicalIdentifier() || key.endsWith("url") || key.contains("password") || key.contains("secret")
+        isNativeTechnicalIdentifier() || key.endsWith("url") || key.contains("password") || key.contains("secret") ||
+        isUnreadableSummaryField()
     ) return 0
     return when (kind) {
         FieldKind.currency, FieldKind.integer, FieldKind.decimal -> 400

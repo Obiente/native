@@ -243,7 +243,7 @@ private val SERVER_PROBE_FALLBACK_REASONS = setOf(
 /** Shown when discovery itself fails before producing even a metadata fallback. */
 internal const val DYNAMIC_DISCOVERY_FAILURE_MESSAGE = "Could not check this app's native API. Try again."
 
-/** What a fallback card's action does. The card shows it only when its screen can perform it. */
+/** What a fallback notice's action does. The notice shows it only when its screen can perform it. */
 internal enum class DynamicContractFallbackAction {
     /** Discover the app's contract again. */
     CheckAgain,
@@ -269,13 +269,13 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     DynamicContractFallbackReason.NoVerifiedContract -> DynamicContractFallbackNotice(
         "No verified native API",
         "Neither the server nor the signed App Store release for this app version provides an API " +
-            "contract or safe read routes. Only app details are shown.",
+            "contract or safe read routes. The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.NoMatchingRelease -> DynamicContractFallbackNotice(
         "No matching App Store release",
         "The Nextcloud App Store lists no signed release for this app version, so its API cannot be " +
-            "verified. Only app details are shown.",
+            "verified. The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.SourceTemporarilyUnavailable -> DynamicContractFallbackNotice(
@@ -287,7 +287,7 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     DynamicContractFallbackReason.MalformedSource -> DynamicContractFallbackNotice(
         "App Store entry incomplete",
         "The Nextcloud App Store entry for this app version is missing data needed to verify its signed " +
-            "release, so no native view is offered. Only app details are shown.",
+            "release, so no native view is offered. The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.ServerProbeInconclusive -> DynamicContractFallbackNotice(
@@ -309,7 +309,7 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     DynamicContractFallbackReason.ServerPermissionDenied -> DynamicContractFallbackNotice(
         "Server API not permitted",
         "Your account does not have permission to read this server's API catalog, which may be limited " +
-            "to administrators, and the App Store offered no verified contract. Only app details are shown. " +
+            "to administrators, and the App Store offered no verified contract. The app's data on the server is unchanged. " +
             "Checking again helps only after an administrator grants access or the App Store adds a release.",
         "Check again",
     )
@@ -328,7 +328,7 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     DynamicContractFallbackReason.SourceUnusable -> DynamicContractFallbackNotice(
         "App Store data unusable",
         "The Nextcloud App Store returned data this version cannot use, such as a response over its size " +
-            "limit, so no native view is offered. Only app details are shown.",
+            "limit, so no native view is offered. The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.VersionUnavailable -> DynamicContractFallbackNotice(
@@ -356,12 +356,12 @@ internal fun DynamicContractFallbackReason?.fallbackNotice(): DynamicContractFal
     DynamicContractFallbackReason.VerificationFailed -> DynamicContractFallbackNotice(
         "App package not verified",
         "The signed App Store release for this app could not be verified, so no native view is offered. " +
-            "Only app details are shown.",
+            "The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.UnsupportedContract -> DynamicContractFallbackNotice(
         "API contract not supported",
-        "This app's API contract cannot be shown as a native view yet. Only app details are shown.",
+        "This app's API contract cannot be shown as a native view yet. The app's data on the server is unchanged.",
         "Check again",
     )
     DynamicContractFallbackReason.ClientFault -> DynamicContractFallbackNotice(

@@ -576,6 +576,63 @@ Invalid actionable links reject the response; invalid optional widget, item,
 and overlay icons are omitted. This policy does not change transport consent
 or authorize requests to another HTTP origin.
 
+### News reading
+
+News publishes no OpenAPI document. Its verified route contract lets the
+generic workspace list feeds, folders, and items as records, but it cannot
+express a reading workflow: unread and starred views, an article reader, and
+read state. A reviewed adapter in
+[`NewsApi.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsApi.kt)
+therefore implements the documented
+[v1-3 API](https://nextcloud.github.io/news/api/api-v1-3/) through the shared
+same-origin transport.
+
+- The adapter first reads the API version index and reports an unsupported
+  version, without retrying, when `v1-3` is absent.
+- Feeds, folders, and article pages are typed and bounded. Feed text is
+  normalized; only HTTP(S) article, favicon, and enclosure links are kept.
+- Article bodies render through the same HTML sanitizer as Mail, so scripts,
+  forms, embeds, and images are removed and opening an article does not contact
+  the publisher.
+- The only writes are the idempotent per-article read, unread, star, and unstar
+  routes. A change is applied optimistically and rolled back for that article
+  alone when the server rejects it or does not confirm it. Read state and star
+  state change independently, so opening an article while its star is
+  pending still marks it read. While a change is
+  pending, refreshed or newly selected pages show the requested state, and a
+  confirmed change is reapplied, so a read that raced the change cannot show
+  the opposite of the server state. Each pending change records the unread
+  and starred count adjustment it made, so a rejection reverses the counts
+  even after the user moved to another view. Counts read while a change is in
+  flight may or may not include it, so they are shown as read and read again
+  once every change has settled. Feed, folder, filter, and mark-all
+  operations stay in the web interface.
+- `NewsWorkspaceController` fences every load by generation, so a late response
+  for an earlier selection, refresh, or page cannot overwrite newer state. When
+  a refresh finds that the selected feed or folder was removed, it falls back
+  to Unread and loads it, invalidating the removed selection's page. A failed
+  refresh keeps the articles as they are, including changes made while it ran,
+  and offers a refresh retry separately from the older-page retry.
+- The account shell retains the controller, so switching to another app and
+  back keeps the selected view, the open article, and loaded pages. The list
+  scroll position is held above the list and reader switch, so returning from
+  the compact reader keeps the reading position. The open article is kept apart
+  from the list, so a refresh that drops it from the list (an opened article
+  is read and leaves Unread) does not close the reader. Each fetched page that
+  contains the open article updates the reader's copy, so it keeps the latest
+  server state after a later page omits it. The reader's scroll
+  position belongs to the open article and is held above the pane-layout
+  switch, so returning to News or resizing across the two-pane width resumes
+  where the reader stopped, and another article starts at the top. Only the
+  selected view is saved across process recreation; the open article is not
+  restored, because a fresh Unread list no longer contains an article that
+  opening marked read.
+
+`NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
+request shapes, parsing of malformed and adversarial input, stale completion,
+pending changes racing a refresh, failed refreshes, removed selections,
+rollback, and paging.
+
 ### Administration visibility
 
 `AdministrationAccessRepository` owns session-scoped, in-memory permission
@@ -860,3 +917,4 @@ recovery.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
+- [News external API v1-3](https://nextcloud.github.io/news/api/api-v1-3/)

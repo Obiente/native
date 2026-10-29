@@ -6,7 +6,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class DynamicContractFallbackCardActionTest {
+class DynamicContractFallbackActionTest {
     private val rejected = DynamicContractFallbackReason.ServerAuthenticationRequired.fallbackNotice()
 
     @Test
@@ -23,7 +23,7 @@ class DynamicContractFallbackCardActionTest {
     }
 
     @Test
-    fun `without an account settings callback the card offers no action but still explains the route`() {
+    fun `without an account settings callback the notice offers no action but still explains the route`() {
         val actions = DynamicContractFallbackActions(onCheckAgain = { error("A retry must not be offered.") })
         assertNull(actions.callbackFor(rejected))
         assertTrue("open Settings, then Account" in rejected.message, rejected.message)

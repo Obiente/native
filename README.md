@@ -197,6 +197,8 @@ Windows, and an early macOS package) with:
 - Talk history, with message cards for text, files, recordings, calls, system
   events and shared objects;
 - Notes, with folders, ETag-aware saving and Markdown editing and preview;
+- News, as a feed reader with unread and starred views, folders, feeds and an
+  article reader that does not load remote images;
 - Activity, global search, Dashboard, user status and app navigation;
 - native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
