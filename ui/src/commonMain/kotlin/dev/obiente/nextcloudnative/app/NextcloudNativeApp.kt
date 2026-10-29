@@ -6682,13 +6682,13 @@ internal fun FilesScreen(
                 scope.launch {
                     filesRequest {
                         services.setFileFavorite(session, requireNotNull(userId), file, favorite)
-                    }.onSuccess {
+                    }.onSuccess { localFollowUp ->
                         favorites.succeeded(file.path)
-                        mutationNotice = if (favorite) {
+                        mutationNotice = localFollowUp.reportFor(if (favorite) {
                             "${file.name} added to favorites"
                         } else {
                             "${file.name} removed from favorites"
-                        }
+                        })
                     }.onFailure {
                         favorites.failed(file.path)?.let { previous ->
                             files = files.withFavorite(file.path, previous)
@@ -7108,10 +7108,9 @@ internal fun FilesScreen(
                             filesRequest {
                                 when (plan.kind) {
                                     FileCreationKind.Folder -> {
-                                        check(services.createDirectoryIfAbsent(session, requireNotNull(userId), plan.path)) {
-                                            "An item named ${plan.name} already exists."
-                                        }
-                                        null
+                                        val created = services.createDirectoryIfAbsent(session, requireNotNull(userId), plan.path)
+                                        check(created.wasCreated) { "An item named ${plan.name} already exists." }
+                                        null to created.localFollowUp
                                     }
                                     FileCreationKind.Markdown, FileCreationKind.Text -> {
                                         val result = services.createTextFileIfAbsent(
@@ -7136,13 +7135,13 @@ internal fun FilesScreen(
                                             hasPreview = false,
                                             etag = result.etag,
                                             permissions = "WDNVR",
-                                        )
+                                        ) to result.localFollowUp
                                     }
                                 }
-                            }.onSuccess { createdDocument ->
+                            }.onSuccess { (createdDocument, localFollowUp) ->
                                 creationKind = null
                                 creationName = ""
-                                mutationNotice = "Created ${plan.name}"
+                                mutationNotice = localFollowUp.reportFor("Created ${plan.name}")
                                 if (createdDocument == null) {
                                     files = null
                                     loadAttempt += 1

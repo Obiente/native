@@ -1265,6 +1265,20 @@ class DesktopNextcloudServices(
         return failure
     }
 
+    /**
+     * Queues [refreshRetainedFoldersAfterMutation] for a server-confirmed background mutation, such
+     * as a folder sync upload or a Linux mount write, so its thread never waits on the provider lock.
+     */
+    private fun refreshAfterBackgroundMutation(
+        session: NextcloudSession,
+        userId: String,
+        accountId: String,
+        path: String,
+        cacheProducer: DesktopFileReadCacheProducer?,
+    ) = fileMutationFollowUps.afterBackgroundMutation(accountId, listOf(path)) { changed ->
+        refreshRetainedFoldersAfterMutation(session, userId, accountId, changed, cacheProducer)
+    }
+
     private fun refreshRetainedFoldersAfterRemoteListing(
         session: NextcloudSession,
         userId: String,
@@ -1327,7 +1341,7 @@ class DesktopNextcloudServices(
         minimumFreeSpaceBytes = { fileReadCache.loadPolicy().minimumFreeSpaceBytes },
         onRemoteMutationCommitted = { session, userId, path ->
             val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
+            refreshAfterBackgroundMutation(session, userId, accountId, path, cacheProducer)
         },
     )
     private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(
@@ -1861,7 +1875,7 @@ class DesktopNextcloudServices(
                     },
                 ),
                 afterMutationInvalidated = { path ->
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
+                    refreshAfterBackgroundMutation(session, userId, accountId, path, cacheProducer)
                 },
             )
             metadataBackendReference = metadataBackend
@@ -4174,44 +4188,7 @@ class DesktopNextcloudServices(
         userId: String,
         file: NextcloudFile,
         favorite: Boolean,
-    ) = withContext(Dispatchers.IO) {
-        val safePath = requireSafeFilePath(file.path, allowRoot = false)
-        val expectedEtag = file.etag?.trim().orEmpty()
-        require(expectedEtag.isNotEmpty()) { "Refresh the folder before changing favorites." }
-        val headers = buildMap {
-            put("Accept", "application/xml")
-            putAll(
-                FileWebDavMutationSpec(
-                    method = "PROPPATCH",
-                    sourcePath = safePath,
-                    destinationPath = null,
-                    expectedEtag = expectedEtag,
-                    sourceIsDirectory = file.isDirectory,
-                    overwrite = false,
-                ).conflictConditionHeaders(),
-            )
-        }
-        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun refreshMetadata() {
-            runCatching { refreshRetainedFoldersAfterMutation(session, userId, accountId, safePath, cacheProducer) }
-        }
-        val response = request(
-            method = "PROPPATCH",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, safePath),
-            session = session,
-            body = buildFileFavoritePropPatch(favorite),
-            contentType = "application/xml; charset=utf-8",
-            headers = headers,
-            maxResponseBytes = 64 * 1024,
-            mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::refreshMetadata,
-        )
-        if (response.status !in 200..299) throw fileOperationException(response.status)
-        check(response.status == 200 || response.status == 207 && fileFavoriteUpdateSucceeded(response.body)) {
-            "The server did not confirm the favorite change."
-        }
-        refreshMetadata()
-    }
+    ): FileMutationLocalFollowUp = withContext(Dispatchers.IO) { fileWrites(session, userId).setFileFavorite(file, favorite) }
 
     override suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile> =
         withContext(Dispatchers.IO) {
@@ -4599,33 +4576,7 @@ class DesktopNextcloudServices(
         userId: String,
         file: NextcloudFile,
         version: NextcloudFileVersion,
-    ): Unit = withContext(Dispatchers.IO) {
-        val specification = fileVersionRestoreRequest(userId, file, version)
-        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path, cacheProducer)
-        val response = request(
-            method = specification.method,
-            url = session.serverUrl + specification.relativePath,
-            session = session,
-            headers = specification.headers + mapOf(
-                "Accept" to "*/*",
-                "Destination" to session.serverUrl + specification.destinationRelativePath,
-            ),
-            maxResponseBytes = specification.maximumResponseBytes,
-            client = noRedirectHttpClient,
-            mutationExecutor = noRedirectFileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
-        )
-        when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
-            FileVersionRestoreHttpResult.Restored -> {
-                runCatching {
-                    refreshRetainedFoldersAfterMutation(session, userId, accountId, file.path, cacheProducer)
-                }
-            }
-            is FileVersionRestoreHttpResult.Rejected -> error(result.message)
-        }
-    }
+    ): FileMutationLocalFollowUp = withContext(Dispatchers.IO) { fileWrites(session, userId).restoreFileVersion(file, version) }
 
     override suspend fun handoffFileVersionToExternalApp(
         session: NextcloudSession,
@@ -4674,130 +4625,51 @@ class DesktopNextcloudServices(
         path: String,
         text: String,
         expectedEtag: String,
-    ): SavedTextFile = withContext(Dispatchers.IO) {
-        val specification = textFileDavSaveRequest(text, expectedEtag)
-        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val response = request(
-            "PUT",
-            buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session,
-            rawBody = specification.body,
-            contentType = specification.contentType,
-            headers = specification.headers,
-            mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
-        )
-        val confirmation = confirmTextFileDavSave(response.status)
-        val etag = response.etag ?:
-            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
-        runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-            etag?.let {
-                fileReadCache.storeContent(
-                    accountId, path,
-                    NextcloudFileContent(specification.body, specification.contentType, it),
-                    cacheProducer = cacheProducer,
-                )
-            }
-        }
-        SavedTextFile(etag, confirmation.created)
-    }
+    ): SavedTextFile = withContext(Dispatchers.IO) { fileWrites(session, userId).saveTextFile(path, text, expectedEtag) }
 
     override suspend fun createTextFileIfAbsent(
         session: NextcloudSession,
         userId: String,
         path: String,
         text: String,
-    ): SavedTextFile = withContext(Dispatchers.IO) {
-        val utf8 = text.toByteArray(StandardCharsets.UTF_8)
-        require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
-            "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be created in the app."
-        }
-        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val response = request(
-            "PUT",
-            buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-            mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
-        )
-        if (response.status == 412) return@withContext SavedTextFile(etag = null, wasCreated = false)
-        check(response.status in 200..299) { "Creating the text file failed (HTTP ${response.status})." }
-        check(response.status == 201) { "The server did not confirm that a new text file was created." }
-        runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-            response.etag?.let {
-                fileReadCache.storeContent(
-                    accountId, path,
-                    NextcloudFileContent(utf8, "text/plain; charset=utf-8", it),
-                    cacheProducer = cacheProducer,
-                )
-            }
-        }
-        SavedTextFile(response.etag, wasCreated = true)
-    }
+    ): SavedTextFile = withContext(Dispatchers.IO) { fileWrites(session, userId).createTextFileIfAbsent(path, text) }
 
     override suspend fun createDirectoryIfAbsent(
         session: NextcloudSession,
         userId: String,
         path: String,
-    ): Boolean = withContext(Dispatchers.IO) {
-        val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun queueAffectedMetadataRefresh() =
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val response = request(
-            method = "MKCOL",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            headers = mapOf("Accept" to "*/*", "If-None-Match" to "*"),
-            maxResponseBytes = 64 * 1024,
-            mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
-        )
-        if (response.status in setOf(405, 412)) return@withContext false
-        if (response.status !in 200..299) throw fileOperationException(response.status)
-        check(response.status == 201) { "The server did not confirm that a new folder was created." }
-        runCatching {
-            refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        }
-        true
-    }
+    ): DirectoryCreation = withContext(Dispatchers.IO) { fileWrites(session, userId).createDirectoryIfAbsent(path) }
 
     override suspend fun executeFileMutation(
         session: NextcloudSession,
         userId: String,
         mutation: NextcloudFileMutation,
-    ): NextcloudFileMutationResult = withContext(Dispatchers.IO) {
-        val spec = mutation.toWebDavMutationSpec()
-        val headers = buildMap {
-            put("Accept", "*/*")
-            putAll(spec.conflictConditionHeaders())
-            spec.destinationPath?.let { destinationPath ->
-                put("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                put("Overwrite", if (spec.overwrite) "T" else "F")
-            }
-        }
+    ): NextcloudFileMutationResult = withContext(Dispatchers.IO) { fileWrites(session, userId).executeFileMutation(mutation) }
+
+    /** File writes of [session]'s account; their local bookkeeping runs on [fileMutationFollowUps]. */
+    private fun fileWrites(session: NextcloudSession, userId: String): DesktopFileWrites {
         val (accountId, cacheProducer) = fileReadCache.producerFor(session)
-        fun refreshLocalState(path: String) = refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer)
-        val followUp = fileMutationFollowUps.mutation(accountId, listOfNotNull(spec.sourcePath, spec.destinationPath), ::refreshLocalState)
-        val response = followUp.reconcilingUnknownResult { onUnknownResult -> request(
-            method = spec.method,
-            url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
-            session = session,
-            headers = headers,
-            maxResponseBytes = 64 * 1024,
-            mutationExecutor = fileMutationHttpExecutor,
-            onAmbiguousMutationResult = onUnknownResult,
-        ) }
-        if (response.status !in 200..299) throw fileOperationException(response.status, spec.sourceIsDirectory, if (response.status == 404) followUp.afterConfirmedMutation() else null)
-        NextcloudFileMutationResult(spec.destinationPath, response.etag, followUp.afterConfirmedMutation())
+        return DesktopFileWrites(
+            accountId, session.serverUrl, userId, fileMutationFollowUps,
+            transport = { write, onAcceptedOrUnknownResult ->
+                val response = request(
+                    method = write.method,
+                    url = write.url,
+                    session = session,
+                    contentType = write.contentType,
+                    headers = write.headers,
+                    rawBody = write.body,
+                    maxResponseBytes = write.maximumResponseBytes ?: MAX_API_RESPONSE_BYTES,
+                    mutationExecutor = if (write.followRedirects) fileMutationHttpExecutor else noRedirectFileMutationHttpExecutor,
+                    onAmbiguousMutationResult = onAcceptedOrUnknownResult,
+                )
+                DesktopFileWriteResponse(response.status, response.etag, response.body)
+            },
+            refreshLocalState = { path -> refreshRetainedFoldersAfterMutation(session, userId, accountId, path, cacheProducer) },
+            loadEtag = { path -> loadFileEtag(session, userId, path) },
+            storeContent = { path, content -> fileReadCache.storeContent(accountId, path, content, cacheProducer = cacheProducer) },
+            favoriteConfirmed = ::fileFavoriteUpdateSucceeded,
+        )
     }
 
     override suspend fun executeNextcloudApi(

@@ -260,8 +260,8 @@ internal fun FileVersionHistorySection(
                         }
                         is FileVersionConfirmation.Restore -> runCatching {
                             services.restoreFileVersion(session, userId, file, version)
-                        }.onSuccess {
-                            actionMessage = "Version restored. Refreshing the current file..."
+                        }.onSuccess { localFollowUp ->
+                            actionMessage = fileVersionRestoredMessage(localFollowUp)
                             runCatching { services.listFileVersions(session, userId, file) }
                                 .onSuccess { refreshed ->
                                     history = refreshed
@@ -469,6 +469,11 @@ internal fun canRestoreFileVersion(
 ): Boolean = runCatching {
     requireRestorableFileVersion(file, version)
 }.isSuccess
+
+/** What to say once the server restored a version; incomplete local bookkeeping is never hidden. */
+internal fun fileVersionRestoredMessage(localFollowUp: FileMutationLocalFollowUp): String =
+    if (localFollowUp == FileMutationLocalFollowUp.Completed) "Version restored. Refreshing the current file..."
+    else localFollowUp.reportFor("Version restored")
 
 private fun ExternalFileHandoffResult.fileVersionActionMessage(): String = when (this) {
     is ExternalFileHandoffResult.Launched -> "A detached historical copy is ready in the platform export sheet."
