@@ -66,6 +66,11 @@ internal fun SettingsScreen(
     val selectedSection = selectedSectionName?.let { restoredName ->
         resolveSettingsWorkspaceSection(restoredName, visibleSections)
     }
+    // The Home support retention notice asks for a fresh report; the Support view consumes the request.
+    val newReportRequested by SupportNewReportRequests.requested.collectAsState()
+    LaunchedEffect(newReportRequested) {
+        if (newReportRequested) selectedSectionName = SettingsWorkspaceSection.Support.name
+    }
 
     if (trustRemovalConfirmationVisible) {
         AlertDialog(
@@ -222,7 +227,9 @@ internal fun SettingsScreen(
                 platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
             )
 
-            SettingsWorkspaceSection.Support -> SupportSettingsView(services, supportDrafts)
+            SettingsWorkspaceSection.Support -> SupportSettingsView(
+                services, supportDrafts, newReportRequested, SupportNewReportRequests::consume,
+            )
 
             SettingsWorkspaceSection.HelpAndGuides -> SettingsHelpSectionContent(
                 state = SettingsHelpSectionState(

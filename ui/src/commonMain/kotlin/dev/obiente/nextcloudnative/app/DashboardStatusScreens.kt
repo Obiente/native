@@ -230,9 +230,7 @@ internal fun NativeDashboardScreen(
     )
     val formFactor = rememberHomeFormFactor()
     val workspaceStorage = rememberAccountHomeWorkspaceStorage(session)
-    val workspaceRepository = remember(workspaceStorage) {
-        HomeWorkspaceLayoutRepository(workspaceStorage)
-    }
+    val workspaceRepository = remember(workspaceStorage) { HomeWorkspaceLayoutRepository(workspaceStorage) }
     val workspacePersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
     val workspaceScope = remember(workspacePersistenceScopes.current, formFactor) {
         HomeWorkspaceScope(workspacePersistenceScopes.current, formFactor)
@@ -259,6 +257,7 @@ internal fun NativeDashboardScreen(
         onRefresh = { refreshAttempt += 1 },
         onSearch = onSearch,
         onSettings = onSettings,
+        supportRetentionNotice = rememberHomeSupportRetentionNotice(onSettings),
     )
 }
 
@@ -283,10 +282,9 @@ internal fun NativeDashboardPresentation(
     onRefresh: () -> Unit,
     onSearch: (() -> Unit)? = null,
     onSettings: (() -> Unit)? = null,
+    supportRetentionNotice: (@Composable () -> Unit)? = null,
 ) {
-    var customizeWorkspace by rememberSaveable(workspaceLayout.scope.persistenceKey) {
-        mutableStateOf(false)
-    }
+    var customizeWorkspace by rememberSaveable(workspaceLayout.scope.persistenceKey) { mutableStateOf(false) }
     var workspacePersistenceError by remember(workspaceLayout.scope) { mutableStateOf<String?>(null) }
     var activeWorkspaceLayout by remember(workspaceLayout) { mutableStateOf(workspaceLayout) }
     val widgetsAuthoritative = (state as? DashboardSurfaceState.Available)?.widgetsAuthoritative != false
@@ -315,6 +313,7 @@ internal fun NativeDashboardPresentation(
             onSearch = onSearch,
             onSettings = onSettings,
         )
+        supportRetentionNotice?.invoke()
         when (val current = state) {
             DashboardSurfaceState.Loading -> DashboardLoading()
             is DashboardSurfaceState.Failed -> DashboardFailure(

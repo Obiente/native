@@ -7,7 +7,7 @@ contractAcquisition/src/test/kotlin/dev/obiente/nextcloudnative/contracts/Signed
 ui/src/androidMain/kotlin/dev/obiente/nextcloudnative/app/AndroidCompatibilityVideoPlaybackService.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt|1157
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|864
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1801
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1800
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckNativeActions.kt|1158
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2437
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2515
@@ -54,8 +54,8 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1023
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2275
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCacheTest.kt|2479
-ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2888
+ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2883
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystemTest.kt|2149
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProviderTest.kt|3204
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/PantryLiveContractCompatibilityTest.kt|1202
-ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2543
+ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntake.kt|2498
