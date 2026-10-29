@@ -90,11 +90,18 @@ internal data class NewsWorkspaceUiState(
     val stateChangeNotice: String? = null,
 ) {
     val openItemId: Long? get() = openedItem?.id
+    val openItem: NewsItem? get() = openedItem
 
-    /** The list's copy when it has one, since it is the most recently read from the server. */
-    val openItem: NewsItem? get() = openedItem?.let { opened ->
-        (articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == opened.id } ?: opened
-    }
+    /**
+     * Replaces the articles and takes the reader's copy from them when they contain it, so a later
+     * page that omits the article keeps the most recent server state rather than the copy opened.
+     */
+    fun withArticles(articles: NewsArticlesState): NewsWorkspaceUiState = copy(
+        articles = articles,
+        openedItem = openedItem?.let { opened ->
+            (articles as? NewsArticlesState.Loaded)?.items?.firstOrNull { it.id == opened.id } ?: opened
+        },
+    )
 
     /** Applies a read or star change to every local copy of one article. */
     fun applying(itemId: Long, change: NewsItemStateChange): NewsWorkspaceUiState = copy(
@@ -162,8 +169,8 @@ internal class NewsWorkspaceController(
             val result = readItems(selection, cursor)
             if (generation != articleGeneration || selection != state.selection) return@launch
             val current = state.articles as? NewsArticlesState.Loaded ?: return@launch
-            state = state.copy(
-                articles = when (result) {
+            state = state.withArticles(
+                when (result) {
                     is NewsRead.Success -> {
                         val known = current.items.mapTo(HashSet(), NewsItem::id)
                         val next = result.value.filterNot { it.id in known }.withPendingChanges()
@@ -305,8 +312,8 @@ internal class NewsWorkspaceController(
         articleJob = scope.launch {
             val result = readItems(selection, olderThanItemId = null)
             if (generation != articleGeneration) return@launch
-            state = state.copy(
-                articles = when (result) {
+            state = state.withArticles(
+                when (result) {
                     is NewsRead.Success -> NewsArticlesState.Loaded(
                         items = result.value.withPendingChanges(),
                         endReached = result.value.size < NEWS_ITEM_PAGE_SIZE,

@@ -208,6 +208,35 @@ class NewsWorkspaceControllerTest {
     }
 
     @Test
+    fun `the reader keeps the latest server state after a refresh drops the article`() {
+        val server = FakeNewsServer()
+        val controller = controller(server)
+        controller.start()
+        controller.select(NewsSelection.All)
+        val item = (controller.state.articles as NewsArticlesState.Loaded).items.first()
+        controller.open(item)
+        server.itemPages = { query ->
+            if (query["offset"] == "0") {
+                FakeNewsServer.items(30L downTo 1L).replace(
+                    "{\"id\":${item.id},\"feedId\":5,\"title\":\"Article ${item.id}\",\"body\":\"<p>Body ${item.id}</p>\",\"unread\":true,\"starred\":false}",
+                    "{\"id\":${item.id},\"feedId\":5,\"title\":\"Article ${item.id}\",\"body\":\"<p>Body ${item.id}</p>\",\"unread\":false,\"starred\":true}",
+                )
+            } else {
+                FakeNewsServer.items(LongRange.EMPTY)
+            }
+        }
+        controller.refresh()
+        assertTrue(controller.state.openItem!!.starred, "Another client starred the article.")
+        server.itemPages = { query -> if (query["offset"] == "0") FakeNewsServer.items(29L downTo 1L) else FakeNewsServer.items(LongRange.EMPTY) }
+        controller.refresh()
+        assertTrue(controller.state.openItem!!.starred, "The dropped article keeps the state last read from the server.")
+        val starredBefore = controller.state.subscriptions!!.starredCount
+        controller.toggleStar(controller.state.openItem!!)
+        assertFalse(controller.state.openItem!!.starred)
+        assertEquals(starredBefore - 1, controller.state.subscriptions!!.starredCount, "Unstarring lowers the count.")
+    }
+
+    @Test
     fun `a rejected change restores counts after the user moved to another view`() {
         val server = FakeNewsServer()
         val controller = controller(server)
