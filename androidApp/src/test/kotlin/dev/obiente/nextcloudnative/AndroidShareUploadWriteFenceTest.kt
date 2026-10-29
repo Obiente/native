@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.DirectoryCreation
 import dev.obiente.nextcloudnative.app.FileMutationNotSentException
 import dev.obiente.nextcloudnative.app.FileWriteBlock
 import dev.obiente.nextcloudnative.app.FileWriteBlockedException
@@ -201,7 +202,7 @@ class AndroidShareUploadWriteFenceTest {
                 "equals" -> proxy === args?.singleOrNull()
                 "createDirectoryIfAbsent" -> {
                     calls += "createDirectoryIfAbsent:${args!![2]}"
-                    true
+                    DirectoryCreation(wasCreated = true)
                 }
                 else -> error("Unexpected synthetic operation: ${method.name}")
             }

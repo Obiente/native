@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -544,6 +545,69 @@ class DesktopFileMutationFollowUpsTest {
                 followUps.afterConfirmedMutation("account", listOf("a")) { null },
             )
         }
+
+    @Test
+    fun `a background mutation never waits for a stalled refresh`() {
+        val followUps = followUps()
+        val release = latch()
+        val returned = CountDownLatch(1)
+        val finished = CountDownLatch(1)
+
+        thread(isDaemon = true) {
+            followUps.afterBackgroundMutation("account", listOf("uploaded")) {
+                release.awaitUninterruptibly()
+                finished.countDown()
+                null
+            }
+            returned.countDown()
+        }
+
+        assertTrue(returned.await(5, TimeUnit.SECONDS), "The sync or mount thread must not wait for the refresh.")
+        assertEquals(1L, finished.count)
+        release.countDown()
+        assertTrue(finished.await(5, TimeUnit.SECONDS), "The refresh still runs in the background.")
+        assertTrue(diagnostics.isEmpty())
+    }
+
+    @Test
+    fun `a full queue refreshes a background mutation on its own thread instead of dropping it`(): Unit = runBlocking {
+        val followUps = followUps(maximumPending = 1)
+        val release = latch()
+        val started = CountDownLatch(1)
+        followUps.afterUnknownResult("account", listOf("stalled")) {
+            started.countDown()
+            release.awaitUninterruptibly()
+            null
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        followUps.afterBackgroundMutation("account", listOf("queued")) { null }
+        val caller = Thread.currentThread()
+        var refreshedOn: Thread? = null
+
+        followUps.afterBackgroundMutation("account", listOf("overflow")) {
+            refreshedOn = Thread.currentThread()
+            IllegalStateException("cache")
+        }
+
+        assertSame(caller, refreshedOn, "With no caller to report a drop to, the refresh is delayed, not lost.")
+        assertEquals(1, followUps.pendingCount)
+        assertEquals(listOf("inline", "failed"), diagnostics.map { it.second.outcome })
+        assertTrue(diagnostics.none { it.second.outcome == "dropped" })
+    }
+
+    @Test
+    fun `a background mutation after service teardown runs nothing`() {
+        val followUps = followUps()
+        scope.cancel()
+        var ran = false
+
+        followUps.afterBackgroundMutation("account", listOf("late")) {
+            ran = true
+            null
+        }
+
+        assertFalse(ran)
+    }
 
     private fun followUps(waitMillis: Long = 5_000L, maximumPending: Int = MAX_PENDING_FILE_MUTATION_FOLLOW_UPS) =
         DesktopFileMutationFollowUps(

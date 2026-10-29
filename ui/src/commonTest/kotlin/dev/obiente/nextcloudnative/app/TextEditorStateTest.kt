@@ -54,6 +54,27 @@ class TextEditorStateTest {
     }
 
     @Test
+    fun `a confirmed save reports incomplete local status instead of plain success`(): Unit = runBlocking {
+        for ((followUp, expected) in listOf(
+            FileMutationLocalFollowUp.Completed to "Saved to Nextcloud",
+            FileMutationLocalFollowUp.StillRunning to
+                "Saved to Nextcloud. Local file status is still updating in the background.",
+            FileMutationLocalFollowUp.Failed to
+                "Saved to Nextcloud. Local file status could not be updated; refresh the folder if it looks out of date.",
+        )) {
+            val editor = TextEditorState(MemoryStore(), { content("old", "v1") }, { _, _ -> SavedTextFile("v2", false, followUp) })
+            editor.open()
+            editor.edit("draft")
+
+            editor.save()
+
+            assertEquals(expected, editor.savedMessage)
+            assertEquals("v2", editor.etag, "The server result stays authoritative.")
+            assertNull(editor.saveError)
+        }
+    }
+
+    @Test
     fun `a covering delete refuses the save without sending or losing edits`(): Unit = runBlocking {
         val store = MemoryStore()
         var block: FileWriteBlock? = FileWriteBlock.DeleteRunning

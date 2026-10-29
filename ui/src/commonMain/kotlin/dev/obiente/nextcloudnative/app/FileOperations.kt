@@ -93,6 +93,22 @@ internal fun FileMutationLocalFollowUp.reportFor(done: String): String = when (t
     FileMutationLocalFollowUp.Failed -> "$done. Local file status could not be updated; refresh the folder if it looks out of date."
 }
 
+/** A text file write the server confirmed. [localFollowUp] reports the local bookkeeping separately. */
+data class SavedTextFile(
+    val etag: String?,
+    val wasCreated: Boolean,
+    val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
+)
+
+/**
+ * The result of creating a folder only when nothing exists at its path. [localFollowUp] reports
+ * the local bookkeeping after a confirmed creation; nothing changed when [wasCreated] is false.
+ */
+data class DirectoryCreation(
+    val wasCreated: Boolean,
+    val localFollowUp: FileMutationLocalFollowUp = FileMutationLocalFollowUp.Completed,
+)
+
 enum class NextcloudFileOperationError {
     AuthenticationRequired,
     PermissionDenied,

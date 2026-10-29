@@ -148,7 +148,12 @@ internal class TextEditorState(
             originalText = submitted
             etag = saved.etag?.takeIf(String::isNotBlank)
             verificationRequired = etag == null
-            savedMessage = if (verificationRequired) "Saved. Verify the server version before saving again." else "Saved to Nextcloud"
+            // Verifying reads the server version, so only a plain success reports local status.
+            savedMessage = if (verificationRequired) {
+                "Saved. Verify the server version before saving again."
+            } else {
+                saved.localFollowUp.reportFor("Saved to Nextcloud")
+            }
         } catch (cancelled: CancellationException) {
             etag = null
             throw cancelled

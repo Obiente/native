@@ -223,7 +223,7 @@ class FileWriteFenceRegistryTest {
                 "equals" -> proxy === args?.singleOrNull()
                 "createDirectoryIfAbsent" -> {
                     calls += "createDirectoryIfAbsent:${args!![2]}"
-                    true
+                    DirectoryCreation(wasCreated = true)
                 }
                 else -> error("Unexpected synthetic operation: ${method.name}")
             }
