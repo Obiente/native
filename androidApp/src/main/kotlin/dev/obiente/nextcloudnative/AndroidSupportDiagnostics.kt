@@ -8,6 +8,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AsyncJvmSupportDiagnostics
 import dev.obiente.nextcloudnative.app.JvmSupportIntake
+import dev.obiente.nextcloudnative.app.recordAndroidSupportRetentionInstallHistory
 import dev.obiente.nextcloudnative.app.JvmSupportAccountStorageCleanup
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
@@ -96,13 +97,18 @@ internal object AndroidSupportIntakeCoordinator {
         client: OkHttpClient,
     ): JvmSupportIntake = instance ?: lock.withLock {
         val appContext = context.applicationContext ?: context
-        instance ?: JvmSupportIntake(
-            diagnostics = diagnostics,
-            temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
-            environment = androidSupportDiagnosticsEnvironment(),
-            client = client.newBuilder().retryOnConnectionFailure(false).build(),
-            supportMutationsAllowed = appContext.cloudMutationGate(),
-        ).also { instance = it }
+        instance ?: run {
+            val temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions")
+            // Decide the one-time retention notice before the intake creates its directory.
+            recordAndroidSupportRetentionInstallHistory(appContext, temporaryRoot.isDirectory)
+            JvmSupportIntake(
+                diagnostics = diagnostics,
+                temporaryRoot = temporaryRoot,
+                environment = androidSupportDiagnosticsEnvironment(),
+                client = client.newBuilder().retryOnConnectionFailure(false).build(),
+                supportMutationsAllowed = appContext.cloudMutationGate(),
+            )
+        }.also { instance = it }
     }
 
     suspend fun removeAccount(context: Context, accountIdentity: String) {

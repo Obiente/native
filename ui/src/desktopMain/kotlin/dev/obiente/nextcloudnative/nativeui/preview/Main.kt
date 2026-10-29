@@ -50,6 +50,7 @@ import dev.obiente.nextcloudnative.app.handoffLinuxAutostartToUserService
 import dev.obiente.nextcloudnative.app.handoffLinuxForegroundLaunchToUserService
 import dev.obiente.nextcloudnative.app.installDesktopBootstrapUncaughtDiagnosticHandler
 import dev.obiente.nextcloudnative.app.installDesktopUncaughtDiagnosticHandler
+import dev.obiente.nextcloudnative.app.recordDesktopSupportRetentionInstallHistory
 import dev.obiente.nextcloudnative.app.registerDesktopTray
 import dev.obiente.nextcloudnative.app.stopLinuxUserServiceForExplicitQuit
 import dev.obiente.nextcloudnative.app.tooltip
@@ -132,6 +133,8 @@ private fun launchDesktopProcess(arguments: Array<String>) {
     }
     val supportDiagnostics = createDesktopSupportDiagnostics(supportDiagnosticsRoot)
     installDesktopUncaughtDiagnosticHandler(supportDiagnostics)
+    // Decide the one-time retention notice before the services create the support directory.
+    recordDesktopSupportRetentionInstallHistory(supportDiagnosticsRoot.resolve("support-submissions"))
     dev.obiente.nextcloudnative.app.warmDesktopVideoPlayback()
     singleInstance.use {
     application {

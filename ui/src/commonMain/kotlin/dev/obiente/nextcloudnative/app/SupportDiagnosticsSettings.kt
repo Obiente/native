@@ -52,8 +52,9 @@ internal fun SupportDiagnosticsSettingsCard(
 }
 
 @Composable
-internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: SupportSettingsDraftState) {
+internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: SupportSettingsDraftState, newReportRequested: Boolean = false, onNewReportRequestConsumed: () -> Boolean = { false }) {
     var tab by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(newReportRequested) { if (newReportRequested && onNewReportRequestConsumed()) tab = SupportTab.NewReport.ordinal }
     var summaryRefresh by remember { mutableStateOf(0) }
     val diagnosticsRevision by remember(services) { services.supportDiagnosticsRevisions() }.collectAsState(0L)
     var summary by remember(services) { mutableStateOf(loadingSummary()) }
