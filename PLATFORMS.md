@@ -27,17 +27,19 @@ The app is built from four layers. Only the last one is platform-specific.
 
 ## Modules and source sets
 
-This section describes where code lives today. The Gradle build has three
-modules (`settings.gradle.kts`); the Rust crate is built separately.
+**Last reviewed: 2026-10-17.** This section describes where code lives; the
+code may have changed since, and the default branch is the source of truth.
+The Gradle build has three modules (`settings.gradle.kts`); the Rust crate is
+built separately.
 
 | Location | What it owns |
 | --- | --- |
 | `ui/src/commonMain` | Platform-neutral models, policies, repositories, the dynamic descriptor compiler (`nativeui/model`), the native renderer (`nativeui/runtime`), and Compose screens. The `NextcloudPlatformServices` interface is declared here. |
-| `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
+| `ui/src/jvmMain` | Code that is identical on Android and desktop: OkHttp request helpers, the authenticated app-read session, the App Store contract acquisition boundary, detached downloads, resumable uploads, text-draft encryption, and support diagnostics. |
 | `ui/src/androidMain` | Android `actual` implementations used by the shared UI, such as audio and video playback services, image decoding, back handling, the embedded Office editor, and server certificate trust. |
 | `ui/src/desktopMain` | The complete desktop platform: `DesktopNextcloudServices`, secret stores, the desktop sync engine and its SQLite stores, Linux FUSE virtual files, Windows Cloud Files, tray integration, in-app video playback through vlcj and libVLC, and packaging resources. |
 | `androidApp/src/main` | The Android application: `MainActivity`, `AndroidNextcloudServices`, Keystore-backed credentials, WorkManager workers, `NextcloudDocumentsProvider`, folder sync, media backup, and share-target activities. |
-| `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. Both `androidApp` and the desktop target depend on it; `commonMain` does not. |
+| `contractAcquisition` | A plain Kotlin/JVM module that verifies signed App Store packages and extracts app contracts. `androidApp` and both `ui` JVM targets depend on it, so shared `jvmMain` code can translate its results; `commonMain` does not. |
 | `src/` (Rust crate) | The reference schema and descriptor compiler, plus the Windows Explorer shell registrar binary that the desktop Windows package bundles. The Rust compiler is not linked into the app. |
 
 `jvmMain` is not a separate Kotlin Multiplatform source set. The `ui` build adds
@@ -63,18 +65,20 @@ behaves identically on both JVM targets belongs in `ui/src/jvmMain`. Code that
 differs because of lifecycle, storage, or operating-system APIs stays in the
 platform module, with the difference documented and tested.
 
-**Last reviewed: 2026-10-02.** This is a source inventory, not a plan. The code
+**Last reviewed: 2026-10-17.** This is a source inventory, not a plan. The code
 may have changed since; the default branch is the source of truth. Similarity
-figures came from comparing function bodies after removing the `Android` and
-`Desktop` name prefixes.
+figures came from comparing function bodies on 2026-10-02 after removing the
+`Android` and `Desktop` name prefixes, and were not remeasured on the review
+date.
 
 **Already shared.** All Compose UI, the sync domain model (planning,
 conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
 policy, and the `NextcloudPlatformServices` interface live in `commonMain`.
 Both service containers implement that interface. `jvmMain` shares login and
-authenticated request policy, application read sessions, detached downloads,
-the resumable chunk-upload state machine, staging-space reservations, support
-diagnostics and intake, text-draft encryption, and WebDAV href decoding.
+authenticated request policy, application read sessions, App Store contract
+acquisition results and failures, detached downloads, the resumable
+chunk-upload state machine, staging-space reservations, support diagnostics and
+intake, text-draft encryption, and WebDAV href decoding.
 
 **Still duplicated.** The gap is below the shared interface: each platform has
 its own HTTP request code, protocol adapters, XML parsers, and sync executor.
@@ -89,7 +93,7 @@ its own HTTP request code, protocol adapters, XML parsers, and sync executor.
 | Medium | Dynamic discovery cache. Most of the logic is identical | `AndroidDynamicDiscoveryCache.kt` | `DesktopDynamicDiscoveryCache.kt` | One `jvmMain` cache |
 | Medium | Deck card draft codec, capacity, and migration policy | `AndroidDeckCardDraftStore.kt` | `DesktopDeckCardDraftStore.kt` | `commonMain` policy behind a storage port |
 | Medium | File read cache. Android skips leased entries during eviction; desktop eviction has no lease check | `AndroidFileReadCache.kt`, `AndroidVirtualFileCache.kt` | `DesktopFileReadCache.kt` | A `jvmMain` blob store |
-| Medium | Account removal stages and journals | Five `AndroidAccountRemoval*` files | `DesktopAccountRemoval.kt` | A `commonMain` removal state machine |
+| Medium | Account removal stages and journals | Four `AndroidAccountRemoval*` files | `DesktopAccountRemoval.kt` | A `commonMain` removal state machine |
 | Medium | Pure policy kept in platform code | `AndroidFileSyncContentEvidence.kt` | `DesktopFileSyncRetryPolicy.kt`, `DesktopFileSyncBatchResult.kt`, `DesktopFileSyncContentSlices.kt` | `commonMain` |
 | Low | Small identical helpers: streaming multipart body, document-editing capability parsing, bounded reads, `sha256Hex` copies, update-channel preferences | Several files | Several files | `jvmMain` |
 

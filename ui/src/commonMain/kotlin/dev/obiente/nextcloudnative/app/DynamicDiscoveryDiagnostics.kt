@@ -10,12 +10,13 @@ internal enum class DynamicDiscoveryStage(val diagnosticValue: String) {
 internal suspend fun <T> observeDynamicDiscoveryStage(
     stage: DynamicDiscoveryStage,
     record: (SupportDiagnosticEventDraft) -> Unit,
+    available: (T) -> Boolean = { it != null },
     block: suspend () -> T,
 ): Result<T> {
     val result = runCatchingPreservingCancellation(block)
     val outcome = when {
         result.isFailure -> "failed"
-        result.getOrNull() == null -> "unavailable"
+        !available(result.getOrThrow()) -> "unavailable"
         else -> "completed"
     }
     // Diagnostics are supplementary: a recorder failure must not discard a usable contract.

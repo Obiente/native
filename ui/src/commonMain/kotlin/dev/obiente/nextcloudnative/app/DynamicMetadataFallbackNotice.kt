@@ -24,18 +24,36 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 
 /**
+ * The callbacks a fallback notice can invoke. A missing callback hides its action, so a screen that
+ * cannot leave for account settings shows only the explanation for that state.
+ */
+internal class DynamicContractFallbackActions(
+    val onCheckAgain: () -> Unit,
+    val onOpenAccountSettings: (() -> Unit)? = null,
+)
+
+/** The callback for [notice]'s action, or null when this screen cannot perform it. */
+internal fun DynamicContractFallbackActions.callbackFor(notice: DynamicContractFallbackNotice): (() -> Unit)? =
+    when (notice.action) {
+        DynamicContractFallbackAction.CheckAgain -> onCheckAgain
+        DynamicContractFallbackAction.OpenAccountSettings -> onOpenAccountSettings
+    }
+
+/**
  * Shown instead of the app-identity record when discovery found no verified API for an app.
  *
- * The identity record (app ID, name, "server-installed") is not useful to a person, and the
- * situation is not a transient load failure, so this explains what happened and what is safe.
+ * The identity record (app ID, name, "server-installed") is not useful to a person, so this
+ * explains what happened, from the typed [reason], and offers the action that can help, if any.
  * Discovery diagnostics stay in support diagnostics; they can contain exception text.
  */
 @Composable
 internal fun DynamicMetadataFallbackNotice(
     appId: String,
     appName: String,
-    onCheckAgain: () -> Unit,
+    reason: DynamicContractFallbackReason?,
+    actions: DynamicContractFallbackActions,
 ) {
+    val notice = dynamicMetadataFallbackNotice(appName, reason)
     Column(
         modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.XLarge),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -43,20 +61,36 @@ internal fun DynamicMetadataFallbackNotice(
     ) {
         Icon(NextcloudIcons.app(appId), contentDescription = null, modifier = Modifier.size(40.dp))
         Text(
-            dynamicMetadataFallbackTitle(appName),
+            notice.title,
             style = MaterialTheme.typography.titleMedium,
             textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            dynamicMetadataFallbackMessage(appName),
+            notice.message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.widthIn(max = 520.dp),
         )
-        OutlinedButton(onClick = onCheckAgain) { Text("Check again") }
+        actions.callbackFor(notice)?.let { onClick ->
+            OutlinedButton(onClick = onClick) { Text(notice.actionLabel) }
+        }
     }
+}
+
+/**
+ * The notice for [reason]. When the installed version offers no verifiable interface, the copy names
+ * the app; every other reason, such as an unreachable source or rejected credentials, keeps its own
+ * explanation and action.
+ */
+internal fun dynamicMetadataFallbackNotice(
+    appName: String,
+    reason: DynamicContractFallbackReason?,
+): DynamicContractFallbackNotice = if (reason == DynamicContractFallbackReason.NoVerifiedContract) {
+    DynamicContractFallbackNotice(dynamicMetadataFallbackTitle(appName), dynamicMetadataFallbackMessage(appName), "Check again")
+} else {
+    reason.fallbackNotice()
 }
 
 internal fun dynamicMetadataFallbackTitle(appName: String): String = "$appName can't be shown natively yet"

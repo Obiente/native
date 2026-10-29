@@ -88,7 +88,7 @@ private suspend fun refreshDynamicAppDiscoveryChecked(
     callbacks.onError(null)
     val candidate = try {
         discoverDynamicAppDescriptor(
-            services = services,
+            services = services.forDiscoveryAttempt(discoveryAttempt),
             session = session,
             app = app,
             serverVersion = serverVersion,
@@ -109,7 +109,7 @@ private suspend fun refreshDynamicAppDiscoveryChecked(
         sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id, cacheProducer)
         callbacks.onError(
             if (retainedDiscovery == null) {
-                failure.message ?: "Could not discover this app's native API."
+                DYNAMIC_DISCOVERY_FAILURE_MESSAGE
             } else {
                 DynamicRetainedReadOnlyMessage
             },

@@ -2615,7 +2615,7 @@ internal fun String.humanize(): String = buildString(length + 4) {
     .filter(String::isNotBlank)
     .joinToString(" ") { word -> word.replaceFirstChar(Char::uppercaseChar) }
 
-private fun JsonObject.string(key: String): String? = (get(key) as? JsonPrimitive)?.contentOrNull
+private fun JsonObject.string(key: String): String? = (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun JsonObject.boolean(key: String): Boolean? = (get(key) as? JsonPrimitive)?.booleanOrNull
 

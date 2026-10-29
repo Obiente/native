@@ -2,108 +2,54 @@ package dev.obiente.nextcloudnative.contracts
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.security.Signature
-import java.security.cert.CertificateFactory
-import java.security.cert.X509CRL
-import java.security.cert.X509Certificate
+import java.io.IOException
 import java.net.URI
-import java.util.Base64
+import java.security.GeneralSecurityException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
-import java.util.zip.GZIPInputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
-import org.snakeyaml.engine.v2.api.Load
-import org.snakeyaml.engine.v2.api.LoadSettings
 import org.w3c.dom.Element
 import org.xml.sax.EntityResolver
 import org.xml.sax.SAXException
 import javax.xml.parsers.DocumentBuilderFactory
-
-data class ContractAcquisitionRequest(
-    val appId: String,
-    val serverVersion: String,
-    val installedAppVersion: String? = null,
-)
-
-data class VerifiedOpenApiContract(
-    val appId: String,
-    /** The version actually installed on the server when it could be discovered. */
-    val appVersion: String,
-    /** The signed release/tag from which this contract was acquired. */
-    val contractVersion: String,
-    val specFile: String,
-    val document: String,
-    val catalogUrl: String,
-    val packageUrl: String,
-    val sourceUrl: String,
-    val sourceKind: OpenApiContractSourceKind,
-    val contractKind: VerifiedContractKind = VerifiedContractKind.OpenApi,
-)
-
-enum class VerifiedContractKind {
-    OpenApi,
-    VerifiedReadRoutes,
-    OpenApiWithVerifiedReadRoutes,
-}
-
-enum class OpenApiContractSourceKind {
-    SignedAppPackage,
-    SignedCompatibleAppPackage,
-    AppStoreLinkedExactGitHubTag,
-    AppStoreLinkedCompatibleGitHubTag,
-}
-
-data class GitHubSourceReference(
-    val owner: String,
-    val repository: String,
-    val tag: String,
-)
-
-data class AppStoreRelease(
-    val appId: String,
-    val version: String,
-    val downloadUrl: String,
-    val signature: String,
-    val signatureDigest: String,
-    val certificatePem: String,
-    val catalogUrl: String,
-    val platformVersionSpec: String? = null,
-    val githubSources: List<GitHubSourceReference> = emptyList(),
-)
-
-interface AppPackageTrustVerifier {
-    fun verifyAndExtract(release: AppStoreRelease, archive: ByteArray): VerifiedPackageContract
-}
-
-data class VerifiedPackageContract(
-    val appId: String,
-    val appVersion: String,
-    val specFile: String,
-    val document: String,
-    val contractKind: VerifiedContractKind = VerifiedContractKind.OpenApi,
-)
 
 class SignedAppStoreContractAcquirer(
     private val httpClient: OkHttpClient = defaultContractHttpClient(),
     private val appStoreBaseUrl: String = OFFICIAL_APP_STORE_BASE_URL,
     private val requireHttps: Boolean = true,
     private val trustVerifier: AppPackageTrustVerifier = NextcloudAppPackageTrustVerifier(),
-    private val catalogCache: AppStoreCatalogCache = MemoryAppStoreCatalogCache(),
+    catalogCache: AppStoreCatalogCache = MemoryAppStoreCatalogCache(),
     private val verifiedContractCache: VerifiedContractCache = MemoryVerifiedContractCache(),
     private val rawGitHubBaseUrl: String = OFFICIAL_RAW_GITHUB_BASE_URL,
     private val githubApiBaseUrl: String = OFFICIAL_GITHUB_API_BASE_URL,
     private val codeloadGitHubBaseUrl: String = OFFICIAL_CODELOAD_GITHUB_BASE_URL,
+    catalogRefreshThrottle: CatalogRefreshThrottle = CatalogRefreshThrottle(),
+    private val responseLimits: ContractResponseLimits = ContractResponseLimits(),
 ) {
     private val verifiedContracts = ConcurrentHashMap<ContractAcquisitionRequest, VerifiedOpenApiContract>()
     private val inFlightAcquisitions =
-        ConcurrentHashMap<ContractAcquisitionRequest, CompletableFuture<VerifiedOpenApiContract?>>()
+        ConcurrentHashMap<Pair<ContractAcquisitionRequest, AcquisitionCachePolicy>, CompletableFuture<ContractAcquisitionOutcome>>()
+    private val catalogFence = CatalogPublicationFence()
+    private val publicationFence = ContractPublicationFence(catalogFence)
+    private val catalogReader = AppStoreCatalogReader(
+        httpClient,
+        catalogCache,
+        catalogRefreshThrottle,
+        responseLimits.catalogBytes,
+        requireHttps,
+        catalogFence,
+    )
+
+    /** Test seam: runs after an acquisition is registered and its generation started. */
+    @Volatile
+    internal var afterRegistration: (ContractAcquisitionRequest, Long) -> Unit = { _, _ -> }
 
     init {
         if (requireHttps) {
@@ -119,12 +65,25 @@ class SignedAppStoreContractAcquirer(
         }
     }
 
-    fun acquire(request: ContractAcquisitionRequest): VerifiedOpenApiContract? {
-        val owner = CompletableFuture<VerifiedOpenApiContract?>()
-        val existing = inFlightAcquisitions.putIfAbsent(request, owner)
-        if (existing != null) {
+    /** Returns the verified contract, or null for any [ContractAcquisitionOutcome.Unavailable] reason. */
+    fun acquire(request: ContractAcquisitionRequest): VerifiedOpenApiContract? =
+        (acquireOutcome(request) as? ContractAcquisitionOutcome.Acquired)?.contract
+
+    /** [cachePolicy] is [AcquisitionCachePolicy.Refresh] only for an explicit user retry; see [CatalogRefreshThrottle]. */
+    fun acquireOutcome(
+        request: ContractAcquisitionRequest,
+        cachePolicy: AcquisitionCachePolicy = AcquisitionCachePolicy.UseCache,
+    ): ContractAcquisitionOutcome {
+        val owner = CompletableFuture<ContractAcquisitionOutcome>()
+        var existing: CompletableFuture<ContractAcquisitionOutcome>? = null
+        // Registration and the generation are one step, so a later refresh or invalidation always sees it.
+        val generation = publicationFence.startIfRegistered(request) {
+            existing = inFlightAcquisitions.putIfAbsent(request to cachePolicy, owner)
+            existing == null
+        }
+        if (generation == null) {
             return try {
-                existing.get()
+                checkNotNull(existing).get()
             } catch (failure: ExecutionException) {
                 throw failure.cause ?: failure
             } catch (failure: InterruptedException) {
@@ -133,45 +92,86 @@ class SignedAppStoreContractAcquirer(
             }
         }
         return try {
-            acquireUncoalesced(request).also { acquired -> owner.complete(acquired) }
+            afterRegistration(request, generation)
+            acquireOnCurrentCatalogs(request, cachePolicy, generation).also { acquired -> owner.complete(acquired) }
         } catch (failure: Throwable) {
             owner.completeExceptionally(failure)
             throw failure
         } finally {
-            inFlightAcquisitions.remove(request, owner)
+            inFlightAcquisitions.remove(request to cachePolicy, owner)
         }
     }
 
-    private fun acquireUncoalesced(request: ContractAcquisitionRequest): VerifiedOpenApiContract? {
-        require(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
+    /**
+     * Runs the acquisition again while a catalog it read was replaced by a newer, different catalog
+     * before its result was accepted, so no accepted result rests on a superseded catalog.
+     */
+    private fun acquireOnCurrentCatalogs(
+        request: ContractAcquisitionRequest,
+        cachePolicy: AcquisitionCachePolicy,
+        generation: Long,
+    ): ContractAcquisitionOutcome {
+        repeat(MAX_CATALOG_ATTEMPTS) {
+            val catalogs = mutableListOf<CatalogObservation>()
+            // Contracts are published through the fence; a no-contract ending is recorded here.
+            when (val outcome = acquireUncoalesced(request, cachePolicy, generation, catalogs)) {
+                is ContractAcquisitionOutcome.Unavailable -> publicationFence.complete(request, generation, outcome, catalogs)
+                else -> outcome
+            }?.let { accepted -> return accepted }
+        }
+        // The catalog kept changing underneath; that proves nothing, so it fences nothing.
+        return ContractAcquisitionOutcome.Unavailable(ContractUnavailableReason.SourceTemporarilyUnavailable)
+    }
+
+    /** Returns null when a catalog it read was superseded before its contract could be published. */
+    private fun acquireUncoalesced(
+        request: ContractAcquisitionRequest,
+        cachePolicy: AcquisitionCachePolicy,
+        generation: Long,
+        catalogs: MutableList<CatalogObservation>,
+    ): ContractAcquisitionOutcome? {
+        requireValidRequest(request.appId.matches(APP_ID_PATTERN)) { "The app ID is invalid." }
         val coreServerVersion = normalizeServerVersion(request.serverVersion)
         request.installedAppVersion?.let { version ->
-            require(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
+            requireValidRequest(version.matches(APP_VERSION_PATTERN)) { "The installed app version is invalid." }
         }
-        verifiedContracts[request]?.let { return it }
-        verifiedContractCache.load(request)?.let { cached ->
-            verifiedContracts[request] = cached
-            return cached
+        val cached = verifiedContracts[request] ?: verifiedContractCache.load(request)?.let { loaded ->
+            // A contract read from disk reaches memory only through the fence, never over a newer result.
+            var current = loaded
+            publicationFence.promote(request, generation) {
+                current = verifiedContracts.putIfAbsent(request, loaded) ?: loaded
+            }
+            current
         }
+        // A refresh looks past a cached contract, which stays until a newly verified contract replaces it.
+        // Every cached return goes through the fence, so a newer accepted result is never contradicted.
+        val serve = { contract: VerifiedOpenApiContract -> publicationFence.serveCached(request, generation, contract) }
+        if (cached != null && cachePolicy == AcquisitionCachePolicy.UseCache) return serve(cached)
         val compatibleCatalogUrl =
             "${appStoreBaseUrl.trimEnd('/')}/platform/$coreServerVersion/apps.json"
-        val platformReleases = fetchCatalogReleases(compatibleCatalogUrl, request.appId)
+        val platformCatalog = catalogReader.read(compatibleCatalogUrl, request.appId, cachePolicy)
+            .also { read -> read.observation?.let(catalogs::add) }
+        // Nothing fresher than a cached contract can come from a platform catalog the window limited.
+        servedOnLimitedRefresh(cachePolicy, cached, serve, platformCatalog)?.let { return it }
+        val platformReleases = platformCatalog.releases
         val exactPlatformRelease = request.installedAppVersion?.let { installed ->
             platformReleases.firstOrNull { release -> release.version == installed }
         }
-        val exactRelease = if (request.installedAppVersion != null && exactPlatformRelease == null) {
-            val allReleasesUrl = "${appStoreBaseUrl.trimEnd('/')}/apps.json"
-            fetchCatalogReleases(allReleasesUrl, request.appId)
-                .firstOrNull { release -> release.version == request.installedAppVersion }
-        } else {
-            exactPlatformRelease
+        val allCatalog = request.installedAppVersion?.takeIf { exactPlatformRelease == null }?.let {
+            catalogReader.read("${appStoreBaseUrl.trimEnd('/')}/apps.json", request.appId, cachePolicy)
+                .also { read -> read.observation?.let(catalogs::add) }
         }
+        // A refused exact lookup does not end the acquisition: fresh platform candidates are still inspected.
+        val exactRelease = exactPlatformRelease
+            ?: allCatalog?.releases?.firstOrNull { release -> release.version == request.installedAppVersion }
         val compatibleReleases = compatibleReleaseCandidates(
             releases = platformReleases,
             installedVersion = request.installedAppVersion,
         ).filterNot { candidate -> candidate.version == exactRelease?.version }
         val releases = listOfNotNull(exactRelease) + compatibleReleases
-        if (releases.isEmpty()) return null
+        // Every no-contract reason below is derived from this record of what was actually inspected.
+        val attempt = ContractAcquisitionEvidence(request.installedAppVersion, platformCatalog, allCatalog)
+        if (releases.isEmpty()) return servedOnLimitedRefresh(cachePolicy, cached, serve, allCatalog) ?: attempt.unavailable()
 
         val missingPackageContracts = mutableListOf<AppStoreRelease>()
         val verifiedRouteFallbacks = mutableListOf<Pair<AppStoreRelease, VerifiedPackageContract>>()
@@ -181,45 +181,77 @@ class SignedAppStoreContractAcquirer(
             val archive = archiveResponse.use { response ->
                 requireSecureResponse(response)
                 if (response.code in setOf(404, 410) && verifiedRouteFallbacks.isNotEmpty()) return@use null
-                check(response.isSuccessful) {
+                requireSuccessfulSource(response) {
                     "Downloading the signed ${request.appId} package failed (HTTP ${response.code})."
                 }
-                response.readBodyLimited(MAX_ARCHIVE_BYTES)
+                response.readBodyLimited(responseLimits.archiveBytes)
             } ?: continue
-            try {
-                val verified = trustVerifier.verifyAndExtract(release, archive)
-                if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
-                    acquireGitHubTagContract(
-                        release = release,
-                        installedAppVersion = request.installedAppVersion,
-                        exact = release.version == request.installedAppVersion,
-                    )?.let { linkedContract ->
-                        return cacheContract(
-                            request,
-                            linkedContract.mergeVerifiedPackageRoutes(verified),
-                        )
-                    }
-                    verifiedRouteFallbacks += release to verified
-                    continue
-                }
-                return cacheContract(
-                    request,
-                    verified.asPackageContract(request, release),
-                )
+            val verified = try {
+                trustVerifier.verifyAndExtract(release, archive)
             } catch (_: OpenApiContractMissingException) {
+                attempt.recordInspected(release, InspectedCandidateResult.PackageWithoutContract)
                 missingPackageContracts += release
+                continue
+            } catch (failure: GeneralSecurityException) {
+                // Signature, certificate, chain, and revocation failures.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: SecurityException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IllegalStateException) {
+                // Identity, digest, and archive structure checks. Size limits and cancellation pass through.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IllegalArgumentException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: IOException) {
+                // A truncated or corrupt archive, or an unsupported metadata encoding.
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: SAXException) {
+                throw failure.asSourceVerificationFailure(request.appId)
+            } catch (failure: JSONException) {
+                throw failure.asSourceVerificationFailure(request.appId)
             }
+            // Missing or unusable bundled trust material, or a parser configuration fault, is local and propagates.
+            if (verified.contractKind == VerifiedContractKind.VerifiedReadRoutes) {
+                acquireGitHubTagContract(
+                    release = release,
+                    installedAppVersion = request.installedAppVersion,
+                    exact = release.version == request.installedAppVersion,
+                    attempt = attempt,
+                )?.let { linkedContract ->
+                    return cacheContract(
+                        request,
+                        generation,
+                        catalogs,
+                        linkedContract.mergeVerifiedPackageRoutes(verified),
+                    )
+                }
+                attempt.recordInspected(release, InspectedCandidateResult.ReadRoutesOnly)
+                verifiedRouteFallbacks += release to verified
+                continue
+            }
+            return cacheContract(request, generation, catalogs, verified.asPackageContract(request, release))
         }
 
         for (release in missingPackageContracts) {
             val exact = release.version == request.installedAppVersion
-            acquireGitHubTagContract(release, request.installedAppVersion, exact)?.let { contract ->
-                return cacheContract(request, contract)
+            acquireGitHubTagContract(release, request.installedAppVersion, exact, attempt)?.let { contract ->
+                return cacheContract(request, generation, catalogs, contract)
             }
         }
-        val (release, verified) = verifiedRouteFallbacks.firstOrNull() ?: return null
-        return cacheContract(request, verified.asPackageContract(request, release))
+        val (release, verified) = verifiedRouteFallbacks.firstOrNull()
+            ?: return servedOnLimitedRefresh(cachePolicy, cached, serve, allCatalog) ?: attempt.unavailable()
+        return cacheContract(request, generation, catalogs, verified.asPackageContract(request, release))
     }
+
+    /**
+     * Forgets the verified contract for [request], for example after it proved unusable downstream.
+     * Acquisitions already running for [request] can no longer publish their result.
+     */
+    fun invalidateVerifiedContract(request: ContractAcquisitionRequest): VerifiedContractRemoval =
+        publicationFence.invalidate(request) {
+            verifiedContracts.remove(request)
+            verifiedContractCache.remove(request)
+        }
 
     private fun VerifiedPackageContract.asPackageContract(
         request: ContractAcquisitionRequest,
@@ -241,18 +273,37 @@ class SignedAppStoreContractAcquirer(
         contractKind = contractKind,
     )
 
+    /**
+     * Publishes [contract], read from [catalogs], unless [generation] is superseded. A superseded
+     * acquisition never reports its own rejected contract; it reports the newer accepted result.
+     * Returns null when a catalog was superseded meanwhile. See [ContractPublicationFence].
+     */
     private fun cacheContract(
         request: ContractAcquisitionRequest,
+        generation: Long,
+        catalogs: List<CatalogObservation>,
         contract: VerifiedOpenApiContract,
-    ): VerifiedOpenApiContract = contract.also {
-        verifiedContracts[request] = it
-        runCatching { verifiedContractCache.store(request, it) }
+    ): ContractAcquisitionOutcome? {
+        var cacheStore = VerifiedContractStore.Stored
+        val outcome = publicationFence.publish(request, generation, contract, catalogs) { accepted ->
+            verifiedContracts[request] = accepted
+            runCatching { verifiedContractCache.store(request, accepted) }
+                .onSuccess { cacheStore = it }
+                .onFailure { cacheStore = VerifiedContractStore.Failed }
+        }
+        // The in-memory contract is served even when it could not be persisted; the result says so.
+        return if (outcome is ContractAcquisitionOutcome.Acquired && outcome.contract === contract) {
+            outcome.copy(cacheStore = cacheStore)
+        } else {
+            outcome
+        }
     }
 
     private fun acquireGitHubTagContract(
         release: AppStoreRelease,
         installedAppVersion: String?,
         exact: Boolean,
+        attempt: ContractAcquisitionEvidence,
     ): VerifiedOpenApiContract? {
         release.githubSources.forEach sourceLoop@ { source ->
             val sourceRoot = "${rawGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}/${source.tag}"
@@ -260,7 +311,7 @@ class SignedAppStoreContractAcquirer(
             val infoXml = fetchOptionalGitHubResource(
                 url = infoUrl,
                 expectedBaseUrl = rawGitHubBaseUrl,
-                maximumBytes = MAX_APP_INFO_BYTES,
+                maximumBytes = responseLimits.appInfoBytes,
             )?.decodeToString() ?: return@sourceLoop
             val identity = runCatching { parseAppInfoIdentity(infoXml) }.getOrNull() ?: return@sourceLoop
             if (identity.first != release.appId || identity.second != release.version) return@sourceLoop
@@ -270,19 +321,19 @@ class SignedAppStoreContractAcquirer(
             val treeBytes = fetchOptionalGitHubResource(
                 url = treeUrl,
                 expectedBaseUrl = githubApiBaseUrl,
-                maximumBytes = MAX_GITHUB_TREE_BYTES,
+                maximumBytes = responseLimits.githubTreeBytes,
                 accept = "application/vnd.github+json",
                 recoverableStatusCodes = setOf(403, 429),
             )
             val contracts = treeBytes?.let { bytes ->
                 val tree = runCatching { JSONObject(bytes.decodeToString()) }.getOrNull()
-                val entries = tree?.takeUnless { it.optBoolean("truncated", true) }?.optJSONArray("tree")
+                val entries = tree?.takeUnless { it.booleanValue("truncated", absent = true, wrongType = true) }?.optJSONArray("tree")
                 entries?.let { treeEntries ->
                     val candidates = (0 until treeEntries.length())
                         .asSequence()
                         .mapNotNull(treeEntries::optJSONObject)
-                        .filter { entry -> entry.optString("type") == "blob" }
-                        .map { entry -> entry.optString("path") }
+                        .filter { entry -> entry.stringValue("type") == "blob" }
+                        .mapNotNull { entry -> entry.stringValue("path") }
                         .filter { path -> path.substringAfterLast('/').matches(OPEN_API_FILE_PATTERN) }
                         .distinct()
                         .sorted()
@@ -298,7 +349,7 @@ class SignedAppStoreContractAcquirer(
                         parseOpenApiCandidate(fileName, contractBytes)?.copy(sourceUrl = specUrl)
                     }
                 }
-            } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot))
+            } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot, attempt))
             selectOpenApiCandidate(contracts, release.appId)
                 ?.let { selected ->
                 val bundled = bundleGitHubSchemaReferences(sourceRoot, selected)
@@ -327,25 +378,24 @@ class SignedAppStoreContractAcquirer(
         source: GitHubSourceReference,
         release: AppStoreRelease,
         sourceRoot: String,
+        attempt: ContractAcquisitionEvidence,
     ): OpenApiCandidate? {
         val archiveUrl = "${codeloadGitHubBaseUrl.trimEnd('/')}/${source.owner}/${source.repository}" +
             "/tar.gz/refs/tags/${source.tag}"
         val archive = fetchOptionalGitHubResource(
             url = archiveUrl,
             expectedBaseUrl = codeloadGitHubBaseUrl,
-            maximumBytes = MAX_ARCHIVE_BYTES,
+            maximumBytes = responseLimits.archiveBytes,
             recoverableStatusCodes = setOf(403, 429),
+            // The archive is the last exact-tag fallback; a refusal here leaves the outcome unknown.
+            onRecoverableStatus = attempt::markSourceTemporarilyUnavailable,
         ) ?: return null
-        val extracted = try {
-            extractOpenApiContract(archive, release)
-        } catch (_: OpenApiContractMissingException) {
-            return null
-        }
+        val extracted = extractLinkedSourceContractOrNull(archive, release) ?: return null
         return OpenApiCandidate(
             path = extracted.specFile,
             document = extracted.document,
             apiVersion = runCatching {
-                JSONObject(extracted.document).optJSONObject("info")?.optString("version")
+                JSONObject(extracted.document).optJSONObject("info")?.stringValue("version")
             }.getOrNull(),
             sourceUrl = "$sourceRoot/${extracted.specFile}",
         )
@@ -382,7 +432,7 @@ class SignedAppStoreContractAcquirer(
             if (depth > MAX_EXTERNAL_REFERENCE_DEPTH) return value
             return when (value) {
                 is JSONObject -> {
-                    val reference = value.optString("${'$'}ref").takeIf(String::isNotBlank)
+                    val reference = value.stringValue("${'$'}ref")?.takeIf(String::isNotBlank)
                     if (reference != null) {
                         val (filePart, fragment) = splitSchemaReference(reference) ?: return value
                         if (filePart.isEmpty() && preserveLocalReferences) return value
@@ -466,64 +516,59 @@ class SignedAppStoreContractAcquirer(
         maximumBytes: Long,
         accept: String = "application/octet-stream",
         recoverableStatusCodes: Set<Int> = emptySet(),
+        onRecoverableStatus: () -> Unit = {},
     ): ByteArray? {
         requireSecureUrl(url)
+        return try {
+            fetchLinkedResource(url, expectedBaseUrl, maximumBytes, accept, recoverableStatusCodes, onRecoverableStatus)
+        } catch (failure: ContractLinkedSourceNetworkException) {
+            throw failure
+        } catch (failure: IOException) {
+            // The App Store already answered; only the linked source failed to respond.
+            throw ContractLinkedSourceNetworkException(failure)
+        }
+    }
+
+    private fun fetchLinkedResource(
+        url: String,
+        expectedBaseUrl: String,
+        maximumBytes: Long,
+        accept: String,
+        recoverableStatusCodes: Set<Int>,
+        onRecoverableStatus: () -> Unit,
+    ): ByteArray? {
         val response = execute(Request.Builder().url(url).header("Accept", accept).get().build())
         return response.use { githubResponse ->
-            if (githubResponse.code == 404 || githubResponse.code in recoverableStatusCodes) return@use null
-            check(githubResponse.isSuccessful) {
+            if (githubResponse.code == 404) return@use null
+            if (githubResponse.code in recoverableStatusCodes) return@use null.also { onRecoverableStatus() }
+            requireSuccessfulSource(githubResponse) {
                 "Loading an exact-tag GitHub contract resource failed (HTTP ${githubResponse.code})."
             }
             requireSecureResponse(githubResponse)
             requireExpectedOrigin(githubResponse, expectedBaseUrl)
-            githubResponse.readBodyLimited(maximumBytes)
-        }
-    }
-
-    private fun fetchCatalogReleases(
-        catalogUrl: String,
-        appId: String,
-    ): List<AppStoreRelease> {
-        requireSecureUrl(catalogUrl)
-        catalogCache.load(catalogUrl)?.let { cached ->
-            return parseReleases(
-                cached.decodeToString(),
-                appId,
-                catalogUrl,
-                requireOfficialGitHubHost = requireHttps,
-            )
-        }
-        val response = execute(Request.Builder().url(catalogUrl).get().build())
-        val bytes = response.use { catalogResponse ->
-            check(catalogResponse.isSuccessful) {
-                "Loading the Nextcloud App Store catalog failed (HTTP ${catalogResponse.code})."
+            // An oversized linked resource is unusable, like a missing one; the lower-trust fallback moves on.
+            try {
+                githubResponse.readBodyLimited(maximumBytes)
+            } catch (_: ContractSourceTooLargeException) {
+                null
             }
-            requireSecureResponse(catalogResponse)
-            catalogResponse.readBodyLimited(MAX_CATALOG_BYTES)
         }
-        catalogCache.store(catalogUrl, bytes)
-        return parseReleases(
-            bytes.decodeToString(),
-            appId,
-            catalogUrl,
-            requireOfficialGitHubHost = requireHttps,
-        )
     }
 
     private fun execute(request: Request): Response = httpClient.newCall(request).execute()
 
     private fun requireSecureUrl(url: String) {
-        if (requireHttps) require(url.startsWith("https://")) { "Contract sources must use HTTPS." }
+        if (requireHttps) requireVerifiedSource(url.startsWith("https://")) { "Contract sources must use HTTPS." }
     }
 
     private fun requireSecureResponse(response: Response) {
-        if (requireHttps) require(response.request.url.isHttps) { "A contract request was redirected away from HTTPS." }
+        if (requireHttps) requireVerifiedSource(response.request.url.isHttps) { "A contract request left HTTPS." }
     }
 
     private fun requireExpectedOrigin(response: Response, expectedBaseUrl: String) {
         val expected = URI(expectedBaseUrl)
         val actual = response.request.url
-        check(
+        requireVerifiedSource(
             actual.scheme.equals(expected.scheme, ignoreCase = true) &&
                 actual.host.equals(expected.host, ignoreCase = true) &&
                 actual.port == expected.effectivePort()
@@ -535,12 +580,9 @@ class SignedAppStoreContractAcquirer(
         const val OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com"
         const val OFFICIAL_GITHUB_API_BASE_URL = "https://api.github.com"
         const val OFFICIAL_CODELOAD_GITHUB_BASE_URL = "https://codeload.github.com"
-        private const val MAX_CATALOG_BYTES = 32L * 1024L * 1024L
-        private const val MAX_ARCHIVE_BYTES = 64L * 1024L * 1024L
-        private const val MAX_APP_INFO_BYTES = 512L * 1024L
-        private const val MAX_GITHUB_TREE_BYTES = 8L * 1024L * 1024L
         private val APP_ID_PATTERN = Regex("[A-Za-z0-9_.-]+")
         private val APP_VERSION_PATTERN = Regex("[0-9A-Za-z][0-9A-Za-z.+_-]*")
+        private const val MAX_CATALOG_ATTEMPTS = 3
     }
 }
 
@@ -573,307 +615,9 @@ private fun defaultContractHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .callTimeout(120, TimeUnit.SECONDS)
     .build()
 
-internal fun selectRelease(
-    catalogJson: String,
-    request: ContractAcquisitionRequest,
-    catalogUrl: String,
-    requireOfficialGitHubHost: Boolean = true,
-): AppStoreRelease? {
-    val candidates = parseReleases(
-        catalogJson = catalogJson,
-        appId = request.appId,
-        catalogUrl = catalogUrl,
-        requireOfficialGitHubHost = requireOfficialGitHubHost,
-    ).filter { release ->
-        request.installedAppVersion != null || !release.version.isRecognizedPrerelease()
-    }.filter { release ->
-        request.installedAppVersion == null || release.version == request.installedAppVersion
-    }
-    return candidates.maxWithOrNull { left, right ->
-        compareSemanticVersions(left.version, right.version)
-    }
-}
-
-private fun parseReleases(
-    catalogJson: String,
-    appId: String,
-    catalogUrl: String,
-    requireOfficialGitHubHost: Boolean,
-): List<AppStoreRelease> {
-    val apps = JSONArray(catalogJson)
-    val app = (0 until apps.length())
-        .asSequence()
-        .mapNotNull(apps::optJSONObject)
-        .firstOrNull { candidate -> candidate.optString("id") == appId }
-        ?: return emptyList()
-    val certificate = app.optString("certificate").takeIf(String::isNotBlank) ?: return emptyList()
-    val releases = app.optJSONArray("releases") ?: return emptyList()
-    return (0 until releases.length())
-        .asSequence()
-        .mapNotNull(releases::optJSONObject)
-        .filter { release -> !release.optBoolean("isNightly", false) }
-        .mapNotNull { release ->
-            val version = release.optString("version").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val download = release.optString("download").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val signature = release.optString("signature").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val digest = release.optString("signatureDigest").takeIf(String::isNotBlank) ?: return@mapNotNull null
-            AppStoreRelease(
-                appId = appId,
-                version = version,
-                downloadUrl = download,
-                signature = signature,
-                signatureDigest = digest,
-                certificatePem = certificate,
-                catalogUrl = catalogUrl,
-                platformVersionSpec = release.optString("platformVersionSpec").takeIf(String::isNotBlank),
-                githubSources = deriveGitHubSources(
-                    app = app,
-                    downloadUrl = download,
-                    releaseVersion = version,
-                    requireOfficialReleaseHost = requireOfficialGitHubHost,
-                ),
-            )
-        }
-        .toList()
-}
-
-private data class ParsedVersion(
-    val numeric: List<Int>,
-    val suffix: String,
-)
-
-private fun normalizeServerVersion(version: String): String {
-    val parsed = parseVersion(version)
-    require(parsed != null && parsed.numeric.size >= 3) {
-        "The server version must contain at least three numeric components."
-    }
-    return parsed.numeric.take(3).joinToString(".")
-}
-
-private fun parseVersion(version: String): ParsedVersion? {
-    if (version.isBlank() || !version.first().isDigit()) return null
-    val numeric = mutableListOf<Int>()
-    var index = 0
-    while (index < version.length) {
-        val start = index
-        while (index < version.length && version[index].isDigit()) index += 1
-        if (start == index) break
-        numeric += version.substring(start, index).toIntOrNull() ?: return null
-        if (index >= version.length || version[index] != '.') break
-        if (index + 1 >= version.length || !version[index + 1].isDigit()) break
-        index += 1
-    }
-    if (numeric.isEmpty()) return null
-    return ParsedVersion(numeric, version.substring(index))
-}
-
-private fun String.isRecognizedPrerelease(): Boolean {
-    val suffix = parseVersion(this)?.suffix?.lowercase().orEmpty()
-    return PRE_RELEASE_MARKERS.any(suffix::contains)
-}
-
-private fun compatibleReleaseCandidates(
-    releases: List<AppStoreRelease>,
-    installedVersion: String?,
-): List<AppStoreRelease> {
-    if (installedVersion == null) {
-        return releases
-            .filterNot { release -> release.version.isRecognizedPrerelease() }
-            .sortedWith { left, right -> compareSemanticVersions(right.version, left.version) }
-    }
-    val installed = parseVersion(installedVersion) ?: return emptyList()
-    if (installed.numeric.size < 2 || installedVersion.isRecognizedPrerelease()) return emptyList()
-    return releases
-        .filterNot { release -> release.version.isRecognizedPrerelease() }
-        .filter { release ->
-            val candidate = parseVersion(release.version)
-            candidate != null && candidate.numeric.size >= 2 &&
-                candidate.numeric[0] == installed.numeric[0] &&
-                candidate.numeric[1] == installed.numeric[1]
-        }
-        .sortedWith { left, right -> compareCompatibility(left.version, right.version, installedVersion) }
-}
-
-private fun compareCompatibility(left: String, right: String, installed: String): Int {
-    val installedVersion = parseVersion(installed) ?: return left.compareTo(right)
-    val leftVersion = parseVersion(left) ?: return 1
-    val rightVersion = parseVersion(right) ?: return -1
-    val leftPatch = leftVersion.numeric.getOrElse(2) { 0 }
-    val rightPatch = rightVersion.numeric.getOrElse(2) { 0 }
-    val installedPatch = installedVersion.numeric.getOrElse(2) { 0 }
-    val leftIsPrior = leftPatch <= installedPatch
-    val rightIsPrior = rightPatch <= installedPatch
-    if (leftIsPrior != rightIsPrior) return if (leftIsPrior) -1 else 1
-    return if (leftIsPrior) rightPatch.compareTo(leftPatch) else leftPatch.compareTo(rightPatch)
-}
-
-private data class GitHubRepository(val owner: String, val repository: String)
-
-private data class GitHubReleaseLocation(
-    val repository: GitHubRepository,
-    val tag: String,
-)
-
-private fun deriveGitHubSources(
-    app: JSONObject,
-    downloadUrl: String,
-    releaseVersion: String,
-    requireOfficialReleaseHost: Boolean,
-): List<GitHubSourceReference> {
-    val release = parseGitHubReleaseLocation(downloadUrl, requireOfficialReleaseHost) ?: return emptyList()
-    val repositories = buildList {
-        parseGitHubRepository(app.optString("repository"))?.let(::add)
-        parseGitHubRepository(app.optString("website"))?.let(::add)
-        add(release.repository)
-    }.distinct()
-    val conventionalTags = setOf(releaseVersion, "v$releaseVersion")
-    val tags = (if (release.tag in conventionalTags) {
-        listOf(release.tag)
-    } else {
-        listOf(release.tag, "v$releaseVersion", releaseVersion)
-    })
-        .distinct()
-        .filter { tag -> tag.matches(GITHUB_TAG_PATTERN) }
-    return repositories.flatMap { repository ->
-        tags.map { tag -> GitHubSourceReference(repository.owner, repository.repository, tag) }
-    }
-}
-
-private fun parseGitHubRepository(url: String): GitHubRepository? {
-    val uri = runCatching { URI(url) }.getOrNull() ?: return null
-    if (!uri.scheme.equals("https", ignoreCase = true) || !uri.host.equals("github.com", ignoreCase = true)) {
-        return null
-    }
-    if (
-        uri.userInfo != null ||
-        uri.port != -1 ||
-        uri.query != null ||
-        uri.fragment?.takeIf(String::isNotBlank)?.equals("readme", ignoreCase = true) == false
-    ) {
-        return null
-    }
-    val parts = uri.rawPath.trim('/').split('/').filter(String::isNotBlank)
-    if (parts.size != 2) return null
-    val owner = parts[0]
-    val repository = parts[1].removeSuffix(".git")
-    if (!owner.matches(GITHUB_REPOSITORY_COMPONENT) || !repository.matches(GITHUB_REPOSITORY_COMPONENT)) return null
-    return GitHubRepository(owner, repository)
-}
-
-private fun parseGitHubReleaseLocation(
-    url: String,
-    requireOfficialHost: Boolean,
-): GitHubReleaseLocation? {
-    val uri = runCatching { URI(url) }.getOrNull() ?: return null
-    if (
-        requireOfficialHost &&
-        (!uri.scheme.equals("https", ignoreCase = true) ||
-            !uri.host.equals("github.com", ignoreCase = true) ||
-            uri.port != -1)
-    ) {
-        return null
-    }
-    if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
-    val parts = uri.rawPath.trim('/').split('/').filter(String::isNotBlank)
-    if (parts.size < 6 || parts[2] != "releases" || parts[3] != "download") return null
-    val owner = parts[0]
-    val repository = parts[1].removeSuffix(".git")
-    val tag = parts[4]
-    if (
-        !owner.matches(GITHUB_REPOSITORY_COMPONENT) ||
-        !repository.matches(GITHUB_REPOSITORY_COMPONENT) ||
-        !tag.matches(GITHUB_TAG_PATTERN)
-    ) {
-        return null
-    }
-    return GitHubReleaseLocation(GitHubRepository(owner, repository), tag)
-}
-
-internal fun compareSemanticVersions(left: String, right: String): Int {
-    val leftVersion = parseVersion(left) ?: return left.compareTo(right)
-    val rightVersion = parseVersion(right) ?: return left.compareTo(right)
-    repeat(maxOf(leftVersion.numeric.size, rightVersion.numeric.size)) { index ->
-        val difference = (leftVersion.numeric.getOrNull(index) ?: 0)
-            .compareTo(rightVersion.numeric.getOrNull(index) ?: 0)
-        if (difference != 0) return difference
-    }
-    if (leftVersion.suffix.isBlank() != rightVersion.suffix.isBlank()) {
-        return if (leftVersion.suffix.isBlank()) 1 else -1
-    }
-    return leftVersion.suffix.compareTo(rightVersion.suffix)
-}
-
-class NextcloudAppPackageTrustVerifier(
-    private val trustResourceLoader: (String) -> ByteArray = ::loadBundledTrustResource,
-) : AppPackageTrustVerifier {
-    override fun verifyAndExtract(release: AppStoreRelease, archive: ByteArray): VerifiedPackageContract {
-        require(release.signatureDigest.equals("sha512", ignoreCase = true)) {
-            "The package uses an unsupported signature digest."
-        }
-        val factory = CertificateFactory.getInstance("X.509")
-        val trustedCertificates = factory.generateCertificates(
-            ByteArrayInputStream(trustResourceLoader(ROOT_CERTIFICATES_RESOURCE)),
-        ).map { certificate -> certificate as X509Certificate }
-        check(trustedCertificates.isNotEmpty()) { "The Nextcloud trust bundle is empty." }
-        trustedCertificates.forEach(X509Certificate::checkValidity)
-        val appCertificate = factory.generateCertificate(
-            ByteArrayInputStream(release.certificatePem.encodeToByteArray()),
-        ) as X509Certificate
-        appCertificate.checkValidity()
-        check(appCertificate.subjectCommonName() == release.appId) {
-            "The package certificate does not belong to ${release.appId}."
-        }
-        check(appCertificate.sigAlgName.contains("RSA", ignoreCase = true)) {
-            "The package certificate uses an unsupported key algorithm."
-        }
-        verifyCertificateChain(appCertificate, trustedCertificates)
-        val crl = factory.generateCRL(
-            ByteArrayInputStream(trustResourceLoader(ROOT_REVOCATION_LIST_RESOURCE)),
-        ) as X509CRL
-        val crlIssuer = trustedCertificates.firstOrNull { certificate ->
-            certificate.subjectX500Principal == crl.issuerX500Principal
-        } ?: error("The CRL issuer is missing from the Nextcloud trust bundle.")
-        crl.verify(crlIssuer.publicKey)
-        check(!crl.isRevoked(appCertificate)) { "The package certificate has been revoked." }
-        val signature = Signature.getInstance("SHA512withRSA")
-        signature.initVerify(appCertificate.publicKey)
-        signature.update(archive)
-        val signatureBytes = Base64.getMimeDecoder().decode(release.signature)
-        check(signature.verify(signatureBytes)) { "The downloaded app package signature is invalid." }
-        return extractOpenApiContract(archive, release)
-    }
-}
-
 class OpenApiContractMissingException(message: String) : IllegalStateException(message)
 
-private fun verifyCertificateChain(
-    leaf: X509Certificate,
-    trustedCertificates: List<X509Certificate>,
-) {
-    var current = leaf
-    val visited = mutableSetOf<String>()
-    repeat(trustedCertificates.size + 1) {
-        val identity = current.subjectX500Principal.name
-        check(visited.add(identity)) { "The package certificate chain contains a cycle." }
-        val issuer = trustedCertificates.firstOrNull { candidate ->
-            candidate.subjectX500Principal == current.issuerX500Principal
-        } ?: error("The package certificate was not issued by Nextcloud's trusted authority.")
-        current.verify(issuer.publicKey)
-        if (issuer.subjectX500Principal == issuer.issuerX500Principal) {
-            issuer.verify(issuer.publicKey)
-            return
-        }
-        current = issuer
-    }
-    error("The package certificate chain is too deep.")
-}
-
-private fun X509Certificate.subjectCommonName(): String? {
-    val principal = subjectX500Principal.getName("RFC2253")
-    return Regex("(?:^|,)CN=([^,]+)").find(principal)?.groupValues?.get(1)
-}
-
-private fun extractOpenApiContract(
+internal fun extractOpenApiContract(
     archive: ByteArray,
     release: AppStoreRelease,
 ): VerifiedPackageContract {
@@ -917,14 +661,14 @@ private fun extractOpenApiContract(
 
 private fun parseOpenApiCandidate(path: String, bytes: ByteArray): OpenApiCandidate? {
     val document = parseStructuredObject(path, bytes) ?: return null
-    if (!document.optString("openapi").startsWith("3.") || document.optJSONObject("paths") == null) {
+    if (document.stringValue("openapi")?.startsWith("3.") != true || document.optJSONObject("paths") == null) {
         return null
     }
     val normalized = document.toString()
     return OpenApiCandidate(
         path = path,
         document = normalized,
-        apiVersion = document.optJSONObject("info")?.optString("version")?.takeIf(String::isNotBlank),
+        apiVersion = document.optJSONObject("info")?.stringValue("version")?.takeIf(String::isNotBlank),
     )
 }
 
@@ -979,39 +723,6 @@ private fun resolveJsonPointer(root: JSONObject, pointer: String): Any? {
     return value
 }
 
-internal fun parseYamlObject(source: String): JSONObject? {
-    val settings = LoadSettings.builder()
-        .setLabel("OpenAPI contract")
-        .setAllowDuplicateKeys(false)
-        .setMaxAliasesForCollections(MAX_YAML_ALIASES)
-        .setCodePointLimit(MAX_SELECTED_FILE_BYTES.toInt())
-        .build()
-    val loaded = Load(settings).loadFromString(source) ?: return null
-    return yamlToJson(loaded, 0, intArrayOf(0)) as? JSONObject
-}
-
-private fun yamlToJson(value: Any?, depth: Int, nodes: IntArray): Any {
-    check(depth <= MAX_YAML_DEPTH) { "The OpenAPI YAML is nested too deeply." }
-    nodes[0] += 1
-    check(nodes[0] <= MAX_YAML_NODES) { "The OpenAPI YAML has too many values." }
-    return when (value) {
-        null -> JSONObject.NULL
-        is Map<*, *> -> JSONObject().also { result ->
-            value.forEach { (key, child) ->
-                check(key is String || key is Number || key is Boolean) {
-                    "OpenAPI YAML object keys must be scalar values."
-                }
-                result.put(key.toString(), yamlToJson(child, depth + 1, nodes))
-            }
-        }
-        is Iterable<*> -> JSONArray().also { result ->
-            value.forEach { child -> result.put(yamlToJson(child, depth + 1, nodes)) }
-        }
-        is String, is Number, is Boolean -> value
-        else -> value.toString()
-    }
-}
-
 internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
     check(!infoXml.contains("<!DOCTYPE", ignoreCase = true)) { "DOCTYPE is not allowed in app metadata." }
     check(!infoXml.contains("<!ENTITY", ignoreCase = true)) { "Entities are not allowed in app metadata." }
@@ -1046,123 +757,10 @@ internal fun parseAppInfoIdentity(infoXml: String): Pair<String, String> {
     return requiredElement("id") to requiredElement("version")
 }
 
-private fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
-    val selected = linkedMapOf<String, ByteArray>()
-    GZIPInputStream(ByteArrayInputStream(archive)).use { input ->
-        var totalUncompressed = 0L
-        var pendingLongPath: String? = null
-        while (true) {
-            val header = input.readExactlyOrNull(TAR_BLOCK_BYTES) ?: break
-            if (header.all { byte -> byte == 0.toByte() }) break
-            val name = header.tarText(0, 100)
-            val prefix = header.tarText(345, 155)
-            val headerName = if (prefix.isBlank()) name else "$prefix/$name"
-            val size = header.tarOctal(124, 12)
-            check(size in 0..MAX_TAR_ENTRY_BYTES) { "An app package entry is too large." }
-            totalUncompressed += size
-            check(totalUncompressed <= MAX_TAR_UNCOMPRESSED_BYTES) { "The app package expands beyond the safety limit." }
-            val type = header[156].toInt().toChar()
-            if (type == 'L') {
-                check(size <= MAX_TAR_PATH_BYTES) { "An app package path exceeds the safety limit." }
-                pendingLongPath = decodeTarLongPath(input.readExactly(size.toInt()))
-                val longPathPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(longPathPadding)
-                continue
-            }
-            if (type in TAR_METADATA_TYPES) {
-                input.skipExactly(size)
-                val metadataPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(metadataPadding)
-                continue
-            }
-            val fullName = pendingLongPath ?: headerName
-            pendingLongPath = null
-            if (isCanonicalTarRootDirectory(fullName, type)) {
-                input.skipExactly(size)
-                val rootPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-                input.skipExactly(rootPadding)
-                continue
-            }
-            validateArchivePath(fullName)
-            val staticMetadata = fullName.endsWith("/appinfo/routes.php") ||
-                (fullName.contains("/lib/Controller/") && fullName.endsWith("Controller.php"))
-            val keep = (type == '\u0000' || type == '0') && (
-                fullName.endsWith("/appinfo/info.xml") ||
-                    fullName.substringAfterLast('/').matches(OPEN_API_FILE_PATTERN) ||
-                    staticMetadata
-                )
-            if (keep) {
-                val selectedFileLimit = if (staticMetadata) MAX_STATIC_METADATA_FILE_BYTES else MAX_SELECTED_FILE_BYTES
-                check(size <= selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
-                check(selected.size < MAX_SELECTED_ARCHIVE_FILES) { "The app package has too many contract metadata files." }
-                selected[fullName] = input.readExactly(size.toInt())
-            } else {
-                input.skipExactly(size)
-            }
-            val padding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
-            input.skipExactly(padding)
-        }
-        check(pendingLongPath == null) { "The app package ends with an incomplete path record." }
-    }
-    return selected
-}
-
-private fun validateArchivePath(path: String) {
-    require(path.isNotBlank() && !path.startsWith('/') && '\\' !in path) { "The app package contains an unsafe path." }
-    require(path.split('/').none { segment -> segment == "." || segment == ".." }) {
-        "The app package contains a traversing path."
-    }
-}
-
-private fun ByteArray.tarText(offset: Int, length: Int): String =
-    copyOfRange(offset, offset + length).takeWhile { byte -> byte != 0.toByte() }.toByteArray()
-        .decodeToString()
-        .trim()
-
-private fun ByteArray.tarOctal(offset: Int, length: Int): Long {
-    val value = tarText(offset, length).trim().trimStart('0')
-    return if (value.isEmpty()) 0L else value.toLong(8)
-}
-
-private fun InputStream.readExactlyOrNull(length: Int): ByteArray? {
-    val first = read()
-    if (first == -1) return null
-    val result = ByteArray(length)
-    result[0] = first.toByte()
-    var offset = 1
-    while (offset < length) {
-        val read = read(result, offset, length - offset)
-        check(read > 0) { "The app package is truncated." }
-        offset += read
-    }
-    return result
-}
-
-private fun InputStream.readExactly(length: Int): ByteArray {
-    val result = ByteArray(length)
-    var offset = 0
-    while (offset < length) {
-        val read = read(result, offset, length - offset)
-        check(read > 0) { "The app package is truncated." }
-        offset += read
-    }
-    return result
-}
-
-private fun InputStream.skipExactly(length: Long) {
-    var remaining = length
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    while (remaining > 0) {
-        val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-        check(read > 0) { "The app package is truncated." }
-        remaining -= read
-    }
-}
-
-private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
+internal fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
     val responseBody = body
     val declaredLength = responseBody.contentLength()
-    check(declaredLength < 0 || declaredLength <= maximumBytes) { "The response is too large." }
+    if (declaredLength > maximumBytes) throw ContractSourceTooLargeException(maximumBytes, "The response is too large.")
     return responseBody.byteStream().use { input ->
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -1171,7 +769,7 @@ private fun Response.readBodyLimited(maximumBytes: Long): ByteArray {
             val read = input.read(buffer)
             if (read == -1) break
             total += read
-            check(total <= maximumBytes) { "The response is too large." }
+            if (total > maximumBytes) throw ContractSourceTooLargeException(maximumBytes, "The response is too large.")
             output.write(buffer, 0, read)
         }
         output.toByteArray()
@@ -1185,28 +783,9 @@ private fun URI.effectivePort(): Int = when {
     else -> -1
 }
 
-private fun loadBundledTrustResource(name: String): ByteArray =
-    NextcloudAppPackageTrustVerifier::class.java.classLoader.getResourceAsStream(name)?.use(InputStream::readBytes)
-        ?: error("The bundled Nextcloud trust resource is missing: $name")
-
-private const val ROOT_CERTIFICATES_RESOURCE = "nextcloud-codesigning/root.crt"
-private const val ROOT_REVOCATION_LIST_RESOURCE = "nextcloud-codesigning/root.crl"
-private const val TAR_BLOCK_BYTES = 512
-private const val MAX_TAR_ENTRY_BYTES = 128L * 1024L * 1024L
-private const val MAX_TAR_UNCOMPRESSED_BYTES = 256L * 1024L * 1024L
-private const val MAX_SELECTED_FILE_BYTES = 16L * 1024L * 1024L
-private const val MAX_STATIC_METADATA_FILE_BYTES = 1L * 1024L * 1024L
-private const val MAX_SELECTED_ARCHIVE_FILES = 320
+internal const val MAX_SELECTED_FILE_BYTES = 16L * 1024L * 1024L
 private const val MAX_OPEN_API_CANDIDATES = 64
 private const val MAX_EXTERNAL_SCHEMA_DOCUMENTS = 16
 private const val MAX_EXTERNAL_REFERENCE_DEPTH = 24
-private const val MAX_YAML_ALIASES = 32
-private const val MAX_YAML_DEPTH = 100
-private const val MAX_YAML_NODES = 250_000
-private val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
-private val GITHUB_REPOSITORY_COMPONENT = Regex("[A-Za-z0-9_.-]+")
+internal val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
 private val SAFE_REPOSITORY_PATH_SEGMENT = Regex("[A-Za-z0-9_.-]+")
-private val GITHUB_TAG_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._+-]*")
-private val PRE_RELEASE_MARKERS = listOf("alpha", "beta", "rc", "dev", "nightly")
-private val TAR_METADATA_TYPES = setOf('g', 'x', 'K')
-private const val MAX_TAR_PATH_BYTES = 4_096L
