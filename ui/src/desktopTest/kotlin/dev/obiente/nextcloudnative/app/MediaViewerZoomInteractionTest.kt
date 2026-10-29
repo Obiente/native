@@ -13,6 +13,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -30,6 +34,7 @@ class MediaViewerZoomInteractionTest {
         var timelineCompositions = 0
         var timelineTaps = 0
         var closes = 0
+        var timelineFocused = false
         nativeSceneTest(400, 700, content = {
             AppRouteTransition(
                 screen = Screen.Media,
@@ -53,6 +58,7 @@ class MediaViewerZoomInteractionTest {
                         contentDescription = "Beach",
                         modifier = Modifier.size(100.dp).padding(8.dp)
                             .mediaZoomSource("/Photos/beach.jpg", ImageBitmap(160, 90), cropped = true)
+                            .onFocusChanged { if (it.isFocused && viewerOpen.value) timelineFocused = true }
                             .clickable { timelineTaps++; viewerOpen.value = true },
                     )
                     Text("Timeline", Modifier.semantics { contentDescription = "Timeline" })
@@ -65,6 +71,17 @@ class MediaViewerZoomInteractionTest {
             assertFalse(has("Timeline"), "The timeline below is hidden from accessibility services while the viewer is open")
             click(androidx.compose.ui.geometry.Offset(50f, 50f))
             assertEquals(1, timelineTaps, "A tap on the viewer never reaches the photo below it")
+            // A keyboard must not walk out of the viewer into the hidden timeline either.
+            repeat(4) {
+                scene.sendKeyEvent(KeyEvent(Key.Tab, KeyEventType.KeyDown))
+                scene.sendKeyEvent(KeyEvent(Key.Tab, KeyEventType.KeyUp))
+                settle()
+            }
+            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown))
+            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+            settle()
+            assertFalse(timelineFocused, "Tab never moves focus into the timeline below the viewer")
+            assertEquals(1, timelineTaps, "Enter never activates a photo below the viewer")
             val close = requireNotNull(node("Close viewer")).boundsInRoot.center
             scene.sendPointerEvent(PointerEventType.Press, close)
             scene.sendPointerEvent(PointerEventType.Release, close)

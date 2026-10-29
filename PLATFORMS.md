@@ -269,8 +269,9 @@ interaction validation is still required.
   shrinks the photo now shown back into its tile, or fades out when that tile
   is not on screen. Thumbnails in the timeline, albums, people, folder stacks,
   media collections, and the Files grid are zoom sources. While the viewer is
-  open, the screen below takes no input and is hidden from accessibility
-  services. Reduced motion opens and closes the viewer at once.
+  open, the screen below takes no pointer input, keyboard focus cannot move into
+  it, and it is hidden from accessibility services. Reduced motion opens and
+  closes the viewer at once.
 - News moves like other workspaces: on one pane the reader slides in over the
   article list and back, two panes fade between articles, and an article's
   title carries from its row into the reader. Rows ease in, and their

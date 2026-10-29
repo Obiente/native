@@ -1,11 +1,13 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
@@ -20,7 +22,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSharedElementHost
  *
  * An [overlay], such as the media viewer, is shown over [content] instead of replacing it, so the
  * screen below keeps its place and scroll position and the overlay can zoom out of it. While an
- * overlay is shown, the screen below is hidden from accessibility services.
+ * overlay is shown, the screen below is hidden from accessibility services and keyboard focus
+ * cannot move into it, so Tab and Enter never reach controls the person cannot see.
  */
 @Composable
 internal fun AppRouteTransition(
@@ -40,7 +43,7 @@ internal fun AppRouteTransition(
                 directional = true,
                 distance = NextcloudMotion.RouteEntranceOffset,
             ) {
-                Box(Modifier.fillMaxSize().then(if (overlay != null) Modifier.clearAndSetSemantics {} else Modifier)) {
+                Box(Modifier.fillMaxSize().then(if (overlay != null) Modifier.obscuredByOverlay() else Modifier)) {
                     content()
                 }
             }
@@ -48,6 +51,12 @@ internal fun AppRouteTransition(
         }
     }
 }
+
+/** Hides a screen that stays composed below an overlay from accessibility services and focus. */
+private fun Modifier.obscuredByOverlay(): Modifier =
+    clearAndSetSemantics {}
+        .focusProperties { onEnter = { cancelFocusChange() } }
+        .focusGroup()
 
 /** Identifies the page shown full screen; every screen inside the shell shares one page. */
 internal fun Screen.pageTransitionKey(): Any =
