@@ -52,8 +52,9 @@ internal fun SupportDiagnosticsSettingsCard(
 }
 
 @Composable
-internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: SupportSettingsDraftState) {
+internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: SupportSettingsDraftState, newReportRequested: Boolean = false, onNewReportRequestConsumed: () -> Boolean = { false }) {
     var tab by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(newReportRequested) { if (newReportRequested && onNewReportRequestConsumed()) tab = SupportTab.NewReport.ordinal }
     var summaryRefresh by remember { mutableStateOf(0) }
     val diagnosticsRevision by remember(services) { services.supportDiagnosticsRevisions() }.collectAsState(0L)
     var summary by remember(services) { mutableStateOf(loadingSummary()) }
@@ -246,7 +247,7 @@ private fun RequestCard(
             Text("Created " + dateLabel(report.createdAt), style = MaterialTheme.typography.bodySmall)
             report.updatedAt?.let { Text("Updated " + timestampLabel(it), style = MaterialTheme.typography.bodySmall) }
             Text(
-                "Available on this device until " + dateLabel(report.retentionUntil) + ".",
+                SUPPORT_REPORT_RETENTION_SHORT_DISCLOSURE,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -563,7 +564,7 @@ private fun PrivacyTab(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
         Text("What private support means", style = MaterialTheme.typography.titleLarge)
         PrivacyPoint("Nothing is uploaded automatically. Sending always requires your explicit confirmation.")
-        PrivacyPoint("nati.ve reports are retained by Obiente Support for 30 days unless deleted first.")
+        PrivacyPoint(SUPPORT_REPORT_RETENTION_DISCLOSURE)
         PrivacyPoint(
             "Reports and replies are not end-to-end encrypted. Authorized maintainers can read them.",
         )

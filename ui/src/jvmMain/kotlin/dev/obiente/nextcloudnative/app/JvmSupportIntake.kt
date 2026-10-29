@@ -26,7 +26,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -118,7 +117,6 @@ class JvmSupportIntake(
     private var actualStateAccountIdentity: String? = null
     private var pending: PendingSubmission? = null
     private var completedSubmissions: List<CompletedSubmission> = emptyList()
-    private var completedExpiryJob: Job? = null
     private var storageUnavailableMessage: String? = null
     private val retiredAccountIdentities = mutableSetOf<String>()
 
@@ -140,7 +138,6 @@ class JvmSupportIntake(
                         ?: currentRecoveryUnavailableMessage()
                     pending = restored
                     completedSubmissions = restoredCompleted
-                    scheduleCompletedExpiryLocked()
                     publishRecoveredStateLocked()
                 }
             } finally {
@@ -182,6 +179,9 @@ class JvmSupportIntake(
             synchronized(lock) {
                 if (pending === target) pending = null
                 completedSubmissions = completedSubmissions.filterNot { it.originAccountIdentity == accountIdentity }
+                if (actualStateAccountIdentity == accountIdentity && actualState is SupportDiagnosticsSubmissionState.Submitted) {
+                    actualState = completedStateFor(accountIdentity)
+                }
                 refreshVisibleStateLocked()
             }
         }
@@ -510,7 +510,7 @@ class JvmSupportIntake(
                     "Sign in to refresh private support reports.")
             val reports = synchronized(lock) {
                 completedSubmissions.filter { completed ->
-                    completed.originAccountIdentity == accountIdentity && completed.isRetained(currentTimeMillis())
+                    completed.originAccountIdentity == accountIdentity
                 }.onEach { completed ->
                     completed.conversationLoading = true
                     completed.conversationError = null
@@ -527,7 +527,7 @@ class JvmSupportIntake(
                     is SupportDiagnosticsConversationResult.Failed -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Unsupported -> if (failure == null) failure = result.reason
                 }
-                publishState(submittedStateFor(accountIdentity), accountIdentity)
+                publishState(synchronized(lock) { completedStateFor(accountIdentity) }, accountIdentity)
             }
             if (failure == null) SupportDiagnosticsConversationResult.Updated
             else SupportDiagnosticsConversationResult.Failed(failure)
@@ -555,8 +555,7 @@ class JvmSupportIntake(
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
                 submission.originAccountIdentity == activeAccountIdentity &&
-                    submission.recordId == recordId &&
-                    submission.isRetained(currentTimeMillis())
+                    submission.recordId == recordId
             }?.also { submission ->
                 submission.conversationLoading = true
                 submission.conversationError = null
@@ -690,9 +689,11 @@ class JvmSupportIntake(
             call.execute().use { response ->
                 val body = response.readBoundedText()
                 if (response.code != expectedStatusCode) {
+                    val gone = response.code == 404 || response.code == 410
+                    if (gone && request.method == "GET") forgetGoneCompletedReport(completed)
                     return@use failConversation(
                         completed,
-                        if (response.code == 404 || response.code == 410) {
+                        if (gone) {
                             "This private support report is no longer available."
                         } else {
                             "The private support conversation could not be refreshed. Try again."
@@ -767,6 +768,14 @@ class JvmSupportIntake(
             Instant.parse(message.createdAt)
         }
         return conversation
+    }
+
+    /** The service confirmed the report is gone, so its receipt no longer grants access to anything. */
+    private fun forgetGoneCompletedReport(completed: CompletedSubmission) {
+        synchronized(lock) {
+            completedSubmissions = completedSubmissions.filterNot { it.recordId == completed.recordId }
+        }
+        deleteCompletedDescriptorOrRetry(completedDescriptor(completed.recordId))
     }
 
     private fun capabilityFor(completed: CompletedSubmission): String =
@@ -985,10 +994,7 @@ class JvmSupportIntake(
             completedSubmissions = completedSubmissions.filterNot { submission ->
                 submission.recordId == completed.recordId
             }
-            scheduleCompletedExpiryLocked()
-            latestCompletedFor(completed.originAccountIdentity)
-                ?.let { submittedStateFor(it.originAccountIdentity) }
-                ?: SupportDiagnosticsSubmissionState.Idle
+            completedStateFor(completed.originAccountIdentity)
         }
         publishState(next, completed.originAccountIdentity)
         return SupportDiagnosticsDeletionResult.Deleted
@@ -1508,7 +1514,6 @@ class JvmSupportIntake(
         val retained = synchronized(lock) {
             if (submission.originAccountIdentity in retiredAccountIdentities) false else {
                 completedSubmissions = completedSubmissions + completedSubmission
-                scheduleCompletedExpiryLocked()
                 true
             }
         }
@@ -2086,7 +2091,6 @@ class JvmSupportIntake(
             if (completedDescriptorRestorePending.get()) continue
             synchronized(lock) {
                 completedSubmissions = restored
-                scheduleCompletedExpiryLocked()
                 storageUnavailableMessage = currentRecoveryUnavailableMessage()
                 publishRecoveredStateLocked()
             }
@@ -2155,7 +2159,6 @@ class JvmSupportIntake(
         )
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         validateReceipt(persisted.receipt)
-        require(System.currentTimeMillis() <= Instant.parse(persisted.receipt.retentionUntil).toEpochMilli())
         require(persisted.acknowledgedStatus in SUPPORT_REPORT_STATUSES)
         require(
             persisted.lastReadMaintainerMessageId == null ||
@@ -2233,12 +2236,7 @@ class JvmSupportIntake(
         var conversation: SupportPrivateStatus? = null,
         var conversationLoading: Boolean = false,
         var conversationError: String? = null,
-    ) {
-        val retentionUntilEpochMillis: Long
-            get() = Instant.parse(receipt.retentionUntil).toEpochMilli()
-
-        fun isRetained(nowEpochMillis: Long): Boolean = nowEpochMillis <= retentionUntilEpochMillis
-    }
+    )
 
     private fun publishState(
         next: SupportDiagnosticsSubmissionState,
@@ -2253,9 +2251,6 @@ class JvmSupportIntake(
         next: SupportDiagnosticsSubmissionState,
         accountIdentity: String? = pending?.originAccountIdentity,
     ) {
-        if (pruneExpiredCompletedLocked()) {
-            scheduleCompletedExpiryLocked()
-        }
         actualState = next
         actualStateAccountIdentity = accountIdentity
         state.value = if (accountIdentity != null && accountIdentity != activeAccountIdentity) {
@@ -2305,17 +2300,17 @@ class JvmSupportIntake(
         }
 
     private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
-        completedSubmissions.filter {
-            it.originAccountIdentity == accountIdentity && it.isRetained(System.currentTimeMillis())
-        }
+        completedSubmissions.filter { it.originAccountIdentity == accountIdentity }
             .maxByOrNull { Instant.parse(it.receipt.createdAt) }
+
+    private fun completedStateFor(accountIdentity: String): SupportDiagnosticsSubmissionState =
+        latestCompletedFor(accountIdentity)?.let { submittedStateFor(it.originAccountIdentity) }
+            ?: SupportDiagnosticsSubmissionState.Idle
 
     private fun submittedStateFor(accountIdentity: String): SupportDiagnosticsSubmissionState.Submitted =
         SupportDiagnosticsSubmissionState.Submitted(
             completedSubmissions
-                .filter {
-                    it.originAccountIdentity == accountIdentity && it.isRetained(System.currentTimeMillis())
-                }
+                .filter { it.originAccountIdentity == accountIdentity }
                 .sortedWith(
                     compareByDescending<CompletedSubmission> { Instant.parse(it.receipt.createdAt) }
                         .thenByDescending(CompletedSubmission::recordId),
@@ -2331,7 +2326,6 @@ class JvmSupportIntake(
                         recordId = completed.recordId,
                         supportCode = completed.receipt.supportCode,
                         createdAt = completed.receipt.createdAt,
-                        retentionUntil = completed.receipt.retentionUntil,
                         status = conversation?.status ?: completed.receipt.status,
                         updatedAt = conversation?.updatedAt,
                         messages = conversation?.messages.orEmpty().map { message ->
@@ -2363,45 +2357,6 @@ class JvmSupportIntake(
                     )
                 },
         )
-
-    private fun scheduleCompletedExpiryLocked() {
-        completedExpiryJob?.cancel()
-        val nextExpiry = completedSubmissions.minOfOrNull(CompletedSubmission::retentionUntilEpochMillis)
-        if (nextExpiry == null) {
-            completedExpiryJob = null
-            return
-        }
-        val now = System.currentTimeMillis()
-        val waitMillis = if (nextExpiry <= now) {
-            1L
-        } else {
-            (nextExpiry - now).takeIf { it > 0L } ?: Long.MAX_VALUE
-        }
-        completedExpiryJob = scope.launch {
-            delay(waitMillis)
-            synchronized(lock) {
-                completedExpiryJob = null
-                pruneExpiredCompletedLocked()
-                refreshVisibleStateLocked()
-                scheduleCompletedExpiryLocked()
-            }
-        }
-    }
-
-    private fun pruneExpiredCompletedLocked(nowEpochMillis: Long = System.currentTimeMillis()): Boolean {
-        val expired = completedSubmissions.filterNot { it.isRetained(nowEpochMillis) }
-        if (expired.isEmpty()) return false
-        completedSubmissions = completedSubmissions.filter { it.isRetained(nowEpochMillis) }
-        if (actualState is SupportDiagnosticsSubmissionState.Submitted) {
-            actualState = latestCompletedFor(actualStateAccountIdentity)
-                ?.let { submittedStateFor(it.originAccountIdentity) }
-                ?: SupportDiagnosticsSubmissionState.Idle
-        }
-        scope.launch {
-            deleteCompletedDescriptorsWithRetry(expired.map { submission -> completedDescriptor(submission.recordId) })
-        }
-        return true
-    }
 
     private suspend fun deleteCompletedDescriptorsWithRetry(descriptors: List<File>) {
         var remaining = descriptors
