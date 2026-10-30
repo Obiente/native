@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -27,8 +30,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import com.mikepenz.markdown.m3.Markdown
 
@@ -134,5 +140,56 @@ private fun NoteEditorMetadata(
                 NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = editable)
             }
         }
+    }
+}
+
+@Composable
+internal fun MarkdownFormattingToolbar(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Medium),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MarkdownToolbarButton(NextcloudIcons.FormatHeading, "Heading", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Heading))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatBold, "Bold", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Bold))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatItalic, "Italic", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Italic))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatChecklist, "Checklist item", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Checklist))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatQuote, "Quote", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Quote))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatCode, "Inline code", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.InlineCode))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatLink, "Link", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Link))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownToolbarButton(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(icon, contentDescription = description)
     }
 }

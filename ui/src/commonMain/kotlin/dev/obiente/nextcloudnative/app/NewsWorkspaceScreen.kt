@@ -73,6 +73,7 @@ import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 import dev.obiente.nextcloudnative.app.design.nextcloudAnimatedColor
 import dev.obiente.nextcloudnative.app.design.NextcloudMotion
+import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceBreakpoints
 import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
@@ -160,7 +161,7 @@ internal fun NewsWorkspaceScreen(
             NextcloudCollectionNavigationHost.AdaptiveAndroid
         }
         val mode = resolveNextcloudCollectionNavigationMode(host, maxWidth.value.toInt(), destinations.size)
-        val twoPane = maxWidth >= NEWS_TWO_PANE_MIN_WIDTH
+        val twoPane = maxWidth.value >= NextcloudWorkspaceBreakpoints.TwoPaneDp
         val openItem = state.openItem
         NextcloudCollectionWorkspaceScaffold(
             model = model,
@@ -564,6 +565,5 @@ private fun NewsNotice(message: String, actionLabel: String? = null, onAction: (
     }
 }
 
-private val NEWS_TWO_PANE_MIN_WIDTH = 840.dp
 private val NEWS_READER_MAX_WIDTH = 760.dp
 private const val NEWS_PREFETCH_DISTANCE = 8

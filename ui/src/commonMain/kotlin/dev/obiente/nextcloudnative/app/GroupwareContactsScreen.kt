@@ -1,35 +1,25 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,18 +31,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
-import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativeGroupwareContactsScreen(
     services: NextcloudPlatformServices,
@@ -78,6 +65,8 @@ fun NativeGroupwareContactsScreen(
     var query by rememberSaveable(accountScope) { mutableStateOf("") }
     var loadAttempt by remember { mutableStateOf(0) }
     var selectedContactHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var addressBookFilterHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    val contactListState = rememberLazyListState()
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
     var editingContact by remember(accountScope) { mutableStateOf<GroupwareContact?>(null) }
     var editLoading by remember(accountScope) { mutableStateOf(false) }
@@ -347,103 +336,133 @@ fun NativeGroupwareContactsScreen(
             ?.takeIf { !editorVisible && !mutationInProgress }
             ?.let(onNavigationConfirmed)
     }
-    val filtered = remember(ready?.contacts, query) {
-        val needle = query.trim().lowercase()
-        ready?.contacts.orEmpty().filter { contact ->
-            needle.isBlank() || listOf(
-                contact.displayName,
-                contact.organization,
-                contact.address,
-                contact.emails.joinToString(" "),
-                contact.phones.joinToString(" "),
-            ).any { value -> value?.lowercase()?.contains(needle) == true }
-        }
+    val editorShown = selected != null && editing && selectedAddressBook != null &&
+        editingContact?.href == selected.href
+    val filterAddressBook = contactsFilterAddressBook(ready, addressBookFilterHref)
+    val filtered = remember(ready?.contacts, filterAddressBook, query) {
+        filterContacts(ready?.contacts.orEmpty(), filterAddressBook, query)
     }
+    val writableAddressBooks = ready?.addressBooks.orEmpty().filter(GroupwareAddressBook::writable)
+        .sortedByDescending { addressBook -> addressBook.href == filterAddressBook?.href }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Contacts", fontWeight = FontWeight.SemiBold)
-                        ready?.let {
-                            Text(
-                                "${it.contacts.size} contacts",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack, enabled = !mutationInProgress) {
-                        Icon(NextcloudIcons.Back, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { loadAttempt += 1 }) {
-                        Icon(NextcloudIcons.Refresh, contentDescription = "Refresh contacts")
-                    }
-                    IconButton(
-                        onClick = { if (!mutationInProgress) creating = true },
-                        enabled = !mutationInProgress &&
-                            ready?.addressBooks?.any(GroupwareAddressBook::writable) == true,
-                    ) {
-                        Icon(NextcloudIcons.Add, contentDescription = "Create contact")
-                    }
-                },
+    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+        val besideList = workspaceShowsDetailBesideList(maxWidth)
+        val destinations = remember(ready) { contactsDestinations(ready) }
+        val navigation = remember(destinations, filterAddressBook) {
+            NextcloudCollectionNavigationModel.create(
+                destinations,
+                if (destinations.isEmpty()) null else filterAddressBook?.href ?: ALL_CONTACTS_DESTINATION_ID,
             )
-        },
-    ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            NextcloudRefreshBar(refreshing)
-            refreshError?.let { message ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(
-                        horizontal = NextcloudSpacing.Large,
-                        vertical = NextcloudSpacing.Small,
-                    ),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        }
+        val detailActions = selected?.let { contact ->
+            ContactDetailActions(
+                canEdit = !mutationInProgress && selectedAddressBook?.writable == true && contact.etag != null,
+                editLoading = editLoading,
+                onEdit = {
+                    if (!mutationInProgress && !editLoading) {
+                        mutationError = null
+                        editing = true
+                    }
+                },
+                onDelete = { if (!mutationInProgress) confirmDelete = true },
+            )
+        }
+        NextcloudCollectionWorkspaceScaffold(
+            model = navigation,
+            mode = workspaceCollectionNavigationMode(maxWidth, destinations.size),
+            workspaceLabel = "Contacts",
+            contentTitle = filterAddressBook?.displayName?.ifBlank { null } ?: "Contacts",
+            contentSubtitle = ready?.let { "${filtered.size} contacts" },
+            onBack = { if (!mutationInProgress) onBack() },
+            hasHierarchyBack = false,
+            onDestinationSelected = { destination ->
+                addressBookFilterHref = destination.id.takeUnless { it == ALL_CONTACTS_DESTINATION_ID }
+            },
+            destinationIcon = { NextcloudIcons.app("contacts") },
+            headerActions = {
+                IconButton(onClick = { loadAttempt += 1 }) {
+                    Icon(NextcloudIcons.Refresh, contentDescription = "Refresh contacts")
+                }
+                IconButton(
+                    onClick = { if (!mutationInProgress) creating = true },
+                    enabled = !mutationInProgress && writableAddressBooks.isNotEmpty(),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
-                        if (mutationRecoveryState != null) {
-                            TextButton(onClick = { showRecoveryOptions = true }) { Text("Recovery options") }
+                    Icon(NextcloudIcons.Add, contentDescription = "Create contact")
+                }
+            },
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    NextcloudRefreshBar(refreshing)
+                    refreshError?.let { message ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(
+                                horizontal = NextcloudSpacing.Large,
+                                vertical = NextcloudSpacing.Small,
+                            ),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = NextcloudSpacing.Medium),
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                                if (mutationRecoveryState != null) {
+                                    TextButton(onClick = { showRecoveryOptions = true }) { Text("Recovery options") }
+                                }
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("Search contacts") },
+                        leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(
+                            horizontal = NextcloudSpacing.Large,
+                            vertical = NextcloudSpacing.Small,
+                        ),
+                    )
+                    when (val value = state) {
+                        ContactsLoadState.Loading -> Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator() }
+                        is ContactsLoadState.Error -> WorkspaceLoadError(value.message) { loadAttempt += 1 }
+                        is ContactsLoadState.Ready -> {
+                            if (value.addressBooks.isEmpty()) {
+                                WorkspaceLoadError("No address books were found.") { loadAttempt += 1 }
+                            } else {
+                                ContactList(
+                                    filtered, selectedContactHref, contactListState,
+                                    onSelect = { selectedContactHref = it.href },
+                                )
+                            }
                         }
                     }
                 }
-            }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("Search contacts") },
-                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Large,
-                    vertical = NextcloudSpacing.Small,
-                ),
-            )
-            when (val value = state) {
-                ContactsLoadState.Loading -> Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) { CircularProgressIndicator() }
-                is ContactsLoadState.Error -> WorkspaceLoadError(value.message) { loadAttempt += 1 }
-                is ContactsLoadState.Ready -> {
-                    if (value.addressBooks.isEmpty()) {
-                        WorkspaceLoadError("No address books were found.") { loadAttempt += 1 }
-                    } else {
-                        ContactList(filtered, onSelect = { selectedContactHref = it.href })
+                if (besideList) {
+                    WorkspaceSideInspector(selected?.let { it to requireNotNull(detailActions) }, { (contact, _) -> contact.href }) {
+                        (contact, actions) -> ContactInspector(contact, actions, mutationError)
                     }
                 }
             }
+        }
+        if (!besideList && selected != null && !editorShown && !confirmDelete) {
+            ContactDetailOverlay(
+                contact = selected,
+                actions = requireNotNull(detailActions),
+                error = mutationError,
+                onDismiss = {
+                    selectedContactHref = null
+                    editingContact = null
+                    mutationError = null
+                },
+            )
         }
     }
 
@@ -472,7 +491,7 @@ fun NativeGroupwareContactsScreen(
     if (creating && ready != null) {
         ContactEditorDialog(
             contact = null,
-            addressBooks = ready.addressBooks.filter(GroupwareAddressBook::writable),
+            addressBooks = writableAddressBooks,
             error = mutationError,
             onDismiss = { creating = false; mutationError = null },
             mutationInProgress = mutationInProgress,
@@ -549,7 +568,7 @@ fun NativeGroupwareContactsScreen(
     selected?.let { contact ->
         val addressBook = selectedAddressBook
         val fullContact = editingContact?.takeIf { it.href == contact.href }
-        if (editing && addressBook != null && fullContact != null) {
+        if (editorShown && addressBook != null && fullContact != null) {
             ContactEditorDialog(
                 contact = fullContact,
                 addressBooks = listOf(addressBook),
@@ -624,25 +643,6 @@ fun NativeGroupwareContactsScreen(
                         }
                     }
                 },
-            )
-        } else if (!confirmDelete) {
-            ContactDetailDialog(
-                contact = contact,
-                canEdit = !mutationInProgress && addressBook?.writable == true && contact.etag != null,
-                editLoading = editLoading,
-                error = mutationError,
-                onDismiss = {
-                    selectedContactHref = null
-                    editingContact = null
-                    mutationError = null
-                },
-                onEdit = {
-                    if (!mutationInProgress && !editLoading) {
-                        mutationError = null
-                        editing = true
-                    }
-                },
-                onDelete = { if (!mutationInProgress) confirmDelete = true },
             )
         }
         if (confirmDelete) {
@@ -719,256 +719,3 @@ fun NativeGroupwareContactsScreen(
         }
     }
 }
-
-@Composable
-private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareContact) -> Unit) {
-    LazyColumn(
-        contentPadding = PaddingValues(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-    ) {
-        items(contacts, key = GroupwareContact::href) { contact ->
-            Card(
-                modifier = Modifier.fillMaxWidth().clickable { onSelect(contact) },
-                colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(shape = CircleShape, color = NextcloudTheme.colors.appIconContainer) {
-                        Text(
-                            contact.initials(),
-                            modifier = Modifier.padding(NextcloudSpacing.Medium),
-                            color = NextcloudTheme.colors.appIcon,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            contact.displayName,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        val subtitle = contact.organization ?: contact.emails.firstOrNull()
-                            ?: contact.phones.firstOrNull()
-                        subtitle?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    Icon(NextcloudIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(20.dp))
-                }
-            }
-        }
-        if (contacts.isEmpty()) item {
-            Text("No contacts match your search.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun ContactEditorDialog(
-    contact: GroupwareContact?,
-    addressBooks: List<GroupwareAddressBook>,
-    error: String?,
-    onDismiss: () -> Unit,
-    mutationInProgress: Boolean,
-    recoveryAvailable: Boolean = false,
-    onOpenRecovery: () -> Unit = {},
-    navigationRequest: NextcloudPendingNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
-    onNavigationDiscardConfirmed: (NextcloudPendingNavigationRequest) -> Unit = onNavigationConfirmed,
-    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
-    onSave: (ContactDraft, GroupwareAddressBook) -> Unit,
-) {
-    val initialDraft = remember(contact) {
-        ContactDraft(
-            name = contact?.displayName.orEmpty(),
-            email = contact?.emails?.firstOrNull().orEmpty(),
-            phone = contact?.phones?.firstOrNull().orEmpty(),
-            organization = contact?.organization.orEmpty(),
-            address = contact?.address.orEmpty(),
-            notes = contact?.notes.orEmpty(),
-        )
-    }
-    val editorStateKey = contact?.href ?: "new-contact"
-    var name by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.name) }
-    var email by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.email) }
-    var phone by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.phone) }
-    var organization by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.organization) }
-    var address by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.address) }
-    var notes by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.notes) }
-    val initialAddressBookHref = addressBooks.firstOrNull()?.href
-    var selectedAddressBookHref by rememberSaveable(editorStateKey) {
-        mutableStateOf(initialAddressBookHref)
-    }
-    val addressBook = addressBooks.firstOrNull { it.href == selectedAddressBookHref }
-        ?: addressBooks.firstOrNull()
-    val currentDraft = ContactDraft(name, email, phone, organization, address, notes)
-    val emailIsSingleValue = groupwareContactEmailIsSingleValue(email)
-    val dirty = contactDraftIsDirty(
-        initialDraft,
-        currentDraft,
-        initialAddressBookHref,
-        addressBook?.href,
-    )
-    val hasDavChanges = contactDraftHasDavChanges(
-        initialDraft,
-        currentDraft,
-        initialAddressBookHref,
-        addressBook?.href,
-    )
-    var confirmNavigationDiscard by remember(contact) { mutableStateOf(false) }
-    LaunchedEffect(navigationRequest?.identity, dirty, mutationInProgress) {
-        val request = navigationRequest
-        when {
-            request == null -> confirmNavigationDiscard = false
-            mutationInProgress -> confirmNavigationDiscard = false
-            dirty -> confirmNavigationDiscard = true
-            else -> onNavigationConfirmed(request)
-        }
-    }
-    AlertDialog(
-        onDismissRequest = { if (!mutationInProgress) onDismiss() },
-        title = { Text(if (contact == null) "New contact" else "Edit contact") },
-        text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                item {
-                    OutlinedTextField(
-                        name,
-                        { name = it },
-                        label = { Text("Name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        email,
-                        { email = it },
-                        label = { Text("Email") },
-                        modifier = Modifier.fillMaxWidth(),
-                        isError = !emailIsSingleValue,
-                        supportingText = if (!emailIsSingleValue) {
-                            { Text("Use one email address without line breaks.") }
-                        } else {
-                            null
-                        },
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        phone,
-                        { phone = it },
-                        label = { Text("Phone") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        organization, { organization = it },
-                        label = { Text("Organization") }, modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        address,
-                        { address = it },
-                        label = { Text("Address") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        notes, { notes = it }, label = { Text("Notes") },
-                        modifier = Modifier.fillMaxWidth(), minLines = 2, enabled = !mutationInProgress,
-                    )
-                }
-                if (addressBooks.size > 1) item {
-                    Text("Address book", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                        addressBooks.forEach { candidate ->
-                            NextcloudFilterChip(
-                                selected = candidate == addressBook,
-                                onClick = { selectedAddressBookHref = candidate.href },
-                                label = { Text(candidate.displayName) },
-                                enabled = !mutationInProgress,
-                            )
-                        }
-                    }
-                }
-                error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = name.isNotBlank() &&
-                    emailIsSingleValue &&
-                    addressBook != null &&
-                    hasDavChanges &&
-                    !mutationInProgress,
-                onClick = {
-                    onSave(
-                        currentDraft,
-                        requireNotNull(addressBook),
-                    )
-                },
-            ) { Text("Save") }
-        },
-        dismissButton = {
-            if (recoveryAvailable) {
-                OutlinedButton(onClick = onOpenRecovery) { Text("Recovery options") }
-            } else {
-                OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
-            }
-        },
-    )
-
-    if (confirmNavigationDiscard) {
-        navigationRequest?.let { request ->
-            AlertDialog(
-                onDismissRequest = {
-                    confirmNavigationDiscard = false
-                    onNavigationCancelled(request)
-                },
-                title = { Text("Discard unsaved contact changes?") },
-                text = { Text("Your contact changes have not been saved.") },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            confirmNavigationDiscard = false
-                            onNavigationCancelled(request)
-                        },
-                    ) { Text("Keep editing") }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            confirmNavigationDiscard = false
-                            onNavigationDiscardConfirmed(request)
-                        },
-                    ) { Text("Discard") }
-                },
-            )
-        }
-    }
-}
-
-private fun GroupwareContact.initials(): String = displayName.split(' ')
-    .filter(String::isNotBlank)
-    .take(2)
-    .mapNotNull(String::firstOrNull)
-    .joinToString("")
-    .uppercase()
-    .ifBlank { "?" }
