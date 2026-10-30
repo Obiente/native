@@ -42,6 +42,7 @@ internal fun DesktopCalendarSourcesPane(
     onCalendarVisibilityChanged: (String, Boolean) -> Unit,
     onClose: (() -> Unit)?,
     modifier: Modifier,
+    collectionActions: CalendarCollectionActions? = null,
 ) {
     Surface(modifier, shape = RoundedCornerShape(NextcloudRadii.Medium), color = MaterialTheme.colorScheme.surfaceContainerLow) {
         LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -53,6 +54,7 @@ internal fun DesktopCalendarSourcesPane(
                 CalendarVisibilityRow(
                     calendar, calendar.href !in hiddenCalendarHrefs, eventCountByCalendar[calendar.href] ?: 0,
                     { visible -> onCalendarVisibilityChanged(calendar.href, visible) },
+                    onManage = collectionActions?.let { actions -> { actions.onManage(calendar) } },
                 )
             }
             if (calendars.isEmpty()) item {
@@ -61,6 +63,7 @@ internal fun DesktopCalendarSourcesPane(
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            collectionActions?.let { actions -> item { CalendarCollectionCreateButton(actions, Modifier.fillMaxWidth().padding(top = 8.dp)) } }
         }
     }
 }

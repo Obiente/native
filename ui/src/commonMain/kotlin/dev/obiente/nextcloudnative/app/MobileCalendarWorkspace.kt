@@ -61,6 +61,7 @@ internal fun MobileGroupwareCalendarWorkspace(
     modifier: Modifier = Modifier,
     onCreateAt: ((String) -> Unit)? = null,
     todayDate: String = currentCalendarDate(),
+    collectionActions: CalendarCollectionActions? = null,
 ) {
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     // The time line follows the clock; a minute is fine-grained enough for a schedule.
@@ -168,7 +169,16 @@ internal fun MobileGroupwareCalendarWorkspace(
                 CalendarVisibilityRow(calendar, calendar.href !in hiddenCalendarHrefs,
                     presentation.eventCountByCalendar[calendar.href] ?: 0,
                     { visible -> onCalendarVisibilityChanged(calendar.href, visible) },
-                    Modifier.padding(horizontal = 8.dp))
+                    Modifier.padding(horizontal = 8.dp),
+                    onManage = collectionActions?.let { actions -> { sourcesVisible = false; actions.onManage(calendar) } })
+            }
+            collectionActions?.let { actions ->
+                item {
+                    CalendarCollectionCreateButton(
+                        CalendarCollectionActions(onCreate = { sourcesVisible = false; actions.onCreate(it) }, onManage = actions.onManage),
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                    )
+                }
             }
         }
     }
