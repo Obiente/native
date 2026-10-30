@@ -123,7 +123,7 @@ acceptance tests pass and its limitations are recorded in
 
 | Platform | Runtime | State in source and packaging | Platform-specific direction |
 | --- | --- | --- | --- |
-| Android | Compose Multiplatform | Active launcher; signed alpha APK and AAB. Source includes Keystore-backed credentials, WorkManager workers, a `DocumentsProvider`, selected-folder sync, media backup, Media3 playback sessions, and share targets. | Notifications and push, calls, and the platform acceptance gates in the roadmap |
+| Android | Compose Multiplatform | Active launcher; signed alpha APK and AAB. Source includes Keystore-backed credentials, WorkManager workers, a `DocumentsProvider`, selected-folder sync, media backup, Media3 playback sessions, and share targets. | System notifications and push, calls, and the platform acceptance gates in the roadmap |
 | Linux | Compose Desktop | Primary interactive desktop target; alpha RPM and DEB. Source includes Secret Service storage through `secret-tool`, a StatusNotifier tray, selected-folder sync, and a FUSE virtual filesystem (`LinuxVirtualFileSystem.kt`). | Portals, notifications, media keys, and conventional sync roots |
 | Windows | Compose Desktop | Unsigned x86-64 MSI with Credential Manager storage, build provenance, and a Cloud Files provider (`WindowsCloudFilesProvider.kt`) under prerelease qualification. | Explorer validation, trusted signing when available, notifications, media controls, and updates |
 | macOS | Compose Desktop | Early DMG packaging artifact. Keychain storage (`MacOsKeychainSecretStore`) is present in source and unit-tested, but authenticated use has not been live-validated or qualified. | Keychain, File Provider and Finder integration, notifications, media controls, and updates |
@@ -341,6 +341,18 @@ interaction validation is still required.
   only one secondary pane is shown, so the file list stays usable.
 - Activity separates actionable notices from the rest of the event history.
   Settings opens account details on demand.
+- The Activity destination opens on a Notifications inbox when the server
+  advertises the Notifications app, with a switch to the Activity history.
+  Phone layouts show the list with pull-to-refresh and replace it with the
+  selected notification, returning on system back. Windows 840dp and wider,
+  including desktop, keep the list beside a detail pane. Inline action buttons
+  appear only for actions the server advertised; DELETE actions and Dismiss
+  all need a separate confirmation. The bottom bar, navigation rail, and
+  desktop sidebar badge Activity with the number of notifications the server
+  still lists. That count is read when the account opens, when the inbox
+  opens, and on refresh; there is no background polling, push, or system
+  notification yet. `NotificationsInboxScreenTest` covers the phone and
+  desktop layouts and the badge semantics.
 - Folder sync shows queue state and last scan time separately. A completed scan
   is never presented as a completed sync. Phone pair rows open dedicated
   details; desktop keeps a pair table and inspector. Conflict choices explain

@@ -8,7 +8,6 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
-import kotlin.time.Instant
 
 private const val UNREAD_DESTINATION = "news:unread"
 private const val STARRED_DESTINATION = "news:starred"
@@ -105,29 +104,12 @@ internal fun NewsSelection.subtitle(subscriptions: NewsSubscriptions?): String? 
     }
 }
 
-/** Compact age for article lists; older articles show their calendar date (UTC). */
-internal fun newsPublishedLabel(publishedEpochSeconds: Long, nowEpochSeconds: Long): String {
-    val age = nowEpochSeconds - publishedEpochSeconds
-    return when {
-        age < 0L -> newsCalendarDate(publishedEpochSeconds)
-        age < 60L -> "Just now"
-        age < 3_600L -> "${age / 60L} min ago"
-        age < 86_400L -> "${age / 3_600L} h ago"
-        age < 2L * 86_400L -> "Yesterday"
-        age < 7L * 86_400L -> "${age / 86_400L} days ago"
-        else -> newsCalendarDate(publishedEpochSeconds)
-    }
-}
-
 internal fun newsEnclosureLabel(mime: String?): String = when {
     mime == null -> "Open attachment"
     mime.startsWith("audio/") -> "Play audio in browser"
     mime.startsWith("video/") -> "Play video in browser"
     else -> "Open attachment"
 }
-
-private fun newsCalendarDate(epochSeconds: Long): String =
-    Instant.fromEpochSeconds(epochSeconds).toString().take(10)
 
 private fun unreadCountLabel(count: Int): String = when (count) {
     0 -> "No unread articles"

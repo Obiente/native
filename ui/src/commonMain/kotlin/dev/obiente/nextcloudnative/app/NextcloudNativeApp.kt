@@ -686,6 +686,7 @@ private fun AuthenticatedApp(
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
     val newsController = rememberNewsWorkspaceController(services, session)
+    val notificationsInbox = rememberNotificationsInboxController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -1523,6 +1524,7 @@ private fun AuthenticatedApp(
             } else {
                 null
             },
+            destinationBadges = notificationsShellBadges(notificationsInbox.state.badgeCount),
         )
     }
     val screenContent: @Composable (Screen) -> Unit = { shown ->
@@ -1566,7 +1568,13 @@ private fun AuthenticatedApp(
                     onSearch = ::openSearch,
                     onOpenApp = { openApp(it, NextcloudDestination.Apps) },
                 )
-                RootDestinationContent.Activity -> ActivityScreen(
+                RootDestinationContent.Activity -> ActivityDestinationScreen(
+                    session, notificationsInbox, activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
+                    onOpenLink = { link -> launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp) },
+                    onOpenNotificationSettings = {
+                        services.openExternalUrl(activitySettingsUrl(session.serverUrl, ActivitySettingsDestination.Notifications))
+                    },
+                ) { ActivityScreen(
                     services = services,
                     session = session,
                     activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
@@ -1580,7 +1588,7 @@ private fun AuthenticatedApp(
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
                     },
-                )
+                ) }
                 RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
                     session = session,
@@ -2051,44 +2059,6 @@ private fun AuthenticatedApp(
         }
     }
 }
-}
-
-@Composable
-internal fun RootShell(
-    presentation: NextcloudPresentation,
-    selected: NextcloudDestination,
-    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
-    navigationEnabled: Boolean = true,
-    onSelected: (NextcloudDestination) -> Unit,
-    identity: NextcloudDesktopIdentity?,
-    onOpenApp: (String) -> Unit = {},
-    activeAppId: String? = null,
-    content: @Composable () -> Unit,
-) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        if (presentation == NextcloudPresentation.Desktop) {
-            NextcloudDesktopShell(
-                selected = selected,
-                onSelected = onSelected,
-                identity = identity,
-                onOpenApp = onOpenApp,
-                activeAppId = activeAppId,
-                workspaceKind = desktopWorkspaceKind,
-                navigationEnabled = navigationEnabled,
-                content = content,
-            )
-        } else {
-            dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell(
-                selected = selected,
-                onSelected = onSelected,
-                identity = identity,
-                activeAppId = activeAppId,
-                onOpenApp = onOpenApp,
-                navigationEnabled = navigationEnabled,
-                content = content,
-            )
-        }
-    }
 }
 
 @Composable

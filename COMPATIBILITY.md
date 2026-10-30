@@ -43,6 +43,7 @@ server or app version.
 | Photos and Memories | Media search, thumbnail grid, RAW and server previews, recognized People covers, per-person galleries, full-screen navigation, and zoom |
 | Talk | Room list, history loading, typed file previews, call and system events, and shared objects. Sending is an explicit user action. Calls are not implemented. |
 | Activity | Read-only OCS activity timeline with refresh and filters |
+| Notifications | In-app inbox from the Notifications OCS v2 API, gated by the advertised `ocs-endpoints` capability: rich subjects, links through native routing, dismiss one or all with a verifying re-read, and only server-advertised actions. Deterministic tests only; no live-server evidence yet. No push or system notifications. |
 | Notes | Metadata-only list, Markdown editor and preview, formatting controls, category and favorite state, explicit save, and ETag conflicts |
 | Dashboard and User Status | Widget and item feeds, native app routing, a short-lived account-private cache, and capability-gated status editing |
 | Contacts, Calendar, and Tasks | CardDAV and CalDAV collections with native lists, editors, recurrence, and ETag-guarded writes |
@@ -207,6 +208,7 @@ authoritative; this table defines the workspace each feature belongs in.
 | Memories | Timeline and media collections | Date groups, albums, people, places, maps, favorites, RAW previews and selection actions |
 | Music | Library navigator, queue and player | Artists, albums, tracks, playlists, genres, search, queue and playback controls |
 | News | Feed navigator, article list and reader | Folders, feeds, unread and starred views, articles, read state, starring and feed management |
+| Notifications | Inbox list with a notification detail | Notifications, rich subjects, links, advertised actions, dismiss, dismiss all, notification settings and push delivery |
 | Office | Document browser and collaborative editor | New/open, format-specific editing, save state, locking, collaboration and version-safe handoff |
 | Pantry | Contract-derived collection hierarchy | Every verified collection, relationship, detail, form, action and summary exposed by the installed version |
 | Photos | Timeline and album gallery | Timeline, albums, favorites, shared media, tags, locations, selection and sharing |

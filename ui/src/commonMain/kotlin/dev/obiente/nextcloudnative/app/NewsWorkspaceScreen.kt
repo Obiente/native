@@ -284,7 +284,7 @@ private fun NewsArticleRow(
     val actions = newsArticleActions(item, pending, controller)
     val meta = listOfNotNull(
         feed?.title?.takeIf { showFeed },
-        item.publishedAtEpochSeconds?.let { newsPublishedLabel(it, Clock.System.now().epochSeconds) },
+        item.publishedAtEpochSeconds?.let { compactAgeLabel(it, Clock.System.now().epochSeconds) },
     ).joinToString(" - ")
     Surface(
         color = nextcloudAnimatedColor(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
@@ -415,7 +415,7 @@ private fun NewsArticleReader(
             )
             val byline = listOfNotNull(
                 item.author,
-                item.publishedAtEpochSeconds?.let { newsPublishedLabel(it, Clock.System.now().epochSeconds) },
+                item.publishedAtEpochSeconds?.let { compactAgeLabel(it, Clock.System.now().epochSeconds) },
             ).joinToString(" - ")
             if (byline.isNotEmpty()) {
                 Text(byline, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
