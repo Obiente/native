@@ -252,7 +252,7 @@ private fun NotificationsHeader(
             IconButton(onClick = onRefresh) { Icon(NextcloudIcons.Refresh, contentDescription = "Refresh notifications") }
         }
         IconButton(onClick = onOpenSettings) {
-            Icon(NextcloudIcons.Settings, contentDescription = "Notification settings, opens in your browser")
+            Icon(NextcloudIcons.Settings, contentDescription = "Notification settings")
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

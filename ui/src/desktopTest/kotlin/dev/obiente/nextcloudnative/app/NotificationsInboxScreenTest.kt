@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
@@ -155,7 +156,6 @@ class NotificationsInboxScreenTest {
                 notifications = controller,
                 activityInstalled = true,
                 onOpenLink = {},
-                onOpenNotificationSettings = {},
             ) { Text("Synthetic activity history") }
         }) {
             assertTrue(has("Notifications (2)"))
@@ -164,6 +164,47 @@ class NotificationsInboxScreenTest {
             assertTrue(has("Synthetic activity history"))
             assertFalse(has("Backup finished"))
         }
+    }
+
+    @Test
+    fun notificationSettingsOpenInsideTheAppAndReturn() {
+        val server = SyntheticServer()
+        val controller = controller(server)
+        val session = NextcloudSession(SERVER, "synthetic-user", "synthetic-app-password")
+        val opened = mutableListOf<String>()
+        for ((width, height) in listOf(412 to 915, 1440 to 900)) {
+            nativeSceneTest(width, height, content = {
+                CompositionLocalProvider(
+                    LocalNextcloudWorkspaceCapabilities provides (width > 1000).let { desktop ->
+                        NextcloudWorkspaceCapabilities(desktop, desktop, desktop)
+                    },
+                ) {
+                    ActivityDestinationScreen(
+                        session = session,
+                        notifications = controller,
+                        activityInstalled = true,
+                        onOpenLink = { opened += it },
+                    ) { openSettings ->
+                        TextButton(onClick = openSettings) { Text("Synthetic activity settings") }
+                    }
+                }
+            }) {
+                click("Notification settings")
+                assertTrue(has("Email about missed notifications"))
+                assertTrue(has("Read-only"))
+                assertFalse(has("Backup finished"))
+                capture("notification-settings-${if (width > 1000) "desktop" else "phone"}")
+                click("Back")
+                assertTrue(has("Backup finished"))
+                click("Activity")
+                click("Synthetic activity settings")
+                assertTrue(has("Email about missed notifications"))
+                click("Back")
+                assertTrue(has("Synthetic activity settings"))
+            }
+        }
+        assertEquals(emptyList(), opened)
+        assertTrue(server.writes.isEmpty())
     }
 
     @Test
