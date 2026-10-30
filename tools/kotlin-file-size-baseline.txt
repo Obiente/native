@@ -13,7 +13,6 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|960
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1380
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|930
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt|971
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt|1121
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaSearchDav.kt|1172
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.kt|996
@@ -21,7 +20,6 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckRelationDialo
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckScreen.kt|1877
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt|1047
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|10761
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1550
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1707
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoEditing.kt|847

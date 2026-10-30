@@ -221,14 +221,15 @@ interaction validation is still required.
   follows the system "Remove animations" setting through
   `LocalNextcloudReducedMotion`, which turns these animations off. Desktop has
   no reduced-motion source yet and keeps full motion.
-- Desktop detail panes for Files, Calendar, and Deck slide in from the side
-  when they open and out when they close. Choosing another item in an open
-  pane, including the always-visible Folder sync inspector, slides its details
-  in from the side. On phones, Deck card details and Folder sync pair details
-  open in `NextcloudDetailSheet`, a bottom sheet over the board or list that
-  closes with Back, Escape, Close, or a tap outside, and reopens after
-  recreation from the saved selection. Narrow desktop windows keep the Deck
-  card dialog and the full Folder sync page. File info stays a full page
+- Desktop detail panes for Files, Calendar, Deck, Contacts, and Tasks slide in
+  from the side when they open and out when they close. Choosing another item
+  in an open pane, including the always-visible Folder sync inspector, slides
+  its details in from the side. On phones, Deck card, Folder sync pair,
+  contact, and task details open in `NextcloudDetailSheet`, a bottom sheet
+  over the board or list that closes with Back, Escape, Close, or a tap
+  outside, and reopens after recreation from the saved selection. Narrow
+  desktop windows keep the Deck card, contact, and task dialogs and the full
+  Folder sync page. File info stays a full page
   because of its version history and restore flow, and Calendar event details
   stay in place because Edit continues in the same page with keyboard input
   and draft guards.
@@ -379,6 +380,37 @@ interaction validation is still required.
 - Tasks can be completed or reopened from the list's checkbox, through the
   same ETag-guarded update as the editor. The editor's due date has a date
   picker and a clear action.
+
+**Notes, Contacts, and Tasks**
+
+- At 840dp and wider (`NextcloudWorkspaceBreakpoints.TwoPaneDp`, shared with
+  News), these apps show the selected item beside the list on Android and
+  desktop. Narrower phone layouts keep their single list.
+- Notes opens the editor beside the folder and note list on wide layouts and
+  in every desktop window. Narrow desktop windows show the editor alone with
+  Back to the list. Phones keep the full-page editor. A note opened beside the
+  list stays open when the window narrows, so its draft is kept, and the open
+  note is saved selection that reopens after recreation. A note first opened
+  as a full page on Android stays a full page if the window widens.
+- The in-place note editor registers with the shell's edit guard
+  (`NativeInlineEditorNavigation`): choosing another note, creating a note,
+  renaming or deleting a folder, switching apps, following a link, and Back
+  all ask before a dirty draft is discarded and wait for a running save.
+- Create note adds a note titled "New note" in the current folder and opens
+  it in the editor, on phones as well, instead of asking for a title and
+  Markdown in a dialog first.
+- Contacts shows address books as list filters when there is more than one:
+  tabs on phones, a rail on tablets and narrow desktop windows, and a sidebar
+  on wide desktop windows. New contacts default to the filtered address book
+  when it is writable. Tasks does the same with task lists, which show their
+  open-task counts and mark read-only lists.
+- Contact and task editors remain dialogs on every layout. Multiple email
+  addresses and phone numbers per contact, A to Z contact sections, task
+  grouping, and note sorting and favorite filters are not implemented.
+- `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
+  `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
+  recreation, and the dirty-draft guard against synthetic servers. They do not
+  establish behavior on a device or against a live server.
 
 **Calendar and Talk**
 
