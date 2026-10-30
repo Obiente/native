@@ -6,7 +6,7 @@ capability, because opening an app does not prove it is compatible. Read it
 before claiming support for an app or platform, and update it when you gather
 new device or server evidence.
 
-**Last reviewed: 2026-10-25.** Implementation, server APIs, and app behavior
+**Last reviewed: 2026-10-29.** Implementation, server APIs, and app behavior
 may have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published compatibility limitations. Planned work
 and acceptance gates live in [ROADMAP.md](ROADMAP.md); platform status lives in
@@ -41,7 +41,7 @@ server or app version.
 | Files | WebDAV folders, list and grid layouts, previews, file details, bounded downloads, ETag-protected UTF-8 editing, copy, move, rename, and sharing |
 | Folder sync and virtual files | Early selected-folder sync on Android, Linux, and Windows; Android `DocumentsProvider`; Linux FUSE virtual filesystem; Windows Cloud Files. Conflict recovery and background durability are still in development. |
 | Photos and Memories | Media search, thumbnail grid, RAW and server previews, recognized People covers, per-person galleries, full-screen navigation, and zoom |
-| Talk | Room list, history loading, typed file previews, call and system events, and shared objects. Sending is an explicit user action. Calls are not implemented. |
+| Talk | Room list beside the conversation on wide windows, history loading, long-polling live updates while visible, typed file previews, call and system events, and shared objects. Replies, reactions, and editing or deleting your own messages are offered only when the server advertises `chat-replies`, `reactions`, `edit-messages`, or `delete-messages` and the conversation permissions allow them; these are covered by deterministic tests, not by a live audit. Sending is an explicit user action. Attachments, new conversations, read markers, and calls are not implemented. |
 | Activity | Read-only OCS activity timeline with refresh and filters |
 | Notes | Metadata-only list, Markdown editor and preview, formatting controls, category and favorite state, explicit save, and ETag conflicts |
 | Dashboard and User Status | Widget and item feeds, native app routing, a short-lived account-private cache, and capability-gated status editing |

@@ -1791,11 +1791,18 @@ private fun AuthenticatedApp(
                 openMediaViewer(media, file, current)
             },
         )
-        Screen.Talk -> TalkScreen(
+        Screen.Talk, is Screen.Chat -> TalkWorkspaceScreen(
             services = services,
             session = session,
-            onBack = ::navigateBack,
-            onOpenRoom = { screen = Screen.Chat(it) },
+            userId = serverInfo?.userId.orEmpty(),
+            selectedRoom = (current as? Screen.Chat)?.room,
+            onSelectRoom = { screen = Screen.Chat(it) },
+            onCloseRoom = { screen = Screen.Talk },
+            onExit = {
+                screen = Screen.Talk
+                navigateBack()
+            },
+            onOpenAttachment = { file -> openMediaViewer(listOf(file), file, current) },
         )
         Screen.Notes -> NextcloudNotesScreen(
             services = services,
@@ -1815,16 +1822,6 @@ private fun AuthenticatedApp(
             onNavigationCancelled = ::cancelPendingNavigationRequest,
             navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
-        )
-        is Screen.Chat -> ChatScreen(
-            services = services,
-            session = session,
-            userId = serverInfo?.userId.orEmpty(),
-            room = current.room,
-            onBack = ::navigateBack,
-            onOpenAttachment = { file ->
-                openMediaViewer(listOf(file), file, current)
-            },
         )
         is Screen.AppInfo -> {
             val resumePlan = planDynamicContractResume(
@@ -10498,90 +10495,6 @@ private fun FileMetadataLine(label: String, value: String) {
         )
     }
 }
-
-@Composable
-internal fun TalkScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    onBack: () -> Unit,
-    onOpenRoom: (TalkRoom) -> Unit,
-) {
-    var rooms by remember(session) { mutableStateOf(TalkWorkspaceMemoryCache.rooms(session)) }
-    var error by remember(session) { mutableStateOf<String?>(null) }
-    var refreshing by remember(session) { mutableStateOf(false) }
-    var loadAttempt by remember(session) { mutableStateOf(0) }
-    LaunchedEffect(loadAttempt) {
-        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
-        refreshing = rooms != null
-        error = null
-        runCatching { services.listTalkRooms(session) }
-            .onSuccess {
-                rooms = it
-                TalkWorkspaceMemoryCache.storeRooms(session, it, cacheProducer)
-            }
-            .onFailure { error = it.message ?: "Could not load Talk conversations." }
-        refreshing = false
-    }
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader("Talk", "Conversations", onBack)
-        if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        if (error != null && rooms != null) {
-            RetainedRefreshError(message = requireNotNull(error), onRetry = { loadAttempt += 1 })
-        }
-        when {
-            error != null && rooms == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            rooms == null -> LoadingMessage("Loading conversations...")
-            rooms?.isEmpty() == true -> EmptyMessage("No Talk conversations yet.")
-            else -> LazyColumn(contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge)) {
-                listItems(requireNotNull(rooms), key = TalkRoom::token) { room ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onOpenRoom(room) }
-                            .padding(horizontal = NextcloudSpacing.XLarge, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-                    ) {
-                        Surface(color = NextcloudTheme.colors.appIconContainer, shape = CircleShape) {
-                            Icon(
-                                NextcloudIcons.app("talk"),
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(10.dp).size(24.dp),
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(room.displayName, fontWeight = FontWeight.SemiBold)
-                            room.lastMessage?.let {
-                                Text(
-                                    it,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        if (room.unreadMessages > 0) {
-                            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape) {
-                                Text(
-                                    room.unreadMessages.toString(),
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            }
-                        }
-                        Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${room.displayName}")
-                    }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 84.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
 
 @Composable
 private fun ProjectNewsScreen(

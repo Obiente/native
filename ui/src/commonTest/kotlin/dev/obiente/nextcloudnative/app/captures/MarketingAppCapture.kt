@@ -8,7 +8,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
-import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
@@ -319,26 +318,16 @@ private fun MarketingDesktopConversationsScenario(
         activeAppId = "spreed",
         desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
     ) {
-        NextcloudDesktopMasterDetail(
-            masterWidthDp = 340,
-            master = {
-                TalkScreen(
-                    services = assets.services,
-                    session = marketingHomepageSession,
-                    onBack = {},
-                    onOpenRoom = {},
-                )
-            },
-            detail = {
-                ChatScreen(
-                    services = assets.services,
-                    session = marketingHomepageSession,
-                    userId = marketingHomepageTalkUserId,
-                    room = marketingHomepageTalkRoom,
-                    onBack = {},
-                    onOpenAttachment = {},
-                )
-            },
+        TalkWorkspaceScreen(
+            services = assets.services,
+            session = marketingHomepageSession,
+            userId = marketingHomepageTalkUserId,
+            selectedRoom = marketingHomepageTalkRoom,
+            onSelectRoom = {},
+            onCloseRoom = {},
+            onExit = {},
+            onOpenAttachment = {},
+            execute = ::marketingHomepageTalkExecute,
         )
     }
 }

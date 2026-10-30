@@ -1,26 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
-
-internal fun talkMessageHistoryPath(
-    token: String,
-    olderCursor: Long?,
-    limit: Int,
-): String {
-    require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-        "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-    }
-    require(olderCursor == null || olderCursor >= 0L) {
-        "Talk history cursor must not be negative."
-    }
-    val encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8).replace("+", "%20")
-    return "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-        "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-        "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1"
-}
 
 internal const val NOTES_LIST_RELATIVE_PATH = "/index.php/apps/notes/api/v1/notes?exclude=content"
 

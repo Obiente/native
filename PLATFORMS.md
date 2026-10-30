@@ -71,8 +71,12 @@ figures came from comparing function bodies after removing the `Android` and
 **Already shared.** All Compose UI, the sync domain model (planning,
 conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
 policy, and the `NextcloudPlatformServices` interface live in `commonMain`.
-Both service containers implement that interface. `jvmMain` shares login and
-authenticated request policy, application read sessions, detached downloads,
+Both service containers implement that interface. Talk chat requests, response
+parsing, capability gating, and write recovery live in `commonMain`
+(`TalkChatProtocol.kt`, `TalkChatController.kt`); each platform only forwards a
+reviewed `TalkTransportRequest` to `executeTalkRequest`. `jvmMain` shares login and
+authenticated request policy, application read sessions, cancellable Talk reads
+and long polls (`JvmTalkTransport.kt`), detached downloads,
 the resumable chunk-upload state machine, staging-space reservations, support
 diagnostics and intake, text-draft encryption, and WebDAV href decoding.
 
@@ -251,6 +255,27 @@ interaction validation is still required.
   the draft. Refresh only reads the conversation, and an uncertain resend needs
   explicit confirmation. Timestamps show UTC and do not imply delivery or read
   state.
+- An open conversation waits for new messages with Talk's long-polling chat
+  API while the app is visible. Hiding the app, leaving the conversation, or
+  switching rooms cancels the waiting request. Polling never sets the read
+  marker, clears notifications, or updates presence. Offline and server errors
+  back off and retry; a removed conversation, an active lobby, or an expired
+  sign-in stops polling and says why.
+- Reply, react, edit, and delete appear only when the server advertises the
+  matching Talk feature and the conversation and attendee permissions allow
+  the write. Edit and delete are limited to this account's own plain-text
+  messages within Talk's documented time windows. Delete needs a separate
+  confirmation. Message actions open with a long press on touch, and with a
+  right click or the overflow button on desktop; all are also exposed as
+  accessibility actions. A send carries a Talk reference ID when supported, so
+  an unconfirmed send is checked against the conversation before the user may
+  send it again. An unconfirmed edit, delete, or reaction is read back before
+  its result is shown.
+- Windows at least 840 dp wide show the conversation list beside the open
+  conversation. Up and Down move through the list, Alt+Up and Alt+Down switch
+  conversations from anywhere in the workspace, Enter sends, Shift+Enter adds a
+  line, and Escape cancels a reply or edit. Compact windows show one pane and
+  use system back. `TalkWorkspaceInteractionTest` covers both layouts.
 
 **Office**
 

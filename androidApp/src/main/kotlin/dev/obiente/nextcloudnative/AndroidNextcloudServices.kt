@@ -43,7 +43,6 @@ import dev.obiente.nextcloudnative.app.textFileDavSaveRequest
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
-import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
 import dev.obiente.nextcloudnative.app.NextcloudApiReadFailure
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
@@ -138,8 +137,10 @@ import dev.obiente.nextcloudnative.app.TextEditorDraftStore
 import dev.obiente.nextcloudnative.app.NextcloudSystemTag
 import dev.obiente.nextcloudnative.app.SavedTextFile
 import dev.obiente.nextcloudnative.app.SystemTagDavRecord
-import dev.obiente.nextcloudnative.app.TalkMessage
-import dev.obiente.nextcloudnative.app.TalkMessagePage
+import dev.obiente.nextcloudnative.app.TalkTransportRequest
+import dev.obiente.nextcloudnative.app.TalkTransportResponse
+import dev.obiente.nextcloudnative.app.executeJvmTalkRead
+import dev.obiente.nextcloudnative.app.forTalkReads
 import dev.obiente.nextcloudnative.app.TalkRoom
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
@@ -356,6 +357,7 @@ internal class AndroidNextcloudServices(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val talkReadHttpClient = httpClient.forTalkReads()
     private val documentEditingTransport = AndroidDocumentEditingTransport { session, specification ->
         val response = request(
             method = specification.method,
@@ -3278,90 +3280,28 @@ internal class AndroidNextcloudServices(
             }
         }
 
-    override suspend fun listTalkMessages(
+    override suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-    ): List<TalkMessage> = listTalkMessagePage(session, token).messages
-
-    override suspend fun listTalkMessagePage(
-        session: NextcloudSession,
-        token: String,
-        olderCursor: Long?,
-        limit: Int,
-    ): TalkMessagePage = withContext(Dispatchers.IO) {
-        require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-            "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-        }
-        require(olderCursor == null || olderCursor >= 0L) {
-            "Talk history cursor must not be negative."
-        }
-        try {
-            val encodedToken = encodePathSegment(token)
+        request: TalkTransportRequest,
+    ): TalkTransportResponse = if (request.isRead) {
+        executeJvmTalkRead(talkReadHttpClient, session, request, USER_AGENT)
+    } else {
+        withContext(Dispatchers.IO) {
+            val formBody = request.encodedFormBody()
             val response = request(
-                method = "GET",
-                url = session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-                    "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-                    "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1",
+                method = request.method.name,
+                url = request.url(session.serverUrl),
                 session = session,
+                contentType = formBody?.let { "application/x-www-form-urlencoded; charset=utf-8" },
+                rawBody = formBody,
                 ocsRequest = true,
+                maxResponseBytes = request.maximumResponseBytes,
+                client = noRedirectHttpClient,
             )
-            val data = if (response.status == 304) {
-                JSONArray()
-            } else {
-                check(response.status in 200..299) {
-                    "Loading Talk history failed (HTTP ${response.status})."
-                }
-                JSONObject(response.text).getJSONObject("ocs").getJSONArray("data")
-            }
-            buildList {
-                for (index in 0 until data.length()) {
-                    val message = data.optJSONObject(index) ?: continue
-                    parseTalkMessageJson(message.toString())?.let(::add)
-                }
-            }.let { messages ->
-                val nextCursor = response.chatLastGiven?.toLongOrNull()
-                TalkMessagePage(
-                    messages = messages,
-                    olderCursor = nextCursor,
-                    hasMoreHistory = response.status != 304 && nextCursor != null,
-                )
-            }
-        } catch (failure: Throwable) {
-            Log.e(LOG_TAG, "Loading Talk messages failed", failure)
-            recordRequestDiagnostic(
-                session,
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Talk,
-                    operation = "talk.messages-load",
-                    outcome = "failed",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("room", token, SupportDiagnosticValuePrivacy.Identifier),
-                    ),
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
+            TalkTransportResponse(response.status, response.body, response.chatLastGiven?.toLongOrNull())
         }
     }
 
-    override suspend fun sendTalkMessage(
-        session: NextcloudSession,
-        token: String,
-        message: String,
-    ) = withContext(Dispatchers.IO) {
-        val encodedToken = encodePathSegment(token)
-        val response = request(
-            method = "POST",
-            url = session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken?format=json",
-            session = session,
-            body = "message=" + URLEncoder.encode(message, StandardCharsets.UTF_8.name()),
-            contentType = "application/x-www-form-urlencoded",
-            ocsRequest = true,
-        )
-        check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
-        Unit
-    }
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         accountCredentials.revokeSession(session) {
             request(
