@@ -38,10 +38,13 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,7 +82,8 @@ internal fun CalendarTimeGrid(
     val density = LocalDensity.current
     val firstHour = if (todayDate in dates && nowMinute != null) (nowMinute / 60 - 1).coerceAtLeast(0) else DefaultFirstHour
     LaunchedEffect(dates.firstOrNull(), dates.size) {
-        scroll.scrollTo(with(density) { (hourHeight * firstHour).roundToPx() })
+        // Stop just above the hour so its label, which sits on the hour line, is not cut off.
+        scroll.scrollTo(with(density) { (hourHeight * firstHour - HourLabelOverhang * 2).roundToPx().coerceAtLeast(0) })
     }
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
@@ -111,7 +115,7 @@ internal fun CalendarTimeGrid(
             Column(Modifier.width(gutter)) {
                 (0 until 24).forEach { hour ->
                     Box(Modifier.height(hourHeight).fillMaxWidth()) {
-                        if (hour > 0) Text("%02d:00".format(hour), Modifier.align(Alignment.TopEnd).offset(y = (-7).dp).padding(end = 6.dp),
+                        if (hour > 0) Text("%02d:00".format(hour), Modifier.align(Alignment.TopEnd).offset(y = -HourLabelOverhang).padding(end = 6.dp),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -167,10 +171,12 @@ private fun CalendarGridDayColumn(
             },
     ) {
         val columnWidth = maxWidth
+        // Even the shortest event keeps room for one readable line of its title.
+        val singleLine = with(LocalDensity.current) { MaterialTheme.typography.labelSmall.lineHeight.toDp() } + 4.dp
         layout.timed.forEach { placement ->
             val top = hourHeight * (placement.startMinute / 60f)
             val height = (hourHeight * ((placement.endMinute - placement.startMinute) / 60f))
-                .coerceAtLeast(hourHeight * (MinimumEventMinutes / 60f))
+                .coerceAtLeast(maxOf(hourHeight * (MinimumEventMinutes / 60f), singleLine))
             val laneWidth = columnWidth / placement.lanes
             CalendarTimedEventBlock(
                 placement.event, calendarByHref[placement.event.calendarHref], dense,
@@ -229,19 +235,42 @@ private fun CalendarTimedEventBlock(
 ) {
     val color = calendarWorkspaceColor(calendar, event.calendarHref)
     val content = calendarEventContentColor(color)
-    Column(
+    val titleStyle = if (dense) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge
+    val detailStyle = MaterialTheme.typography.labelSmall
+    val density = LocalDensity.current
+    BoxWithConstraints(
         modifier.background(color, RoundedCornerShape(6.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) {
                 contentDescription = listOfNotNull(event.title, event.displayTimeRange(), event.location, calendar?.displayName).joinToString(", ")
-            }
-            .padding(horizontal = if (dense) 3.dp else 8.dp, vertical = 3.dp),
+            },
     ) {
-        Text(event.title, Modifier.sharedElement(SharedElementKeys.calendarEventTitle(event.instanceId)),
-            style = if (dense) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold, color = content, maxLines = if (dense) 3 else 2, overflow = TextOverflow.Ellipsis)
-        if (!dense) Text(listOfNotNull(event.displayTimeRange(), event.location?.takeIf(String::isNotBlank)).joinToString(" | "),
-            style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // Lay out only the lines that fit, so a short event never shows half a line of text.
+        val titleLine = with(density) { titleStyle.lineHeight.toDp() }
+        val detailLine = with(density) { detailStyle.lineHeight.toDp() }
+        val verticalPadding = if (maxHeight < titleLine + 6.dp) 1.dp else 3.dp
+        val lines = ((maxHeight - verticalPadding * 2) / titleLine).toInt().coerceAtLeast(1)
+        val detail = listOfNotNull(event.displayTimeRange(), event.location?.takeIf(String::isNotBlank)).joinToString(" | ")
+        val showDetail = !dense && maxHeight - verticalPadding * 2 >= titleLine + detailLine
+        val titleLines = if (showDetail) (lines - 1).coerceIn(1, 2) else lines.coerceAtMost(if (dense) 3 else 2)
+        val narrow = maxWidth < NarrowEventWidth
+        Column(Modifier.padding(horizontal = if (dense) 3.dp else 8.dp, vertical = verticalPadding)) {
+            val titleModifier = Modifier.sharedElement(SharedElementKeys.calendarEventTitle(event.instanceId))
+            if (narrow && titleLines > 1) {
+                // A narrow lane shows whole words on their own lines instead of breaking them apart;
+                // assistive technology still reads the title as one piece of text.
+                Column(titleModifier.clearAndSetSemantics { text = AnnotatedString(event.title) }) {
+                    event.title.split(' ').filter(String::isNotBlank).take(titleLines).forEach { word ->
+                        Text(word, style = titleStyle, fontWeight = FontWeight.SemiBold, color = content, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, softWrap = false)
+                    }
+                }
+            } else {
+                Text(event.title, titleModifier, style = titleStyle, fontWeight = FontWeight.SemiBold, color = content,
+                    maxLines = titleLines, overflow = TextOverflow.Ellipsis, softWrap = titleLines > 1)
+            }
+            if (showDetail) Text(detail, style = detailStyle, color = content.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -276,6 +305,8 @@ internal fun calendarEventContentColor(background: Color): Color =
 
 internal val CalendarWeekdayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 private val CalendarHourHeight = 52.dp
+private val HourLabelOverhang = 7.dp
+private val NarrowEventWidth = 72.dp
 private val CalendarTimeGutter = 48.dp
 private const val DefaultFirstHour = 7
 private const val MaxAllDayChips = 2

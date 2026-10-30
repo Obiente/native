@@ -74,6 +74,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
     onDeleteEvent: (GroupwareCalendarEvent) -> Unit,
     onCreateAt: ((String) -> Unit)? = null,
     todayDate: String = currentCalendarDate(),
+    collectionActions: CalendarCollectionActions? = null,
 ) {
     val now by produceState(calendarLocalNow()) {
         while (true) {
@@ -137,6 +138,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                     onCalendarVisibilityChanged = onCalendarVisibilityChanged,
                     onClose = { sourcesRequested = false },
                     modifier = Modifier.width(216.dp).fillMaxHeight(),
+                    collectionActions = collectionActions,
                 )
                 Surface(
                     Modifier.weight(1f).fillMaxHeight(),
@@ -198,7 +200,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                     DesktopCalendarSourcesPane(
                         calendars, hiddenCalendarHrefs, presentation.eventCountByCalendar, loading,
                         onCalendarVisibilityChanged, onClose = null,
-                        modifier = Modifier.fillMaxWidth().height(480.dp),
+                        modifier = Modifier.fillMaxWidth().height(480.dp), collectionActions = collectionActions,
                     )
                 },
                 confirmButton = { TextButton(onClick = { sourcesRequested = false }) { Text("Done") } },

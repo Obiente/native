@@ -111,6 +111,7 @@ fun NativeGroupwareCalendarScreen(
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+    val collections = rememberCalendarCollectionManager(services, session, userId) { loadAttempt += 1 }
 
     LaunchedEffect(navigationCommitInProgress) {
         if (navigationCommitInProgress) {
@@ -498,7 +499,7 @@ fun NativeGroupwareCalendarScreen(
                 } else if (displayed == null) {
                     WorkspaceLoadError((state as CalendarLoadState.Error).message) { loadAttempt += 1 }
                 } else if (!initialLoading && displayed.calendars.isEmpty()) {
-                    WorkspaceLoadError("No event calendars were found.") { loadAttempt += 1 }
+                    CalendarCollectionEmptyState(collections.actions, onRetry = { loadAttempt += 1 })
                 } else if (desktop) {
                     val selectedEvent = displayed.events.firstOrNull { event ->
                         event.instanceId == selectedEventId
@@ -514,8 +515,7 @@ fun NativeGroupwareCalendarScreen(
                         selectedEvent = selectedEvent,
                         loading = initialLoading,
                         mutationsEnabled = !mutationInProgress,
-                        onPrevious = { navigateCalendar(-1) },
-                        onNext = { navigateCalendar(1) },
+                        onPrevious = { navigateCalendar(-1) }, onNext = { navigateCalendar(1) },
                         onToday = ::selectToday,
                         onViewChanged = { selected -> viewName = selected.name },
                         onQueryChanged = { query = it },
@@ -528,6 +528,7 @@ fun NativeGroupwareCalendarScreen(
                         onCreateEvent = { startCreating() },
                         onCreateAt = ::startCreating,
                         onRefresh = { loadAttempt += 1 },
+                        collectionActions = collections.actions,
                         onEditEvent = { event ->
                             if (!mutationInProgress) {
                                 activeEventInstanceId = event.instanceId
@@ -550,14 +551,13 @@ fun NativeGroupwareCalendarScreen(
                         events = displayed.events,
                         hiddenCalendarHrefs = hiddenCalendarHrefs.toSet(),
                         query = query,
-                        onPrevious = { navigateCalendar(-1) },
-                        onNext = { navigateCalendar(1) },
+                        onPrevious = { navigateCalendar(-1) }, onNext = { navigateCalendar(1) },
                         onToday = ::selectToday,
                         onViewChanged = { selected -> viewName = selected.name },
                         onQueryChanged = { query = it },
                         onCalendarVisibilityChanged = ::setCalendarVisible,
                         onSelectDate = { selectedDate = it },
-                        onCreateAt = ::startCreating,
+                        onCreateAt = ::startCreating, collectionActions = collections.actions,
                         onSelectEvent = { event ->
                             activeEventInstanceId = event.instanceId
                             eventEditorActive = false
@@ -565,11 +565,11 @@ fun NativeGroupwareCalendarScreen(
                     )
                 }
                 NextcloudRefreshBar(initialLoading || refreshing, Modifier.fillMaxWidth().align(Alignment.TopCenter))
-
             }
         }
     }
 
+    CalendarCollectionDialogs(collections)
     if (showRecoveryOptions && mutationRecoveryState != null) {
         DurableMutationRecoveryDialog(
             title = "Resolve calendar recovery",
@@ -912,7 +912,6 @@ private fun currentCalendarMonth(): CalendarMonth {
 
 /** The device's local date, so "today" turns over at local midnight rather than at UTC midnight. */
 internal fun currentCalendarDate(): String = deckLocalDatePlusDays(0).isoDateToCompact()
-
 
 internal fun groupwareCalendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     2 -> if (year % 400 == 0 || year % 4 == 0 && year % 100 != 0) 29 else 28

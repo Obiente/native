@@ -21,6 +21,12 @@ data class GroupwareCalendar(
     val displayName: String,
     val color: String? = null,
     val writable: Boolean = false,
+    /** Whose calendar this is: the user's own, shared with them, or a subscribed feed. */
+    val kind: GroupwareCalendarKind = GroupwareCalendarKind.Owned,
+    val ownerName: String? = null,
+    /** The feed address of a subscription. */
+    val sourceUrl: String? = null,
+    val supportsTasks: Boolean = false,
 )
 
 data class GroupwareAddressBook(
@@ -280,32 +286,6 @@ fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalen
 
 fun parseGroupwareTaskCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
     parseGroupwareCalendarsForComponent(response, "VTODO")
-
-private fun parseGroupwareCalendarsForComponent(
-    response: NextcloudApiResponse,
-    componentName: String,
-): List<GroupwareCalendar> {
-    require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
-    val xml = response.body.decodeToString()
-    return xml.xmlElements("response").mapNotNull { block ->
-        val href = block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
-            ?: return@mapNotNull null
-        if (!block.containsXmlElement("calendar")) return@mapNotNull null
-        val supportsComponent = block.xmlOpeningTags("comp").any { component ->
-            component.xmlAttribute("name")?.equals(componentName, ignoreCase = true) == true
-        }
-        if (!supportsComponent) return@mapNotNull null
-        val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
-        GroupwareCalendar(
-            href = href.requireSafeDavHref(),
-            displayName = block.xmlText("displayname")?.decodeXmlEntities()?.trim()
-                ?.takeIf(String::isNotBlank)
-                ?: href.trimEnd('/').substringAfterLast('/').decodePercentEncoding(),
-            color = block.xmlText("calendar-color")?.trim()?.takeIf(String::isNotBlank),
-            writable = privileges.any { it == "write" || it == "write-content" },
-        )
-    }.distinctBy(GroupwareCalendar::href)
-}
 
 fun parseGroupwareAddressBooks(response: NextcloudApiResponse): List<GroupwareAddressBook> {
     require(response.status in 200..299) { "Address-book discovery failed (HTTP ${response.status})." }
@@ -1022,7 +1002,7 @@ private fun String.encodeDavPathSegment(): String = encodeToByteArray().joinToSt
     else "%${unsigned.toString(16).uppercase().padStart(2, '0')}"
 }
 
-private fun String.decodePercentEncoding(): String {
+internal fun String.decodePercentEncoding(): String {
     val bytes = mutableListOf<Byte>()
     var index = 0
     while (index < length) {
@@ -1111,11 +1091,13 @@ private val COLLECTION_DISCOVERY_BODY = """
     <d:propfind xmlns:d="DAV:"
         xmlns:c="urn:ietf:params:xml:ns:caldav"
         xmlns:card="urn:ietf:params:xml:ns:carddav"
-        xmlns:cs="http://calendarserver.org/ns/">
+        xmlns:cs="http://calendarserver.org/ns/" xmlns:x1="http://apple.com/ns/ical/"
+        xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.com/ns">
       <d:prop>
         <d:displayname /><d:resourcetype /><d:getetag /><d:sync-token />
         <cs:getctag /><d:current-user-privilege-set />
-        <c:supported-calendar-component-set />
+        <c:supported-calendar-component-set /><x1:calendar-color /><cs:source />
+        <oc:owner-principal /><nc:owner-displayname /><nc:deleted-at />
       </d:prop>
     </d:propfind>
 """.trimIndent()

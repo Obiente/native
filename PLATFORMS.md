@@ -387,6 +387,21 @@ interaction validation is still required.
   own `TZID`, so a repeating event keeps its wall time across daylight-saving
   changes; events without one are stored in UTC. Unknown zones are shown as
   written rather than guessed.
+- The calendar list manages calendars as the web calendar does: "New
+  calendar" creates a calendar (optionally also holding tasks) with CalDAV
+  `MKCALENDAR`, or subscribes to an iCalendar link (`https`, `http`, or
+  `webcal`, never with credentials) the way Nextcloud stores subscriptions.
+  Each calendar's menu renames or recolors it (`PROPPATCH`), deletes it, ends a
+  subscription, or removes a calendar shared with the user, after a
+  confirmation. Shared calendars name their owner and subscriptions are always
+  read-only. Every change is confirmed against a fresh calendar list, so a
+  lost response is reported as unknown rather than as success or failure, and
+  retrying a new calendar reuses its address instead of creating a second one.
+  Calendars in Nextcloud's trash bin are not listed; restoring them, sharing,
+  publishing, and importing still happen in the web calendar.
+- Time-grid events show only the lines that fit: short events keep one
+  readable line, and narrow overlapping lanes wrap at words rather than inside
+  them.
 - Shared date grouping includes multi-day events within a bounded window and
   respects exclusive all-day end dates. The editor puts title and schedule
   first, with compact recurrence and calendar selectors.

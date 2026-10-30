@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -119,6 +122,7 @@ internal fun CalendarVisibilityRow(
     eventCount: Int,
     onVisibilityChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onManage: (() -> Unit)? = null,
 ) {
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(10.dp))
         .toggleable(visible, role = Role.Checkbox, onValueChange = onVisibilityChanged)
@@ -129,11 +133,21 @@ internal fun CalendarVisibilityRow(
         Box(Modifier.size(8.dp).background(calendarWorkspaceColor(calendar), CircleShape))
         Column(Modifier.weight(1f)) {
             Text(calendar.displayName, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!calendar.writable) Text("Read only", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            calendar.accessDescription()?.let { Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(eventCount.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (onManage != null) IconButton(onClick = onManage) {
+            Icon(NextcloudIcons.More, contentDescription = "Manage ${calendar.displayName}")
+        }
     }
+}
+
+/** Whose calendar this is and whether it can be changed, when that is not simply "yours". */
+internal fun GroupwareCalendar.accessDescription(): String? = when (kind) {
+    GroupwareCalendarKind.Subscription -> "Subscription, read only"
+    GroupwareCalendarKind.Shared -> (ownerName?.let { "Shared by $it" } ?: "Shared with you") + if (writable) "" else ", read only"
+    GroupwareCalendarKind.Owned -> "Read only".takeIf { !writable }
 }
 
 /** A CalDAV calendar color such as `#0082C9` or `#0082C9FF`; anything else is ignored. */
