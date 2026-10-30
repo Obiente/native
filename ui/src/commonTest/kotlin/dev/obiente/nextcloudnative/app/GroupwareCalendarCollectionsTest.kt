@@ -115,6 +115,14 @@ class GroupwareCalendarCollectionsTest {
     }
 
     @Test
+    fun colorChoicesKeepTheirOrderAndAddAForeignColorOnce() {
+        assertEquals(CalendarCollectionColors, calendarColorChoices(null))
+        assertEquals(CalendarCollectionColors, calendarColorChoices("#2e9e5bff"), "A palette color is not repeated")
+        assertEquals(CalendarCollectionColors + "#123456", calendarColorChoices("#123456FF"))
+        assertEquals(CalendarCollectionColors, calendarColorChoices("not a color"))
+    }
+
+    @Test
     fun draftsExplainWhatIsMissing() {
         assertEquals("Enter a name.", CalendarCollectionDraft(" ", "#0082C9").validationMessage())
         assertEquals("Choose a color.", CalendarCollectionDraft("Work", "blue").validationMessage())

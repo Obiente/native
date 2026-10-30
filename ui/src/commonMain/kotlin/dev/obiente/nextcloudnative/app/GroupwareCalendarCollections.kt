@@ -70,7 +70,7 @@ internal data class CalendarCollectionDraft(
 
 /** The colors offered for calendars, matching the Nextcloud calendar palette. */
 internal val CalendarCollectionColors = listOf(
-    "#0082C9", "#1E78C1", "#2E9E5B", "#E9A23B", "#E9322D", "#8E44AD", "#C71585", "#795548",
+    "#0082C9", "#00897B", "#2E9E5B", "#E9A23B", "#E9322D", "#8E44AD", "#C71585", "#795548",
 )
 
 internal fun CalendarCollectionDraft.validationMessage(): String? = when {

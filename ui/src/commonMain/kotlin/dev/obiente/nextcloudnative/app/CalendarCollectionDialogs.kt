@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -162,7 +163,7 @@ private fun CalendarCollectionEditorDialog(
                     Text("Feed: $source", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text("Color", style = MaterialTheme.typography.labelLarge)
-                CalendarColorPicker(color, enabled = !busy) { color = it }
+                CalendarColorPicker(color, original = existing?.color, enabled = !busy) { color = it }
                 if (existing == null && !subscription) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -196,15 +197,17 @@ private fun CalendarCollectionEditorDialog(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CalendarColorPicker(selected: String, enabled: Boolean, onSelect: (String) -> Unit) {
-    // A color set elsewhere stays available, so saving a rename never changes the color.
-    val colors = (listOf(selected) + CalendarCollectionColors).distinctBy(String::uppercase)
+private fun CalendarColorPicker(selected: String, original: String?, enabled: Boolean, onSelect: (String) -> Unit) {
+    // The swatches never move: a color set elsewhere is added once, after the palette, so saving
+    // a rename keeps it and choosing another color does not reorder the row.
+    val colors = remember(original) { calendarColorChoices(original) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         colors.forEach { hex ->
             val isSelected = hex.equals(selected, ignoreCase = true)
             val swatch = hex.parseCalendarColor() ?: Color.Gray
             Box(
                 Modifier.size(40.dp)
+                    .clip(CircleShape)
                     .selectable(isSelected, enabled = enabled, role = Role.RadioButton) { onSelect(hex) }
                     .semantics { contentDescription = calendarColorName(hex) }
                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.onSurface else Color.Transparent, CircleShape)
@@ -212,7 +215,8 @@ private fun CalendarColorPicker(selected: String, enabled: Boolean, onSelect: (S
                     .background(swatch, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                if (isSelected) Icon(NextcloudIcons.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                if (isSelected) Icon(NextcloudIcons.CheckCircle, contentDescription = null, tint = calendarEventContentColor(swatch),
+                    modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -263,9 +267,14 @@ private fun CalendarCollectionDeleteDialog(
     )
 }
 
+internal fun calendarColorChoices(original: String?): List<String> {
+    val current = original?.take(7)?.uppercase()?.takeIf { it.length == 7 && it.parseCalendarColor() != null }
+    return CalendarCollectionColors + listOfNotNull(current?.takeIf { color -> CalendarCollectionColors.none { it.equals(color, ignoreCase = true) } })
+}
+
 private fun calendarColorName(hex: String): String = when (hex.uppercase()) {
     "#0082C9" -> "Blue"
-    "#1E78C1" -> "Dark blue"
+    "#00897B" -> "Teal"
     "#2E9E5B" -> "Green"
     "#E9A23B" -> "Amber"
     "#E9322D" -> "Red"

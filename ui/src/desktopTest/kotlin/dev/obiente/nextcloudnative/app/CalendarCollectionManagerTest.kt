@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.ui.semantics.getOrNull
 import java.io.ByteArrayInputStream
 import java.lang.reflect.Proxy
 import javax.xml.parsers.DocumentBuilderFactory
@@ -125,7 +126,11 @@ class CalendarCollectionManagerTest {
             click("New calendar")
             assertTrue(has("Create"))
             replaceText("", "Family")
+            val blue = assertNotNull(node("Blue")).boundsInRoot
             click("Green")
+            assertEquals(blue, assertNotNull(node("Blue")).boundsInRoot, "Choosing a color never moves the swatches")
+            assertEquals(true, node("Green")?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Selected))
+            capture("calendar-collection-editor")
             click("Create")
             settleUntil { changes > 0 }
             assertEquals(1, changes)
