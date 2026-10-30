@@ -711,6 +711,7 @@ class DesktopNextcloudServices(
         .followSslRedirects(false)
         .build()
     private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
+    private val talkReadHttpClient = httpClient.forTalkReads()
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
@@ -5249,56 +5250,28 @@ class DesktopNextcloudServices(
             }
         }
 
-    override suspend fun listTalkMessages(session: NextcloudSession, token: String): List<TalkMessage> =
-        listTalkMessagePage(session, token).messages
-
-    override suspend fun listTalkMessagePage(
+    override suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-        olderCursor: Long?,
-        limit: Int,
-    ): TalkMessagePage =
+        request: TalkTransportRequest,
+    ): TalkTransportResponse = if (request.isRead) {
+        executeJvmTalkRead(talkReadHttpClient, session, request, USER_AGENT)
+    } else {
         withContext(Dispatchers.IO) {
+            val formBody = request.encodedFormBody()
             val response = request(
-                "GET",
-                session.serverUrl + talkMessageHistoryPath(token, olderCursor, limit),
-                session,
+                method = request.method.name,
+                url = request.url(session.serverUrl),
+                session = session,
+                contentType = formBody?.let { "application/x-www-form-urlencoded; charset=utf-8" },
+                rawBody = formBody,
                 ocsRequest = true,
+                maxResponseBytes = request.maximumResponseBytes,
+                client = noRedirectHttpClient,
             )
-            val data = if (response.status == 304) {
-                JSONArray()
-            } else {
-                check(response.status in 200..299) {
-                    "Loading Talk history failed (HTTP ${response.status})."
-                }
-                JSONObject(response.text).getJSONObject("ocs").getJSONArray("data")
-            }
-            val messages = buildList {
-                for (index in 0 until data.length()) {
-                    val message = data.optJSONObject(index) ?: continue
-                    parseTalkMessageJson(message.toString())?.let(::add)
-                }
-            }
-            val nextCursor = response.chatLastGiven?.toLongOrNull()
-            TalkMessagePage(
-                messages = messages,
-                olderCursor = nextCursor,
-                hasMoreHistory = response.status != 304 && nextCursor != null,
-            )
+            TalkTransportResponse(response.status, response.body, response.chatLastGiven?.toLongOrNull())
         }
-    override suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String) =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                "POST",
-                session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/${encodePath(token)}?format=json",
-                session,
-                "message=" + encodeForm(message),
-                "application/x-www-form-urlencoded",
-                true,
-            )
-            check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
-            Unit
-        }
+    }
+
     override suspend fun revokeSession(session: NextcloudSession): Unit = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize {
             clearSessionForAccountOperation(expectedSession = session) { current ->

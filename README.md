@@ -194,8 +194,9 @@ Windows, and an early macOS package) with:
 - Photos and Memories: collections, albums, tags, people, favorites, RAW and
   JPEG grouping, full-quality originals loaded on zoom, and foundations for
   edits that keep the original;
-- Talk history, with message cards for text, files, recordings, calls, system
-  events and shared objects;
+- Talk conversations with live updates, replies, reactions, and editing or
+  deleting your own messages where the server allows it, and message cards for
+  text, files, recordings, calls, system events and shared objects;
 - Notes, with folders, ETag-aware saving and Markdown editing and preview;
 - News, as a feed reader with unread and starred views, folders, feeds and an
   article reader that does not load remote images;

@@ -1810,11 +1810,18 @@ private fun AuthenticatedApp(
                 openMediaViewer(media, file, current)
             },
         )
-        Screen.Talk -> TalkScreen(
+        Screen.Talk, is Screen.Chat -> TalkWorkspaceScreen(
             services = services,
             session = session,
-            onBack = ::navigateBack,
-            onOpenRoom = { screen = Screen.Chat(it) },
+            userId = serverInfo?.userId.orEmpty(),
+            selectedRoom = (current as? Screen.Chat)?.room,
+            onSelectRoom = { screen = Screen.Chat(it) },
+            onCloseRoom = { screen = Screen.Talk },
+            onExit = {
+                screen = Screen.Talk
+                navigateBack()
+            },
+            onOpenAttachment = { file -> openMediaViewer(listOf(file), file, current) },
         )
         Screen.Notes -> NextcloudNotesScreen(
             services = services,
@@ -1834,16 +1841,6 @@ private fun AuthenticatedApp(
             onNavigationCancelled = ::cancelPendingNavigationRequest,
             navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
-        )
-        is Screen.Chat -> ChatScreen(
-            services = services,
-            session = session,
-            userId = serverInfo?.userId.orEmpty(),
-            room = current.room,
-            onBack = ::navigateBack,
-            onOpenAttachment = { file ->
-                openMediaViewer(listOf(file), file, current)
-            },
         )
         is Screen.AppInfo -> {
             val resumePlan = planDynamicContractResume(
@@ -10397,49 +10394,6 @@ private fun FileMetadataLine(label: String, value: String) {
         )
     }
 }
-
-@Composable
-internal fun TalkScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    onBack: () -> Unit,
-    onOpenRoom: (TalkRoom) -> Unit,
-) {
-    var rooms by remember(session) { mutableStateOf(TalkWorkspaceMemoryCache.rooms(session)) }
-    var error by remember(session) { mutableStateOf<String?>(null) }
-    var refreshing by remember(session) { mutableStateOf(false) }
-    var loadAttempt by remember(session) { mutableStateOf(0) }
-    LaunchedEffect(loadAttempt) {
-        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
-        refreshing = rooms != null
-        error = null
-        runCatching { services.listTalkRooms(session) }
-            .onSuccess {
-                rooms = it
-                TalkWorkspaceMemoryCache.storeRooms(session, it, cacheProducer)
-            }
-            .onFailure { error = it.message ?: "Could not load Talk conversations." }
-        refreshing = false
-    }
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader("Talk", "Conversations", onBack)
-        NextcloudRefreshBar(refreshing)
-        if (error != null && rooms != null) {
-            RetainedRefreshError(message = requireNotNull(error), onRetry = { loadAttempt += 1 })
-        }
-        when {
-            error != null && rooms == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            rooms == null -> LoadingMessage("Loading conversations...")
-            rooms?.isEmpty() == true -> EmptyMessage("No Talk conversations yet.")
-            else -> LazyColumn(contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge)) {
-                listItems(requireNotNull(rooms), key = TalkRoom::token) { room ->
-                    TalkRoomRow(room, onOpenRoom, nextcloudItemMotion())
-                }
-            }
-        }
-    }
-}
-
 
 @Composable
 private fun ProjectNewsScreen(
