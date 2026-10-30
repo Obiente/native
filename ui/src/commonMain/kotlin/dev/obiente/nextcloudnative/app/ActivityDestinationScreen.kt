@@ -47,20 +47,31 @@ internal fun notificationsShellBadges(count: Int): Map<NextcloudDestination, Nex
         )
     }.orEmpty()
 
-/** The shell's Activity destination: the Notifications inbox and the Activity history. */
+/**
+ * The shell's Activity destination: the Notifications inbox, the Activity history, and the
+ * notification settings both of them open.
+ */
 @Composable
 internal fun ActivityDestinationScreen(
     session: NextcloudSession,
     notifications: NotificationsInboxController,
     activityInstalled: Boolean,
     onOpenLink: (String) -> Unit,
-    onOpenNotificationSettings: () -> Unit,
-    activity: @Composable () -> Unit,
+    activity: @Composable (onOpenSettings: () -> Unit) -> Unit,
 ) {
     var requested by rememberSaveable(session.accountId.storageKey) {
         mutableStateOf(ActivityDestinationView.Notifications)
     }
+    var showingSettings by rememberSaveable(session.accountId.storageKey) { mutableStateOf(false) }
     val availability = notifications.state.availability
+    PlatformBackHandler(enabled = showingSettings) { showingSettings = false }
+    if (showingSettings) {
+        NotificationSettingsScreen(
+            sections = notificationSettingsSections(availability, activityInstalled),
+            onBack = { showingSettings = false },
+        )
+        return
+    }
     val view = activityDestinationView(requested, availability, activityInstalled)
     Column(modifier = Modifier.fillMaxSize()) {
         if (availability != NotificationsAvailability.NotEnabled && activityInstalled) {
@@ -85,9 +96,9 @@ internal fun ActivityDestinationScreen(
                     controller = notifications,
                     serverUrl = session.serverUrl,
                     onOpenLink = onOpenLink,
-                    onOpenSettings = onOpenNotificationSettings,
+                    onOpenSettings = { showingSettings = true },
                 )
-                ActivityDestinationView.Activity -> activity()
+                ActivityDestinationView.Activity -> activity { showingSettings = true }
             }
         }
     }

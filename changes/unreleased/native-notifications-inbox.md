@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Activity now opens on a native Notifications inbox with an unread badge in the navigation, a detail pane on wide windows, dismiss and dismiss all, and the actions the server offers for each notification.
+Activity opens on a native Notifications inbox with a navigation badge, a desktop detail pane, dismiss and dismiss all, and server-offered actions. Notification settings open in the app, read-only.

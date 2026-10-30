@@ -216,18 +216,6 @@ class ActivitySemanticsTest {
     }
 
     @Test
-    fun `activity settings handoffs remain on the account origin`() {
-        assertEquals(
-            "https://cloud.example.test/index.php/settings/user/notifications",
-            activitySettingsUrl("https://cloud.example.test/", ActivitySettingsDestination.Notifications),
-        )
-        assertEquals(
-            "https://cloud.example.test/index.php/apps/activity",
-            activitySettingsUrl("https://cloud.example.test", ActivitySettingsDestination.RssFeed),
-        )
-    }
-
-    @Test
     fun `empty and not-modified pages are safe terminal results`() {
         listOf(204, 304).forEach { status ->
             val page = parseNextcloudActivityPage(

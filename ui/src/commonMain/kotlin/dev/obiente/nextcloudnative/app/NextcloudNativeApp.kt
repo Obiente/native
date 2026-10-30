@@ -1559,10 +1559,7 @@ private fun AuthenticatedApp(
                 RootDestinationContent.Activity -> ActivityDestinationScreen(
                     session, notificationsInbox, activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
                     onOpenLink = { link -> launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp) },
-                    onOpenNotificationSettings = {
-                        services.openExternalUrl(activitySettingsUrl(session.serverUrl, ActivitySettingsDestination.Notifications))
-                    },
-                ) { ActivityScreen(
+                ) { openSettings -> ActivityScreen(
                     services = services,
                     session = session,
                     activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
@@ -1576,6 +1573,7 @@ private fun AuthenticatedApp(
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
                     },
+                    onOpenSettings = openSettings,
                 ) }
                 RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
@@ -6144,6 +6142,7 @@ private fun ActivityScreen(
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenFilesPath: (String) -> Unit,
     onOpenLink: (String) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     var selectedServerFilterId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("all") }
     var serverFilters by remember(session, activityInstalled) {
@@ -6320,9 +6319,7 @@ private fun ActivityScreen(
                         services.loadPreview(session, preview.fileId, width = 160, height = 160)
                     },
                     previewCacheScope = previewCacheDigest(session),
-                    onOpenSettings = { settings ->
-                        services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
-                    },
+                    onOpenSettings = onOpenSettings,
                 )
             } else ActivityMobileWorkspace(
                 timeline = timeline,
@@ -6347,9 +6344,7 @@ private fun ActivityScreen(
                     services.loadPreview(session, preview.fileId, width = 160, height = 160)
                 },
                 previewCacheScope = previewCacheDigest(session),
-                onOpenSettings = { settings ->
-                    services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
-                },
+                onOpenSettings = onOpenSettings,
             )
         }
     }

@@ -226,8 +226,12 @@ interaction validation is still required.
   desktop sidebar badge Activity with the number of notifications the server
   still lists. That count is read when the account opens, when the inbox
   opens, and on refresh; there is no background polling, push, or system
-  notification yet. `NotificationsInboxScreenTest` covers the phone and
-  desktop layouts and the badge semantics.
+  notification yet. The settings buttons in the inbox and in Activity open a
+  native Notification settings screen instead of the browser. It lists what
+  this app does with the server and describes the Notifications and Activity
+  settings read-only, because neither app offers an API to read them.
+  `NotificationsInboxScreenTest` covers the phone and desktop layouts, the
+  settings screen, and the badge semantics.
 - Folder sync shows queue state and last scan time separately. A completed scan
   is never presented as a completed sync. Phone pair rows open dedicated
   details; desktop keeps a pair table and inspector. Conflict choices explain
