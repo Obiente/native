@@ -251,7 +251,7 @@ interaction validation is still required.
   A refresh failure over content that is still shown uses
   `RetainedContentNotice` instead of a full error state.
 - In-app section switches ease in the new content: Photos destinations,
-  desktop Settings sections, Calendar Month, Week, and Agenda views, and
+  desktop Settings sections, Calendar Month, Week, Day, and Agenda views, and
   dynamic app views, record details, the inline editor, and content that
   finished loading. Segmented controls spring a shared selection pill between
   options. Details, insights, and inventory disclosures in dynamic apps unfold
@@ -362,13 +362,31 @@ interaction validation is still required.
   Files, Deck, Talk, and news. `NoteEditorContentTest` covers the short-window
   controls and preservation of temporary form values.
 - Contact detail bodies scroll independently of their Edit and Delete buttons.
+  Email addresses and phone numbers open the system mail or phone app with one
+  tap, and an address can be copied.
+- Tasks can be completed or reopened from the list's checkbox, through the
+  same ETag-guarded update as the editor. The editor's due date has a date
+  picker and a clear action.
 
 **Calendar and Talk**
 
 - Calendar shares view selection, time-first event rows, named calendar
-  checkboxes, and event detail facts. Phone Month shows a compact date grid
-  above the selected day's events, and Week uses a day strip. Desktop has a
-  continuous month grid with event overflow and scrollable week columns.
+  checkboxes, and event detail facts. Phone Month is a full-screen grid whose
+  days show their events as colored chips with a "+N" count; tapping a day
+  opens its Day view. Week and Day are a shared time grid (`CalendarTimeGrid`)
+  on phone and desktop: hour lines, timed events placed by start and length,
+  overlapping events side by side, all-day and day-spanning events in a row
+  above, and a current-time line on today. Tapping empty time starts a new
+  event at that half hour. On phones, swiping sideways moves to the previous
+  or next period. Desktop keeps its continuous month grid with event overflow.
+- Calendar colors come from the color set on the server, with a theme color
+  as the fallback, so events match the web calendar. "Today" follows the
+  device's local date. Event times are shown and edited in the device's time
+  zone: UTC times and times with a `TZID` are converted once after recurrences
+  are expanded, while floating times stay as written. Saving keeps an event's
+  own `TZID`, so a repeating event keeps its wall time across daylight-saving
+  changes; events without one are stored in UTC. Unknown zones are shown as
+  written rather than guessed.
 - Shared date grouping includes multi-day events within a bounded window and
   respects exclusive all-day end dates. The editor puts title and schedule
   first, with compact recurrence and calendar selectors.

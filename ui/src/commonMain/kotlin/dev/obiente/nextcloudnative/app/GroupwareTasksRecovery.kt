@@ -117,3 +117,11 @@ internal fun decodeTaskMutationRecoveryState(
 ): TaskMutationPostcondition? = runCatching {
     taskMutationRecoveryJson.decodeFromString<TaskMutationRecoveryState>(encoded)
 }.getOrNull()?.takeIf { recovery -> recovery.accountScope == expectedAccountScope }?.postcondition
+
+/** The task as an editor draft, with its due date in the editor's `YYYY-MM-DD` form. */
+internal fun GroupwareTask.toTaskDraft(): TaskDraft = TaskDraft(
+    title = title,
+    dueDate = due?.take(8)?.takeIf { it.length == 8 }?.let { "${it.take(4)}-${it.substring(4, 6)}-${it.takeLast(2)}" }.orEmpty(),
+    description = description.orEmpty(),
+    completed = completed,
+)

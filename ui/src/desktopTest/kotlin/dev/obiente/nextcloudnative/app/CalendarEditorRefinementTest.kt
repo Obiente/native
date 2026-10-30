@@ -18,7 +18,7 @@ class CalendarEditorRefinementTest {
                 onSave = { _, _ -> }, inPlace = true)
         }) {
             assertTrue(assertNotNull(node("Title")).boundsInRoot.top < assertNotNull(node("Date")).boundsInRoot.top)
-            assertTrue(assertNotNull(node("Ends (UTC)")).boundsInRoot.top < assertNotNull(node("Repeats")).boundsInRoot.top)
+            assertTrue(assertNotNull(node("Ends")).boundsInRoot.top < assertNotNull(node("Repeats")).boundsInRoot.top)
             assertTrue(has("Does not repeat"))
             assertFalse(has("Weekly"))
             assertTrue(has("Location"))
@@ -75,10 +75,10 @@ class CalendarEditorRefinementTest {
         }) {
             replaceText("09:00", "11:30")
             click("All day")
-            assertFalse(has("Starts (UTC)"))
+            assertFalse(has("Starts"))
             click("All day")
             assertTrue(nodes().any { it.config.getOrNull(SemanticsProperties.EditableText)?.text == "11:30" })
-            assertTrue(has("Choose Starts (UTC)"))
+            assertTrue(has("Choose Starts"))
         }
     }
 

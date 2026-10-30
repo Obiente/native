@@ -40,6 +40,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
@@ -279,6 +281,88 @@ fun NativeGroupwareTasksScreen(
         }
     }
 
+    // Saves a new or changed task through the same guarded write as the editor: the list's
+    // checkbox uses it to complete a task, keeping its other fields as they are.
+    fun saveTask(target: GroupwareTask?, draft: TaskDraft, calendar: GroupwareCalendar, editStartEtag: String?, onSaved: () -> Unit) {
+        val writable = ready ?: return
+        mutationError = null
+        if (!writable.canWrite(calendar.href)) {
+            mutationError = "This task list is read-only."
+            return
+        }
+        val normalizedDraft = draft.normalized()
+        val normalizedDue = normalizedDraft.compactDueDateOrNull()
+        val uid = target?.uid ?: "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
+        val href = target?.href ?: "${calendar.href}$uid.ics"
+        val content = prepareGroupwareDavMutation(
+            onInvalid = { mutationError = "Review the task fields and try again." },
+        ) {
+            target?.let { task ->
+                updateGroupwareTaskContent(
+                    task,
+                    normalizedDraft.title,
+                    normalizedDue,
+                    normalizedDraft.completed,
+                    normalizedDraft.description,
+                )
+            } ?: createGroupwareTaskContent(
+                uid,
+                normalizedDraft.title,
+                normalizedDue,
+                normalizedDraft.completed,
+                normalizedDraft.description,
+            )
+        } ?: return
+        val request = prepareGroupwareDavMutation(
+            onInvalid = { mutationError = "The task cannot be changed safely. Refresh and try again." },
+        ) {
+            GroupwareDavMutationSpec(
+                kind = GroupwareDavKind.Task,
+                mutation = if (target == null) {
+                    GroupwareDavMutation.Create
+                } else {
+                    GroupwareDavMutation.Update
+                },
+                objectHref = href,
+                etag = editStartEtag,
+                content = content,
+            ).toGroupwareDavRequest()
+        } ?: return
+        val postcondition = TaskMutationPostcondition.Upsert(
+            href = href,
+            calendarHref = calendar.href,
+            expectedUid = uid,
+            expectedRecurrenceId = target?.recurrenceId,
+            previousEtag = editStartEtag,
+            draft = normalizedDraft,
+            expectedDue = expectedGroupwareTaskDueAfterDateEdit(target, normalizedDue),
+        )
+        scope.launch {
+            operations.mutate mutation@{
+                if (!retainRecovery(postcondition)) return@mutation
+                try {
+                    val response = services.executeGroupwareDav(session, request)
+                    if (response.status !in 200..299) {
+                        if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
+                            mutationError = "Saving the task failed (HTTP ${response.status})."
+                        } else {
+                            mutationError = "The task result is unknown. Refresh to verify it."
+                            loadAttempt += 1
+                        }
+                        return@mutation
+                    }
+                    onSaved()
+                    loadAttempt += 1
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (_: Exception) {
+                    mutationError = "The task result is unknown. Refresh to verify it."
+                    loadAttempt += 1
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -396,7 +480,15 @@ fun NativeGroupwareTasksScreen(
                                 modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Checkbox(checked = task.completed, onCheckedChange = null)
+                                Checkbox(
+                                    checked = task.completed,
+                                    onCheckedChange = ready?.calendars?.firstOrNull { it.href == task.calendarHref }
+                                        ?.takeIf { !interactionBlocked && taskWritable && task.etag != null }
+                                        ?.let { calendar -> { done -> saveTask(task, task.toTaskDraft().copy(completed = done), calendar, task.etag) {} } },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = if (task.completed) "Mark ${task.title} as not done" else "Mark ${task.title} as done"
+                                    },
+                                )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         task.title,
@@ -481,84 +573,8 @@ fun NativeGroupwareTasksScreen(
                 editing = false
                 if (selectedTask == null) selectedTaskSelection = null
             },
-            onSave = save@{ draft, calendar, editStartEtag ->
-                mutationError = null
-                if (!ready.canWrite(calendar.href)) {
-                    mutationError = "This task list is read-only."
-                    return@save
-                }
-                val normalizedDraft = draft.normalized()
-                val normalizedDue = normalizedDraft.compactDueDateOrNull()
-                val uid = selectedTask?.uid ?: "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
-                val href = selectedTask?.href ?: "${calendar.href}$uid.ics"
-                val content = prepareGroupwareDavMutation(
-                    onInvalid = { mutationError = "Review the task fields and try again." },
-                ) {
-                    selectedTask?.let { task ->
-                        updateGroupwareTaskContent(
-                            task,
-                            normalizedDraft.title,
-                            normalizedDue,
-                            normalizedDraft.completed,
-                            normalizedDraft.description,
-                        )
-                    } ?: createGroupwareTaskContent(
-                        uid,
-                        normalizedDraft.title,
-                        normalizedDue,
-                        normalizedDraft.completed,
-                        normalizedDraft.description,
-                    )
-                } ?: return@save
-                val request = prepareGroupwareDavMutation(
-                    onInvalid = { mutationError = "The task cannot be changed safely. Refresh and try again." },
-                ) {
-                    GroupwareDavMutationSpec(
-                        kind = GroupwareDavKind.Task,
-                        mutation = if (selectedTask == null) {
-                            GroupwareDavMutation.Create
-                        } else {
-                            GroupwareDavMutation.Update
-                        },
-                        objectHref = href,
-                        etag = editStartEtag,
-                        content = content,
-                    ).toGroupwareDavRequest()
-                } ?: return@save
-                val postcondition = TaskMutationPostcondition.Upsert(
-                    href = href,
-                    calendarHref = calendar.href,
-                    expectedUid = uid,
-                    expectedRecurrenceId = selectedTask?.recurrenceId,
-                    previousEtag = editStartEtag,
-                    draft = normalizedDraft,
-                    expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
-                )
-                scope.launch {
-                    operations.mutate mutation@{
-                        if (!retainRecovery(postcondition)) return@mutation
-                        try {
-                            val response = services.executeGroupwareDav(session, request)
-                            if (response.status !in 200..299) {
-                                if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
-                                    mutationError = "Saving the task failed (HTTP ${response.status})."
-                                } else {
-                                    mutationError = "The task result is unknown. Refresh to verify it."
-                                    loadAttempt += 1
-                                }
-                                return@mutation
-                            }
-                            creating = false
-                            editing = false
-                            loadAttempt += 1
-                        } catch (failure: CancellationException) {
-                            throw failure
-                        } catch (_: Exception) {
-                            mutationError = "The task result is unknown. Refresh to verify it."
-                            loadAttempt += 1
-                        }
-                    }
-                }
+            onSave = { draft, calendar, editStartEtag ->
+                saveTask(selectedTask, draft, calendar, editStartEtag) { creating = false; editing = false }
             },
         )
     }

@@ -148,14 +148,13 @@ internal fun TaskEditorDialog(
                     )
                 }
                 item {
-                    OutlinedTextField(
+                    CalendarDateField(
                         editorState.dueDate,
                         { updateEditorState(editorState.copy(dueDate = it)) },
-                        label = { Text("Due date") },
-                        placeholder = { Text("YYYY-MM-DD") },
-                        modifier = Modifier.fillMaxWidth(),
-                        isError = !dateValid,
                         enabled = !mutationInProgress,
+                        label = "Due date",
+                        chooseLabel = "Choose due date",
+                        optional = true,
                     )
                 }
                 item {

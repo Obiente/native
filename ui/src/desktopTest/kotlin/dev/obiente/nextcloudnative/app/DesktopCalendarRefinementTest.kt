@@ -45,20 +45,22 @@ class DesktopCalendarRefinementTest {
     }
 
     @Test
-    fun weekColumnsScrollToLaterEventsAndKeepExactOccurrenceIdentity() {
+    fun weekGridScrollsToLaterEventsAndKeepsExactOccurrenceIdentity() {
         val events = (1..20).map(::event)
         var selected: GroupwareCalendarEvent? = null
         nativeSceneTest(1200, 540, content = {
             CalendarFixture(events = events, view = CalendarWorkspaceView.Week, onSelectEvent = { selected = it })
         }) {
-            val description = "Events on 4 August 2026"
-            val column = assertNotNull(nodes().firstOrNull {
-                it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true &&
-                    it.config.getOrNull(SemanticsActions.ScrollBy)?.action != null
+            // The week is one time grid; its hours scroll together to reach the evening.
+            val day = assertNotNull(node("Schedule for 4 August 2026")).boundsInRoot
+            val column = assertNotNull(nodes().lastOrNull {
+                it.config.getOrNull(SemanticsActions.ScrollBy)?.action != null &&
+                    it.boundsInRoot.left <= day.left && it.boundsInRoot.right >= day.right
             })
             assertTrue(column.config[SemanticsActions.ScrollBy].action!!.invoke(0f, 10000f))
             settle()
-            assertTrue(has("Planning item 20"))
+            val evening = assertNotNull(node("Planning item 20")).boundsInRoot
+            assertTrue(evening.top >= 0f && evening.bottom <= 540f, "Scrolling the grid brings the evening into view: $evening")
             click("Planning item 20")
             assertEquals(events.last().instanceId, selected?.instanceId)
             capture("calendar-desktop-scrollable-week")
@@ -160,8 +162,8 @@ class DesktopCalendarRefinementTest {
     @Test
     fun ordinaryDesktopWeekShowsEveryDayBesideTheInspector() {
         nativeSceneTest(823, 680, content = {
-            DesktopCalendarWeek(
-                calendarWeekDates("20260804"), "20260804", "20260804", emptyMap(), emptyMap(), {}, { _, _ -> },
+            CalendarTimeGrid(
+                calendarWeekDates("20260804"), "20260804", "20260804", emptyMap(), emptyMap(), {}, { _, _ -> }, onCreateAt = null,
             )
         }) {
             listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun").forEach { day ->
@@ -174,23 +176,20 @@ class DesktopCalendarRefinementTest {
     }
 
     @Test
-    fun narrowLargeFontWeekOffersPointerControlsToReachTheLastDay() {
+    fun narrowLargeFontWeekKeepsEveryDayOnScreen() {
         var selections = 0
         nativeSceneTest(560, 680, fontScale = 1.5f, content = {
-            DesktopCalendarWeek(
+            CalendarTimeGrid(
                 calendarWeekDates("20260804"), "20260804", "20260804", emptyMap(), emptyMap(),
-                { selections++ }, { _, _ -> selections++ },
+                { selections++ }, { _, _ -> selections++ }, onCreateAt = null,
             )
         }) {
-            assertTrue(has("Scroll week"))
-            repeat(2) { click("Show later days") }
-            val sunday = assertNotNull(node("Sun")).boundsInRoot
-            assertTrue(sunday.width > 0 && sunday.left >= 0 && sunday.right <= 560)
-            repeat(2) { click("Show earlier days") }
-            val monday = assertNotNull(node("Mon")).boundsInRoot
-            assertTrue(monday.width > 0 && monday.left >= 0 && monday.right <= 560)
-            assertEquals(0, selections, "Scrolling the week must not select dates or events")
-            capture("calendar-desktop-week-overflow-controls")
+            listOf("Mon", "Sun").forEach { day ->
+                val bounds = assertNotNull(node(day)).boundsInRoot
+                assertTrue(bounds.width > 0 && bounds.left >= 0 && bounds.right <= 560, "$day stays on screen like a phone week")
+            }
+            assertEquals(0, selections, "Laying out the week must not select dates or events")
+            capture("calendar-desktop-narrow-large-font-week")
         }
     }
 
@@ -198,9 +197,9 @@ class DesktopCalendarRefinementTest {
     fun ordinaryWeekCardsKeepShortWordsTogether() {
         val appointment = event(9).copy(title = "Dentist appointment")
         nativeSceneTest(823, 680, content = {
-            DesktopCalendarWeek(
+            CalendarTimeGrid(
                 calendarWeekDates("20260804"), "20260804", "20260804",
-                mapOf("20260804" to listOf(appointment)), mapOf(calendar().href to calendar()), {}, { _, _ -> },
+                mapOf("20260804" to listOf(appointment)), mapOf(calendar().href to calendar()), {}, { _, _ -> }, onCreateAt = null,
             )
         }) {
             val text = assertNotNull(node("Dentist appointment"))

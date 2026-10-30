@@ -102,6 +102,8 @@ internal fun CalendarDayHeading(date: String, count: Int, modifier: Modifier = M
 
 @Composable
 internal fun calendarWorkspaceColor(calendar: GroupwareCalendar?, fallbackHref: String? = null): Color {
+    // The color chosen in Nextcloud wins, so events look the same here as on the web.
+    calendar?.color?.parseCalendarColor()?.let { return it }
     val palette = listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary,
         MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.error)
     val hash = (calendar?.href ?: fallbackHref)?.hashCode() ?: 0
@@ -132,4 +134,14 @@ internal fun CalendarVisibilityRow(
         }
         Text(eventCount.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+/** A CalDAV calendar color such as `#0082C9` or `#0082C9FF`; anything else is ignored. */
+internal fun String.parseCalendarColor(): Color? {
+    val hex = trim().removePrefix("#")
+    if (hex.length != 6 && hex.length != 8) return null
+    val value = hex.toLongOrNull(16) ?: return null
+    val rgb = if (hex.length == 8) value ushr 8 else value
+    val alpha = if (hex.length == 8) (value and 0xFF).toInt() else 0xFF
+    return Color(red = ((rgb shr 16) and 0xFF).toInt(), green = ((rgb shr 8) and 0xFF).toInt(), blue = (rgb and 0xFF).toInt(), alpha = alpha)
 }

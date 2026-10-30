@@ -61,6 +61,9 @@ data class GroupwareCalendarEvent(
     val excludedStarts: Set<String> = emptySet(),
     val isGeneratedOccurrence: Boolean = false,
     val rawCalendar: String,
+    /** The TZID of DTSTART and DTEND, when they name one; see [inDeviceTime]. */
+    val startZone: String? = null,
+    val endZone: String? = null,
 ) {
     /** Stable across sorting and refreshes, including multiple visible instances of one DAV object. */
     val instanceId: String get() = "$href#${recurrenceId ?: start}"
@@ -559,6 +562,8 @@ private fun parseGroupwareCalendarEventComponent(
         }.flatten().toSet(),
         isGeneratedOccurrence = recurrenceId != null,
         rawCalendar = content,
+        startZone = start.declaration.calendarTimeZoneId(),
+        endZone = property("DTEND")?.declaration?.calendarTimeZoneId(),
     )
 }
 
@@ -822,39 +827,6 @@ private val CALENDAR_WEEK_DAY_INDEX = mapOf(
     "MO" to 0, "TU" to 1, "WE" to 2, "TH" to 3, "FR" to 4, "SA" to 5, "SU" to 6,
 )
 
-fun createGroupwareCalendarEventContent(
-    uid: String,
-    title: String,
-    start: String,
-    end: String?,
-    allDay: Boolean,
-    location: String? = null,
-    description: String? = null,
-    recurrenceRule: String? = null,
-): String {
-    require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The event id is invalid." }
-    require(title.isNotBlank()) { "An event title is required." }
-    require(start.isCalendarDateValue(allDay)) { "The event start is invalid." }
-    require(end == null || end.isCalendarDateValue(allDay)) { "The event end is invalid." }
-    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
-    val dateParameter = if (allDay) ";VALUE=DATE" else ""
-    return buildList {
-        add("BEGIN:VCALENDAR")
-        add("VERSION:2.0")
-        add("PRODID:-//Obiente//Nextcloud Native//EN")
-        add("BEGIN:VEVENT")
-        add("UID:${uid.escapeCalendarText()}")
-        add("DTSTART$dateParameter:$start")
-        end?.let { add("DTEND$dateParameter:$it") }
-        add("SUMMARY:${title.escapeCalendarText()}")
-        location?.takeIf(String::isNotBlank)?.let { add("LOCATION:${it.escapeCalendarText()}") }
-        description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
-        recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { add("RRULE:$it") }
-        add("END:VEVENT")
-        add("END:VCALENDAR")
-    }.joinToString("\r\n", postfix = "\r\n")
-}
-
 fun updateGroupwareCalendarEventContent(
     event: GroupwareCalendarEvent,
     title: String,
@@ -864,6 +836,7 @@ fun updateGroupwareCalendarEventContent(
     location: String?,
     description: String?,
     recurrenceRule: String? = event.recurrenceRule,
+    timeZone: String? = null,
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
@@ -877,8 +850,8 @@ fun updateGroupwareCalendarEventContent(
     val eventStart = eventRange.first
     var eventEnd = eventRange.last
     val replacements = linkedMapOf(
-        "DTSTART" to "DTSTART${if (allDay) ";VALUE=DATE" else ""}:$start",
-        "DTEND" to end?.let { "DTEND${if (allDay) ";VALUE=DATE" else ""}:$it" },
+        "DTSTART" to "DTSTART${calendarTimeParameter(allDay, timeZone)}:$start",
+        "DTEND" to end?.let { "DTEND${calendarTimeParameter(allDay, timeZone)}:$it" },
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
         "LOCATION" to location?.takeIf(String::isNotBlank)?.let { "LOCATION:${it.escapeCalendarText()}" },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let { "DESCRIPTION:${it.escapeCalendarText()}" },
@@ -901,7 +874,7 @@ fun updateGroupwareCalendarEventContent(
     return original.joinToString("\r\n", postfix = "\r\n")
 }
 
-private fun requireValidCalendarRecurrenceRule(value: String) {
+internal fun requireValidCalendarRecurrenceRule(value: String) {
     require(isSupportedCalendarRecurrenceRuleForWrite(value)) {
         "Use a supported daily, weekly, or monthly recurrence rule."
     }
@@ -1038,7 +1011,7 @@ private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<Strin
     return components
 }
 
-private fun String.isCalendarDateValue(allDay: Boolean): Boolean =
+internal fun String.isCalendarDateValue(allDay: Boolean): Boolean =
     if (allDay) length == 8 && all(Char::isDigit)
     else length in 15..20 && take(8).all(Char::isDigit) && getOrNull(8) == 'T'
 

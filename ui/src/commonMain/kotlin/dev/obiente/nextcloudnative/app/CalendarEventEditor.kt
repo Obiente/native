@@ -83,10 +83,13 @@ internal fun EventEditorDialog(
     inPlace: Boolean = false,
     backLabel: String = "Back to calendar",
 ) {
-    val initialIsoDate = (event?.start?.take(8) ?: initialDate).compactDateToIso()
+    // A new event may start at a time picked on the grid, given as a compact date-time.
+    val initialIsoDate = (event?.start ?: initialDate).take(8).compactDateToIso()
     val initialTitle = event?.title.orEmpty()
-    val initialStartTime = event?.start?.compactTime() ?: "09:00"
-    val initialEndTime = event?.end?.compactTime() ?: "10:00"
+    val pickedStartMinute = initialDate.calendarMinuteOfDay().takeIf { event == null }
+    val initialStartTime = event?.start?.compactTime() ?: pickedStartMinute?.let(::calendarClockTime) ?: "09:00"
+    val initialEndTime = event?.end?.compactTime()
+        ?: pickedStartMinute?.let { calendarClockTime((it + 60).coerceAtMost(MinutesPerDay - 1)) } ?: "10:00"
     val initialAllDay = event?.allDay ?: false
     val initialLocation = event?.location.orEmpty()
     val initialDescription = event?.description.orEmpty()
@@ -284,8 +287,9 @@ internal fun EventEditorDialog(
             Button(
                 enabled = valid && calendar != null && hasDavChanges && !mutationInProgress,
                 onClick = {
+                    // The fields are in device time; storage keeps the event's own zone, or UTC.
                     onSave(
-                        currentDraft,
+                        currentDraft.inDavFrame(event?.startZone),
                         requireNotNull(calendar),
                     )
                 },

@@ -104,6 +104,8 @@ fun NativeGroupwareCalendarScreen(
         navigationCommitInProgress,
     )
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
+    // A time picked on the grid, as a compact start value; null starts on the selected date.
+    var createStart by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
@@ -225,9 +227,15 @@ fun NativeGroupwareCalendarScreen(
         monthNumber = value.month
     }
 
+    fun setCalendarVisible(href: String, visible: Boolean) { hiddenCalendarHrefs = if (visible) hiddenCalendarHrefs - href else (hiddenCalendarHrefs + href).distinct() }
+
+    fun startCreating(start: String? = null) {
+        if (!mutationInProgress) { createStart = start; creating = true }
+    }
+
     fun navigateCalendar(direction: Int) {
-        if (view == CalendarWorkspaceView.Week) {
-            val date = selectedDate.parseCompactCalendarDate()?.plusDays(direction * 7) ?: return
+        if (view.navigationDays() != null) {
+            val date = selectedDate.parseCompactCalendarDate()?.plusDays(direction * (view.navigationDays() ?: 7)) ?: return
             selectedDate = date.compactValue
             selectMonth(CalendarMonth(date.year, date.month))
         } else {
@@ -286,7 +294,7 @@ fun NativeGroupwareCalendarScreen(
                 expandGroupwareCalendarEvents(
                     parseGroupwareCalendarEvents(calendar.href, response),
                     queryWindow,
-                )
+                ).map(GroupwareCalendarEvent::inDeviceTime)
             }.sortedWith(compareBy(GroupwareCalendarEvent::start, GroupwareCalendarEvent::title))
             CalendarLoadState.Ready(month, queryWindow, calendars, events)
         }.onSuccess { loaded ->
@@ -349,7 +357,7 @@ fun NativeGroupwareCalendarScreen(
                 CalendarPhoneTopBar(
                     onBack = onBack,
                     onRefresh = { loadAttempt += 1 },
-                    onCreate = { if (!mutationInProgress) creating = true },
+                    onCreate = { startCreating() },
                     navigationEnabled = !mutationInProgress,
                     createEnabled = !mutationInProgress &&
                         (state as? CalendarLoadState.Ready)?.calendars?.any { it.writable } == true,
@@ -412,7 +420,7 @@ fun NativeGroupwareCalendarScreen(
                                         val updated = updateGroupwareCalendarEventContent(
                                             event = event,
                                             title = draft.title,
-                                            start = draft.startValue(),
+                                            start = draft.startValue(), timeZone = draft.zone,
                                             end = draft.endValue(),
                                             allDay = draft.allDay,
                                             location = draft.location,
@@ -512,16 +520,13 @@ fun NativeGroupwareCalendarScreen(
                         onViewChanged = { selected -> viewName = selected.name },
                         onQueryChanged = { query = it },
                         onCalendarVisibilityChanged = { href, visible ->
-                            hiddenCalendarHrefs = if (visible) {
-                                hiddenCalendarHrefs - href
-                            } else {
-                                (hiddenCalendarHrefs + href).distinct()
-                            }
+                            setCalendarVisible(href, visible)
                             if (!visible && selectedEvent?.calendarHref == href) selectedEventId = null
                         },
                         onSelectDate = { date -> selectedDate = date; selectedEventId = null },
                         onSelectEvent = { event -> selectedEventId = event?.instanceId },
-                        onCreateEvent = { if (!mutationInProgress) creating = true },
+                        onCreateEvent = { startCreating() },
+                        onCreateAt = ::startCreating,
                         onRefresh = { loadAttempt += 1 },
                         onEditEvent = { event ->
                             if (!mutationInProgress) {
@@ -550,14 +555,9 @@ fun NativeGroupwareCalendarScreen(
                         onToday = ::selectToday,
                         onViewChanged = { selected -> viewName = selected.name },
                         onQueryChanged = { query = it },
-                        onCalendarVisibilityChanged = { href, visible ->
-                            hiddenCalendarHrefs = if (visible) {
-                                hiddenCalendarHrefs - href
-                            } else {
-                                (hiddenCalendarHrefs + href).distinct()
-                            }
-                        },
+                        onCalendarVisibilityChanged = ::setCalendarVisible,
                         onSelectDate = { selectedDate = it },
+                        onCreateAt = ::startCreating,
                         onSelectEvent = { event ->
                             activeEventInstanceId = event.instanceId
                             eventEditorActive = false
@@ -595,7 +595,7 @@ fun NativeGroupwareCalendarScreen(
     if (creating && ready != null) {
         EventEditorDialog(
             event = null,
-            initialDate = selectedDate,
+            initialDate = createStart ?: selectedDate,
             calendars = ready.calendars.filter(GroupwareCalendar::writable),
             onDismiss = { creating = false },
             error = mutationError,
@@ -628,7 +628,7 @@ fun NativeGroupwareCalendarScreen(
                         content = createGroupwareCalendarEventContent(
                             uid = uid,
                             title = draft.title,
-                            start = draft.startValue(),
+                            start = draft.startValue(), timeZone = draft.zone,
                             end = draft.endValue(),
                             allDay = draft.allDay,
                             location = draft.location,
@@ -822,6 +822,7 @@ internal data class EventDraft(
     val location: String,
     val description: String,
     val recurrenceRule: String?,
+    /** Set once converted for storage: the event's TZID, or null for UTC; see [inDavFrame]. */ val zone: String? = null, val endDate: String? = null,
 ) {
     fun normalizedForDav(): EventDraft = copy(
         title = title.normalizeGroupwareTextLineEndings(),
@@ -830,9 +831,8 @@ internal data class EventDraft(
         recurrenceRule = recurrenceRule?.trim()?.takeUnless(String::isBlank),
     )
 
-    fun startValue(): String = date.isoDateToCompact() + if (allDay) "" else "T${startTime.timeToCompact()}00Z"
-    fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
-    else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
+    fun startValue(): String = date.isoDateToCompact() + if (allDay) "" else "T${startTime.timeToCompact()}00${if (zone == null) "Z" else ""}"
+    fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact() else (endDate ?: date).isoDateToCompact() + "T${endTime.timeToCompact()}00${if (zone == null) "Z" else ""}"
 }
 
 internal fun calendarEventDraftIsDirty(
@@ -906,29 +906,13 @@ internal fun nextIsoDate(date: String): String? {
 }
 
 private fun currentCalendarMonth(): CalendarMonth {
-    val date = epochDayToCivil(Clock.System.now().epochSeconds.floorDiv(86_400))
-    return CalendarMonth(date.first, date.second)
+    val date = requireNotNull(currentCalendarDate().parseCompactCalendarDate())
+    return CalendarMonth(date.year, date.month)
 }
 
-internal fun currentCalendarDate(): String {
-    val date = epochDayToCivil(Clock.System.now().epochSeconds.floorDiv(86_400))
-    return "%04d%02d%02d".format(date.first, date.second, date.third)
-}
+/** The device's local date, so "today" turns over at local midnight rather than at UTC midnight. */
+internal fun currentCalendarDate(): String = deckLocalDatePlusDays(0).isoDateToCompact()
 
-// Gregorian civil date conversion adapted from the public-domain algorithm by Howard Hinnant.
-private fun epochDayToCivil(epochDay: Long): Triple<Int, Int, Int> {
-    val z = epochDay + 719_468
-    val era = if (z >= 0) z / 146_097 else (z - 146_096) / 146_097
-    val dayOfEra = z - era * 146_097
-    val yearOfEra = (dayOfEra - dayOfEra / 1_460 + dayOfEra / 36_524 - dayOfEra / 146_096) / 365
-    var year = yearOfEra.toInt() + era.toInt() * 400
-    val dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
-    val monthPrime = (5 * dayOfYear + 2) / 153
-    val day = (dayOfYear - (153 * monthPrime + 2) / 5 + 1).toInt()
-    val month = (monthPrime + if (monthPrime < 10) 3 else -9).toInt()
-    year += if (month <= 2) 1 else 0
-    return Triple(year, month, day)
-}
 
 internal fun groupwareCalendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     2 -> if (year % 400 == 0 || year % 4 == 0 && year % 100 != 0) 29 else 28

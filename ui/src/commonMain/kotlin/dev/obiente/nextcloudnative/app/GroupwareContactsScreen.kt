@@ -631,11 +631,7 @@ fun NativeGroupwareContactsScreen(
                 canEdit = !mutationInProgress && addressBook?.writable == true && contact.etag != null,
                 editLoading = editLoading,
                 error = mutationError,
-                onDismiss = {
-                    selectedContactHref = null
-                    editingContact = null
-                    mutationError = null
-                },
+                onDismiss = { selectedContactHref = null; editingContact = null; mutationError = null },
                 onEdit = {
                     if (!mutationInProgress && !editLoading) {
                         mutationError = null
@@ -643,6 +639,7 @@ fun NativeGroupwareContactsScreen(
                     }
                 },
                 onDelete = { if (!mutationInProgress) confirmDelete = true },
+                onOpenUri = services::openExternalUrl, onCopy = services::copyTextToClipboard,
             )
         }
         if (confirmDelete) {
