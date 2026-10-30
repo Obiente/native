@@ -24,7 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -49,6 +49,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -118,26 +121,14 @@ internal fun FileSyncWorkspace(
         val desktop = maxWidth >= 940.dp
         val phonePair = visiblePairs.firstOrNull { it.id == selectedPairId }
         if (!desktop && phonePair != null) {
-            PlatformBackHandler(enabled = true, onBack = { selectedPairId = null })
-            Column(modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
-                TextButton(onClick = { selectedPairId = null }) {
-                    Icon(NextcloudIcons.Back, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("All syncs")
-                }
-                FileSyncPairInspector(
-                    pair = phonePair,
-                    busy = phonePair.id in busyPairIds,
-                    actionsEnabled = phonePair.id !in busyPairIds,
-                    onRun = { onRun(phonePair) },
-                    onRemove = { onRemove(phonePair) },
-                    onResolve = onResolve,
-                    onResolveBatch = onResolveBatch,
-                    modifier = if (fillAvailableHeight) Modifier.weight(1f).fillMaxWidth()
-                        else Modifier.fillMaxWidth().heightIn(min = 560.dp, max = 760.dp),
+            val close = { selectedPairId = null }
+            if (LocalNextcloudWorkspaceCapabilities.current.isDesktop) {
+                FileSyncPairDetailPage(
+                    phonePair, busyPairIds, fillAvailableHeight, close, onRun, onRemove, onResolve, onResolveBatch,
                 )
+                return@BoxWithConstraints
             }
-            return@BoxWithConstraints
+            FileSyncPairDetailSheet(phonePair, busyPairIds, close, onRun, onRemove, onResolve, onResolveBatch)
         }
         Column(
             modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
@@ -207,20 +198,23 @@ internal fun FileSyncWorkspace(
                                 Modifier.weight(1.9f).heightIn(min = 520.dp, max = 760.dp)
                             },
                         )
-                        FileSyncPairInspector(
-                            pair = inspectedPair,
-                            busy = inspectedPair?.id in busyPairIds,
-                            actionsEnabled = inspectedPair?.id !in busyPairIds,
-                            onRun = { inspectedPair?.let(onRun) },
-                            onRemove = { inspectedPair?.let(onRemove) },
-                            onResolve = onResolve,
-                            onResolveBatch = onResolveBatch,
-                            modifier = if (fillAvailableHeight) {
-                                Modifier.widthIn(min = 308.dp, max = 372.dp).fillMaxHeight()
-                            } else {
-                                Modifier.widthIn(min = 308.dp, max = 372.dp).heightIn(min = 520.dp, max = 760.dp)
-                            },
-                        )
+                        // Choosing another sync slides its details in beside the table.
+                        NextcloudContentEntrance(inspectedPair?.id, NextcloudEntranceAxis.Horizontal) {
+                            FileSyncPairInspector(
+                                pair = inspectedPair,
+                                busy = inspectedPair?.id in busyPairIds,
+                                actionsEnabled = inspectedPair?.id !in busyPairIds,
+                                onRun = { inspectedPair?.let(onRun) },
+                                onRemove = { inspectedPair?.let(onRemove) },
+                                onResolve = onResolve,
+                                onResolveBatch = onResolveBatch,
+                                modifier = if (fillAvailableHeight) {
+                                    Modifier.widthIn(min = 308.dp, max = 372.dp).fillMaxHeight()
+                                } else {
+                                    Modifier.widthIn(min = 308.dp, max = 372.dp).heightIn(min = 520.dp, max = 760.dp)
+                                },
+                            )
+                        }
                     }
                     FileSyncDesktopStatusBar(pair = inspectedPair)
                 } else {
@@ -290,7 +284,7 @@ private fun FileSyncFilters(
     )
     @Composable
     fun filterChip(option: FileSyncListFilter, modifier: Modifier = Modifier, fill: Boolean = false) {
-        FilterChip(
+        NextcloudFilterChip(
             selected = selected == option,
             onClick = { onSelected(option) },
             label = { Text("${option.title} ${counts.getValue(option)}") },
@@ -696,14 +690,14 @@ private fun FileSyncStepProgress(current: FileSyncSetupStep, onSelect: (FileSync
 @Composable
 private fun FileSyncStepNumber(step: FileSyncSetupStep, selected: Boolean) {
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = animatedColor(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh),
         shape = RoundedCornerShape(999.dp),
     ) {
         Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
             Text(
                 (step.ordinal + 1).toString(),
                 style = MaterialTheme.typography.labelMedium,
-                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = animatedColor(if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant),
             )
         }
     }
@@ -960,7 +954,7 @@ private fun FileSyncChoiceCard(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = animatedColor(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
         shape = RoundedCornerShape(NextcloudRadii.Card),
         border = BorderStroke(
             if (selected) 2.dp else 1.dp,

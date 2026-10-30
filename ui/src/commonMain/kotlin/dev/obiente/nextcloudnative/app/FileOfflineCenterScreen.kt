@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,7 +27,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -1162,102 +1160,6 @@ internal fun FileOfflineCenterScreen(
             },
         )
     }
-}
-
-@Composable
-internal fun FileOfflineWorkspaceNavigation(
-    selected: FileOfflineWorkspaceSection,
-    onSelected: (FileOfflineWorkspaceSection) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
-            Text(
-                "SYNC WORKSPACE",
-                modifier = Modifier.padding(horizontal = NextcloudSpacing.Small, vertical = NextcloudSpacing.Small),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FileOfflineWorkspaceSection.entries.forEach { section ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth().clickable { onSelected(section) },
-                    color = if (selected == section) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerLow
-                    },
-                    contentColor = if (selected == section) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    shape = RoundedCornerShape(NextcloudRadii.Small),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(
-                            horizontal = NextcloudSpacing.Medium,
-                            vertical = NextcloudSpacing.Medium,
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        androidx.compose.material3.Icon(
-                            section.fileOfflineWorkspaceIcon(),
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Text(section.title, style = MaterialTheme.typography.labelLarge)
-                    }
-                }
-            }
-            Spacer(Modifier.height(NextcloudSpacing.Medium))
-            Text(
-                "Folder mappings and offline copies are managed separately, so each workspace can use the screen well.",
-                modifier = Modifier.padding(horizontal = NextcloudSpacing.Small),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-internal fun FileOfflineWorkspaceTabs(
-    selected: FileOfflineWorkspaceSection,
-    onSelected: (FileOfflineWorkspaceSection) -> Unit,
-) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-    ) {
-        items(FileOfflineWorkspaceSection.entries, key = FileOfflineWorkspaceSection::name) { section ->
-            FilterChip(
-                selected = selected == section,
-                onClick = { onSelected(section) },
-                label = { Text(section.title) },
-                leadingIcon = {
-                    androidx.compose.material3.Icon(
-                        section.fileOfflineWorkspaceIcon(),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
-            )
-        }
-    }
-}
-
-private fun FileOfflineWorkspaceSection.fileOfflineWorkspaceIcon() = when (this) {
-    FileOfflineWorkspaceSection.FolderSync -> NextcloudIcons.Refresh
-    FileOfflineWorkspaceSection.OfflineFiles -> NextcloudIcons.FolderOpen
-    FileOfflineWorkspaceSection.VirtualFiles -> NextcloudIcons.Cloud
 }
 
 @Composable

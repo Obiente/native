@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import dev.obiente.nextcloudnative.app.ThemePreference
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudReducedMotion
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -135,7 +136,10 @@ class MainActivity : ComponentActivity() {
                 window.decorView.setBackgroundColor(background.toArgb())
             }
 
-            CompositionLocalProvider(LocalAppWindowVisibility provides windowVisibility) {
+            CompositionLocalProvider(
+                LocalAppWindowVisibility provides windowVisibility,
+                LocalNextcloudReducedMotion provides rememberAndroidReducedMotion(),
+            ) {
                 NextcloudNativeApp(
                     services = services,
                     appUpdateReviewRequest = appUpdateReviewRequest,

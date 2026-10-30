@@ -15,7 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -122,6 +122,7 @@ internal fun TextEditorScreen(
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         ScreenHeader(file.name, if (dirty) "Unsaved changes" else "Text editor", ::requestBack,
+            titleSharedKey = SharedElementKeys.fileName(file.path),
             compact = true, trailingContent = {
                 Button(
                     enabled = editor.canSave && !navigationCommitInProgress,
@@ -166,7 +167,7 @@ internal fun TextEditorScreen(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = markdownViewMode == MarkdownFileViewMode.Preview,
                             onClick = { markdownViewMode = MarkdownFileViewMode.Preview },
                             enabled = markdownPreviewAvailable,
@@ -179,7 +180,7 @@ internal fun TextEditorScreen(
                                 )
                             },
                         )
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = markdownViewMode == MarkdownFileViewMode.Edit,
                             onClick = { markdownViewMode = MarkdownFileViewMode.Edit },
                             label = { Text("Edit source") },

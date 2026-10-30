@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,7 +39,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudReducedMotion
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 
 @Composable
@@ -74,6 +79,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
     val createEnabled = mutationsEnabled && calendars.any(GroupwareCalendar::writable)
     var sourcesRequested by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var detailsRequested by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    val reducedMotion = LocalNextcloudReducedMotion.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val workspaceWidth = maxWidth
         val panes = calendarPaneLayout(workspaceWidth.value.toInt(), sourcesRequested, detailsRequested, selectedEvent != null)
@@ -124,7 +130,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                     color = MaterialTheme.colorScheme.surface,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
-                    when (view) {
+                    NextcloudContentEntrance(view, NextcloudEntranceAxis.Horizontal, Modifier.fillMaxSize(), order = view.ordinal) { when (view) {
                         CalendarWorkspaceView.Month -> DesktopCalendarMonthGrid(
                             month, selectedDate, todayDate, presentation.eventsByDate, calendarByHref,
                             selectDay, showDay,
@@ -139,15 +145,28 @@ internal fun DesktopGroupwareCalendarWorkspace(
                             presentation.visibleEvents, calendarByHref, selectedEvent,
                             { event -> onSelectDate(event.start.take(8)); selectEvent(event) },
                         )
+                    } }
+                }
+                // The inspector slides in from the side; a new event or day slides its details in.
+                AnimatedVisibility(
+                    visible = panes.detailsInline,
+                    enter = NextcloudMotion.sidePaneEnter(reducedMotion),
+                    exit = NextcloudMotion.sidePaneExit(reducedMotion),
+                ) {
+                    NextcloudContentEntrance(
+                        key = selectedEvent?.instanceId ?: "day:$selectedDate",
+                        axis = NextcloudEntranceAxis.Horizontal,
+                        modifier = Modifier.width(292.dp).fillMaxHeight(),
+                    ) {
+                        DesktopCalendarInspectorPane(
+                            selectedDate, selectedEvent, calendarByHref, presentation.selectedDateEvents,
+                            createEnabled, mutationsEnabled, selectEvent, onCreateEvent, onEditEvent, onDeleteEvent,
+                            onClose = { detailsRequested = false },
+                            onShowDay = { onSelectEvent(null) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     }
                 }
-                if (panes.detailsInline) DesktopCalendarInspectorPane(
-                    selectedDate, selectedEvent, calendarByHref, presentation.selectedDateEvents,
-                    createEnabled, mutationsEnabled, selectEvent, onCreateEvent, onEditEvent, onDeleteEvent,
-                    onClose = { detailsRequested = false },
-                    onShowDay = { onSelectEvent(null) },
-                    modifier = Modifier.width(292.dp).fillMaxHeight(),
-                )
             }
         }
         if (panes.sourcesVisible && !panes.sourcesInline) {
@@ -243,8 +262,8 @@ private fun DesktopCalendarToolbar(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 CalendarViewSelector(view, onViewChanged)
-                FilterChip(sourcesVisible, onToggleSources, label = { Text("Calendars") })
-                FilterChip(detailsVisible, onToggleDetails, label = { Text("Details") })
+                NextcloudFilterChip(sourcesVisible, onToggleSources, label = { Text("Calendars") })
+                NextcloudFilterChip(detailsVisible, onToggleDetails, label = { Text("Details") })
                 OutlinedTextField(
                     value = query, onValueChange = onQueryChanged,
                     modifier = Modifier.width(248.dp), singleLine = true,

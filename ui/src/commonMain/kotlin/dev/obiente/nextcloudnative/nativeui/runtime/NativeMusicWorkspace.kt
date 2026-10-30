@@ -312,11 +312,11 @@ private fun NativeMusicTabStrip(
                             destination.label,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (selected) {
+                            color = animatedColor(if (selected) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            }),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -381,7 +381,7 @@ private fun NativeMusicRailDestination(
                 role = Role.Tab,
                 onClick = onClick,
             ),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        color = animatedColor(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
         shape = RoundedCornerShape(NextcloudRadii.Medium),
     ) {
         Column(
@@ -405,11 +405,11 @@ private fun NativeMusicRailDestination(
             Text(
                 destination.label,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (selected) {
+                color = animatedColor(if (selected) {
                     MaterialTheme.colorScheme.onSecondaryContainer
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                }),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -452,7 +452,7 @@ private fun NativeMusicSidebar(
                             role = Role.Tab,
                             onClick = { onDestinationSelected(destination) },
                     ),
-                    color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                    color = animatedColor(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent),
                     shape = RoundedCornerShape(NextcloudRadii.Medium),
                 ) {
                     Row(
@@ -478,11 +478,11 @@ private fun NativeMusicSidebar(
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) {
+                            color = animatedColor(if (selected) {
                                 MaterialTheme.colorScheme.onSecondaryContainer
                             } else {
                                 MaterialTheme.colorScheme.onSurface
-                            },
+                            }),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

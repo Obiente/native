@@ -782,11 +782,11 @@ private fun NativeMailRailRow(
                     stateDescription = "Selected"
                 }
             },
-        color = if (selected) {
+        color = animatedColor(if (selected) {
             MaterialTheme.colorScheme.secondaryContainer
         } else {
             MaterialTheme.colorScheme.surface
-        },
+        }),
         shape = MaterialTheme.shapes.medium,
     ) {
         Row(
@@ -915,11 +915,11 @@ internal fun NativeMailMessageList(
                         this.selected = selected
                         stateDescription = if (item.presentation.unread) "Unread" else "Read"
                     },
-                color = if (selected) {
+                color = animatedColor(if (selected) {
                     MaterialTheme.colorScheme.secondaryContainer
                 } else {
                     MaterialTheme.colorScheme.surface
-                },
+                }),
                 shape = MaterialTheme.shapes.medium,
             ) {
                 Row(

@@ -69,6 +69,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Icecream
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KebabDining
 import androidx.compose.material.icons.outlined.Laptop
@@ -178,6 +179,7 @@ object NextcloudIcons {
     val Edit: ImageVector = Icons.Outlined.Edit
     val Save: ImageVector = Icons.Outlined.Save
     val Info: ImageVector = Icons.Outlined.Info
+    val Empty: ImageVector = Icons.Outlined.Inbox
     val CheckCircle: ImageVector = Icons.Outlined.CheckCircle
     val People: ImageVector = Icons.Outlined.PeopleOutline
     val Schedule: ImageVector = Icons.Outlined.CalendarMonth

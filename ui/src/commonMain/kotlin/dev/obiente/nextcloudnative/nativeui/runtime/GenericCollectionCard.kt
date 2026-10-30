@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,6 +47,7 @@ internal fun GenericCollectionCard(
     primaryContent: (@Composable () -> Unit)? = null,
 ) {
     val presentation = nativeRecordPresentation(resource, record)
+    val titleKey = genericRecordTitleKey(resource, record)
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     var actionsExpanded by rememberSaveable(record.id) { mutableStateOf(false) }
     val content: @Composable () -> Unit = {
@@ -62,9 +64,12 @@ internal fun GenericCollectionCard(
             leadingContent?.invoke()
             GenericResourceIcon(resource, presentation.iconKey, presentation.colorArgb)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                if (primaryContent != null) primaryContent() else {
+                if (primaryContent != null) {
+                    CompositionLocalProvider(LocalGenericCardTitleKey provides titleKey, content = primaryContent)
+                } else {
                     Text(
                         presentation.title,
+                        modifier = Modifier.genericSharedElement(titleKey),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,

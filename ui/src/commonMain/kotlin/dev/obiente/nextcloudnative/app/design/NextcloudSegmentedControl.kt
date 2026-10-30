@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app.design
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -11,9 +12,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -46,7 +48,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -88,6 +92,8 @@ fun NextcloudSegmentedControl(
     var naturalWidth by remember { mutableIntStateOf(0) }
     var menuOpen by remember { mutableStateOf(false) }
     LaunchedEffect(enabled, options) { menuOpen = false }
+    val pill = rememberSegmentedSelectionPill(selectedId)
+    val pillColor = MaterialTheme.colorScheme.surface
     val activate: (String) -> Unit = { id ->
         if (enabled && id != selectedId && options.any { it.id == id && it.enabled }) onSelected(id)
         menuOpen = false
@@ -105,7 +111,11 @@ fun NextcloudSegmentedControl(
         val orderedIds = options.map { it.id }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(if (bounded) Modifier.weight(1f, fill = false).horizontalScroll(scrollState) else Modifier) {
-                Row(Modifier.onSizeChanged { naturalWidth = it.width }, verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.onSizeChanged { naturalWidth = it.width }
+                        .drawBehind { pill.draw(this, pillColor, NextcloudRadii.Small.toPx()) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     options.forEach { option ->
                         key(option.id) {
                             val focusRequester = remember { FocusRequester() }
@@ -113,7 +123,10 @@ fun NextcloudSegmentedControl(
                             var focused by remember { mutableStateOf(false) }
                             DisposableEffect(option.id) {
                                 requesters[option.id] = focusRequester
-                                onDispose { requesters.remove(option.id) }
+                                onDispose {
+                                    requesters.remove(option.id)
+                                    pill.forget(option.id)
+                                }
                             }
                             LaunchedEffect(selectedId, focusedId, orderedIds, viewportWidth, naturalWidth, overflow) {
                                 if ((focusedId ?: selectedId) == option.id) reveal.bringIntoView()
@@ -121,13 +134,18 @@ fun NextcloudSegmentedControl(
                             val selected = selectedId == option.id
                             val active = enabled && option.enabled
                             val shape = RoundedCornerShape(NextcloudRadii.Small)
-                            val foreground = when {
-                                !active -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                selected -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+                            val foreground by animateColorAsState(
+                                when {
+                                    !active -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    selected -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                NextcloudMotion.color(LocalNextcloudReducedMotion.current),
+                                label = "segment foreground",
+                            )
                             Row(
-                                Modifier.bringIntoViewRequester(reveal).focusRequester(focusRequester)
+                                Modifier.onPlaced { pill.place(option.id, it.positionInParent().x, it.size.width.toFloat()) }
+                                    .bringIntoViewRequester(reveal).focusRequester(focusRequester)
                                     .onFocusChanged {
                                         focused = it.isFocused
                                         if (it.isFocused) focusedId = option.id
@@ -150,7 +168,6 @@ fun NextcloudSegmentedControl(
                                         } ?: false
                                     }
                                     .clip(shape)
-                                    .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
                                     .border(2.dp, if (focused && active) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
                                     .selectable(selected, active, role = role, onClick = { activate(option.id) })
                                     .sizeIn(minWidth = 48.dp, minHeight = 48.dp)

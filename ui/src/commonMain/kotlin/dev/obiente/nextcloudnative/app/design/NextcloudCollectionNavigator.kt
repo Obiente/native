@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.PrimaryTabRow
@@ -30,6 +31,7 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -40,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -263,11 +266,14 @@ fun NextcloudCollectionWorkspaceScaffold(
     modifier: Modifier = Modifier,
     compactHeader: Boolean = false,
     destinationIcon: (NextcloudCollectionDestination) -> ImageVector? = { null },
+    contentTitleSharedKey: String? = null,
+    contentSubtitleSharedKey: String? = null,
     headerActions: @Composable () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var sectionsCollapsed by remember(workspaceLabel) { mutableStateOf(false) }
-    when (mode) {
+    val headerKeys = NextcloudCollectionHeaderSharedKeys(contentTitleSharedKey, contentSubtitleSharedKey)
+    CompositionLocalProvider(LocalNextcloudCollectionHeaderSharedKeys provides headerKeys) { when (mode) {
         NextcloudCollectionNavigationMode.Tabs -> NextcloudCollectionTabbedScaffold(
             model = model,
             contentTitle = contentTitle,
@@ -357,7 +363,7 @@ fun NextcloudCollectionWorkspaceScaffold(
                 content = content,
             )
         }
-    }
+    } }
 }
 
 @Composable
@@ -582,10 +588,21 @@ internal fun NextcloudCollectionDestinationList(
     var focusedDestinationId by remember(model.destinations.map { it.id }) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    // One pill glides between destinations; an empty key draws none while nothing is selected.
+    val highlight = rememberNextcloudSelectionHighlight(model.selectedDestinationId.orEmpty())
+    val selection = nextcloudSelectionColors()
+    val itemColors = NavigationDrawerItemDefaults.colors(
+        selectedContainerColor = Color.Transparent,
+        selectedIconColor = selection.icon,
+        selectedTextColor = selection.selectedLabel,
+        selectedBadgeColor = selection.selectedLabel,
+    )
 
     LazyColumn(
         modifier = modifier
             .fillMaxWidth()
+            .then(highlight.containerModifier())
+            .then(highlight.drawModifier(selection.fill, selection.outline, NextcloudRadii.Pill))
             .nextcloudCollectionKeyboardNavigation(
                 model = model,
                 focusedDestinationId = focusedDestinationId,
@@ -640,8 +657,10 @@ internal fun NextcloudCollectionDestinationList(
                         },
                         selected = destination.id == model.selectedDestinationId,
                         onClick = { onDestinationSelected(destination) },
+                        colors = itemColors,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .then(highlight.entryModifier(destination.id))
                             .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
                             .semantics {
                                 contentDescription = destination.accessibilityDescription()

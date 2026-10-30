@@ -181,12 +181,12 @@ private fun CalendarDateButton(
         }.clickable(role = Role.Button, onClick = onClick).padding(vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Box(Modifier.sizeIn(minWidth = 30.dp, minHeight = 30.dp)
-            .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)
+            .background(animatedColor(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent), CircleShape)
             .then(if (isToday && !isSelected) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier)
             .padding(horizontal = 5.dp, vertical = 3.dp), contentAlignment = Alignment.Center) {
             Text(date.takeLast(2).toInt().toString(), style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (isSelected || isToday) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                color = animatedColor(if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface))
         }
         Row(Modifier.height(5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             events.distinctBy(GroupwareCalendarEvent::calendarHref).take(3).forEach {

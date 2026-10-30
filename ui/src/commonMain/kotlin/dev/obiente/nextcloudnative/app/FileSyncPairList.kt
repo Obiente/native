@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -56,37 +57,39 @@ internal fun FileSyncMapTable(
                     Text("No syncs match this filter.", Modifier.padding(16.dp))
                 }
                 items(pairs, key = FileSyncPairSummary::id) { pair ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().clickable { onSelect(pair) },
-                        color = if (pair.id == selectedPairId) MaterialTheme.colorScheme.secondaryContainer
-                            else NextcloudTheme.colors.appTile,
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                    Column(nextcloudItemMotion()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().clickable { onSelect(pair) },
+                            color = if (pair.id == selectedPairId) MaterialTheme.colorScheme.secondaryContainer
+                                else NextcloudTheme.colors.appTile,
                         ) {
-                            Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(pair.localDisplayName, fontWeight = FontWeight.SemiBold)
-                                Text("/${pair.remoteRootPath}", style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text(pair.configuration.direction.syncDirectionTitle(),
-                                    style = MaterialTheme.typography.labelSmall,
+                            Row(
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(pair.localDisplayName, fontWeight = FontWeight.SemiBold)
+                                    Text("/${pair.remoteRootPath}", style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(pair.configuration.direction.syncDirectionTitle(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FileSyncHealthBadge(pair)
+                                    Text(pair.syncWorkSummary(), style = MaterialTheme.typography.bodySmall)
+                                    if (pair.id in busyPairIds || pair.runningCount > 0) {
+                                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    }
+                                }
+                                Text(fileSyncCheckedTime(pair.lastScanEpochMillis), Modifier.width(126.dp),
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                FileSyncHealthBadge(pair)
-                                Text(pair.syncWorkSummary(), style = MaterialTheme.typography.bodySmall)
-                                if (pair.id in busyPairIds || pair.runningCount > 0) {
-                                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                                }
-                            }
-                            Text(fileSyncCheckedTime(pair.lastScanEpochMillis), Modifier.width(126.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        HorizontalDivider()
                     }
-                    HorizontalDivider()
                 }
             }
         }

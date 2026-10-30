@@ -590,10 +590,10 @@ private fun ActivityMobileAutomationBundle(
                 }
                 Icon(
                     NextcloudIcons.ExpandMore,
-                    contentDescription = if (expanded) "Collapse grouped activity" else "Expand grouped activity",
+                    if (expanded) "Collapse grouped activity" else "Expand grouped activity", Modifier.disclosureChevron(expanded),
                 )
             }
-            if (expanded) {
+            dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent(expanded) {
                 Column(
                     modifier = Modifier.padding(top = NextcloudSpacing.Small, start = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
@@ -991,7 +991,7 @@ private fun ActivityAutomationBundleRow(
             }
             Text(if (expanded) "Collapse" else "Review", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         }
-        if (expanded) {
+        dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent(expanded) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(start = 76.dp, end = 12.dp, bottom = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1124,7 +1124,7 @@ private fun ActivitySummaryMetric(label: String, count: Int, modifier: Modifier)
 private fun ActivityScopeRow(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerLow,
+        color = animatedColor(if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerLow),
         shape = RoundedCornerShape(NextcloudRadii.Small),
     ) {
         Row(

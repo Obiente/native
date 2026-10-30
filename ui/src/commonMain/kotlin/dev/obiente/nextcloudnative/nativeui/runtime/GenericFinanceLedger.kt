@@ -20,7 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -133,7 +133,7 @@ internal fun GenericFinanceCollection(
                                 option == NativeFinanceLedgerFilter.Income && NativeFinanceDirection.Credit in representedDirections ||
                                 option == NativeFinanceLedgerFilter.Expenses && NativeFinanceDirection.Debit in representedDirections
                         }.forEach { option ->
-                            FilterChip(
+                            NextcloudFilterChip(
                                 selected = filter == option,
                                 onClick = { filter = option },
                                 label = { Text(option.label) },
@@ -152,14 +152,14 @@ internal fun GenericFinanceCollection(
                             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         ) {
                             categories.forEach { category ->
-                                FilterChip(
+                                NextcloudFilterChip(
                                     selected = categoryFilter == category,
                                     onClick = { categoryFilter = category.takeUnless { it == categoryFilter } },
                                     label = { Text(category, maxLines = 1) },
                                 )
                             }
                             accounts.forEach { account ->
-                                FilterChip(
+                                NextcloudFilterChip(
                                     selected = accountFilter == account,
                                     onClick = { accountFilter = account.takeUnless { it == accountFilter } },
                                     label = { Text(account, maxLines = 1) },
@@ -220,7 +220,7 @@ internal fun GenericFinanceCollection(
                                 )
                                 Text(
                                     transaction.title,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f).genericRecordTitle(resource, record),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -345,6 +345,7 @@ private fun financeSplitLabel(transaction: NativeFinancePresentation): String? =
 internal fun GenericFinanceDetailHeader(
     resource: ResourceSpec,
     transaction: NativeFinancePresentation,
+    titleKey: String? = null,
 ) {
     val contextualCurrency = LocalNativeFinanceCurrency.current
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
@@ -376,6 +377,7 @@ internal fun GenericFinanceDetailHeader(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             transaction.title,
+                            modifier = Modifier.genericSharedElement(titleKey),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
@@ -406,6 +408,7 @@ internal fun GenericFinanceDetailHeader(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             transaction.title,
+                            modifier = Modifier.genericSharedElement(titleKey),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,

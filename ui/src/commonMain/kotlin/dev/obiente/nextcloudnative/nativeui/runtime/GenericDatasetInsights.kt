@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -7,15 +8,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,9 +36,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.nextcloudDisclosureChevron
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlin.math.roundToInt
 
@@ -104,11 +109,11 @@ private fun CategoricalSummaryDisclosure(
             }
             TextButton(onClick = { expanded = !expanded }) {
                 Text(if (expanded) "Hide" else "Show")
+                Icon(NextcloudIcons.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp).nextcloudDisclosureChevron(expanded))
             }
         }
-        if (expanded) {
-            GenericCategoricalSummary(summary)
-        } else {
+        NextcloudDisclosureContent(expanded) { GenericCategoricalSummary(summary) }
+        if (!expanded) {
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = NextcloudSpacing.Large),
                 color = MaterialTheme.colorScheme.outlineVariant,
@@ -199,11 +204,11 @@ internal fun DatasetInsightsDisclosure(
             }
             TextButton(onClick = { expanded = !expanded }) {
                 Text(if (expanded) "Hide" else "Show")
+                Icon(NextcloudIcons.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp).nextcloudDisclosureChevron(expanded))
             }
         }
-        if (expanded) {
-            GenericDatasetInsights(insights, compact)
-        } else {
+        NextcloudDisclosureContent(expanded) { GenericDatasetInsights(insights, compact) }
+        if (!expanded) {
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = NextcloudSpacing.Large),
                 color = MaterialTheme.colorScheme.outlineVariant,

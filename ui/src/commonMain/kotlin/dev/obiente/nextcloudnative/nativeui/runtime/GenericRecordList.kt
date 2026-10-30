@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -147,62 +148,64 @@ internal fun GenericRecordList(
             }
         }
         itemsIndexed(displayedRecords, key = { _, record -> record.id }) { index, record ->
-            if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls && index > 0) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(genericRecordItemMotion(dragActive = draggingRecordId != null)) {
+                if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls && index > 0) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                val dragging = draggingRecordId == record.id
+                GenericCollectionCard(
+                    resource = resource,
+                    record = record,
+                    onSelectRecord = onSelectRecord,
+                    secondaryActions = secondaryActions(record),
+                    primaryContent = primaryContent?.let { content -> { content(record) } },
+                    modifier = Modifier
+                        .onGloballyPositioned { coordinates ->
+                            rowBounds[record.id] = coordinates.boundsInWindow()
+                        }
+                        .graphicsLayer { alpha = if (dragging) 0.56f else 1f },
+                    leadingContent = activeReorder?.takeUnless { reorderState.executing }?.let {
+                        {
+                            NextcloudBoardDragHandle(
+                                itemLabel = nativeRecordPresentation(resource, record).title,
+                                dragActive = dragging,
+                                onDragStart = { position ->
+                                    draggingRecordId = record.id
+                                    dragOrigin = position
+                                    dragPosition = position
+                                },
+                                onDrag = { delta ->
+                                    val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
+                                    dragPosition = position
+                                    reorderState.updateOrder(
+                                        moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                            orderedRecordIds = reorderState.orderedRecordIds,
+                                            recordId = record.id,
+                                            pointerY = position.y,
+                                            movementY = delta.y,
+                                            rowBounds = rowBounds,
+                                        ),
+                                    )
+                                },
+                                onDragEnd = {
+                                    dragPosition?.let(::moveDraggedRecord)
+                                    draggingRecordId = null
+                                    dragOrigin = null
+                                    dragPosition = null
+                                    reorderState.submit(reorderState.orderedRecordIds)
+                                },
+                                onDragCancel = {
+                                    draggingRecordId = null
+                                    dragOrigin = null
+                                    dragPosition = null
+                                    reorderState.updateOrder(authoritativeOrder)
+                                },
+                            )
+                        }
+                    },
+                    busy = reorderState.executing,
+                )
             }
-            val dragging = draggingRecordId == record.id
-            GenericCollectionCard(
-                resource = resource,
-                record = record,
-                onSelectRecord = onSelectRecord,
-                secondaryActions = secondaryActions(record),
-                primaryContent = primaryContent?.let { content -> { content(record) } },
-                modifier = Modifier
-                    .onGloballyPositioned { coordinates ->
-                        rowBounds[record.id] = coordinates.boundsInWindow()
-                    }
-                    .graphicsLayer { alpha = if (dragging) 0.56f else 1f },
-                leadingContent = activeReorder?.takeUnless { reorderState.executing }?.let {
-                    {
-                        NextcloudBoardDragHandle(
-                            itemLabel = nativeRecordPresentation(resource, record).title,
-                            dragActive = dragging,
-                            onDragStart = { position ->
-                                draggingRecordId = record.id
-                                dragOrigin = position
-                                dragPosition = position
-                            },
-                            onDrag = { delta ->
-                                val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
-                                dragPosition = position
-                                reorderState.updateOrder(
-                                    moveNativeCollectionRecordAcrossAdjacentMidpoint(
-                                        orderedRecordIds = reorderState.orderedRecordIds,
-                                        recordId = record.id,
-                                        pointerY = position.y,
-                                        movementY = delta.y,
-                                        rowBounds = rowBounds,
-                                    ),
-                                )
-                            },
-                            onDragEnd = {
-                                dragPosition?.let(::moveDraggedRecord)
-                                draggingRecordId = null
-                                dragOrigin = null
-                                dragPosition = null
-                                reorderState.submit(reorderState.orderedRecordIds)
-                            },
-                            onDragCancel = {
-                                draggingRecordId = null
-                                dragOrigin = null
-                                dragPosition = null
-                                reorderState.updateOrder(authoritativeOrder)
-                            },
-                        )
-                    }
-                },
-                busy = reorderState.executing,
-            )
         }
         NativeCollectionPagingFooter(
             loadingMore = loadingMore,

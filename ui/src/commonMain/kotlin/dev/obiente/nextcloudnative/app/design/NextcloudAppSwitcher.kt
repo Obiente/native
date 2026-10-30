@@ -163,8 +163,8 @@ private fun ShellSwitcherRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
             .semantics { contentDescription = description; selected = active },
         shape = RoundedCornerShape(12.dp),
-        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-        contentColor = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        color = nextcloudAnimatedColor(if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow),
+        contentColor = nextcloudAnimatedColor(if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface),
     ) {
         Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

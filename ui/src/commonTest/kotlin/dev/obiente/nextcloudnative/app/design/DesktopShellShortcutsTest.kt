@@ -50,4 +50,20 @@ class DesktopShellShortcutsTest {
             assertNull(destinationForNextcloudDesktopShortcut(key, false))
         }
     }
+
+    @Test
+    fun tooltipHintsNameTheShortcutThatOpensEachDestination() {
+        assertEquals("Ctrl+1", nextcloudDesktopShortcutHint(NextcloudDestination.Home))
+        assertEquals("Ctrl+2", nextcloudDesktopShortcutHint(NextcloudDestination.FolderSync))
+        assertEquals("Ctrl+3", nextcloudDesktopShortcutHint(NextcloudDestination.Activity))
+        assertEquals("Ctrl+4", nextcloudDesktopShortcutHint(NextcloudDestination.Apps))
+        assertEquals("Ctrl+,", nextcloudDesktopShortcutHint(NextcloudDestination.Settings))
+        for (destination in NextcloudDestination.entries) {
+            val hint = nextcloudDesktopShortcutHint(destination) ?: continue
+            val key = NextcloudDesktopShortcutKey.entries.single {
+                destinationForNextcloudDesktopShortcut(it, primaryModifierPressed = true) == destination
+            }
+            assertTrue(hint.startsWith("Ctrl+"), "Hint for $key must name the accepted modifier")
+        }
+    }
 }

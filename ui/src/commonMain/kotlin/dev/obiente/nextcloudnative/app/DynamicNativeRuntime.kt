@@ -75,15 +75,6 @@ data class DynamicDescriptorDiscovery(
 )
 
 @Serializable
-enum class DynamicContractVersionStatus {
-    VerifiedCurrent,
-    LastKnownReadOnly,
-}
-
-internal fun DynamicContractVersionStatus.allows(risk: ActionRisk): Boolean =
-    this == DynamicContractVersionStatus.VerifiedCurrent || risk == ActionRisk.readOnly
-
-@Serializable
 enum class DynamicDescriptorAcquisition {
     OcsApiViewer,
     StaticAppAsset,
@@ -352,6 +343,7 @@ class DynamicNextcloudActionExecutor(
     private val descriptor: DynamicAppDescriptor,
     private val runtimeContext: Map<String, String> = emptyMap(),
     private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
+    private val writeGate: DynamicContractWriteGate? = null,
     private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
 ) : NativeActionExecutor {
     init {
@@ -364,7 +356,7 @@ class DynamicNextcloudActionExecutor(
                 message = "The dynamic action is no longer available.",
                 outcome = NativeActionFailureOutcome.Rejected,
             )
-        if (!versionStatus.allows(action.risk)) {
+        if (!versionStatus.allows(action.risk) || writeGate?.authorizesWrite(action.risk, descriptor) == false) {
             return NativeActionExecutionResult.Failure(
                 message = "Reconnect to verify the server and app versions before changing cloud data.",
                 outcome = NativeActionFailureOutcome.Rejected,

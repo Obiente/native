@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 
 /**
  * The callbacks a fallback notice can invoke. A missing callback hides its action, so a screen that
@@ -54,7 +55,7 @@ internal fun DynamicMetadataFallbackNotice(
 ) {
     val notice = dynamicMetadataFallbackNotice(appName, reason)
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.XLarge),
+        modifier = Modifier.fillMaxSize().nextcloudFadeInOnLoad().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.XLarge),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium, Alignment.CenterVertically),
     ) {

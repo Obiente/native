@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,11 +41,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudReducedMotion
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.NextcloudMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.nextcloudSelectionColors
+import dev.obiente.nextcloudnative.app.design.rememberNextcloudSelectionHighlight
 
 internal enum class FileLayout { List, Grid, Compact }
 
@@ -172,24 +179,31 @@ internal fun NativeFilesWorkspace(
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                     browserPane(Modifier.weight(1f), true)
-                    AnimatedVisibility(visible = panes.showInspector) {
+                    val reducedMotion = LocalNextcloudReducedMotion.current
+                    AnimatedVisibility(
+                        visible = panes.showInspector,
+                        enter = NextcloudMotion.sidePaneEnter(reducedMotion),
+                        exit = NextcloudMotion.sidePaneExit(reducedMotion),
+                    ) {
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        FilesInspector(
-                            file = selectedFile,
-                            offlineAvailability = selectedFile?.let { offlineAvailability[it.path] },
-                            offlineStorageSupported = offlineStorageSupported,
-                            writeBlock = writeBlock,
-                            fileSharing = fileSharing,
-                            externalHandoffCapability = externalHandoffCapability,
-                            services = services,
-                            session = session,
-                            userId = userId,
-                            onClose = { inspectorClosed = true },
-                            onOpen = { file ->
-                                if (file.isDirectory) onOpenPath(file.path) else onOpenFile(file)
-                            },
-                            onAction = onAction,
-                        )
+                        NextcloudContentEntrance(selectedFile?.path, NextcloudEntranceAxis.Horizontal) {
+                            FilesInspector(
+                                file = selectedFile,
+                                offlineAvailability = selectedFile?.let { offlineAvailability[it.path] },
+                                offlineStorageSupported = offlineStorageSupported,
+                                writeBlock = writeBlock,
+                                fileSharing = fileSharing,
+                                externalHandoffCapability = externalHandoffCapability,
+                                services = services,
+                                session = session,
+                                userId = userId,
+                                onClose = { inspectorClosed = true },
+                                onOpen = { file ->
+                                    if (file.isDirectory) onOpenPath(file.path) else onOpenFile(file)
+                                },
+                                onAction = onAction,
+                            )
+                        }
                     }
                 }
             } else {
@@ -214,8 +228,13 @@ private fun FilesNavigationPane(
     }.take(5)
     val pinnedPaths = pinnedFolders.mapTo(mutableSetOf(), NextcloudFile::path)
     val favoriteFolders = files.filter { it.isDirectory && it.favorite && it.path !in pinnedPaths }.take(5)
+    // One pill glides between places; a folder without a sidebar entry shows none.
+    val highlight = rememberNextcloudSelectionHighlight(filesNavigationKey(selectedFilter, currentPath))
+    val selection = nextcloudSelectionColors()
     Column(
-        modifier = Modifier.width(218.dp).fillMaxHeight().padding(NextcloudSpacing.Medium),
+        modifier = Modifier.width(218.dp).fillMaxHeight().padding(NextcloudSpacing.Medium)
+            .then(highlight.containerModifier())
+            .then(highlight.drawModifier(selection.fill, selection.outline, NextcloudRadii.Small)),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
@@ -229,6 +248,7 @@ private fun FilesNavigationPane(
             icon = NextcloudIcons.FolderOpen,
             selected = selectedFilter == FileWorkspaceFilter.All && currentPath.isEmpty(),
             count = files.size,
+            modifier = highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.All, "")),
             onClick = {
                 onFilterChanged(FileWorkspaceFilter.All)
                 onOpenPath("")
@@ -239,6 +259,7 @@ private fun FilesNavigationPane(
             icon = NextcloudIcons.Favorite,
             selected = selectedFilter == FileWorkspaceFilter.Favorites,
             count = files.count(NextcloudFile::favorite),
+            modifier = highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.Favorites, currentPath)),
             onClick = { onFilterChanged(FileWorkspaceFilter.Favorites) },
         )
         FilesNavItem(
@@ -246,6 +267,7 @@ private fun FilesNavigationPane(
             icon = NextcloudIcons.CheckCircle,
             selected = selectedFilter == FileWorkspaceFilter.Offline,
             count = offlineAvailability.values.count { it == FileOfflineAvailability.Available },
+            modifier = highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.Offline, currentPath)),
             onClick = { onFilterChanged(FileWorkspaceFilter.Offline) },
         )
         if (pinnedFolders.isNotEmpty()) {
@@ -257,7 +279,8 @@ private fun FilesNavigationPane(
                 modifier = Modifier.padding(horizontal = NextcloudSpacing.Small),
             )
             pinnedFolders.forEach { file ->
-                FilesNavItem(file.name, NextcloudIcons.Folder, currentPath == file.path, null) {
+                FilesNavItem(file.name, NextcloudIcons.Folder, currentPath == file.path, null,
+                    highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.All, file.path))) {
                     onFilterChanged(FileWorkspaceFilter.All)
                     onOpenPath(file.path)
                 }
@@ -272,7 +295,8 @@ private fun FilesNavigationPane(
                 modifier = Modifier.padding(horizontal = NextcloudSpacing.Small),
             )
             favoriteFolders.forEach { file ->
-                FilesNavItem(file.name, NextcloudIcons.FavoriteBorder, currentPath == file.path, null) {
+                FilesNavItem(file.name, NextcloudIcons.FavoriteBorder, currentPath == file.path, null,
+                    highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.All, file.path))) {
                     onFilterChanged(FileWorkspaceFilter.All)
                     onOpenPath(file.path)
                 }
@@ -281,18 +305,32 @@ private fun FilesNavigationPane(
     }
 }
 
+/** Sidebar entries are keyed by what they open, so the highlight finds the place that is showing. */
+private fun filesNavigationKey(filter: FileWorkspaceFilter, path: String): String = when (filter) {
+    FileWorkspaceFilter.All -> "path:$path"
+    else -> "filter:${filter.name}"
+}
+
 @Composable
 private fun FilesNavItem(
     label: String,
     icon: ImageVector,
     selected: Boolean,
     count: Int?,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val content by animateColorAsState(
+        if (selected) nextcloudSelectionColors().selectedLabel else MaterialTheme.colorScheme.onSurface,
+        NextcloudMotion.color(LocalNextcloudReducedMotion.current),
+        label = "files place content",
+    )
     Surface(
+        selected = selected,
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else androidx.compose.ui.graphics.Color.Transparent,
+        modifier = Modifier.fillMaxWidth().then(modifier),
+        color = androidx.compose.ui.graphics.Color.Transparent,
+        contentColor = content,
         shape = RoundedCornerShape(NextcloudRadii.Small),
     ) {
         Row(
@@ -456,7 +494,7 @@ private fun FilesFilterAndSortBar(
                     candidate,
                     offlineAvailability.filterValues { it == FileOfflineAvailability.Available }.keys,
                 )
-                FilterChip(
+                NextcloudFilterChip(
                     selected = filter == candidate,
                     onClick = { onFilterChanged(candidate) },
                     label = { Text("${candidate.readableLabel()}${if (count > 0 && candidate != FileWorkspaceFilter.All) " $count" else ""}") },

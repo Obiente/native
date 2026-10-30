@@ -15,7 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -166,7 +166,7 @@ internal fun FileShareDialogContent(
                 contentPadding = PaddingValues(end = NextcloudSpacing.Small),
             ) {
                 items(state.supportedTargets, key = FileShareTarget::name) { target ->
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = state.target == target,
                         enabled = !state.running,
                         onClick = { onTargetChanged(target) },
@@ -183,13 +183,13 @@ internal fun FileShareDialogContent(
                 recipientPicker(state.target)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                FilterChip(
+                NextcloudFilterChip(
                     selected = !state.allowEditing,
                     enabled = !state.running,
                     onClick = { onAllowEditingChanged(false) },
                     label = { Text("Can view") },
                 )
-                FilterChip(
+                NextcloudFilterChip(
                     selected = state.allowEditing,
                     enabled = !state.running,
                     onClick = { onAllowEditingChanged(true) },

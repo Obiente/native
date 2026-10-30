@@ -35,6 +35,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -121,7 +122,7 @@ internal fun FileVersionHistorySection(
                 }
             }
 
-            if (expanded) {
+            NextcloudDisclosureContent(expanded) {
                 if (loading) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

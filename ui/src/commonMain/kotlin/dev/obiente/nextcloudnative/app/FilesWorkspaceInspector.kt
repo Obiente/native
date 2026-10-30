@@ -36,6 +36,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
+import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -121,7 +123,7 @@ internal fun FilesInspector(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 preview?.let {
-                    Image(it, file.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    Image(it, file.name, Modifier.fillMaxSize().nextcloudFadeInOnLoad(), contentScale = ContentScale.Crop)
                 } ?: Icon(
                     if (file.isDirectory) NextcloudIcons.Folder else workspaceFileIcon(file),
                     contentDescription = null,
@@ -132,7 +134,7 @@ internal fun FilesInspector(
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(file.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(file.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).sharedElement(SharedElementKeys.fileName(file.path)))
                 if (file.favorite) Icon(NextcloudIcons.Favorite, "Favorite", tint = MaterialTheme.colorScheme.primary)
             }
             Text(
@@ -148,7 +150,7 @@ internal fun FilesInspector(
             IconButton(onClick = {
                 onAction(file, if (file.favorite) FileMenuAction.RemoveFavorite else FileMenuAction.AddFavorite)
             }) {
-                Icon(
+                NextcloudAnimatedIcon(
                     if (file.favorite) NextcloudIcons.Favorite else NextcloudIcons.FavoriteBorder,
                     contentDescription = if (file.favorite) "Remove favorite" else "Add favorite",
                 )

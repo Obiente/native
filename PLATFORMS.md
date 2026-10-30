@@ -195,6 +195,127 @@ interaction validation is still required.
   Settings and the account entry share a utility footer that scrolls in short
   windows. Collapse state is a saved presentation preference, not a server
   setting.
+- The desktop sidebar sits on the window background beside a bordered
+  workspace panel. The sidebar, bottom bar, and rail share one selection style
+  (`nextcloudSelectionColors`): a soft accent tint, an accent icon, and a
+  heavier label, so selection does not rely on color alone. Sidebar tooltips
+  name the keyboard shortcut for each destination that has one, such as
+  Ctrl+1 for Home.
+- Photos, Talk, Calendar, Deck, Folder sync, and the Apps catalog each set an
+  app accent (`NextcloudAppAccentFamily`) for the shell and workspace. Home,
+  Activity, Settings, Files, and apps without a family keep the brand mint.
+  The accent replaces only Material's primary roles; status colors never
+  change. Navigation selection colors glide to the new accent, while the
+  workspace switches on the frame its entrance starts. A deterministic test
+  checks WCAG AA contrast for every accent in light and dark themes.
+- Shell motion uses shared tokens in `NextcloudMotion`. The desktop sidebar
+  draws one selection highlight (`NextcloudSelectionHighlightState`) that
+  springs to the selected entry. App sidebars use the same highlight: the
+  Photos library, the Files places list, the Folder sync sections, and the
+  section list of dynamic apps. Other selected rows, cards, and segments fade
+  between their colors with `nextcloudAnimatedColor`. The desktop sidebar
+  width animates when it collapses or expands, switching entry layout at the
+  midpoint. Switching root destinations or apps fades the workspace in
+  with a small rise in every layout. The workspace stays one composition
+  during the entrance, so drafts and saved state are never duplicated. Android
+  follows the system "Remove animations" setting through
+  `LocalNextcloudReducedMotion`, which turns these animations off. Desktop has
+  no reduced-motion source yet and keeps full motion.
+- Desktop detail panes for Files, Calendar, and Deck slide in from the side
+  when they open and out when they close. Choosing another item in an open
+  pane, including the always-visible Folder sync inspector, slides its details
+  in from the side. On phones, Deck card details and Folder sync pair details
+  open in `NextcloudDetailSheet`, a bottom sheet over the board or list that
+  closes with Back, Escape, Close, or a tap outside, and reopens after
+  recreation from the saved selection. Narrow desktop windows keep the Deck
+  card dialog and the full Folder sync page. File info stays a full page
+  because of its version history and restore flow, and Calendar event details
+  stay in place because Edit continues in the same page with keyboard input
+  and draft guards.
+- Lists keyed by stable ids use `nextcloudItemMotion`: new items fade in and
+  moved items glide into place in the Files list and grid, transfers, Talk
+  conversations, Deck cards, the Apps catalog, and the desktop sync table.
+  Lists that replace every item at once, such as another folder or transfer
+  page, skip the fade-out so rows never overlap. Deck cards skip the fade-out
+  and stop gliding during a drag, so drop targets never read moving bounds.
+  The phone sync list is not lazy and has no item motion. Reduced motion turns
+  item motion off. Dynamic app lists, grids, tables, and boards use the same
+  motion without fade-out, and stop gliding during a drag.
+- Workspace states share `NextcloudStatusState`, `NextcloudLoadingState`, and
+  `NextcloudSkeleton` (in `design/NextcloudStatusState.kt`). Empty and error
+  states are centered with an icon, a title, and their action, and ease in.
+  First loads wait briefly before appearing, so fast or cached loads do not
+  flash; list and grid screens, including dynamic apps, show placeholders
+  shaped like the coming content, announced as one busy indicator. Content
+  refreshing in place shows `NextcloudRefreshBar`, which eases open and closed.
+  A refresh failure over content that is still shown uses
+  `RetainedContentNotice` instead of a full error state.
+- In-app section switches ease in the new content: Photos destinations,
+  desktop Settings sections, Calendar Month, Week, and Agenda views, and
+  dynamic app views, record details, the inline editor, and content that
+  finished loading. Segmented controls spring a shared selection pill between
+  options. Details, insights, and inventory disclosures in dynamic apps unfold
+  with `NextcloudDisclosureContent` and a turning chevron, and record details
+  keep their open state across recreation.
+- Navigation inside an app follows its direction (`AppRouteTransitions.kt`):
+  opening a folder, a full-page detail such as file info, a chat, a note, or an
+  editor slides in from the end, and going back slides the previous page in
+  from the start. Full-page details move over the whole window, while routes
+  inside the shell move only the workspace. Switching apps or root
+  destinations keeps the shell's rise instead. Dynamic apps slide the same way
+  between views, records, and the inline editor, and fade in content that
+  finished loading. Reduced motion places pages at once.
+- The media viewer opens over the screen it came from instead of replacing it
+  (`MediaViewerZoom.kt`), so the timeline, album, or folder below keeps its
+  place and scroll position. The tapped thumbnail grows into the photo's
+  fitted place while the screen behind darkens, and stands in for the photo
+  until the viewer's own image loads. Closing, with Back, Escape, or Close,
+  shrinks the photo now shown back into its tile, or fades out when that tile
+  is not on screen. Thumbnails in the timeline, albums, people, folder stacks,
+  media collections, and the Files grid are zoom sources. While the viewer is
+  open, the screen below takes no pointer input, keyboard focus cannot move into
+  it, and it is hidden from accessibility services. Reduced motion opens and
+  closes the viewer at once.
+- News moves like other workspaces: on one pane the reader slides in over the
+  article list and back, two panes fade between articles, and an article's
+  title carries from its row into the reader. Rows ease in, and their
+  selection, unread dot, and star fade or pop instead of switching.
+- Text shown on both sides of a navigation carries across it
+  (`NextcloudSharedElements`). A conversation's name flies from the Talk list
+  into the chat header, a file's name from the Files list into file details,
+  the inspector, the editor, or preview, and the same for note titles, Deck
+  cards and their inspector, calendar events and their inspector, and Settings
+  sections and their header. In dynamic apps, a record's title in a list,
+  grid, board, task, recipe, contact, media, ledger, mailbox, table, or
+  inventory card flies to the detail headline, and a record opened into its
+  children carries its name into the app header. Detail headlines use the
+  resource the selection named, because a detail read often belongs to another
+  resource than its list. The element is drawn above both screens while it
+  travels, so neither screen is composed twice. Only arrivals right after a
+  navigation fly, so lists scrolling items back into view do not, and elements
+  in dialogs or sheets do not. An element removed by a navigation waits up to
+  two seconds for its counterpart, so a detail that loads before showing its
+  title still receives it. Reduced motion turns this off.
+- Content chosen from an ordered set moves toward the side that was picked:
+  Calendar views, Photos destinations, and the sync inspector's tabs slide
+  from the right for a later tab and from the left for an earlier one, and
+  desktop Settings sections rise or fall with the section list. Loaded
+  thumbnails and cover art fade in over their placeholders, refresh notices
+  fade in, and grouped Activity and file version history unfold with a turning
+  chevron.
+- Toggles animate: `NextcloudFilterChip` eases its fill, label, icon, and
+  outline between states and widens smoothly for its check mark, and
+  `NextcloudAnimatedIcon` pops in a changed icon such as favorite, play and
+  pause, layout, or search. Material switches, checkboxes, and radio buttons
+  keep their built-in motion.
+- A dynamic app view never shows the previous view's records while its own
+  load is pending; it shows its loading state until its data arrives.
+- Each dynamic app location, a view together with the record it was opened
+  for, keeps its own list and grid scroll position
+  (`GenericRendererLocationScope`). Opening a record or child collection starts
+  at its top, and Back returns to the parent's position, including after the
+  navigation history is restored. Saved keys contain a digest instead of record
+  ids, and only the most recent locations are retained.
 - The compact Apps browser is a searchable list with category filters and
   pinned shortcuts. Long labels truncate explicitly and the header grows with
   text size. Desktop keeps its catalog grid. App tiles open directly; pinning

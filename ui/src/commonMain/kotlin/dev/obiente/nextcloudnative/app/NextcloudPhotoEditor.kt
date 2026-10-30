@@ -17,7 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -321,7 +321,7 @@ fun NextcloudPhotoEditor(
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     PhotoFilter.entries.forEach { filter ->
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = recipe.filter == filter,
                             onClick = { updateRecipe(recipe.copy(filter = filter)) },
                             label = {
@@ -342,7 +342,7 @@ fun NextcloudPhotoEditor(
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     PhotoExportFormat.entries.forEach { format ->
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = exportFormat == format,
                             onClick = { exportFormat = format },
                             label = { Text(format.label) },
@@ -622,12 +622,12 @@ private fun PhotoTransformControls(
         ) {
             OutlinedButton(onClick = { onChange(recipe.rotateCounterClockwise()) }) { Text("Rotate left") }
             OutlinedButton(onClick = { onChange(recipe.rotateClockwise()) }) { Text("Rotate right") }
-            FilterChip(
+            NextcloudFilterChip(
                 selected = recipe.flipHorizontal,
                 onClick = { onChange(recipe.toggleHorizontalFlip()) },
                 label = { Text("Flip H") },
             )
-            FilterChip(
+            NextcloudFilterChip(
                 selected = recipe.flipVertical,
                 onClick = { onChange(recipe.toggleVerticalFlip()) },
                 label = { Text("Flip V") },
@@ -675,7 +675,7 @@ private fun PhotoTransformControls(
 
 @Composable
 private fun PhotoCropChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+    NextcloudFilterChip(selected = selected, onClick = onClick, label = { Text(label) })
 }
 
 @Composable

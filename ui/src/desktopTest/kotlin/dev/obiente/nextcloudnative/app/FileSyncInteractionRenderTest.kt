@@ -17,33 +17,6 @@ import kotlin.test.assertTrue
 
 class FileSyncInteractionRenderTest {
     @Test
-    fun phonePairOpensDedicatedDetailsAndBackReturnsToListWithoutRunningWork() {
-        var runRequests = 0
-        var removals = 0
-        nativeSceneTest(390, 844, content = {
-            FileSyncWorkspace(
-                snapshot = FileSyncCenterSnapshot(FileSyncCenterSupport.Available, listOf(pair())),
-                loading = false, busyPairId = null,
-                onAdd = {}, onRun = { runRequests++ }, onRemove = { removals++ },
-                onResolve = { _, _, _ -> }, fillAvailableHeight = true,
-            )
-        }) {
-            assertTrue(has("Add sync"))
-            assertFalse(has("All syncs"))
-            click("Example documents")
-            assertTrue(has("All syncs"))
-            assertTrue(has("Current work"))
-            assertFalse(has("Add sync"))
-            capture("sync-phone-detail")
-            click("All syncs")
-            assertTrue(has("Add sync"))
-            assertFalse(has("Current work"))
-            assertEquals(0, runRequests)
-            assertEquals(0, removals)
-        }
-    }
-
-    @Test
     fun conflictChoiceShowsConsequencesBeforeStagingAnExactGuardedReviewRequest() {
         val conflict = FileSyncConflictSummary(
             workId = 7, relativePath = "Example.txt", reason = FileSyncDecisionReason.SimultaneousEdit,

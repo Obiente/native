@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -191,7 +191,7 @@ internal fun SettingsAppearanceSectionContent(
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
             ThemePreference.entries.forEach { preference ->
-                FilterChip(
+                NextcloudFilterChip(
                     modifier = Modifier.heightIn(min = MinimumSettingsTargetDp),
                     selected = selectedTheme == preference,
                     onClick = { onThemeSelected(preference) },

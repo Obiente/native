@@ -30,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -93,23 +95,29 @@ internal fun FileSyncPairInspector(
                 Column(
                     modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                 ) {
-                    when (selectedTab) {
-                        FileSyncInspectorTab.Overview -> FileSyncPairDetails(
-                            pair = pair,
-                            busy = busy,
-                            actionsEnabled = actionsEnabled,
-                            onRun = onRun,
-                            onRemove = onRemove,
-                            onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
-                            onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
-                            compact = false,
-                        )
-                        FileSyncInspectorTab.Activity -> FileSyncInspectorActivity(pair)
-                        FileSyncInspectorTab.Rules -> FileSyncInspectorRules(pair)
-                        FileSyncInspectorTab.Settings -> {
-                            FileSyncInspectorSettings(pair)
-                            TextButton(enabled = actionsEnabled, onClick = onRemove, modifier = Modifier.padding(16.dp)) {
-                                Text("Remove sync", color = MaterialTheme.colorScheme.error)
+                    NextcloudContentEntrance(
+                        selectedTab, NextcloudEntranceAxis.Horizontal, order = selectedTab.ordinal,
+                    ) {
+                        Column {
+                            when (selectedTab) {
+                                FileSyncInspectorTab.Overview -> FileSyncPairDetails(
+                                    pair = pair,
+                                    busy = busy,
+                                    actionsEnabled = actionsEnabled,
+                                    onRun = onRun,
+                                    onRemove = onRemove,
+                                    onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
+                                    onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
+                                    compact = false,
+                                )
+                                FileSyncInspectorTab.Activity -> FileSyncInspectorActivity(pair)
+                                FileSyncInspectorTab.Rules -> FileSyncInspectorRules(pair)
+                                FileSyncInspectorTab.Settings -> {
+                                    FileSyncInspectorSettings(pair)
+                                    TextButton(enabled = actionsEnabled, onClick = onRemove, modifier = Modifier.padding(16.dp)) {
+                                        Text("Remove sync", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
                             }
                         }
                     }

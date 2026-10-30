@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app.design
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -105,67 +107,86 @@ fun NextcloudDesktopShell(
             desktopWorkspaceKind = workspaceKind,
             desktopSidebarExpanded = sidebarExpanded,
         )
-        val margin = layout.workspaceMarginDp.dp
         val canExpand = maxWidth.value >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp
+        val reducedMotion = LocalNextcloudReducedMotion.current
+        val navigationWidth by animateDpAsState(
+            layout.navigationWidthDp.dp,
+            NextcloudMotion.content(reducedMotion),
+            label = "desktop sidebar width",
+        )
+        val margin by animateDpAsState(
+            layout.workspaceMarginDp.dp,
+            NextcloudMotion.content(reducedMotion),
+            label = "desktop workspace margin",
+        )
         LaunchedEffect(focusRequester) {
             focusRequester.requestFocus()
         }
 
-        CompositionLocalProvider(
-            LocalNextcloudWorkspaceCapabilities provides NextcloudWorkspaceCapabilities(
-                isDesktop = true,
-                usesDenseControls = true,
-                supportsAuxiliaryPane = layout.supportsAuxiliaryPane,
-            ),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(margin)
-                    .focusRequester(focusRequester)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        val shortcut = when (event.key) {
-                            Key.One -> NextcloudDesktopShortcutKey.One
-                            Key.Two -> NextcloudDesktopShortcutKey.Two
-                            Key.Three -> NextcloudDesktopShortcutKey.Three
-                            Key.Four -> NextcloudDesktopShortcutKey.Four
-                            Key.Comma -> NextcloudDesktopShortcutKey.Comma
-                            else -> null
-                        } ?: return@onPreviewKeyEvent false
-                        val destination = destinationForNextcloudDesktopShortcut(
-                            key = shortcut,
-                            primaryModifierPressed = event.isCtrlPressed || event.isMetaPressed,
-                        ) ?: return@onPreviewKeyEvent false
-                        if (!navigationEnabled) return@onPreviewKeyEvent true
-                        onSelected(destination)
-                        true
-                    }
-                    .focusable(),
-                horizontalArrangement = Arrangement.spacedBy(margin),
+        val destinationKey = nextcloudShellDestinationKey(selected, activeAppId)
+        NextcloudAppAccentScope(destinationKey) {
+            CompositionLocalProvider(
+                LocalNextcloudWorkspaceCapabilities provides NextcloudWorkspaceCapabilities(
+                    isDesktop = true,
+                    usesDenseControls = true,
+                    supportsAuxiliaryPane = layout.supportsAuxiliaryPane,
+                ),
             ) {
-                NextcloudDesktopNavigation(
-                    selected = selected,
-                    onSelected = onSelected,
-                    identity = identity,
-                    onOpenApp = onOpenApp,
-                    activeAppId = activeAppId,
-                    expanded = layout.navigationStyle == NextcloudNavigationStyle.ExpandedSidebar,
-                    canExpand = canExpand,
-                    onToggleExpanded = {
-                        sidebarExpanded = layout.navigationStyle != NextcloudNavigationStyle.ExpandedSidebar
-                    },
-                    navigationEnabled = navigationEnabled,
-                    modifier = Modifier.width(layout.navigationWidthDp.dp).fillMaxHeight(),
-                )
-
-                Surface(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = RoundedCornerShape(NextcloudRadii.Medium),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp,
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(margin)
+                        .focusRequester(focusRequester)
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            val shortcut = when (event.key) {
+                                Key.One -> NextcloudDesktopShortcutKey.One
+                                Key.Two -> NextcloudDesktopShortcutKey.Two
+                                Key.Three -> NextcloudDesktopShortcutKey.Three
+                                Key.Four -> NextcloudDesktopShortcutKey.Four
+                                Key.Comma -> NextcloudDesktopShortcutKey.Comma
+                                else -> null
+                            } ?: return@onPreviewKeyEvent false
+                            val destination = destinationForNextcloudDesktopShortcut(
+                                key = shortcut,
+                                primaryModifierPressed = event.isCtrlPressed || event.isMetaPressed,
+                            ) ?: return@onPreviewKeyEvent false
+                            if (!navigationEnabled) return@onPreviewKeyEvent true
+                            onSelected(destination)
+                            true
+                        }
+                        .focusable(),
+                    horizontalArrangement = Arrangement.spacedBy(margin),
                 ) {
-                    Box(modifier = Modifier.fillMaxSize()) { content() }
+                    NextcloudDesktopNavigation(
+                        selected = selected,
+                        onSelected = onSelected,
+                        identity = identity,
+                        onOpenApp = onOpenApp,
+                        activeAppId = activeAppId,
+                        expanded = desktopSidebarShowsExpandedContent(navigationWidth.value),
+                        canExpand = canExpand,
+                        onToggleExpanded = {
+                            sidebarExpanded = layout.navigationStyle != NextcloudNavigationStyle.ExpandedSidebar
+                        },
+                        navigationEnabled = navigationEnabled,
+                        modifier = Modifier.width(navigationWidth).fillMaxHeight(),
+                    )
+
+                    Surface(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        shape = RoundedCornerShape(NextcloudRadii.Large),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        // A hairline separates the workspace from the window background in light themes.
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    ) {
+                        NextcloudDestinationEntrance(
+                            destinationKey = destinationKey,
+                            modifier = Modifier.fillMaxSize(),
+                            content = content,
+                        )
+                    }
                 }
             }
         }

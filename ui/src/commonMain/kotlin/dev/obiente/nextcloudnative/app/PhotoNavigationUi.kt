@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,9 +38,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
+import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudReducedMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.nextcloudSelectionColors
+import dev.obiente.nextcloudnative.app.design.rememberNextcloudSelectionHighlight
 
 @Composable
 internal fun PhotoAdaptiveNavigationLayout(
@@ -50,33 +57,35 @@ internal fun PhotoAdaptiveNavigationLayout(
 ) {
     val latestContent = rememberUpdatedState(content)
     val movableContent = remember {
-        movableContentOf {
-            latestContent.value()
+        movableContentOf { destination: PhotoDestination ->
+            NextcloudContentEntrance(destination, NextcloudEntranceAxis.Horizontal, Modifier.fillMaxSize(), order = destination.ordinal) {
+                latestContent.value()
+            }
         }
     }
     when (intent.placement) {
         PhotoNavigationPlacement.BottomBar -> Column(modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                movableContent()
+                movableContent(intent.activeDestination)
             }
             PhotoBottomNavigation(intent, onDestinationSelected)
         }
         PhotoNavigationPlacement.CompactMenu -> Column(modifier.fillMaxSize()) {
             PhotoCompactNavigationMenu(intent, onDestinationSelected)
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                movableContent()
+                movableContent(intent.activeDestination)
             }
         }
         PhotoNavigationPlacement.NavigationRail -> Row(modifier.fillMaxSize()) {
             PhotoNavigationRail(intent, onDestinationSelected)
             Box(Modifier.fillMaxHeight().weight(1f)) {
-                movableContent()
+                movableContent(intent.activeDestination)
             }
         }
         PhotoNavigationPlacement.Sidebar -> Row(modifier.fillMaxSize()) {
             PhotoNavigationSidebar(intent, onDestinationSelected)
             Box(Modifier.fillMaxHeight().weight(1f)) {
-                movableContent()
+                movableContent(intent.activeDestination)
             }
         }
     }
@@ -186,13 +195,18 @@ private fun PhotoNavigationSidebar(
     intent: PhotoNavigationIntent,
     onDestinationSelected: (PhotoDestination) -> Unit,
 ) {
+    // One pill glides between destinations, like the app sidebar, instead of each row repainting.
+    val highlight = rememberNextcloudSelectionHighlight(intent.activeDestination)
+    val selection = nextcloudSelectionColors()
     Row(Modifier.fillMaxHeight()) {
         Column(
             modifier = Modifier
                 .width(216.dp)
                 .fillMaxHeight()
                 .selectableGroup()
-                .padding(NextcloudSpacing.Medium),
+                .padding(NextcloudSpacing.Medium)
+                .then(highlight.containerModifier())
+                .then(highlight.drawModifier(selection.fill, selection.outline, NextcloudRadii.Medium)),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
         ) {
             Text(
@@ -209,17 +223,14 @@ private fun PhotoNavigationSidebar(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(highlight.entryModifier(destination))
                         .selectable(
                             selected = selected,
                             role = Role.Tab,
                             onClick = { onDestinationSelected(destination) },
                         ),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(NextcloudRadii.Medium),
-                    color = if (selected) {
-                        androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        androidx.compose.ui.graphics.Color.Transparent
-                    },
+                    color = androidx.compose.ui.graphics.Color.Transparent,
                 ) {
                     Row(
                         modifier = Modifier.padding(
@@ -229,13 +240,20 @@ private fun PhotoNavigationSidebar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
+                        val content by animateColorAsState(
+                            if (selected) selection.selectedLabel else selection.unselectedContent,
+                            NextcloudMotion.color(LocalNextcloudReducedMotion.current),
+                            label = "photo destination content",
+                        )
                         Icon(
                             photoDestinationIcon(destination),
                             contentDescription = null,
                             modifier = Modifier.size(22.dp),
+                            tint = if (selected) selection.icon else content,
                         )
                         Text(
                             photoDestinationLabel(destination),
+                            color = content,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     }

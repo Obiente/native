@@ -66,7 +66,7 @@ internal fun nativeTableRecordDetail(
 }
 
 @Composable
-internal fun NativeTableRecordDetail(detail: NativeTableRecordDetailPresentation) {
+internal fun NativeTableRecordDetail(detail: NativeTableRecordDetailPresentation, titleKey: String? = null) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large)) {
         Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -74,7 +74,7 @@ internal fun NativeTableRecordDetail(detail: NativeTableRecordDetailPresentation
                 color = MaterialTheme.colorScheme.primary) }
             detail.titleField?.let { Text(it.formatted.label, style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Text(detail.title, style = MaterialTheme.typography.headlineSmall)
+            Text(detail.title, Modifier.genericSharedElement(titleKey), style = MaterialTheme.typography.headlineSmall)
         }
         if (detail.detailFields.isNotEmpty()) {
             androidx.compose.material3.Card(

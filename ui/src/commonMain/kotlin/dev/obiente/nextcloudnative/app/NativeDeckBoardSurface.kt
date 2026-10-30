@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -58,7 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import com.mikepenz.markdown.m3.Markdown
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.BoardDragVerticalScrollTarget
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
@@ -461,56 +459,9 @@ private fun DeckBoardWorkspace(
                     onMoveCard = onMoveCard,
                     modifier = Modifier.weight(1f),
                 )
-                if (showInspector) {
-                    Box(
-                        modifier = Modifier.fillMaxHeight().width(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant),
-                    )
-                    state.selectedCard?.let { card ->
-                        DeckCardInspector(
-                            card = card,
-                            actions = cardActions(card),
-                            modifier = Modifier.width(340.dp).fillMaxHeight(),
-                        )
-                    }
-                }
+                DeckCardSideInspector(showInspector, state.selectedCard, cardActions)
             }
-            if (!showInspector) {
-                state.selectedCard?.let { card ->
-                    val actions = cardActions(card)
-                    var menuExpanded by remember(card.id) { mutableStateOf(false) }
-                    AlertDialog(
-                        onDismissRequest = onDismissCard,
-                        title = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                Text(card.title, modifier = Modifier.weight(1f))
-                                NextcloudCardOverflow(
-                                    itemLabel = card.title,
-                                    actions = actions,
-                                    expanded = menuExpanded,
-                                    onExpandedChange = { menuExpanded = it },
-                                )
-                            }
-                        },
-                        text = {
-                            DeckCardInspector(
-                                card = card,
-                                actions = actions,
-                                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
-                                showTitle = false,
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(onClick = onDismissCard) {
-                                Text("Close")
-                            }
-                        },
-                    )
-                }
-            }
+            if (!showInspector) DeckCardDetailOverlay(state.selectedCard, cardActions, onDismissCard)
         }
     }
 }
@@ -784,6 +735,7 @@ private fun DeckLanes(
                                 }
                             }
                             DeckCardItem(
+                                modifier = nextcloudItemMotion(fadeOut = false, placement = activeCard == null),
                                 card = card,
                                 selected = card.id == selectedCardId,
                                 dragging = card.id == activeCard?.id,
@@ -882,6 +834,7 @@ private fun DeckCardItem(
     onOpen: () -> Unit,
     onSelect: () -> Unit,
     actions: List<NextcloudCardAction>,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(card.id) { mutableStateOf(false) }
     var itemBounds by remember(card.id) { mutableStateOf<DeckUiRect?>(null) }
@@ -891,7 +844,7 @@ private fun DeckCardItem(
         NextcloudTheme.colors.appTile
     }
     Card(
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
             .onGloballyPositioned { coordinates ->
                 coordinates.boundsInWindow().toDeckUiRect().let { bounds ->
                     itemBounds = bounds
@@ -941,7 +894,7 @@ private fun DeckCardItem(
                 }
                 Text(
                     card.title,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).sharedElement(SharedElementKeys.deckCardTitle(card.id)),
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
@@ -1041,74 +994,3 @@ private fun androidx.compose.ui.geometry.Rect.toDeckUiRect() = DeckUiRect(
     right = right,
     bottom = bottom,
 )
-
-@Composable
-private fun DeckCardInspector(
-    card: DeckCard,
-    actions: List<NextcloudCardAction>,
-    modifier: Modifier,
-    showTitle: Boolean = true,
-) {
-    var menuExpanded by remember(card.id) { mutableStateOf(false) }
-    LazyColumn(
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerLow),
-        contentPadding = PaddingValues(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        if (showTitle) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Text(
-                        card.title,
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                    NextcloudCardOverflow(
-                        itemLabel = card.title,
-                        actions = actions,
-                        expanded = menuExpanded,
-                        onExpandedChange = { menuExpanded = it },
-                    )
-                }
-            }
-        }
-        card.descriptionMarkdown?.takeIf(String::isNotBlank)?.let { description ->
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-                    Text("Description", style = MaterialTheme.typography.labelMedium)
-                    Markdown(typography = nativeMarkdownTypography(), content = description)
-                }
-            }
-        }
-        card.dueAt?.let { due ->
-            item { DeckInspectorField("Due", deckInstantDisplayLabel(due)) }
-        }
-        card.startAt?.let { start ->
-            item { DeckInspectorField("Starts", deckInstantDisplayLabel(start)) }
-        }
-        if (card.labels.isNotEmpty()) {
-            item { DeckInspectorField("Labels", card.labels.joinToString(", ") { it.title }) }
-        }
-        if (card.assignees.isNotEmpty()) {
-            item { DeckInspectorField("Assigned", card.assignees.joinToString(", ") { it.displayName }) }
-        }
-        if (card.attachmentCount > 0) {
-            item { DeckInspectorField("Attachments", card.attachmentCount.toString()) }
-        }
-    }
-}
-
-@Composable
-private fun DeckInspectorField(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium)
-    }
-}

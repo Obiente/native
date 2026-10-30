@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -54,7 +54,7 @@ internal fun FileShareCreationFields(
                 contentPadding = PaddingValues(end = NextcloudSpacing.Small),
             ) {
                 item {
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = details.expiration == FileShareExpiration.ServerDefault,
                         enabled = enabled,
                         onClick = {
@@ -65,7 +65,7 @@ internal fun FileShareCreationFields(
                 }
                 if (!expirationPolicy.enforced) {
                     item {
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = details.expiration == FileShareExpiration.NoExpiration,
                             enabled = enabled,
                             onClick = {
@@ -76,7 +76,7 @@ internal fun FileShareCreationFields(
                     }
                 }
                 item {
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = details.expiration is FileShareExpiration.OnDate,
                         enabled = enabled,
                         onClick = {

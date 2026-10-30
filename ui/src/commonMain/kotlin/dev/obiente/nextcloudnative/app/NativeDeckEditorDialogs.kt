@@ -21,7 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -101,7 +101,7 @@ fun DeckUiBoardEditorDialog(
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     items(DECK_UI_COLOR_OPTIONS, key = DeckUiColorOption::value) { option ->
-                        FilterChip(
+                        NextcloudFilterChip(
                             selected = draft.color.removePrefix("#").equals(option.value, true),
                             enabled = !busy,
                             onClick = { draft = draft.copy(color = option.value) },
@@ -449,7 +449,7 @@ private fun DeckUiDueDateFields(
         if (quickDueDates.isNotEmpty()) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 items(quickDueDates, key = DeckUiDueDateOption::date) { option ->
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = dueDate == option.date,
                         enabled = enabled,
                         onClick = { onDateChanged(option.date) },

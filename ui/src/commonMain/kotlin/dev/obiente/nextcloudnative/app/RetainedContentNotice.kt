@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
 
 /** A failed refresh does not make the content already on screen unusable. */
 @Composable
@@ -25,7 +26,8 @@ internal fun RetainedContentNotice(
     modifier: Modifier = Modifier,
     actionLabel: String = "Retry",
 ) {
-    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    // The notice fades in, so a failed refresh is noticed without the content jumping.
+    Surface(modifier = modifier.nextcloudFadeInOnLoad(), color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface, shape = MaterialTheme.shapes.medium) {
         Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

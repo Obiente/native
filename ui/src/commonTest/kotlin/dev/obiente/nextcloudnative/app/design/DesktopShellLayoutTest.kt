@@ -183,4 +183,24 @@ class DesktopShellLayoutTest {
             ),
         )
     }
+
+    @Test
+    fun `animating sidebar switches entry layout at the width midpoint`() {
+        val collapsed = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_280,
+            destination = NextcloudDestination.Home,
+            desktopSidebarExpanded = false,
+        ).navigationWidthDp.toFloat()
+        val expanded = resolveNextcloudRootShellLayout(
+            presentation = NextcloudPresentation.Desktop,
+            availableWidthDp = 1_280,
+            destination = NextcloudDestination.Home,
+        ).navigationWidthDp.toFloat()
+        val midpoint = (collapsed + expanded) / 2f
+        assertTrue(desktopSidebarShowsExpandedContent(expanded))
+        assertTrue(desktopSidebarShowsExpandedContent(midpoint))
+        assertFalse(desktopSidebarShowsExpandedContent(midpoint - 1f))
+        assertFalse(desktopSidebarShowsExpandedContent(collapsed))
+    }
 }

@@ -96,6 +96,14 @@ fun resolveNextcloudRootShellLayout(
     }
 }
 
+/**
+ * While the sidebar width animates, its entries switch between the rail and the labelled list
+ * at the midpoint, so a collapsing sidebar never squeezes labels and an expanding one never
+ * shows a wide empty rail.
+ */
+internal fun desktopSidebarShowsExpandedContent(animatedWidthDp: Float): Boolean =
+    animatedWidthDp >= (DesktopSidebarWidthDp + DesktopRailWidthDp) / 2f
+
 private const val AdaptiveRailWidthDp = 88
 private const val DesktopAuxiliaryPaneBreakpointDp = 1_180
 private const val DesktopSidebarWidthDp = 252

@@ -12,7 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -86,7 +86,7 @@ fun NativeAppCatalogSurface(
         ) {
             NativeAppCatalogFilter.entries.forEach { candidate ->
                 if (candidate != NativeAppCatalogFilter.Updates || catalog.includesUpdateAvailability) {
-                    FilterChip(
+                    NextcloudFilterChip(
                         selected = candidate == filter,
                         onClick = { onFilterChanged(candidate) },
                         label = { Text(candidate.name) },

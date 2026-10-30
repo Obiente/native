@@ -67,6 +67,7 @@ fun NextcloudBottomNavigation(
     activeApp: NextcloudDesktopSidebarApp? = null,
     onSwitchApp: (() -> Unit)? = null,
 ) {
+    val selection = nextcloudSelectionColors()
     Column(modifier = modifier.fillMaxWidth()) {
         HorizontalDivider(
             thickness = 1.dp,
@@ -103,11 +104,11 @@ fun NextcloudBottomNavigation(
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer,
-                        selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
-                        indicatorColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
-                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedIconColor = selection.icon,
+                        selectedTextColor = selection.selectedLabel,
+                        indicatorColor = selection.fill,
+                        unselectedIconColor = selection.unselectedContent,
+                        unselectedTextColor = selection.unselectedContent,
                     ),
                 )
             }
@@ -126,6 +127,7 @@ fun NextcloudNavigationRail(
     activeApp: NextcloudDesktopSidebarApp? = null,
     onSwitchApp: (() -> Unit)? = null,
 ) {
+    val selection = nextcloudSelectionColors()
     Box(
         modifier = modifier
             .width(88.dp)
@@ -163,11 +165,11 @@ fun NextcloudNavigationRail(
                     },
                     alwaysShowLabel = true,
                     colors = NavigationRailItemDefaults.colors(
-                        selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                        selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                        indicatorColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
-                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedIconColor = selection.icon,
+                        selectedTextColor = selection.selectedLabel,
+                        indicatorColor = selection.fill,
+                        unselectedIconColor = selection.unselectedContent,
+                        unselectedTextColor = selection.unselectedContent,
                     ),
                 )
             }

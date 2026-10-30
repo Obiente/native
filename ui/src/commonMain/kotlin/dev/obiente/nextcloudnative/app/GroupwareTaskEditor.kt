@@ -9,7 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -191,7 +191,7 @@ internal fun TaskEditorDialog(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
                         calendars.forEach { candidate ->
-                            FilterChip(
+                            NextcloudFilterChip(
                                 selected = candidate.href == calendar?.href,
                                 onClick = { updateEditorState(editorState.copy(calendarHref = candidate.href)) },
                                 label = { Text(candidate.displayName) },

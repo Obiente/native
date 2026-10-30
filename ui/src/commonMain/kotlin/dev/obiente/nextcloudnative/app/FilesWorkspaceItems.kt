@@ -46,6 +46,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.nextcloudFadeInOnLoad
+import dev.obiente.nextcloudnative.app.design.nextcloudItemMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -96,9 +98,11 @@ internal fun NativeFileWorkspaceList(
                 val selected = selectedFile?.path == file.path
                 val availability = offlineAvailability[file.path] ?: FileOfflineAvailability.OnlineOnly
                 Surface(
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent,
+                    color = animatedColor(if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent),
                     shape = RoundedCornerShape(NextcloudRadii.Small),
-                    modifier = Modifier.fillMaxWidth().semantics { if (desktop) this.selected = selected }.combinedClickable(
+                    // Opening another folder replaces every key, so rows fade in without ghosting.
+                    modifier = nextcloudItemMotion(fadeOut = false).fillMaxWidth()
+                        .semantics { if (desktop) this.selected = selected }.combinedClickable(
                         onClickLabel = if (desktop) "Select ${file.name}" else primaryFileActionLabel(file),
                         onLongClickLabel = "Show actions for ${file.name}",
                         onClick = {
@@ -131,7 +135,7 @@ internal fun NativeFileWorkspaceList(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     file.name,
-                                    modifier = Modifier.weight(1f, fill = false),
+                                    modifier = Modifier.weight(1f, fill = false).sharedElement(SharedElementKeys.fileName(file.path)),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     fontWeight = if (file.isDirectory) FontWeight.SemiBold else FontWeight.Normal,
@@ -224,6 +228,7 @@ internal fun NativeFileWorkspaceGrid(
     ) {
         gridItems(files, key = NextcloudFile::path) { file ->
             NativeFileWorkspaceTile(
+                modifier = nextcloudItemMotion(fadeOut = false),
                 file = file,
                 selected = selectedFile?.path == file.path,
                 availability = offlineAvailability[file.path] ?: FileOfflineAvailability.OnlineOnly,
@@ -262,6 +267,7 @@ private fun NativeFileWorkspaceTile(
     onClick: () -> Unit,
     onDoubleClick: (() -> Unit)?,
     onAction: (FileMenuAction) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(file.path) { mutableStateOf(false) }
     var preview by remember(session, file.fileId, file.etag, file.hasPreview) { mutableStateOf<ImageBitmap?>(null) }
@@ -277,7 +283,7 @@ private fun NativeFileWorkspaceTile(
         )
     }
     Card(
-        modifier = Modifier.fillMaxWidth().semantics { if (onDoubleClick != null) this.selected = selected }.combinedClickable(
+        modifier = modifier.fillMaxWidth().semantics { if (onDoubleClick != null) this.selected = selected }.combinedClickable(
             onClickLabel = if (onDoubleClick != null) "Select ${file.name}" else primaryFileActionLabel(file),
             onLongClickLabel = "Show actions for ${file.name}",
             onClick = onClick,
@@ -285,7 +291,7 @@ private fun NativeFileWorkspaceTile(
             onLongClick = { menuExpanded = true },
         ),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else NextcloudTheme.colors.appTile,
+            containerColor = animatedColor(if (selected) MaterialTheme.colorScheme.primaryContainer else NextcloudTheme.colors.appTile),
         ),
         border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         shape = RoundedCornerShape(NextcloudRadii.Card),
@@ -295,7 +301,7 @@ private fun NativeFileWorkspaceTile(
             contentAlignment = Alignment.Center,
         ) {
             preview?.let {
-                Image(it, file.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Image(it, file.name, Modifier.fillMaxSize().nextcloudFadeInOnLoad().mediaZoomSource(file.path, it, cropped = true), contentScale = ContentScale.Crop)
             } ?: Icon(
                 if (file.isDirectory) NextcloudIcons.Folder else workspaceFileIcon(file),
                 contentDescription = null,
@@ -337,7 +343,7 @@ private fun NativeFileWorkspaceTile(
             }
         }
         Column(modifier = Modifier.padding(NextcloudSpacing.Medium)) {
-            Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+            Text(file.name, Modifier.sharedElement(SharedElementKeys.fileName(file.path)), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
             Text(
                 availability.readableStatus() ?: if (file.isDirectory) "Folder" else formatOptionalByteSize(file.size),
                 maxLines = 1,

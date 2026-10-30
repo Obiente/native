@@ -14,7 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -55,6 +55,7 @@ internal fun NoteEditorContent(
     onContentChange: (TextFieldValue) -> Unit,
     onViewModeChange: (NoteViewMode) -> Unit,
     onSave: () -> Unit,
+    titleSharedKey: String? = null,
 ) {
     var showDetails by remember { mutableStateOf(false) }
     val editable = !readOnly && !mutationInProgress
@@ -67,16 +68,16 @@ internal fun NoteEditorContent(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    FilterChip(selected = viewMode == NoteViewMode.Edit,
+                    NextcloudFilterChip(selected = viewMode == NoteViewMode.Edit,
                         onClick = { onViewModeChange(NoteViewMode.Edit) }, label = { Text("Edit") })
-                    FilterChip(selected = viewMode == NoteViewMode.Preview,
+                    NextcloudFilterChip(selected = viewMode == NoteViewMode.Preview,
                         onClick = { onViewModeChange(NoteViewMode.Preview) }, label = { Text("Preview") },
                         enabled = previewAvailable)
                     if (compact) TextButton(onClick = { showDetails = true }) { Text("Details") }
                 }
                 Button(enabled = canSave, onClick = onSave) { Text(if (saving) "Saving..." else "Save") }
             }
-            if (!compact) NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange)
+            if (!compact) NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange, titleSharedKey)
             if (viewMode == NoteViewMode.Edit) {
                 MarkdownFormattingToolbar(content, onContentChange, editable)
                 OutlinedTextField(value = content, onValueChange = onContentChange,
@@ -121,16 +122,16 @@ internal fun NoteEditorContent(
 @Composable
 private fun NoteEditorMetadata(
     title: String, category: String, folderOptions: List<String>, editable: Boolean,
-    onTitleChange: (String) -> Unit, onCategoryChange: (String) -> Unit,
+    onTitleChange: (String) -> Unit, onCategoryChange: (String) -> Unit, titleSharedKey: String? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, enabled = editable)
+        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth().sharedElement(titleSharedKey), label = { Text("Title") }, singleLine = true, enabled = editable)
         OutlinedTextField(category, onCategoryChange, Modifier.fillMaxWidth(), label = { Text("Folder") }, singleLine = true, enabled = editable)
         if (folderOptions.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-            FilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = editable)
+            NextcloudFilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = editable)
             folderOptions.forEach { path ->
-                FilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = editable)
+                NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = editable)
             }
         }
     }

@@ -364,9 +364,12 @@ class CalendarInteractionRenderTest {
             assertEquals(0, mutations, "Generated occurrences must stay read-only")
             val originalDayWidth = assertNotNull(node("Mon")).boundsInRoot.width
             click("Details")
+            // The inspector slides out, so wait for its exit before checking the freed space.
+            settleUntil { !has("Edit series") }
             assertFalse(has("Edit series"))
             click("Calendars")
             assertFalse(has("My calendars"))
+            settleUntil { assertNotNull(node("Mon")).boundsInRoot.width > originalDayWidth + 30f }
             assertTrue(assertNotNull(node("Mon")).boundsInRoot.width > originalDayWidth + 30f)
             assertEquals(0, mutations, "Pane visibility must not alter calendar visibility or event state")
             capture("calendar-desktop-collapsed-panes")

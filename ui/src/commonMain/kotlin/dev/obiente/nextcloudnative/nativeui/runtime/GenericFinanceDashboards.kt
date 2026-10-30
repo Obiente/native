@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -83,7 +83,7 @@ internal fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
                         NativeBudgetProgressFilter.OnTrack -> !category.isOverBudget() && category.percentage < 75.0
                     }
                 }
-                FilterChip(
+                NextcloudFilterChip(
                     selected = filter == option,
                     onClick = { filter = option },
                     label = { Text("${option.label} $count") },

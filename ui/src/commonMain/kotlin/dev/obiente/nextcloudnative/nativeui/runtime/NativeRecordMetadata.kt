@@ -4,13 +4,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudDisclosureContent
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.nextcloudDisclosureChevron
 
 @Composable
 internal fun NativeRecordMetadata(
@@ -20,15 +23,16 @@ internal fun NativeRecordMetadata(
     onOpenLink: ((String) -> Unit)?,
 ) {
     if (fields.isEmpty()) return
-    var expanded by remember(recordId, collapsible) { mutableStateOf(!collapsible) }
+    var expanded by rememberSaveable(recordId, collapsible) { mutableStateOf(!collapsible) }
     if (collapsible) {
         TextButton(onClick = { expanded = !expanded }) {
             Text(if (expanded) "Hide details" else "Details")
+            Icon(NextcloudIcons.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp).nextcloudDisclosureChevron(expanded))
         }
     } else {
         Text("Details", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    if (expanded) {
+    NextcloudDisclosureContent(expanded) {
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),

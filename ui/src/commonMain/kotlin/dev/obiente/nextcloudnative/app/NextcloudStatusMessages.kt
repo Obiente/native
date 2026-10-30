@@ -5,9 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -17,48 +15,48 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudLoadingState
+import dev.obiente.nextcloudnative.app.design.NextcloudSkeletonLayout
+import dev.obiente.nextcloudnative.app.design.NextcloudStatusState
+import dev.obiente.nextcloudnative.app.design.NextcloudStatusTone
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
+/**
+ * First load of a workspace with nothing to show yet. Pass [skeleton] when the content is a list
+ * or grid so placeholders take its shape; the state waits briefly before appearing, so fast or
+ * cached loads never flash.
+ */
 @Composable
-internal fun LoadingMessage(message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        CircularProgressIndicator()
-        Text(message, modifier = Modifier.padding(top = NextcloudSpacing.Large))
-    }
+internal fun LoadingMessage(message: String, skeleton: NextcloudSkeletonLayout? = null) {
+    NextcloudLoadingState(message, skeleton = skeleton)
 }
 
+/** A workspace that loaded successfully but has nothing in it. */
 @Composable
 internal fun EmptyMessage(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.XLarge), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+    NextcloudStatusState(icon = NextcloudIcons.Empty, title = message)
 }
 
+/** A workspace whose content could not be shown at all; content already on screen uses a notice instead. */
 @Composable
 internal fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
-    Column(modifier = Modifier.padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-        Text(message, color = MaterialTheme.colorScheme.error)
-        onRetry?.let { retry -> OutlinedButton(onClick = retry) { Text("Try again") } }
-    }
+    NextcloudStatusState(
+        icon = NextcloudIcons.Error,
+        title = message,
+        tone = NextcloudStatusTone.Error,
+        actions = onRetry?.let { retry -> { OutlinedButton(onClick = retry) { Text("Try again") } } },
+    )
 }
 
 /** Full-screen load failure for a workspace whose content could not be shown at all. */
 @Composable
 internal fun WorkspaceLoadError(message: String, onRetry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.size(38.dp))
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
-        Button(onClick = onRetry) { Text("Try again") }
-    }
+    NextcloudStatusState(
+        icon = NextcloudIcons.Error,
+        title = message,
+        tone = NextcloudStatusTone.Error,
+        actions = { Button(onClick = onRetry) { Text("Try again") } },
+    )
 }
 
 @Composable

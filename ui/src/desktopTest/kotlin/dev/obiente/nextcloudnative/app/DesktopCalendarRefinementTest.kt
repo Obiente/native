@@ -95,9 +95,12 @@ class DesktopCalendarRefinementTest {
         }) {
             val narrowWidth = assertNotNull(node("Mon")).boundsInRoot.width
             click("Hide details panel")
+            // The inspector slides out, so wait for its exit before checking the freed space.
+            settleUntil { !has("Event details") }
             assertFalse(has("Event details"))
             click("Hide calendars panel")
             assertFalse(has("My calendars"))
+            settleUntil { assertNotNull(node("Mon")).boundsInRoot.width > narrowWidth + 30 }
             assertTrue(assertNotNull(node("Mon")).boundsInRoot.width > narrowWidth + 30)
             click("Details")
             assertTrue(has("Planning item 1"))
