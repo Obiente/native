@@ -425,7 +425,10 @@ This milestone supports Activity, Talk, shares, sync, calendar reminders, backgr
 
 ### Scope
 
-- Typed Notifications app adapter and action routing.
+- Typed Notifications app adapter and action routing. The in-app inbox,
+  account-scoped cache, dismissals, and advertised actions are present in
+  source (see [COMPATIBILITY.md](COMPATIBILITY.md)); push and platform
+  notification bridges below are not.
 - Push registration per account/device with key rotation and logout cleanup.
 - Android variants for Google push where distributable and UnifiedPush for open distribution, following the official Talk Android patterns in [`UnifiedPushService.kt`](https://github.com/nextcloud/talk-android/blob/master/app/src/main/java/com/nextcloud/talk/services/UnifiedPushService.kt).
 - APNs integration on Apple platforms; native Windows/macOS/Linux notification bridges.

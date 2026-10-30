@@ -18,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -79,12 +81,15 @@ internal fun NextcloudDesktopNavigation(
                     DesktopNextcloudNavigationItems
                         .filter { it.destination != NextcloudDestination.Settings }
                         .forEach { item ->
+                            val badge = identity?.destinationBadges?.get(item.destination)
                             DesktopNavigationEntry(
                                 label = item.label,
                                 icon = NextcloudIcons.destination(item.destination),
                                 isSelected = activeAppId == null && selected == item.destination,
                                 expanded = expanded,
                                 enabled = navigationEnabled,
+                                badge = badge?.text,
+                                badgeDescription = badge?.description,
                                 onClick = { onSelected(item.destination) },
                             )
                         }
@@ -195,6 +200,7 @@ private fun DesktopNavigationEntry(
     expanded: Boolean,
     enabled: Boolean,
     badge: String? = null,
+    badgeDescription: String? = null,
     onClick: () -> Unit,
 ) {
     val foreground = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
@@ -210,7 +216,7 @@ private fun DesktopNavigationEntry(
                     .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
                     .semantics(mergeDescendants = true) {
                         selected = isSelected
-                        contentDescription = label
+                        contentDescription = badgeDescription?.let { "$label, $it" } ?: label
                     }
                     .clickable(enabled = enabled, role = Role.Button, onClickLabel = "Open $label", onClick = onClick)
                     .heightIn(min = 44.dp)
@@ -239,7 +245,9 @@ private fun DesktopNavigationEntry(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        Icon(icon, contentDescription = null, tint = foreground, modifier = Modifier.size(21.dp))
+                        BadgedBox(badge = { badge?.let { Badge { Text(it) } } }) {
+                            Icon(icon, contentDescription = null, tint = foreground, modifier = Modifier.size(21.dp))
+                        }
                         Text(
                             label,
                             style = MaterialTheme.typography.labelSmall,

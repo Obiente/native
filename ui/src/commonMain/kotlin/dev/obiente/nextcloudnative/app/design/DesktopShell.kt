@@ -50,6 +50,14 @@ data class NextcloudDesktopIdentity(
     val storageProgress: Float? = null,
     val availableApps: List<NextcloudDesktopSidebarApp> = emptyList(),
     val accountScopeKey: String? = null,
+    val destinationBadges: Map<NextcloudDestination, NextcloudDestinationBadge> = emptyMap(),
+)
+
+/** A count shown on a shell destination, with the words a screen reader announces for it. */
+@Immutable
+data class NextcloudDestinationBadge(
+    val text: String,
+    val description: String,
 )
 
 @Immutable

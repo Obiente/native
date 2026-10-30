@@ -12,6 +12,7 @@ object AccountPrivateMemoryCleanup {
         sharedNextcloudNotesCache.purgeRetiredAccount(accountStorageKey)
         sharedDynamicNativeMemoryCache.retireAccount(accountStorageKey)
         sharedDashboardStatusMemoryCache.purgeRetiredAccount(accountStorageKey)
+        sharedNotificationsInboxMemoryCache.purgeRetiredAccount(accountStorageKey)
         ContactsWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         DeckWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)

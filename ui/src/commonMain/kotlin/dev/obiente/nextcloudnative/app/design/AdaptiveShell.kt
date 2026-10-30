@@ -46,6 +46,7 @@ internal fun NextcloudAdaptiveShell(
                 NextcloudBottomNavigation(
                     selected, onSelected, enabled = navigationEnabled,
                     activeApp = activeApp, onSwitchApp = { switcherOpen = true },
+                    badges = identity?.destinationBadges.orEmpty(),
                 )
             }
         } else {
@@ -53,6 +54,7 @@ internal fun NextcloudAdaptiveShell(
                 NextcloudNavigationRail(
                     selected, onSelected, enabled = navigationEnabled,
                     activeApp = activeApp, onSwitchApp = { switcherOpen = true },
+                    badges = identity?.destinationBadges.orEmpty(),
                 )
                 Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
                     Box(Modifier.fillMaxHeight().widthIn(max = requireNotNull(layout.contentMaximumWidthDp).dp).fillMaxWidth()) {
