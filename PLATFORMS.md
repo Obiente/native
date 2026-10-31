@@ -339,6 +339,12 @@ interaction validation is still required.
 - Photos places the date scrubber over edge-to-edge timeline content. The thumb
   and narrow rail keep date navigation while the surrounding area still accepts
   photo taps.
+- An open album has an actions menu in its header. Owners can rename or delete
+  the album; collaborators can leave a shared album. Each change is confirmed
+  separately, never addresses the original files, and is followed by a fresh
+  read of the album list. The viewer's actions include Favorite, which sets
+  the Files favorite explicitly instead of toggling a possibly stale value.
+  `NativeMediaAlbumManagementTest` covers the album plans.
 
 **Files, Activity, and Folder sync**
 
@@ -362,6 +368,25 @@ interaction validation is still required.
   settings read-only, because neither app offers an API to read them.
   `NotificationsInboxScreenTest` covers the phone and desktop layouts, the
   settings screen, and the badge semantics.
+- Files has a Deleted files view, opened from the desktop library pane or the
+  phone Files menu, when the server advertises `files.undelete`. Items can be
+  restored to their original folder one at a time or as a selection. Delete
+  permanently and Empty ask for a separate confirmation and are hidden when
+  the server sets `files.delete_from_trash` to false. Every batch is verified
+  with a fresh listing, and an item whose result could not be checked stays
+  locked until the next listing.
+- Select items in the Files menu opens a multi-select list for the visible
+  items with Favorite, Move, Copy, and Delete. Moves and copies keep the item's
+  ETag precondition and never overwrite; deletes use the same per-item fence
+  and verified outcome as a single delete. A result card lists what completed,
+  what failed, and what is safe to try again.
+- File details on phones and the desktop inspector show tags and comments.
+  Tags marked assignable can be added or removed and new public tags created;
+  comments can be posted, and your own comments edited or deleted after a
+  confirmation. A post with an unknown result is checked against a fresh read
+  before it can be sent again. These Files additions are covered by
+  deterministic tests (`FileTrashbin*Test`, `FileBulkOperationsTest`,
+  `FileCommentsTest`, `FileSystemTagAssignmentsTest`).
 - Folder sync shows queue state and last scan time separately. A completed scan
   is never presented as a completed sync. Phone pair rows open dedicated
   details; desktop keeps a pair table and inspector. Conflict choices explain
