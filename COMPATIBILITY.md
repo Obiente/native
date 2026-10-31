@@ -51,7 +51,7 @@ server or app version.
 | News | Reviewed v1-3 adapter: Unread, Starred, and All views, folders and feeds, an article reader that removes images and scripts, and per-article read and star changes. Feed and folder management stays in the web interface. |
 | Office | Native document browser and preview; Direct Editing handoff as described in [ADR 0001](docs/architecture-decisions/0001-android-office-web-integration.md) |
 | Unified Search | Provider-driven search with native routing for exact Files results |
-| Other installed apps | Discovered at runtime and rendered through the [dynamic descriptor](DYNAMIC_APP_DESCRIPTOR.md), with reviewed presentation for apps such as Mail, Music, Budget, Tables, Pantry, Cookbook, Cospend, and Chores. Writes require verified provenance. |
+| Other installed apps | Discovered at runtime and rendered through the [dynamic descriptor](DYNAMIC_APP_DESCRIPTOR.md), with reviewed presentation for apps such as Mail, Music, Budget, Tables, Pantry, Cookbook, Cospend, and Chores. Writes require verified provenance. [Reviewed write adapters](DYNAMIC_APP_DESCRIPTOR.md#reviewed-write-adapters) add Tables 2.x row create, edit, and delete, Cospend 4.x bill create, edit, and delete with member pickers, and Forms 5.x responses; these are covered by deterministic tests, not by a live audit (Last reviewed: 2026-10-31, may have changed). Bookmarks has no verified contract and stays unsupported. |
 
 ## Android integration audit
 

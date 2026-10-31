@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
@@ -71,6 +72,15 @@ internal fun GenericTableCollection(
     val projection = remember(resource, records, columnResource, columnRecords, composite) {
         nativeTableProjection(resource, records, columnResource, columnRecords, composite)
     }
+    val rowPlan = remember(schema, view, datasetContext) { nativeTablesRowWritePlan(schema, view, datasetContext) }
+    val rowEditing = remember(schema.app.id, view.id, rowPlan?.scope) { NativeTablesRowEditing() }
+    LaunchedEffect(rowEditing, recordsGeneration) { rowEditing.session.acceptAuthoritativeRefresh() }
+    val rowActions: (NativeRecord) -> List<NextcloudCardAction> = { record ->
+        nativeTablesRowActions(rowPlan, rowEditing, record, nativeRecordPresentation(projection.resource, record).title)
+    }
+    val openRowCreate: (() -> Unit)? = rowPlan?.takeIf { it.create != null }?.let { plan ->
+        { rowEditing.open(plan, NativeTablesRowEditorTarget.Create) }
+    }
     val facets = remember(projection) { inferNativeDatasetFacets(projection.resource, projection.records) }
     val browseStateKey = remember(schema, view, projection.resource, datasetContext) {
         nativeDatasetBrowseStateKey(schema, view, projection.resource, datasetContext)
@@ -101,10 +111,22 @@ internal fun GenericTableCollection(
         val compactRecordList = shouldUseCompactTableRecordList(maxWidth.value)
         Column(modifier = Modifier.fillMaxSize()) {
             if (schema.app.id == "tables") {
-                Text(nativeTableLoadedSummary(filteredRecords.size, projection.records.size,
-                    projection.projectedFieldIds.size.takeIf { projection.composite }),
-                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    Text(nativeTableLoadedSummary(filteredRecords.size, projection.records.size,
+                        projection.projectedFieldIds.size.takeIf { projection.composite }),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    openRowCreate?.let { create ->
+                        OutlinedButton(onClick = create, enabled = !rowEditing.session.submitting) {
+                            Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("New row", modifier = Modifier.padding(start = NextcloudSpacing.XSmall))
+                        }
+                    }
+                }
             }
             NativeTableBrowseControls(
                 facets = facets,
@@ -137,6 +159,11 @@ internal fun GenericTableCollection(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    if (!filtering) {
+                        openRowCreate?.let { create ->
+                            OutlinedButton(onClick = create, enabled = !rowEditing.session.submitting) { Text("Add a row") }
+                        }
+                    }
                     NativeCollectionPagingStatus(
                         loadingMore = loadingMore,
                         loadMoreError = loadMoreError,
@@ -157,6 +184,7 @@ internal fun GenericTableCollection(
                     loadMoreError = loadMoreError,
                     modifier = Modifier.weight(1f),
                     recordsGeneration = recordsGeneration,
+                    rowActions = rowActions,
                 )
             } else {
                 GenericRecordTable(
@@ -173,10 +201,12 @@ internal fun GenericTableCollection(
                     loadMoreError,
                     Modifier.weight(1f),
                     recordsGeneration,
+                    rowActions,
                 )
             }
         }
     }
+    rowPlan?.let { plan -> NativeTablesRowEditorDialog(plan, rowEditing, actionExecutor, onInlineActionSucceeded) }
 }
 
 @Composable
