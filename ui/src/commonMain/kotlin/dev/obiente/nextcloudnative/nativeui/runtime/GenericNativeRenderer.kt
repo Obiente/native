@@ -972,7 +972,7 @@ fun GenericNativeAppScreen(
                 )
             state is NativeScreenState.Ready -> when (presentedSurface) {
                 GenericNativeSurface.List -> GenericRecordCollection(
-                    schema = schema,
+                    schema = schema, listActionId = view.sourceActionId,
                     resource = presentedResource,
                     records = visiblePresentedRecords,
                     datasetContext = datasetContext,
@@ -2220,7 +2220,7 @@ private fun GenericRecordCommandActionDialog(
 
 @Composable
 private fun GenericRecordCollection(
-    schema: NativeAppSchema,
+    schema: NativeAppSchema, listActionId: String,
     resource: ResourceSpec,
     records: List<NativeRecord>,
     datasetContext: NativeDatasetContext,
@@ -2340,7 +2340,7 @@ private fun GenericRecordCollection(
     }
     if (finance != null) {
         GenericFinanceCollection(resource, finance, onSelectRecord, onLoadMore, loadingMore, loadMoreError,
-            NativeFinanceWriteContext(schema, datasetContext, actionExecutor, onInlineActionSucceeded, authoritativeRecordsKey))
+            NativeFinanceWriteContext(schema, listActionId, datasetContext, actionExecutor, onInlineActionSucceeded, authoritativeRecordsKey))
         return
     }
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
@@ -3232,7 +3232,7 @@ private fun GenericTaskCollection(
     loadingMore: Boolean,
     loadMoreError: String?,
 ) {
-    val pantryItems = nativePantryCollectionKind(schema, resource) == NativePantryCollectionKind.Item
+    val pantryItems = nativePantryCollectionKind(resource) == NativePantryCollectionKind.Item
     val scope = rememberCoroutineScope()
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
     val listState = rememberLazyListState()
@@ -4003,7 +4003,7 @@ private fun GenericRecordDetail(
 ) {
     val tableDetail = remember(schema, resource, record, datasetContext) { nativeTableRecordDetail(schema, resource, record, datasetContext) }
     if (tableDetail != null) { NativeTableRecordDetail(tableDetail, genericDetailTitleKey(resource, record)); return }
-    remember(schema, resource, record) { nativeFormsSubmissionPlan(schema, resource, record) }?.let { plan -> NativeFormsSubmissionDetail(plan, record, actionExecutor, onInlineActionSucceeded ?: onActionSucceeded); return }
+    remember(schema, resource, record) { nativeQuestionnairePlan(schema, resource, record) }?.let { plan -> NativeQuestionnaireDetail(plan, record, actionExecutor, onInlineActionSucceeded ?: onActionSucceeded); return }
     val mailTarget = remember(schema, resource, record, datasetContext) {
         nativeMailMessageRenderTarget(schema, resource, record, datasetContext)
     }

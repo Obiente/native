@@ -15,12 +15,15 @@ internal enum class NativePantryCollectionKind(val fallbackTitle: String) {
     Household("Household"), List("List"), Item("Item"),
 }
 
-/** Exact reviewed Pantry shapes affect card presentation only, never action binding. */
-internal fun nativePantryCollectionKind(schema: NativeAppSchema, resource: ResourceSpec): NativePantryCollectionKind? {
-    if (schema.app.id != "pantry" || schema.app.version != "0.34.0" ||
-        resource.confidence !in setOf(Confidence.high, Confidence.verified) ||
+/**
+ * Household, shopping list, and list item shapes affect card presentation only, never action
+ * binding. They are recognized from contract-declared resource names and fields, so any app that
+ * models households, lists, and items with a name, a quantity, and a done flag gets them.
+ */
+internal fun nativePantryCollectionKind(resource: ResourceSpec): NativePantryCollectionKind? {
+    if (resource.confidence !in setOf(Confidence.high, Confidence.verified) ||
         resource.evidence.none { it.source in setOf(EvidenceSource.verifiedAppPackage,
-            EvidenceSource.openApi, EvidenceSource.verifiedAdapter) } ||
+            EvidenceSource.openApi, EvidenceSource.appStoreLinkedSourceTag) } ||
         resource.fields.none { it.id == "name" && it.kind == FieldKind.string }) return null
     return when (resource.id) {
         "houses" -> NativePantryCollectionKind.Household

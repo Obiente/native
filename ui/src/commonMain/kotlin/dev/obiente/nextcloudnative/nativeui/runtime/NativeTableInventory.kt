@@ -31,13 +31,17 @@ internal data class NativeTableInventoryPresentation(
     val details: List<NativeDetailFieldPresentation>,
 )
 
-/** Display-only table metadata; no counts or identities are synthesized from other tables. */
+/**
+ * Display-only metadata for a record that contains a column-defined grid (a table, a sheet, a
+ * database). The container role comes from the schema's grid views, not from an app identity;
+ * no counts or identities are synthesized from other containers.
+ */
 internal fun nativeTableInventoryPresentation(
     schema: NativeAppSchema,
     resource: ResourceSpec,
     record: NativeRecord,
 ): NativeTableInventoryPresentation? {
-    if (schema.app.id != "tables" || resource.id != "tables") return null
+    if (!schema.containsGridsIn(resource)) return null
     fun field(key: String) = resource.fields.singleOrNull { it.id.lowercase().filter(Char::isLetterOrDigit) == key }
     fun value(key: String) = field(key)?.let { record.presentationValue(it.id) }
     fun count(key: String, singular: String): String? = value(key)?.toLongOrNull()?.takeIf { it >= 0 }
@@ -85,3 +89,7 @@ internal fun NativeTableInventoryContent(presentation: NativeTableInventoryPrese
         }
     }
 }
+
+/** Whether records of [resource] are the parents of a column-defined grid view in this schema. */
+internal fun NativeAppSchema.containsGridsIn(resource: ResourceSpec): Boolean =
+    views.any { view -> view.compositeDataGrid?.parentResourceId == resource.id }

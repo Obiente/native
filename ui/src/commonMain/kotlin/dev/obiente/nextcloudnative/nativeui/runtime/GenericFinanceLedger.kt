@@ -57,11 +57,12 @@ internal fun GenericFinanceCollection(
     writes: NativeFinanceWriteContext? = null,
 ) {
     val contextualCurrency = LocalNativeFinanceCurrency.current
-    val billPlan = remember(writes?.schema, resource, writes?.datasetContext) {
-        writes?.let { nativeCospendBillPlan(it.schema, resource, it.datasetContext) }
+    val recordPlan = remember(writes?.schema, writes?.listActionId, writes?.datasetContext) {
+        writes?.let { nativeChildRecordWritePlan(it.schema, it.listActionId, it.datasetContext) }
     }
-    val billEditing = remember(resource.id, billPlan?.projectId) { NativeCospendBillEditing() }
-    LaunchedEffect(billEditing, writes?.recordsKey) { billEditing.session.acceptAuthoritativeRefresh() }
+    val recordEditing = remember(resource.id, recordPlan?.parentId) { NativeChildRecordEditing() }
+    LaunchedEffect(recordEditing, writes?.recordsKey) { recordEditing.session.acceptAuthoritativeRefresh() }
+    val noun = resource.name.singularRecordNoun()
     var filter by rememberSaveable(resource.id) { mutableStateOf(NativeFinanceLedgerFilter.All) }
     var categoryFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
     var accountFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
@@ -120,11 +121,11 @@ internal fun GenericFinanceCollection(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        billPlan?.takeIf { it.create != null }?.let { plan ->
+                        recordPlan?.takeIf { it.create?.unavailableReason == null && it.create != null }?.let { plan ->
                             TextButton(
-                                enabled = !billEditing.session.submitting,
-                                onClick = { billEditing.open(plan, NativeCospendBillTarget.Create, nativeCospendToday()) },
-                            ) { Text("New bill") }
+                                enabled = !recordEditing.session.submitting,
+                                onClick = { recordEditing.open(plan, NativeChildRecordTarget.Create, nativeLocalToday()) },
+                            ) { Text("New $noun") }
                         }
                         Text(
                             netFlow?.let { "Loaded net ${formatNativeFinanceAmount(it, currency)}" }
@@ -210,7 +211,7 @@ internal fun GenericFinanceCollection(
                         GenericCollectionCard(resource, record, onSelectRecord)
                         return@items
                     }
-                    val actions = nativeCospendBillActions(billPlan, billEditing, record, nativeCospendToday())
+                    val actions = nativeChildRecordActions(recordPlan, recordEditing, record, transaction.title, nativeLocalToday())
                     var actionsExpanded by remember(record.id) { mutableStateOf(false) }
                     val interaction = Modifier.nextcloudCardInteractions(
                         onOpen = onSelectRecord?.let { callback -> { callback(record) } },
@@ -317,8 +318,8 @@ internal fun GenericFinanceCollection(
             }
         }
     }
-    if (billPlan != null && writes != null) {
-        NativeCospendBillEditorDialog(billPlan, billEditing, writes.actionExecutor, writes.onActionSucceeded)
+    if (recordPlan != null && writes != null) {
+        NativeChildRecordEditorDialog(recordPlan, recordEditing, writes.actionExecutor, writes.onActionSucceeded, noun)
     }
 }
 
@@ -480,3 +481,14 @@ internal fun GenericFinanceDetailHeader(
  * return records equal to the previous snapshot. This key treats a newly allocated record list as
  * a refresh even when its contents are unchanged.
  */
+
+/** "Bills" becomes "bill"; a name that is not a simple plural is used as it is. */
+internal fun String.singularRecordNoun(): String {
+    val word = trim().lowercase().ifEmpty { return "entry" }
+    return when {
+        word.endsWith("ies") && word.length > 3 -> word.dropLast(3) + "y"
+        word.endsWith("ses") || word.endsWith("xes") -> word.dropLast(2)
+        word.endsWith("s") && !word.endsWith("ss") -> word.dropLast(1)
+        else -> word
+    }
+}

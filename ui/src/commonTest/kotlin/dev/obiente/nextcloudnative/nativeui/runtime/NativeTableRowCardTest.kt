@@ -12,15 +12,14 @@ class NativeTableRowCardTest {
             "item" to "Camera kit", "location" to "Studio", "status" to "Ready", "quantity" to "3"))
         val projection = NativeTableProjection(ResourceSpec("rows", "Rows", Confidence.verified, fields), listOf(row),
             composite = true, projectedFieldIds = setOf("item", "location", "status", "quantity"))
-        val schema = NativeAppSchema("1", AppIdentity("tables", "Tables", "1"), Confidence.verified)
-        val displayResource = assertNotNull(nativeTableRowCardResource(schema, projection))
+        val displayResource = assertNotNull(nativeTableRowCardResource(projection))
         val detail = nativeTableRowCardPresentation(displayResource, row)
         assertEquals("Camera kit", detail.title)
         assertEquals(listOf("location", "status", "quantity"), detail.detailFields.map { it.fieldId })
         assertEquals("original-row", row.id)
         assertEquals("Synthetic owner", row.values["owner"])
-        assertNull(nativeTableRowCardResource(schema.copy(app = schema.app.copy(id = "other")), projection))
-        assertNull(nativeTableRowCardResource(schema, projection.copy(composite = false)))
-        assertNull(nativeTableRowCardResource(schema, projection.copy(projectedFieldIds = emptySet())))
+        // The card shape follows the column-defined grid, whatever app serves it.
+        assertNull(nativeTableRowCardResource(projection.copy(composite = false)))
+        assertNull(nativeTableRowCardResource(projection.copy(projectedFieldIds = emptySet())))
     }
 }

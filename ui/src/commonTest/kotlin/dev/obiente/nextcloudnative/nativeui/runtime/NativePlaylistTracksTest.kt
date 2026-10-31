@@ -58,6 +58,10 @@ class NativePlaylistTracksTest {
             assertNull(nativePlaylistTracks(schema, view, listOf(it)))
         }
         assertNull(nativePlaylistTracks(schema.copy(actions = listOf(action.copy(evidence = emptyList()))), view, listOf(valid)))
-        assertNull(nativePlaylistTracks(schema.copy(app = schema.app.copy(version = "3.2.2")), view, listOf(valid)))
+        // A collection read is not a single playlist, whatever its response holds.
+        val listRead = action.copy(binding = action.binding.copy(path = "/apps/music/api/playlists"))
+        assertNull(nativePlaylistTracks(schema.copy(actions = listOf(listRead)), view, listOf(valid)))
+        // The same shape from another app or version still expands; only the data decides.
+        assertNotNull(nativePlaylistTracks(schema.copy(app = AppIdentity("tunes", "Tunes", "9.0.0")), view, listOf(valid)))
     }
 }

@@ -31,16 +31,16 @@ import kotlinx.coroutines.launch
  * form (its `canSubmit` flag) before it can be sent again.
  */
 @Stable
-internal class NativeFormsResponseDraft {
+internal class NativeQuestionnaireDraft {
     var open by mutableStateOf(false)
         private set
-    var answers by mutableStateOf<Map<Long, String>>(emptyMap())
+    var answers by mutableStateOf<Map<String, String>>(emptyMap())
         private set
-    var errors by mutableStateOf<Map<Long, String>>(emptyMap())
+    var errors by mutableStateOf<Map<String, String>>(emptyMap())
         private set
     var sent by mutableStateOf(false)
         private set
-    val session = NativeReviewedWriteSession()
+    val session = NativeEditorWriteSession()
 
     fun start() {
         if (session.submitting) return
@@ -50,7 +50,7 @@ internal class NativeFormsResponseDraft {
         session.reset()
     }
 
-    fun answer(questionId: Long, value: String) {
+    fun answer(questionId: String, value: String) {
         answers = answers + (questionId to value)
         errors = errors - questionId
     }
@@ -59,12 +59,12 @@ internal class NativeFormsResponseDraft {
         if (!session.submitting) open = false
     }
 
-    suspend fun send(plan: NativeFormsSubmissionPlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
+    suspend fun send(plan: NativeQuestionnairePlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
         when (val result = plan.submitRequest(answers)) {
-            is NativeFormsSubmissionResult.Invalid -> errors = result.errors
-            NativeFormsSubmissionResult.Unavailable -> open = false
-            is NativeFormsSubmissionResult.Ready ->
-                if (session.submit(executor, result.request, NativeReviewedWriteRetry.NonIdempotent, onRefreshRequested)) {
+            is NativeQuestionnaireResult.Invalid -> errors = result.errors
+            NativeQuestionnaireResult.Unavailable -> open = false
+            is NativeQuestionnaireResult.Ready ->
+                if (session.submit(executor, result.request, NativeEditorWriteRetry.NonIdempotent, onRefreshRequested)) {
                     open = false
                     sent = true
                     answers = emptyMap()
@@ -75,13 +75,13 @@ internal class NativeFormsResponseDraft {
 
 /** Native entry point of one form: what it asks, whether you can respond, and the response sheet. */
 @Composable
-internal fun NativeFormsSubmissionDetail(
-    plan: NativeFormsSubmissionPlan,
+internal fun NativeQuestionnaireDetail(
+    plan: NativeQuestionnairePlan,
     record: NativeRecord,
     executor: NativeActionExecutor,
     onActionSucceeded: ((ActionSpec) -> Unit)?,
 ) {
-    val draft = remember(plan.formId) { NativeFormsResponseDraft() }
+    val draft = remember(plan.recordId) { NativeQuestionnaireDraft() }
     // A refreshed form record means the server state was re-read after an unconfirmed send.
     androidx.compose.runtime.LaunchedEffect(draft, record) { draft.session.acceptAuthoritativeRefresh() }
     Column(
@@ -110,12 +110,12 @@ internal fun NativeFormsSubmissionDetail(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        NativeReviewedWriteStatusText(draft.session)
+        NativeEditorWriteStatusText(draft.session)
     }
     if (draft.open && plan.submit != null) {
         val scope = rememberCoroutineScope()
         val enabled = !draft.session.submitting
-        NativeReviewedEditorDialog(
+        NativeEditorDialog(
             title = plan.title,
             session = draft.session,
             submitLabel = "Send response",
@@ -130,7 +130,7 @@ internal fun NativeFormsSubmissionDetail(
                         Text(question.description, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    NativeFormsAnswerInput(question, draft.answers[question.id].orEmpty(), draft.errors[question.id], enabled) {
+                    NativeQuestionAnswerInput(question, draft.answers[question.id].orEmpty(), draft.errors[question.id], enabled) {
                         value -> draft.answer(question.id, value)
                     }
                 }
@@ -140,38 +140,35 @@ internal fun NativeFormsSubmissionDetail(
 }
 
 @Composable
-private fun NativeFormsAnswerInput(
-    question: NativeFormsQuestion,
+private fun NativeQuestionAnswerInput(
+    question: NativeQuestion,
     value: String,
     error: String?,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
 ) {
     val label = question.text
-    when (question.type) {
-        NativeFormsQuestionType.Short -> NativeReviewedTextField(label, value, onValueChange, enabled, question.required, error)
-        NativeFormsQuestionType.Long ->
-            NativeReviewedTextField(label, value, onValueChange, enabled, question.required, error, multiline = true)
-        NativeFormsQuestionType.Multiple -> NativeReviewedMultiChoiceField(
+    when (question.kind) {
+        NativeQuestionKind.Short -> NativeEditorTextField(label, value, onValueChange, enabled, question.required, error)
+        NativeQuestionKind.Long ->
+            NativeEditorTextField(label, value, onValueChange, enabled, question.required, error, multiline = true)
+        NativeQuestionKind.Multiple -> NativeEditorMultiChoiceField(
             label, question.options, value.split(',').filter(String::isNotEmpty).toSet(),
             { ids -> onValueChange(question.options.map { it.id }.filter { it in ids }.joinToString(",")) },
             enabled, question.required, error,
         )
-        NativeFormsQuestionType.MultipleUnique, NativeFormsQuestionType.Dropdown ->
-            NativeReviewedChoiceField(label, question.options, value, onValueChange, enabled, question.required, error)
-        NativeFormsQuestionType.LinearScale -> NativeReviewedChoiceField(
+        NativeQuestionKind.Single, NativeQuestionKind.Dropdown ->
+            NativeEditorChoiceField(label, question.options, value, onValueChange, enabled, question.required, error)
+        NativeQuestionKind.Scale -> NativeEditorChoiceField(
             label,
-            (question.scaleLowest..question.scaleHighest).map { NativeReviewedChoice(it.toString(), it.toString()) },
+            (question.scaleLowest..question.scaleHighest).map { NativeEditorChoice(it.toString(), it.toString()) },
             value, onValueChange, enabled, question.required, error,
         )
-        NativeFormsQuestionType.Date ->
-            NativeReviewedTextField(label, value, onValueChange, enabled, question.required, error, placeholder = "YYYY-MM-DD")
-        NativeFormsQuestionType.DateTime -> NativeReviewedTextField(
-            label, value, onValueChange, enabled, question.required, error, placeholder = "YYYY-MM-DD HH:MM",
-        )
-        NativeFormsQuestionType.Time ->
-            NativeReviewedTextField(label, value, onValueChange, enabled, question.required, error, placeholder = "HH:MM")
-        NativeFormsQuestionType.Unsupported ->
-            NativeReviewedPreservedValue(label, "This question type cannot be answered here yet and is left blank.")
+        NativeQuestionKind.Date ->
+            NativeEditorTextField(label, value, onValueChange, enabled, question.required, error, placeholder = "YYYY-MM-DD")
+        NativeQuestionKind.Time ->
+            NativeEditorTextField(label, value, onValueChange, enabled, question.required, error, placeholder = "HH:MM")
+        NativeQuestionKind.Unsupported ->
+            NativeEditorPreservedValue(label, "This question type cannot be answered here yet and is left blank.")
     }
 }
