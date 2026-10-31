@@ -204,7 +204,11 @@ Windows, and an early macOS package) with:
 - native Settings for personal info, Talk privacy and conversation settings,
   and, for administrators, read-only views of apps, accounts, groups and server
   information;
-- native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
+- Mail, with folders, reply, reply all and forward, a composer with address
+  suggestions, identities and attachments, undo and scheduled sending, drafts
+  kept on the device, message and folder organizing, and signature and alias
+  settings, for Mail 5.0 to 5.12 when the installed version can be confirmed;
+- native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;
 - an Office document browser with editor choices based on server
