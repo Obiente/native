@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -122,9 +121,21 @@ internal fun NoteFolderCard(
 }
 
 @Composable
-internal fun NoteCard(note: NextcloudNote, enabled: Boolean, onClick: () -> Unit, selected: Boolean = false) {
+internal fun NoteCard(
+    note: NextcloudNote,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    selected: Boolean = false,
+    actions: List<NextcloudCardAction> = emptyList(),
+) {
+    var menuExpanded by remember(note.id) { mutableStateOf(false) }
     Card(
-        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }.clickable(enabled = enabled, onClick = onClick),
+        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }.nextcloudCardInteractions(
+            onOpen = onClick.takeIf { enabled },
+            onShowActions = actions.takeIf { enabled && it.isNotEmpty() }?.let { { menuExpanded = true } },
+            openLabel = "Open ${note.title}",
+            actionsLabel = "Show actions for ${note.title}",
+        ),
         colors = workspaceListCardColors(selected, unselected = MaterialTheme.colorScheme.surfaceContainer),
         border = workspaceListCardBorder(selected),
         shape = RoundedCornerShape(NextcloudRadii.Card),
@@ -170,7 +181,16 @@ internal fun NoteCard(note: NextcloudNote, enabled: Boolean, onClick: () -> Unit
                 ).joinToString(" · ")
                 Text(metadata, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${note.title}")
+            if (actions.isEmpty() || !enabled) {
+                Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${note.title}")
+            } else {
+                NextcloudCardOverflow(
+                    itemLabel = note.title,
+                    actions = actions,
+                    expanded = menuExpanded,
+                    onExpandedChange = { menuExpanded = it },
+                )
+            }
         }
     }
 }

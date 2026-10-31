@@ -42,6 +42,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudLoadingState
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
@@ -81,6 +83,7 @@ internal fun NextcloudNotesScreen(
     onOpenNote: (NextcloudNote) -> Unit,
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
+    filesAccess: NotesFilesAccess? = null,
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) { durableMutationAccountScope(session) }
     var deletionRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
@@ -95,6 +98,10 @@ internal fun NextcloudNotesScreen(
     var currentPath by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var openNoteId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf<Long?>(null) }
     var openNoteSnapshot by remember(session) { mutableStateOf<NextcloudNote?>(null) }
+    var listFilter by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf(NotesListFilter.All) }
+    var showSettings by remember(session) { mutableStateOf(false) }
+    var shareNote by remember(session) { mutableStateOf<NextcloudNote?>(null) }
+    var actionMessage by remember(session) { mutableStateOf<String?>(null) }
     var renameFolder by remember(session) { mutableStateOf<NativeNoteFolder?>(null) }
     var deleteFolder by remember(session) { mutableStateOf<NativeNoteFolder?>(null) }
     var error by remember(session) { mutableStateOf<String?>(null) }
@@ -139,6 +146,40 @@ internal fun NextcloudNotesScreen(
         }
     }
     val currentShowNote by rememberUpdatedState(::showNote)
+
+    fun toggleFavorite(note: NextcloudNote) {
+        if (interactionBlocked || note.id == openNoteId) return
+        val cacheProducer = sharedNextcloudNotesCache.producer(session)
+        listMutationInProgress = true
+        actionMessage = null
+        scope.launch {
+            try {
+                val outcome = setNoteFavorite(services, session, note.id, !note.favorite)
+                val latest = (outcome as? NoteFavoriteOutcome.Saved)?.note ?: (outcome as? NoteFavoriteOutcome.Failed)?.latest
+                latest?.let { updated ->
+                    notes = notes?.map { listed -> if (listed.id == updated.id) updated else listed }
+                    sharedNextcloudNotesCache.storeList(session, notes.orEmpty(), cacheProducer)
+                }
+                when (outcome) {
+                    is NoteFavoriteOutcome.Saved -> Unit
+                    is NoteFavoriteOutcome.Failed -> actionMessage = outcome.message
+                    is NoteFavoriteOutcome.Unknown -> {
+                        actionMessage = outcome.message
+                        loadAttempt += 1
+                    }
+                }
+            } finally {
+                listMutationInProgress = false
+            }
+        }
+    }
+
+    fun noteActions(note: NextcloudNote): List<NextcloudCardAction> = buildList {
+        if (!note.readOnly && note.id != openNoteId) {
+            add(NextcloudCardAction(if (note.favorite) "Remove from favorites" else "Add to favorites") { toggleFavorite(note) })
+        }
+        if (filesAccess?.canShareNotes() == true) add(NextcloudCardAction("Share") { shareNote = note })
+    }
 
     fun createNote() {
         if (interactionBlocked) return
@@ -284,6 +325,12 @@ internal fun NextcloudNotesScreen(
                             ) {
                                 Icon(NextcloudIcons.Add, contentDescription = "Create note")
                             }
+                            IconButton(
+                                onClick = { inlineNavigation.navigate { showSettings = true } },
+                                enabled = !interactionBlocked,
+                            ) {
+                                Icon(NextcloudIcons.Settings, contentDescription = "Notes settings")
+                            }
                             IconButton(onClick = { loadAttempt += 1 }, enabled = !refreshing) {
                                 if (refreshing) {
                                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -300,8 +347,11 @@ internal fun NextcloudNotesScreen(
                     NotesListPane(
                         notes = notes,
                         error = error,
-                        createError = createError,
+                        createError = createError ?: actionMessage,
                         query = query,
+                        filter = listFilter,
+                        onFilterChange = { listFilter = it },
+                        noteActions = ::noteActions,
                         onQueryChange = { query = it },
                         currentPath = currentPath,
                         onPathChange = { currentPath = it },
@@ -333,6 +383,7 @@ internal fun NextcloudNotesScreen(
                                     },
                                     navigationCommitInProgress = navigationCommitInProgress,
                                     onMutationInProgressChanged = { editorMutationInProgress = it },
+                                    filesAccess = filesAccess,
                                     inPlace = NoteEditorInPlace(
                                         navigation = inlineNavigation,
                                         closeIcon = if (besideList) NextcloudIcons.Close else NextcloudIcons.Back,
@@ -415,6 +466,24 @@ internal fun NextcloudNotesScreen(
             },
         )
     }
+    if (showSettings) {
+        NotesSettingsDialog(
+            services = services,
+            session = session,
+            filesAccess = filesAccess,
+            onNotesFolderChanged = {
+                openNoteId = null
+                currentPath = ""
+                loadAttempt += 1
+            },
+            onDismiss = { showSettings = false },
+        )
+    }
+    shareNote?.let { note ->
+        filesAccess?.let { access ->
+            NoteFileShareHost(note, services, session, access, { shareNote = null }, { listMutationInProgress = it })
+        }
+    }
     if (showRecoveryOptions && deletionRecoveryState != null) {
         DurableMutationRecoveryDialog(
             title = "Resolve note recovery",
@@ -465,6 +534,9 @@ private fun NotesListPane(
     error: String?,
     createError: String?,
     query: String,
+    filter: NotesListFilter,
+    onFilterChange: (NotesListFilter) -> Unit,
+    noteActions: (NextcloudNote) -> List<NextcloudCardAction>,
     onQueryChange: (String) -> Unit,
     currentPath: String,
     onPathChange: (String) -> Unit,
@@ -496,14 +568,10 @@ private fun NotesListPane(
             )
             else -> {
                 val location = remember(notes, currentPath) { buildNativeNotesLocation(notes, currentPath) }
-                val visibleNotes = remember(notes, location, query) {
-                    val candidates = if (query.isBlank()) location.notes else notes
-                    candidates.filter { note ->
-                        query.isBlank() || note.title.contains(query, ignoreCase = true) ||
-                            note.category.contains(query, ignoreCase = true) ||
-                            note.content?.contains(query, ignoreCase = true) == true
-                    }
+                val visibleNotes = remember(notes, location, query, filter) {
+                    filterNotesForList(notes, location.notes, query, filter)
                 }
+                val browsingFolders = query.isBlank() && filter == NotesListFilter.All
                 Column(modifier = Modifier.fillMaxSize()) {
                     listOfNotNull(error?.let { "Showing saved results. $it" }, createError).forEach { message ->
                         Surface(
@@ -534,6 +602,18 @@ private fun NotesListPane(
                         label = { Text("Search notes") },
                         singleLine = true,
                     )
+                    Row(
+                        modifier = Modifier.padding(horizontal = NextcloudSpacing.XLarge),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        NotesListFilter.entries.forEach { option ->
+                            NextcloudFilterChip(
+                                selected = filter == option,
+                                onClick = { onFilterChange(option) },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         state = listState,
@@ -544,7 +624,7 @@ private fun NotesListPane(
                         ),
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
-                        if (query.isBlank()) {
+                        if (browsingFolders) {
                             item(key = "breadcrumbs") {
                                 NotesBreadcrumbs(location.breadcrumbs, onPathChange)
                             }
@@ -564,9 +644,19 @@ private fun NotesListPane(
                                 enabled = !interactionBlocked,
                                 onClick = { onOpenNote(note) },
                                 selected = note.id == openNoteId,
+                                actions = noteActions(note),
                             )
                         }
-                        if (query.isBlank() && location.folders.isEmpty() && visibleNotes.isEmpty()) {
+                        if (filter == NotesListFilter.Favorites && visibleNotes.isEmpty()) {
+                            item(key = "no-favorites") {
+                                Text(
+                                    "No favorite notes. Add a note to favorites from its menu or the editor.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(NextcloudSpacing.Large),
+                                )
+                            }
+                        }
+                        if (browsingFolders && location.folders.isEmpty() && visibleNotes.isEmpty()) {
                             item(key = "empty") {
                                 Text(
                                     "This folder is empty. Create a Markdown note here.",
