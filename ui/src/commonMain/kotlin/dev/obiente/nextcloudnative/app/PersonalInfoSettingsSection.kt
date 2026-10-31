@@ -34,9 +34,11 @@ internal fun rememberAccountProfileController(
     session: NextcloudSession,
 ): AccountProfileController {
     val currentServices by rememberUpdatedState(services)
+    // The controller lives per account; requests read the newest session for that account.
+    val currentSession by rememberUpdatedState(session)
     val scope = rememberCoroutineScope()
     val controller = remember(session.accountId) {
-        AccountProfileController(scope) { request -> currentServices.executeNextcloudApi(session, request) }
+        AccountProfileController(scope) { request -> currentServices.executeNextcloudApi(currentSession, request) }
     }
     LaunchedEffect(controller) { controller.refresh() }
     return controller

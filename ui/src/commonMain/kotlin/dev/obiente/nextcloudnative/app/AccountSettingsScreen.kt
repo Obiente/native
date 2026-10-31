@@ -334,9 +334,11 @@ private fun rememberTalkUserSettingsController(
     session: NextcloudSession,
 ): TalkUserSettingsController {
     val currentServices by androidx.compose.runtime.rememberUpdatedState(services)
+    // The controller lives per account; requests read the newest session for that account.
+    val currentSession by androidx.compose.runtime.rememberUpdatedState(session)
     val scope = rememberCoroutineScope()
     return remember(session.accountId) {
-        TalkUserSettingsController(scope) { request -> currentServices.executeTalkRequest(session, request) }
+        TalkUserSettingsController(scope) { request -> currentServices.executeTalkRequest(currentSession, request) }
     }
 }
 
