@@ -17,7 +17,7 @@ internal class DeckCardLoadGate {
     private var requestedCardId: Long? = null
 
     fun begin(cardId: Long): DeckCardLoadToken {
-        require(cardId > 0L) { "A Deck card load needs a valid card id." }
+        require(cardId > 0L) { "A card load needs a valid card id." }
         generation += 1L
         requestedCardId = cardId
         return DeckCardLoadToken(cardId, generation)

@@ -62,13 +62,13 @@ internal fun NoteFolderCard(
     folder: NativeNoteFolder,
     mutationEnabled: Boolean,
     onOpen: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onRename: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
 ) {
     var menuExpanded by remember(folder.path) { mutableStateOf(false) }
-    val actions = listOf(
-        NextcloudCardAction(label = "Rename", enabled = mutationEnabled, onClick = onRename),
-        NextcloudCardAction(label = "Delete", enabled = mutationEnabled, destructive = true, onClick = onDelete),
+    val actions = listOfNotNull(
+        onRename?.let { NextcloudCardAction(label = "Rename", enabled = mutationEnabled, onClick = it) },
+        onDelete?.let { NextcloudCardAction(label = "Delete", enabled = mutationEnabled, destructive = true, onClick = it) },
     )
     Card(
         modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(

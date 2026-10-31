@@ -52,8 +52,8 @@ class AccountPrivateMemoryCleanupTest {
         try {
             sharedPreviewMemoryCache.put(removedPreview, byteArrayOf(1), removedProducer)
             sharedPreviewMemoryCache.put(retainedPreview, byteArrayOf(2), retainedProducer)
-            sharedNextcloudNotesCache.storeDetail(removed, note(1L, "Removed"), removedProducer)
-            sharedNextcloudNotesCache.storeDetail(retained, note(2L, "Retained"), retainedProducer)
+            sharedNextcloudNotesCache.storeDetail(removed, "notes", note(1L, "Removed"), removedProducer)
+            sharedNextcloudNotesCache.storeDetail(retained, "notes", note(2L, "Retained"), retainedProducer)
             sharedDynamicNativeMemoryCache.storeScreen(
                 removedDynamicKey, dynamicSnapshot(1), removedDynamicProducer,
             )
@@ -76,8 +76,8 @@ class AccountPrivateMemoryCleanupTest {
             CalendarWorkspaceMemoryCache.store(retained, "retained", calendarSnapshot(), retainedProducer)
             UserStatusWorkspaceMemoryCache.store(removed, statusSnapshot("removed"), removedProducer)
             UserStatusWorkspaceMemoryCache.store(retained, statusSnapshot("retained"), retainedProducer)
-            DeckWorkspaceMemoryCache.store(removed, deckSnapshot(), removedProducer)
-            DeckWorkspaceMemoryCache.store(retained, deckSnapshot(), retainedProducer)
+            DeckWorkspaceMemoryCache.store(removed, "deck", deckSnapshot(), removedProducer)
+            DeckWorkspaceMemoryCache.store(retained, "deck", deckSnapshot(), retainedProducer)
             sharedDocumentEditingCapabilitiesCache.store(
                 removed, NextcloudDocumentEditingCapabilities.Unavailable, null, removedProducer,
             )
@@ -179,8 +179,8 @@ class AccountPrivateMemoryCleanupTest {
 
             assertNull(sharedPreviewMemoryCache.get(removedPreview))
             assertContentEquals(byteArrayOf(2), sharedPreviewMemoryCache.get(retainedPreview))
-            assertNull(sharedNextcloudNotesCache.detail(removed, 1L))
-            assertEquals("Retained", sharedNextcloudNotesCache.detail(retained, 2L)?.title)
+            assertNull(sharedNextcloudNotesCache.detail(removed, "notes", 1L))
+            assertEquals("Retained", sharedNextcloudNotesCache.detail(retained, "notes", 2L)?.title)
             assertNull(sharedDynamicNativeMemoryCache.screen(removedDynamicKey))
             assertNotNull(sharedDynamicNativeMemoryCache.screen(retainedDynamicKey))
             assertNull(sharedDashboardStatusMemoryCache.get(removed, 1L))
@@ -191,8 +191,8 @@ class AccountPrivateMemoryCleanupTest {
             assertNotNull(CalendarWorkspaceMemoryCache.get(retained, "retained", testMonth, testWindow))
             assertNull(UserStatusWorkspaceMemoryCache.get(removed))
             assertEquals("retained", UserStatusWorkspaceMemoryCache.get(retained)?.status?.userId)
-            assertNull(DeckWorkspaceMemoryCache.get(removed))
-            assertNotNull(DeckWorkspaceMemoryCache.get(retained))
+            assertNull(DeckWorkspaceMemoryCache.get(removed, "deck"))
+            assertNotNull(DeckWorkspaceMemoryCache.get(retained, "deck"))
             assertNull(sharedDocumentEditingCapabilitiesCache.get(removed))
             assertNotNull(sharedDocumentEditingCapabilitiesCache.get(retained))
             assertNull(ActivityWorkspaceMemoryCache.get(removed, "all"))
@@ -264,7 +264,7 @@ class AccountPrivateMemoryCleanupTest {
             )
             CalendarWorkspaceMemoryCache.store(removed, "removed", calendarSnapshot(), removedProducer)
             UserStatusWorkspaceMemoryCache.store(removed, statusSnapshot("removed"), removedProducer)
-            DeckWorkspaceMemoryCache.store(removed, deckSnapshot(), removedProducer)
+            DeckWorkspaceMemoryCache.store(removed, "deck", deckSnapshot(), removedProducer)
             sharedDocumentEditingCapabilitiesCache.store(
                 removed, NextcloudDocumentEditingCapabilities.Unavailable, null, removedProducer,
             )
@@ -279,7 +279,7 @@ class AccountPrivateMemoryCleanupTest {
             assertNull(ContactsWorkspaceMemoryCache.get(removed, "removed"))
             assertNull(CalendarWorkspaceMemoryCache.get(removed, "removed", testMonth, testWindow))
             assertNull(UserStatusWorkspaceMemoryCache.get(removed))
-            assertNull(DeckWorkspaceMemoryCache.get(removed))
+            assertNull(DeckWorkspaceMemoryCache.get(removed, "deck"))
             assertNull(sharedDocumentEditingCapabilitiesCache.get(removed))
             assertNull(ActivityWorkspaceMemoryCache.get(removed, "all"))
             assertNull(TalkWorkspaceMemoryCache.rooms(removed))
@@ -337,7 +337,7 @@ class AccountPrivateMemoryCleanupTest {
         sharedDocumentEditingCapabilitiesCache.store(
             account, NextcloudDocumentEditingCapabilities.Unavailable, null, staleProducer,
         )
-        DeckWorkspaceMemoryCache.store(account, deckSnapshot(), staleProducer)
+        DeckWorkspaceMemoryCache.store(account, "deck", deckSnapshot(), staleProducer)
         sharedPreviewMemoryCache.put(
             PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64), byteArrayOf(1), staleProducer,
         )
@@ -346,7 +346,7 @@ class AccountPrivateMemoryCleanupTest {
         assertNull(ContactsWorkspaceMemoryCache.get(account, "user"))
         assertNull(UserStatusWorkspaceMemoryCache.get(account))
         assertNull(sharedDocumentEditingCapabilitiesCache.get(account))
-        assertNull(DeckWorkspaceMemoryCache.get(account))
+        assertNull(DeckWorkspaceMemoryCache.get(account, "deck"))
         assertNull(sharedPreviewMemoryCache.get(PreviewCacheKey(accountKey, "core", 1L, "etag", 64, 64)))
 
         val currentProducer = requireNotNull(sharedAccountPrivateMemoryGate.producer(accountKey))
@@ -356,13 +356,13 @@ class AccountPrivateMemoryCleanupTest {
         sharedDocumentEditingCapabilitiesCache.store(
             account, NextcloudDocumentEditingCapabilities.Unavailable, null, currentProducer,
         )
-        DeckWorkspaceMemoryCache.store(account, deckSnapshot(), currentProducer)
+        DeckWorkspaceMemoryCache.store(account, "deck", deckSnapshot(), currentProducer)
 
         assertNotNull(sharedDashboardStatusMemoryCache.get(account, 2L))
         assertNotNull(ContactsWorkspaceMemoryCache.get(account, "user"))
         assertNotNull(UserStatusWorkspaceMemoryCache.get(account))
         assertNotNull(sharedDocumentEditingCapabilitiesCache.get(account))
-        assertNotNull(DeckWorkspaceMemoryCache.get(account))
+        assertNotNull(DeckWorkspaceMemoryCache.get(account, "deck"))
         AccountPrivateMemoryCleanup.removeAccount(accountKey)
         AccountPrivateMemoryLifecycle.activateAccount(accountKey)
     }
@@ -422,8 +422,6 @@ class AccountPrivateMemoryCleanupTest {
     private fun deckSnapshot() = DeckWorkspaceMemorySnapshot(
         state = DeckWorkspaceState.Loading,
         loadedBoards = emptyList(),
-        capabilities = null,
-        activeRoute = null,
         requestedBoard = null,
         requestedBoardId = null,
         requestedCardId = null,

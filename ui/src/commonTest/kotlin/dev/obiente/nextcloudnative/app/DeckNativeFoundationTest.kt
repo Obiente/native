@@ -10,74 +10,41 @@ import kotlin.test.assertTrue
 
 class DeckNativeFoundationTest {
     @Test
-    fun `advertised API versions select 1_1 and never expose apiVersion as user input`() {
-        val negotiation = negotiateDeckReadRoutes(
-            DeckCapabilities(
-                appVersion = "1.18.2",
-                apiVersions = listOf("1.0", "1.1"),
-                canCreateBoards = true,
-            ),
-        )
-        val route = negotiation.candidates.first()
-        val request = route.stacks(7)
-
-        assertTrue(negotiation.capabilityBacked)
-        assertEquals("1.1", route.version.value)
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks", request.relativePath)
-        assertTrue(request.ocsApiRequest)
-        assertTrue(request.queryParameters.isEmpty())
-        assertEquals(
-            NextcloudApiCachePolicy.ForceNetwork,
-            route.authoritativeBoard(7).cachePolicy,
-        )
-        assertEquals(
-            NextcloudApiCachePolicy.ForceNetwork,
-            route.authoritativeCard(7, 11, 42).cachePolicy,
-        )
-        assertEquals(
-            NextcloudApiCachePolicy.ForceNetwork,
-            route.workspaceBoardMetadata(7).cachePolicy,
-        )
-    }
-
-    @Test
-    fun `read fallback advances only for route mismatch responses`() {
-        val negotiation = negotiateDeckReadRoutes(null)
-        val first = negotiation.candidates.first()
-
-        assertFalse(negotiation.capabilityBacked)
-        assertEquals("1.0", negotiation.nextAfter(first, 404)?.version?.value)
-        assertNull(negotiation.nextAfter(first, 401))
-        assertNull(negotiation.nextAfter(first, 403))
-        assertNull(negotiation.nextAfter(first, 429))
-        assertNull(negotiation.nextAfter(first, 500))
-    }
-
-    @Test
-    fun `capability response parses exact Deck support`() {
-        val capabilities = parseDeckCapabilities(
-            jsonResponse(
+    fun `lists and cards parse by field roles from any board app`() {
+        val stacks = parseDeckStacks(
+            7,
+            NextcloudApiResponse(
+                200,
                 """
-                {
-                  "ocs": {
-                    "data": {
-                      "capabilities": {
-                        "deck": {
-                          "version": "1.18.2",
-                          "canCreateBoards": true,
-                          "apiVersions": ["1.0", "1.1"]
-                        }
-                      }
-                    }
-                  }
-                }
-                """.trimIndent(),
+                [{"id":3,"name":"Backlog","position":2,"boardId":7,"tasks":[
+                  {"id":9,"name":"Plan","listId":3,"position":1,"dueDate":"2026-08-01T10:00:00Z","completed":true}
+                ]},
+                 {"id":4,"title":"Later","order":5}]
+                """.trimIndent().encodeToByteArray(),
+                "application/json",
+                null,
             ),
         )
 
-        assertEquals("1.18.2", capabilities?.appVersion)
-        assertEquals(listOf("1.0", "1.1"), capabilities?.apiVersions)
-        assertEquals(true, capabilities?.canCreateBoards)
+        assertEquals(listOf("Backlog", "Later"), stacks.map(DeckStack::title))
+        val card = stacks.first().cards.single()
+        assertEquals("Plan", card.title)
+        assertEquals(3L, card.stackId)
+        assertEquals("2026-08-01T10:00:00Z", card.dueAt)
+        assertEquals(COMPLETED_WITHOUT_TIMESTAMP, card.completedAt)
+        assertTrue(stacks.first().cardsEmbedded)
+        assertFalse(stacks.last().cardsEmbedded)
+    }
+
+    @Test
+    fun `a board record without permission evidence leaves enforcement to the server`() {
+        val board = parseDeckBoard(
+            NextcloudApiResponse(200, """{"id":7,"name":"Roadmap"}""".encodeToByteArray(), "application/json", null),
+        )
+
+        assertEquals("Roadmap", board.title)
+        assertTrue(board.permissions.canEdit && board.permissions.canManage && board.permissions.canShare)
+        assertEquals(mapOf("id" to "7", "name" to "Roadmap"), board.rawFields)
     }
 
     @Test

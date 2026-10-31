@@ -27,30 +27,30 @@ fun planDeckCardInsertion(
     destination: DeckStack,
     insertionIndex: Int,
 ): DeckCardInsertionPlan {
-    require(source.id > 0L) { "The Deck card id is invalid." }
-    require(source.boardId > 0L) { "The Deck board id is invalid." }
-    require(source.stackId > 0L) { "The Deck source stack id is invalid." }
-    require(destination.id > 0L) { "The Deck destination stack id is invalid." }
+    require(source.id > 0L) { "The card id is invalid." }
+    require(source.boardId > 0L) { "The board id is invalid." }
+    require(source.stackId > 0L) { "The source stack id is invalid." }
+    require(destination.id > 0L) { "The destination stack id is invalid." }
     require(destination.boardId == source.boardId) {
-        "A Deck card cannot be moved to a stack from another board."
+        "A card cannot be moved to a stack from another board."
     }
 
     val destinationCards = destination.cards
     destinationCards.forEach { card ->
-        require(card.id > 0L) { "A Deck destination card id is invalid." }
+        require(card.id > 0L) { "A destination card id is invalid." }
         require(card.boardId == destination.boardId && card.stackId == destination.id) {
-            "A Deck destination card has invalid parent context."
+            "A destination card has invalid parent context."
         }
     }
     val movingWithinDestination = source.stackId == destination.id
     val sourceOccurrences = destinationCards.count { it.id == source.id }
     if (movingWithinDestination) {
         require(sourceOccurrences == 1) {
-            "The Deck source card must occur exactly once in its current stack."
+            "The source card must occur exactly once in its current stack."
         }
     } else {
         require(sourceOccurrences == 0) {
-            "The Deck source card cannot already exist in the destination stack."
+            "The source card cannot already exist in the destination stack."
         }
     }
 
@@ -60,7 +60,7 @@ fun planDeckCardInsertion(
         destinationCards
     }
     require(insertionIndex in 0..remainingCards.size) {
-        "The Deck card insertion index is invalid."
+        "The card insertion index is invalid."
     }
 
     if (movingWithinDestination) {

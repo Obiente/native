@@ -7,9 +7,9 @@ data class DeckCardDraftKey(
     val cardId: Long?,
 ) {
     init {
-        require(boardId > 0L) { "A Deck draft needs a board." }
-        require(stackId > 0L) { "A Deck draft needs a stack." }
-        require(cardId == null || cardId > 0L) { "A Deck draft card id is invalid." }
+        require(boardId > 0L) { "A draft needs a board." }
+        require(stackId > 0L) { "A draft needs a stack." }
+        require(cardId == null || cardId > 0L) { "A draft card id is invalid." }
     }
 }
 
@@ -19,16 +19,16 @@ data class PersistedDeckCardDraft(
 ) {
     init {
         require(draft.title.length <= DECK_UI_CARD_TITLE_LIMIT) {
-            "The persisted Deck card title is too long."
+            "The persisted card title is too long."
         }
         require(draft.descriptionMarkdown.length <= DECK_UI_CARD_DESCRIPTION_LIMIT) {
-            "The persisted Deck card description is too long."
+            "The persisted card description is too long."
         }
         require(draft.dueDate.length <= 10 && draft.dueTime.length <= 5) {
-            "The persisted Deck due date is invalid."
+            "The persisted due date is invalid."
         }
         require(draft.dueAtBeforeEditing == null || draft.dueAtBeforeEditing.length <= 64) {
-            "The persisted Deck original due date is too long."
+            "The persisted original due date is too long."
         }
     }
 }
@@ -61,7 +61,7 @@ interface DeckCardDraftPlatformServices {
 
     /** Explicitly discards every local Deck recovery record, including unreadable records. */
     suspend fun discardAllDeckCardDrafts(): Unit =
-        error("This platform does not provide Deck draft recovery reset.")
+        error("This platform does not provide card draft recovery reset.")
 }
 
 object DeckCardDraftRetention {
@@ -76,7 +76,7 @@ object DeckCardDraftRetention {
         entries: List<Entry>,
         maximumEntries: Int = MAX_ENTRIES,
     ): Set<String> {
-        require(maximumEntries > 0) { "Deck draft retention must keep at least one entry." }
+        require(maximumEntries > 0) { "Card draft retention must keep at least one entry." }
         return entries
             .sortedWith(
                 compareByDescending<Entry> { it.updatedAtEpochMillis }
@@ -88,7 +88,7 @@ object DeckCardDraftRetention {
 }
 
 class DeckCardDraftCapacityException : IllegalStateException(
-    "Unreadable Deck drafts fill the recovery limit.",
+    "Unreadable card drafts fill the recovery limit.",
 )
 
 class DeckCardDraftResetRequiredException(

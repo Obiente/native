@@ -13,13 +13,13 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
- * Deck board sharing (ACL) contract.
+ * Board sharing (ACL) model.
  *
- * Source: Deck `appinfo/routes.php` (`board_api#addAcl`, `#updateAcl`, `#deleteAcl`),
- * `lib/Db/Acl.php` for participant types, and `BoardService::addAcl/updateAcl/deleteAcl` for the
- * permission checks: adding and updating require share permission, removing requires manage
- * permission. The server caps the edit, share, and manage flags a non-manager can grant, so a
- * successful response is always reconciled against a fresh board read.
+ * Participant types are Nextcloud core share types. Which share writes exist, and their paths and
+ * fields, come from the board app's own contract (see SemanticBoardRoutes). Adding and updating
+ * require share permission and removing requires manage permission on the board record; the
+ * server still caps what a non-manager can grant, so every write is reconciled against a fresh
+ * board read.
  */
 enum class DeckAclType(val wireValue: Int?, val label: String) {
     User(0, "User"),
@@ -53,6 +53,8 @@ data class DeckAcl(
     val canShare: Boolean,
     val canManage: Boolean,
     val owner: Boolean = false,
+    /** Scalar server values, used only to keep unchanged fields in a full-replacement update. */
+    val rawFields: Map<String, String> = emptyMap(),
 ) {
     fun permissions(): DeckAclPermissions = DeckAclPermissions(canEdit, canShare, canManage)
 }
@@ -71,11 +73,11 @@ data class DeckSharee(
     val detail: String? = null,
 ) {
     init {
-        require(type.canBeAddedNatively) { "This Deck participant type cannot be added." }
+        require(type.canBeAddedNatively) { "This participant type cannot be added." }
         require(id.isNotBlank() && id.length <= DECK_SHARE_PARTICIPANT_LIMIT) {
-            "The Deck participant is invalid."
+            "The participant is invalid."
         }
-        require(id.none(Char::isISOControl)) { "The Deck participant is invalid." }
+        require(id.none(Char::isISOControl)) { "The participant is invalid." }
     }
 }
 
@@ -106,84 +108,16 @@ fun DeckBoard.aclEditability(acl: DeckAcl, currentUserId: String): DeckAclEditab
     )
 }
 
-fun DeckWriteRoutePlan.addBoardAcl(
-    board: DeckBoard,
-    sharee: DeckSharee,
-): NextcloudApiRequest {
-    require(board.id > 0L) { "The Deck board id is invalid." }
-    require(board.canAddShares()) { "Deck share permission is required." }
-    require(
-        board.acl.none { it.type == sharee.type && it.participant.id == sharee.id },
-    ) { "This board is already shared with ${sharee.displayName}." }
-    require(!(sharee.type == DeckAclType.User && sharee.id == board.owner?.id)) {
-        "The board owner already has access."
-    }
-    return deckSharingJsonRequest(
-        method = NextcloudApiMethod.POST,
-        path = "$apiRoot/boards/${board.id}/acl",
-        body = buildJsonObject {
-            put("type", checkNotNull(sharee.type.wireValue))
-            put("participant", sharee.id)
-            put("permissionEdit", false)
-            put("permissionShare", false)
-            put("permissionManage", false)
-        },
-    )
-}
-
-fun DeckWriteRoutePlan.updateBoardAcl(
-    board: DeckBoard,
-    acl: DeckAcl,
-    currentUserId: String,
-    requested: DeckAclPermissions,
-): NextcloudApiRequest {
-    val current = board.requireAcl(acl)
-    val editability = board.aclEditability(current, currentUserId)
-    require(editability.canChangeAny) { "You cannot change this share." }
-    require(editability.canChangeEdit || requested.canEdit == current.canEdit) {
-        "You cannot change edit access for this share."
-    }
-    require(editability.canChangeShare || requested.canShare == current.canShare) {
-        "You cannot change sharing access for this share."
-    }
-    require(editability.canChangeManage || requested.canManage == current.canManage) {
-        "You cannot change manage access for this share."
-    }
-    return deckSharingJsonRequest(
-        method = NextcloudApiMethod.PUT,
-        path = "$apiRoot/boards/${board.id}/acl/${current.id}",
-        body = buildJsonObject {
-            put("permissionEdit", requested.canEdit)
-            put("permissionShare", requested.canShare)
-            put("permissionManage", requested.canManage)
-        },
-    )
-}
-
-fun DeckWriteRoutePlan.deleteBoardAcl(
-    board: DeckBoard,
-    acl: DeckAcl,
-    currentUserId: String,
-): NextcloudApiRequest {
-    val current = board.requireAcl(acl)
-    require(board.aclEditability(current, currentUserId).canRemove) {
-        "Deck manage permission is required to remove access."
-    }
-    return NextcloudApiRequest(
-        method = NextcloudApiMethod.DELETE,
-        relativePath = "$apiRoot/boards/${board.id}/acl/${current.id}",
-        ocsApiRequest = true,
-        maximumResponseBytes = DECK_SHARING_RESPONSE_BYTES,
-    )
-}
-
 /**
- * Searches participants with the same core autocomplete request the Deck web sharing tab uses
- * (`/core/autocomplete/get`, `itemType=deck`). Remote participants are excluded because adding
- * them requires federation setup this client does not negotiate.
+ * Searches participants through the server's core autocomplete (`/core/autocomplete/get`), with the
+ * sharing app's own id as the item type. Remote participants are excluded because adding them
+ * requires federation setup this client does not negotiate.
  */
-fun deckShareeSearchRequest(boardId: Long, query: String): NextcloudApiRequest {
-    require(boardId > 0L) { "The Deck board id is invalid." }
+fun deckShareeSearchRequest(appId: String, boardId: Long, query: String): NextcloudApiRequest {
+    require(appId.isNotBlank() && appId.length <= 64 && appId.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+        "The sharing app id is invalid."
+    }
+    require(boardId > 0L) { "The board id is invalid." }
     val search = query.trim()
     require(search.length <= DECK_SHARE_SEARCH_LIMIT) { "The search is too long." }
     require(search.none(Char::isISOControl)) { "The search contains unsupported characters." }
@@ -193,7 +127,7 @@ fun deckShareeSearchRequest(boardId: Long, query: String): NextcloudApiRequest {
         queryParameters = buildMap {
             put("format", "json")
             put("search", search)
-            put("itemType", "deck")
+            put("itemType", appId)
             put("itemId", boardId.toString())
             put("limit", DECK_SHARE_RESULT_LIMIT.toString())
             DECK_SEARCHABLE_SHARE_TYPES.forEachIndexed { index, type ->
@@ -207,7 +141,7 @@ fun deckShareeSearchRequest(boardId: Long, query: String): NextcloudApiRequest {
 }
 
 fun parseDeckSharees(response: NextcloudApiResponse): List<DeckSharee> {
-    require(response.status in 200..299) { "Deck could not search people (HTTP ${response.status})." }
+    require(response.status in 200..299) { "The app could not search people (HTTP ${response.status})." }
     require(response.body.size <= DECK_SHARING_RESPONSE_BYTES) { "The people search returned too much data." }
     val root = runCatching { deckSharingJson.parseToJsonElement(response.body.decodeToString()) }
         .getOrNull() as? JsonObject ?: error("The people search returned invalid JSON.")
@@ -239,18 +173,18 @@ fun parseDeckSharees(response: NextcloudApiResponse): List<DeckSharee> {
 
 /** Parses the `acl` relation of a full Deck board record. Malformed entries are rejected. */
 internal fun parseDeckBoardAcl(boardId: Long, values: JsonArray): List<DeckAcl> = values.map { element ->
-    val value = element as? JsonObject ?: error("The Deck board share list is malformed.")
-    val id = value.long("id")?.takeIf { it > 0L } ?: error("A Deck board share has no valid id.")
+    val value = element as? JsonObject ?: error("The board share list is malformed.")
+    val id = value.long("id")?.takeIf { it > 0L } ?: error("A board share has no valid id.")
     val aclBoardId = value.long("boardId") ?: boardId
-    require(aclBoardId == boardId) { "A Deck board share belongs to an unexpected board." }
+    require(aclBoardId == boardId) { "A board share belongs to an unexpected board." }
     val participant = when (val raw = value["participant"]) {
         is JsonObject -> {
             val participantId = raw.text("uid") ?: raw.text("primaryKey") ?: raw.text("id")
-                ?: error("A Deck board share has no participant.")
+                ?: error("A board share has no participant.")
             DeckAclParticipant(participantId, raw.text("displayname") ?: raw.text("displayName") ?: participantId)
         }
         else -> {
-            val participantId = value.text("participant") ?: error("A Deck board share has no participant.")
+            val participantId = value.text("participant") ?: error("A board share has no participant.")
             DeckAclParticipant(participantId, participantId)
         }
     }
@@ -263,6 +197,10 @@ internal fun parseDeckBoardAcl(boardId: Long, values: JsonArray): List<DeckAcl> 
         canShare = value.flag("permissionShare"),
         canManage = value.flag("permissionManage"),
         owner = value.flag("owner"),
+        rawFields = value.entries.mapNotNull { (name, field) ->
+            (field as? kotlinx.serialization.json.JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
+                ?.takeIf { it.length <= 4_096 }?.let { name to it }
+        }.toMap(),
     )
 }
 
@@ -271,7 +209,7 @@ fun verifyDeckAclAdded(board: DeckBoard, sharee: DeckSharee): DeckWriteVerificat
     if (board.acl.any { it.type == sharee.type && it.participant.id == sharee.id }) {
         DeckWriteVerification.Confirmed
     } else {
-        DeckWriteVerification.NotApplied("Deck did not add ${sharee.displayName} to this board.")
+        DeckWriteVerification.NotApplied("The app did not add ${sharee.displayName} to this board.")
     }
 
 fun verifyDeckAclUpdated(
@@ -285,7 +223,7 @@ fun verifyDeckAclUpdated(
         DeckWriteVerification.Confirmed
     } else {
         DeckWriteVerification.Adjusted(
-            "Deck kept some permissions unchanged. Your own access limits what you can grant.",
+            "The app kept some permissions unchanged. Your own access limits what you can grant.",
         )
     }
 }
@@ -294,27 +232,8 @@ fun verifyDeckAclRemoved(board: DeckBoard, aclId: Long): DeckWriteVerification =
     if (board.acl.none { it.id == aclId }) {
         DeckWriteVerification.Confirmed
     } else {
-        DeckWriteVerification.NotApplied("Deck did not remove this share.")
+        DeckWriteVerification.NotApplied("The app did not remove this share.")
     }
-
-private fun DeckBoard.requireAcl(acl: DeckAcl): DeckAcl {
-    require(acl.boardId == id) { "The Deck share belongs to another board." }
-    return this.acl.firstOrNull { it.id == acl.id }
-        ?: error("The Deck share is not part of the current board.")
-}
-
-private fun deckSharingJsonRequest(
-    method: NextcloudApiMethod,
-    path: String,
-    body: JsonObject,
-): NextcloudApiRequest = NextcloudApiRequest(
-    method = method,
-    relativePath = path,
-    contentType = "application/json",
-    body = body.toString().encodeToByteArray(),
-    ocsApiRequest = true,
-    maximumResponseBytes = DECK_SHARING_RESPONSE_BYTES,
-)
 
 private fun JsonObject.text(name: String): String? = this[name]?.let { value ->
     if (value is JsonNull) null else runCatching { value.jsonPrimitive.contentOrNull }.getOrNull()

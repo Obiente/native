@@ -10,28 +10,38 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.nativeui.runtime.BoardField
+import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
 /**
- * Production host for the native Deck workspace.
+ * Production host for the native board workspace of any board-shaped app.
  *
- * UI callbacks receive typed board, stack, card, label, user, comment, and attachment context.
- * The host never asks for resource ids and refreshes authoritative server state after every write.
+ * Every request comes from [routes], resolved from the installed app's own contract; an action
+ * appears only when that contract describes it. UI callbacks receive typed board, list, card,
+ * label, user, comment, and attachment context. The host never asks for resource ids and
+ * refreshes authoritative server state after every write.
  */
 @Composable
-fun NativeDeckScreen(
+internal fun NativeDeckScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    routes: SemanticBoardRoutes,
+    appSettings: SemanticSettings?,
+    /** Sends a request; writes wait until the app contract is confirmed as still verified. */
+    execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
+    authorizeWrite: suspend () -> Boolean,
     currentUserId: String = session.loginName,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val appId = routes.appId
     val workspaceProducer = remember(session) { DeckWorkspaceMemoryCache.producer(session) }
-    val retainedWorkspace = remember(session) { DeckWorkspaceMemoryCache.get(session) }
+    val retainedWorkspace = remember(session, appId) { DeckWorkspaceMemoryCache.get(session, appId) }
     var state by remember(session) {
         mutableStateOf<DeckWorkspaceState>(retainedWorkspace?.state ?: DeckWorkspaceState.Loading)
     }
@@ -41,8 +51,6 @@ fun NativeDeckScreen(
     var archivedBoards by remember(session) {
         mutableStateOf((retainedWorkspace?.state as? DeckWorkspaceState.BoardPicker)?.archivedBoards.orEmpty())
     }
-    var capabilities by remember(session) { mutableStateOf(retainedWorkspace?.capabilities) }
-    var activeRoute by remember(session) { mutableStateOf(retainedWorkspace?.activeRoute) }
     var requestedBoard by remember(session) { mutableStateOf(retainedWorkspace?.requestedBoard) }
     var requestedBoardId by rememberSaveable(session.serverUrl, session.loginName) {
         mutableStateOf(retainedWorkspace?.requestedBoardId)
@@ -80,19 +88,16 @@ fun NativeDeckScreen(
         session,
         state,
         loadedBoards,
-        capabilities,
-        activeRoute,
         requestedBoard,
         requestedBoardId,
         requestedCardId,
     ) {
         DeckWorkspaceMemoryCache.store(
             session,
+            appId,
             DeckWorkspaceMemorySnapshot(
                 state = state,
                 loadedBoards = loadedBoards,
-                capabilities = capabilities,
-                activeRoute = activeRoute,
                 requestedBoard = requestedBoard,
                 requestedBoardId = requestedBoardId,
                 requestedCardId = requestedCardId,
@@ -107,10 +112,10 @@ fun NativeDeckScreen(
         DeckWorkspaceState.Empty(
             title = "No boards",
             message = "Create a board to start organizing cards.",
-            canCreateBoards = capabilities?.canCreateBoards == true,
+            canCreateBoards = routes.supports(BoardOperation.CreateBoard),
         )
     } else {
-        DeckWorkspaceState.BoardPicker(loadedBoards, capabilities?.canCreateBoards == true, archivedBoards)
+        DeckWorkspaceState.BoardPicker(loadedBoards, routes.supports(BoardOperation.CreateBoard), archivedBoards)
     }
 
     fun adoptBoard(board: DeckBoard) {
@@ -122,12 +127,9 @@ fun NativeDeckScreen(
 
     fun stackFor(card: DeckCard): DeckStack =
         boardState()?.stacks?.firstOrNull { it.id == card.stackId }
-            ?: error("The Deck card list is unavailable.")
+            ?: error("The card list is unavailable.")
 
-    fun selectedRoute(): DeckReadRoutePlan =
-        checkNotNull(activeRoute) { "The verified Deck API route is unavailable." }
-
-    fun writePlan(): DeckWriteRoutePlan = DeckWriteRoutePlan(selectedRoute().version)
+    fun writePlan(): SemanticBoardRoutes = routes
 
     fun boardAccess(board: DeckBoard): DeckBoardAccess = DeckBoardAccess.from(board)
 
@@ -147,24 +149,9 @@ fun NativeDeckScreen(
             cardId = editor.card?.id,
         )
 
-    suspend fun fetchAuthoritativeCard(card: DeckCard): DeckCard {
-        val route = selectedRoute()
-        val response = services.executeNextcloudApi(
-            session,
-            route.authoritativeCard(card.boardId, card.stackId, card.id),
-        )
-        return parseDeckResponseOffUi {
-            parseDeckCard(card.boardId, card.stackId, response)
-        }
-    }
+    suspend fun fetchAuthoritativeCard(card: DeckCard): DeckCard = fetchAuthoritativeCard(execute, routes, card)
 
-    suspend fun fetchAuthoritativeBoard(board: DeckBoard): DeckBoard {
-        val route = selectedRoute()
-        val response = services.executeNextcloudApi(session, route.authoritativeBoard(board.id))
-        return parseDeckResponseOffUi {
-            parseDeckBoard(response)
-        }
-    }
+    suspend fun fetchAuthoritativeBoard(board: DeckBoard): DeckBoard = fetchAuthoritativeBoard(execute, routes, board.id)
 
     fun replaceCard(card: DeckCard, select: Boolean = true) {
         val board = boardState() ?: return
@@ -204,7 +191,7 @@ fun NativeDeckScreen(
             mutationError = null
             var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(session, request()).also {
+                execute(request()).also {
                     responseStatus = it.status
                     onResponse(it)
                 }
@@ -223,11 +210,11 @@ fun NativeDeckScreen(
                 if (error is CancellationException) throw error
                 if (isAmbiguousDeckMutationFailure(responseStatus)) {
                     mutationOutcomeUnknown = true
-                    mutationError = "Deck may have applied this action. Refreshing before another change."
+                    mutationError = "The app may have applied this action. Refreshing before another change."
                     outcomeUnknownBoardRecovery?.let { board ->
                         boardRecovery = DeckUiBoardRecovery(
                             board = board,
-                            errorMessage = "Deck may have deleted this board. Checking the board list.",
+                            errorMessage = "The app may have deleted this board. Checking the board list.",
                             verification = DeckBoardRecoveryVerification.DeleteOutcome,
                         )
                     }
@@ -254,9 +241,7 @@ fun NativeDeckScreen(
             boardRecovery = DeckUiBoardRecovery(board = board, restoring = true)
             var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(
-                    session,
-                    writePlan().restoreBoard(boardAccess(board)),
+                execute(writePlan().restoreBoard(boardAccess(board)),
                 ).also {
                     responseStatus = it.status
                     parseDeckMutationReceipt(it, expectedId = board.id)
@@ -272,7 +257,7 @@ fun NativeDeckScreen(
                     DeckUiBoardRecovery(
                         board = board,
                         restoring = false,
-                        errorMessage = "Deck may have restored this board. Checking the board list.",
+                        errorMessage = "The app may have restored this board. Checking the board list.",
                         verification = DeckBoardRecoveryVerification.RestoreOutcome,
                     ).also {
                         loadedBoards = emptyList()
@@ -309,9 +294,7 @@ fun NativeDeckScreen(
                     } else {
                         var responseStatus: Int? = null
                         runCatching {
-                            services.executeNextcloudApi(
-                                session,
-                                writePlan().updateCard(
+                            execute(writePlan().updateCard(
                                     boardAccess(checkNotNull(boardState()?.board)),
                                     cardContext(current),
                                     update(current),
@@ -329,7 +312,7 @@ fun NativeDeckScreen(
                             if (isAmbiguousDeckMutationFailure(responseStatus)) {
                                 mutationOutcomeUnknown = true
                                 mutationError =
-                                    "Deck may have applied this card update. Refreshing before another change."
+                                    "The app may have applied this card update. Refreshing before another change."
                                 refreshBoard()
                             } else {
                                 mutationError = error.deckMessage()
@@ -363,10 +346,9 @@ fun NativeDeckScreen(
                     } else {
                         var responseStatus: Int? = null
                         runCatching {
-                            services.executeNextcloudApi(
-                                session,
-                                writePlan().updateBoard(
+                            execute(writePlan().updateBoard(
                                     boardAccess(current),
+                                    current,
                                     update(current),
                                 ),
                             ).also {
@@ -386,7 +368,7 @@ fun NativeDeckScreen(
                             if (isAmbiguousDeckMutationFailure(responseStatus)) {
                                 mutationOutcomeUnknown = true
                                 mutationError =
-                                    "Deck may have applied this board update. Refreshing before another change."
+                                    "The app may have applied this board update. Refreshing before another change."
                                 requestedBoard = null
                                 requestedBoardId = null
                                 requestedCardId = null
@@ -419,10 +401,10 @@ fun NativeDeckScreen(
             var failedResponseStatus: Int? = null
             runCatching {
                 requests().forEach { request ->
-                    val response = services.executeNextcloudApi(session, request)
+                    val response = execute(request)
                     failedResponseStatus = response.status
                     require(response.status in 200..299) {
-                        "The Deck action failed (HTTP ${response.status})."
+                        "The action failed (HTTP ${response.status})."
                     }
                     confirmedWrites += 1
                     failedResponseStatus = null
@@ -446,7 +428,7 @@ fun NativeDeckScreen(
                 if (requiresReconciliation && reconciliation.isFailure) {
                     mutationOutcomeUnknown = true
                     mutationError =
-                        "Deck may have applied part of this change. Refreshing before another change."
+                        "The app may have applied part of this change. Refreshing before another change."
                 }
                 refreshBoard()
             }
@@ -470,7 +452,7 @@ fun NativeDeckScreen(
             when (plan) {
                 is DeckCardInsertionPlan.MoveReady -> runMutation(
                     request = {
-                        writePlan().moveCard(boardAccess(board), plan.move)
+                        writePlan().moveCard(boardAccess(board), card, plan.move)
                     },
                     onResponse = { response ->
                         parseDeckCardMove(plan.move, response)
@@ -539,11 +521,9 @@ fun NativeDeckScreen(
         )
         scope.launch {
             runCatching {
-                val response = services.executeNextcloudApi(
-                    session,
-                    writePlan().comments(
+                val response = execute(writePlan().comments(
                         access = boardAccess(board),
-                        context = cardContext(card),
+                        card = card,
                         limit = DECK_COMMENT_PAGE_SIZE,
                         offset = offset,
                     ),
@@ -561,7 +541,8 @@ fun NativeDeckScreen(
                     page
                 }
                 commentRecords = combined.associateBy { it.id.toString() }
-                val canWriteComments = boardState()?.board?.canWriteDeckComments == true
+                val canWriteComments = boardState()?.board?.canWriteDeckComments == true &&
+                    routes.supports(BoardOperation.CreateComment)
                 commentsState = DeckUiCommentsState(
                     comments = combined.map {
                         it.toDeckUiComment(currentUserId, canWriteComments)
@@ -587,7 +568,8 @@ fun NativeDeckScreen(
         commentsState = DeckUiCommentsState(
             comments = emptyList(),
             loading = true,
-            canComment = boardState()?.board?.canWriteDeckComments == true,
+            canComment = boardState()?.board?.canWriteDeckComments == true &&
+                routes.supports(BoardOperation.CreateComment),
         )
         commentRecords = emptyMap()
         interaction = DeckUiInteraction.Comments(card)
@@ -613,7 +595,7 @@ fun NativeDeckScreen(
         scope.launch {
             var responseStatus: Int? = null
             runCatching {
-                services.executeNextcloudApi(session, plannedRequest).also {
+                execute(plannedRequest).also {
                     responseStatus = it.status
                     onResponse(it)
                 }
@@ -632,7 +614,7 @@ fun NativeDeckScreen(
                     mutationOutcomeUnknown = true
                     commentsState = commentsState.copy(
                         submitting = false,
-                        errorMessage = "Deck may have applied this comment action. Checking the card first.",
+                        errorMessage = "The app may have applied this comment action. Checking the card first.",
                     )
                     loadComments(card, append = false)
                     refreshBoard()
@@ -647,7 +629,10 @@ fun NativeDeckScreen(
     }
 
     fun attachmentUploadScope(card: DeckCard): DurableUploadScope =
-        DurableUploadScope(feature = "deck-attachment", resourceId = card.id.toString())
+        DurableUploadScope(
+            feature = "board-attachment",
+            resourceId = "${appId.filter(Char::isLetterOrDigit).take(48)}-${card.id}",
+        )
 
     fun loadAttachments(card: DeckCard) {
         val board = boardState()?.board ?: return
@@ -658,9 +643,7 @@ fun NativeDeckScreen(
                 services.durableMultipartUploadStatuses(session, attachmentUploadScope(card))
             }.getOrDefault(emptyList())
             runCatching {
-                val response = services.executeNextcloudApi(
-                    session,
-                    writePlan().attachments(boardAccess(board), cardContext(card)),
+                val response = execute(writePlan().attachments(boardAccess(board), card),
                 )
                 parseDeckResponseOffUi {
                     parseDeckAttachments(cardContext(card), response)
@@ -676,12 +659,12 @@ fun NativeDeckScreen(
                 attachmentsState = DeckUiAttachmentsState(
                     attachments = values.map { attachment ->
                         attachment.toDeckUiAttachment(
-                            canEdit = board.permissions.canEdit,
+                            canEdit = board.permissions.canEdit && routes.supports(BoardOperation.DeleteAttachment),
                             handoffCapability = handoffCapability,
                         )
                     },
                     uploads = durableUploads,
-                    canAdd = board.permissions.canEdit,
+                    canAdd = board.permissions.canEdit && routes.supports(BoardOperation.UploadAttachment),
                 )
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -700,7 +683,8 @@ fun NativeDeckScreen(
         attachmentsState = DeckUiAttachmentsState(
             attachments = emptyList(),
             loading = true,
-            canAdd = boardState()?.board?.permissions?.canEdit == true,
+            canAdd = boardState()?.board?.permissions?.canEdit == true &&
+                routes.supports(BoardOperation.UploadAttachment),
         )
         attachmentRecords = emptyMap()
         interaction = DeckUiInteraction.Attachments(card)
@@ -743,34 +727,11 @@ fun NativeDeckScreen(
                 is LocalUploadSelectionResult.Selected -> {
                     val file = selection.file
                     runCatching {
-                        val type = if (selectedRoute().version.value == "1.1") {
-                            DeckAttachmentType.File
-                        } else {
-                            DeckAttachmentType.DeckFile
-                        }
-                        val target = writePlan().attachmentUploadTarget(
-                            access = boardAccess(board),
-                            context = cardContext(card),
-                            type = type,
-                        )
+                        check(authorizeWrite()) { "The app's contract is being checked again. Try again shortly." }
                         services.enqueueDurableMultipartUpload(
                             session,
                             attachmentUploadScope(card),
-                            NextcloudMultipartUploadRequest(
-                                method = target.method,
-                                relativePath = target.relativePath,
-                                file = file,
-                                fileFieldName = target.fileFieldName,
-                                textFields = listOf(
-                                    MultipartTextField(
-                                        target.typeFieldName,
-                                        target.attachmentType.serverValue,
-                                    ),
-                                ),
-                                ocsApiRequest = true,
-                                maximumFileBytes = DEFAULT_LOCAL_UPLOAD_LIMIT_BYTES,
-                                maximumResponseBytes = DECK_ATTACHMENT_MUTATION_RESPONSE_BYTES,
-                            ),
+                            writePlan().attachmentUpload(boardAccess(board), card, file),
                         ).also { result ->
                             require(result !is DurableUploadEnqueueResult.Rejected) {
                                 (result as DurableUploadEnqueueResult.Rejected).reason
@@ -814,16 +775,7 @@ fun NativeDeckScreen(
         attachmentsState = attachmentsState.copy(loading = true, errorMessage = null)
         scope.launch {
             runCatching {
-                val response = services.executeNextcloudApi(
-                    session,
-                    writePlan().deleteAttachment(
-                        boardAccess(board),
-                        DeckAttachmentReference(
-                            card = cardContext(card),
-                            type = attachment.type,
-                            attachmentId = attachment.id,
-                        ),
-                    ),
+                val response = execute(writePlan().deleteAttachment(boardAccess(board), card, attachment),
                 )
                 parseDeckMutationReceipt(response)
             }.onSuccess {
@@ -843,16 +795,16 @@ fun NativeDeckScreen(
         }
     }
 
-    val boardTools = remember(services, session) {
+    val boardTools = remember(services, session, routes) {
         DeckBoardTools(
             DeckBoardToolContext(
-                execute = { request -> services.executeNextcloudApi(session, request) },
-                readPlan = ::selectedRoute,
-                writePlan = ::writePlan,
+                execute = execute,
+                routes = routes,
                 currentUserId = currentUserId,
                 onBoardRefreshed = ::adoptBoard,
                 onBoardContentChanged = ::refreshBoard,
             ),
+            appSettings,
         )
     }
 
@@ -867,7 +819,7 @@ fun NativeDeckScreen(
             mutationBusy = true
             mutationError = try {
                 val updates = planDeckStackMove(current.stacks, stack.id, direction)
-                runDeckStackMove({ services.executeNextcloudApi(session, it) }, writePlan(), current.board, updates)
+                runDeckStackMove({ execute(it) }, writePlan(), current.board, updates)
             } catch (invalid: IllegalArgumentException) {
                 invalid.deckMessage()
             }
@@ -891,13 +843,11 @@ fun NativeDeckScreen(
         if (board == null) {
             if (loadedBoards.isEmpty()) state = DeckWorkspaceState.Loading
             runCatching {
-                loadDeckBoards(services, session)
+                loadDeckBoards(execute, routes)
             }.onSuccess { loaded ->
                 val reconciledUnknownMutation = mutationOutcomeUnknown
                 loadedBoards = loaded.boards
                 archivedBoards = loaded.archivedBoards
-                capabilities = loaded.capabilities
-                activeRoute = loaded.route
                 if (reconciledUnknownMutation) {
                     boardRecovery = boardRecovery?.let { recovery ->
                         reconcileDeckBoardRecovery(recovery, loaded.boards)
@@ -922,7 +872,7 @@ fun NativeDeckScreen(
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 state = DeckWorkspaceState.Error(
-                    title = "Deck could not load",
+                    title = "Boards could not load",
                     message = error.deckMessage(),
                     cachedState = pickerState().takeIf { it is DeckWorkspaceState.BoardPicker },
                 )
@@ -931,15 +881,9 @@ fun NativeDeckScreen(
             val selectedCardId = requestedCardId
             if (boardState()?.board?.id != board.id) state = DeckWorkspaceState.Loading
             runCatching {
-                loadDeckStacks(
-                    services = services,
-                    session = session,
-                    board = board,
-                    preferredRoute = activeRoute,
-                )
+                loadDeckStacks(execute, routes, board)
             }.onSuccess { loaded ->
                 val reconciledUnknownMutation = mutationOutcomeUnknown
-                activeRoute = loaded.route
                 requestedBoard = loaded.board
                 loadedBoards = loadedBoards.map { current ->
                     if (current.id == loaded.board.id) loaded.board else current
@@ -1031,19 +975,23 @@ fun NativeDeckScreen(
         },
         onDismissCard = ::dismissSelectedCard,
         onRetry = { refreshBoard() },
-        onCreateBoard = capabilities?.takeIf(DeckCapabilities::canCreateBoards)?.let {
+        onCreateBoard = routes.takeIf { it.supports(BoardOperation.CreateBoard) }?.let {
             { interaction = DeckUiInteraction.BoardEditor(null) }
         },
-        onCreateStack = currentBoard?.takeIf { it.permissions.canManage && !it.archived }?.let { board ->
+        onCreateStack = currentBoard?.takeIf {
+            it.permissions.canManage && !it.archived && routes.supports(BoardOperation.CreateLane)
+        }?.let { board ->
             { interaction = DeckUiInteraction.StackEditor(board, null) }
         },
-        onCreateCard = currentBoard?.takeIf { it.permissions.canEdit && !it.archived }?.let {
+        onCreateCard = currentBoard?.takeIf {
+            it.permissions.canEdit && !it.archived && routes.supports(BoardOperation.CreateCard)
+        }?.let {
             { stack -> interaction = DeckUiInteraction.CardEditor(stack, null) }
         },
         boardActions = { board ->
             buildList {
                 if (board.permissions.canManage) {
-                    if (!board.archived) {
+                    if (!board.archived && routes.managesLabels()) {
                         add(
                             NextcloudCardAction("Manage labels") {
                                 mutationError = null
@@ -1051,16 +999,16 @@ fun NativeDeckScreen(
                             },
                         )
                     }
-                    add(
-                        NextcloudCardAction("Edit board") {
-                            interaction = DeckUiInteraction.BoardEditor(board)
-                        },
-                    )
-                    add(
-                        NextcloudCardAction("Delete board", destructive = true) {
-                            interaction = DeckUiInteraction.DeleteBoard(board)
-                        },
-                    )
+                    if (routes.supports(BoardOperation.UpdateBoard)) {
+                        add(NextcloudCardAction("Edit board") { interaction = DeckUiInteraction.BoardEditor(board) })
+                    }
+                    if (routes.supports(BoardOperation.DeleteBoard)) {
+                        add(
+                            NextcloudCardAction("Delete board", destructive = true) {
+                                interaction = DeckUiInteraction.DeleteBoard(board)
+                            },
+                        )
+                    }
                 }
                 addAll(
                     boardTools.actions(board, boardState()?.board?.id == board.id, ::toggleBoardArchived)
@@ -1073,58 +1021,61 @@ fun NativeDeckScreen(
             if (board?.permissions?.canManage != true || board.archived) {
                 emptyList()
             } else {
-                DeckStackMoveDirection.entries.filter { stack.canMove(boardState()?.stacks.orEmpty(), it) }.map {
+                val reorderable = routes.declares(BoardOperation.UpdateLane, BoardField.Order)
+                DeckStackMoveDirection.entries.filter { reorderable && stack.canMove(boardState()?.stacks.orEmpty(), it) }.map {
                     NextcloudCardAction(it.label, enabled = !mutationBusy) { moveStack(stack, it) }
-                } + listOf(
+                } + listOfNotNull(
                     NextcloudCardAction("Rename list") {
                         interaction = DeckUiInteraction.StackEditor(board, stack)
-                    },
+                    }.takeIf { routes.declares(BoardOperation.UpdateLane, BoardField.Title) },
                     NextcloudCardAction("Delete list", destructive = true) {
                         interaction = DeckUiInteraction.DeleteStack(stack)
-                    },
+                    }.takeIf { routes.supports(BoardOperation.DeleteLane) },
                 )
             }
         },
         cardActions = { card ->
             val board = boardState()?.board
             buildList {
-                if (board?.permissions?.canEdit == true && !board.archived) {
-                    add(
+                val editable = board?.permissions?.canEdit == true && !board.archived
+                val updates = editable && routes.supports(BoardOperation.UpdateCard)
+                if (editable) {
+                    if (updates) add(
                         NextcloudCardAction("Edit card") {
                             showAuthoritativeCard(card) { current, stack ->
                                 DeckUiInteraction.CardEditor(stack, current)
                             }
                         },
                     )
-                    add(
+                    if (routes.supports(BoardOperation.MoveCard)) add(
                         NextcloudCardAction("Move") {
                             showAuthoritativeCard(card) { current, _ ->
                                 DeckUiInteraction.MoveCard(current)
                             }
                         },
                     )
-                    add(
+                    if (routes.assignsLabels()) add(
                         NextcloudCardAction("Labels") {
                             showAuthoritativeCard(card) { current, _ ->
                                 DeckUiInteraction.Labels(current)
                             }
                         },
                     )
-                    add(
+                    if (routes.assignsUsers()) add(
                         NextcloudCardAction("Assignees") {
                             showAuthoritativeCard(card) { current, _ ->
                                 DeckUiInteraction.Assignees(current)
                             }
                         },
                     )
-                    add(
+                    if (updates && routes.declares(BoardOperation.UpdateCard, BoardField.DueDate)) add(
                         NextcloudCardAction("Due date") {
                             showAuthoritativeCard(card) { current, _ ->
                                 DeckUiInteraction.DueDate(current)
                             }
                         },
                     )
-                    add(
+                    if (updates && routes.declares(BoardOperation.UpdateCard, BoardField.Done)) add(
                         NextcloudCardAction(
                             if (card.completedAt == null) "Mark done" else "Mark not done",
                         ) {
@@ -1147,25 +1098,29 @@ fun NativeDeckScreen(
                             }
                         },
                     )
-                    add(
+                    if (routes.supports(BoardOperation.ArchiveCard)) add(
                         NextcloudCardAction("Archive card") {
-                            runMutation(request = { writePlan().archiveCard(boardAccess(board), cardContext(card)) })
+                            runMutation(request = { writePlan().archiveCard(boardAccess(board), card) })
                         },
                     )
-                    add(
+                    if (routes.supports(BoardOperation.DeleteCard)) add(
                         NextcloudCardAction("Delete card", destructive = true) {
                             interaction = DeckUiInteraction.DeleteCard(card)
                         },
                     )
                 }
                 if (board?.permissions?.canRead == true) {
-                    add(NextcloudCardAction("Comments") { showComments(card) })
-                    add(NextcloudCardAction("Attachments") { showAttachments(card) })
+                    if (routes.supports(BoardOperation.ListComments)) {
+                        add(NextcloudCardAction("Comments") { showComments(card) })
+                    }
+                    if (routes.supports(BoardOperation.ListAttachments)) {
+                        add(NextcloudCardAction("Attachments") { showAttachments(card) })
+                    }
                 }
             }
         },
         onMoveCard = currentBoard?.takeIf {
-            it.permissions.canEdit && !it.archived && !mutationBusy
+            it.permissions.canEdit && !it.archived && !mutationBusy && routes.supports(BoardOperation.MoveCard)
         }?.let {
             { card, destinationStack, insertionIndex ->
                 moveCardToIndex(card, destinationStack, insertionIndex)
@@ -1175,7 +1130,7 @@ fun NativeDeckScreen(
         statusMessage = mutationError.takeIf { interaction == null },
         onDismissStatus = { mutationError = null },
         onRestoreBoard = boardRecovery
-            ?.takeIf { requestedBoard == null }
+            ?.takeIf { requestedBoard == null && routes.supports(BoardOperation.RestoreBoard) }
             ?.takeUnless { it.restoring || it.verifying }
             ?.let {
             ::restoreDeletedBoard
@@ -1200,10 +1155,7 @@ fun NativeDeckScreen(
                 if (overlay.board == null) {
                     runMutation(
                         request = {
-                            writePlan().createBoard(
-                                capabilities = checkNotNull(capabilities),
-                                draft = DeckBoardDraft(draft.title, draft.color),
-                            )
+                            writePlan().createBoard(DeckBoardDraft(draft.title, draft.color))
                         },
                     )
                 } else {
@@ -1244,6 +1196,7 @@ fun NativeDeckScreen(
                                 access,
                                 stackContext(overlay.stack),
                                 DeckStackDraft(draft.title, overlay.stack.order),
+                                record = overlay.stack.rawFields,
                             )
                         },
                     )
@@ -1264,6 +1217,14 @@ fun NativeDeckScreen(
             busy = cardDraftBusy,
             errorMessage = mutationError,
             quickDueDates = deckQuickDueDates(),
+            allowsDescription = routes.declares(
+                if (overlay.card == null) BoardOperation.CreateCard else BoardOperation.UpdateCard,
+                BoardField.Description,
+            ),
+            allowsDueDate = routes.declares(
+                if (overlay.card == null) BoardOperation.CreateCard else BoardOperation.UpdateCard,
+                BoardField.DueDate,
+            ),
             onDismiss = {
                 if (!cardDraftBusy) {
                     val key = cardDraftKey(overlay)
@@ -1414,16 +1375,16 @@ fun NativeDeckScreen(
                     card = overlay.card,
                     requests = {
                         (selectedIds - currentIds).map { labelId ->
-                            writePlan().assignLabel(access, cardContext(overlay.card), labelId)
+                            writePlan().assignLabel(access, overlay.card, labelId)
                         } + (currentIds - selectedIds).map { labelId ->
-                            writePlan().removeLabel(access, cardContext(overlay.card), labelId)
+                            writePlan().removeLabel(access, overlay.card, labelId)
                         }
                     },
                     reconciledInteraction = DeckUiInteraction::Labels,
                 )
             },
             onManageLabels = boardState()?.board
-                ?.takeIf { it.permissions.canManage && !it.archived }
+                ?.takeIf { it.permissions.canManage && !it.archived && routes.managesLabels() }
                 ?.let { board ->
                     {
                         mutationError = null
@@ -1490,9 +1451,9 @@ fun NativeDeckScreen(
                     card = overlay.card,
                     requests = {
                         (selectedIds - currentIds).map { userId ->
-                            writePlan().assignUser(access, cardContext(overlay.card), userId)
+                            writePlan().assignUser(access, overlay.card, userId)
                         } + (currentIds - selectedIds).map { userId ->
-                            writePlan().unassignUser(access, cardContext(overlay.card), userId)
+                            writePlan().unassignUser(access, overlay.card, userId)
                         }
                     },
                     reconciledInteraction = DeckUiInteraction::Assignees,
@@ -1538,7 +1499,7 @@ fun NativeDeckScreen(
                     request = {
                         writePlan().createComment(
                             boardAccess(board),
-                            cardContext(overlay.card),
+                            overlay.card,
                             DeckCommentDraft(
                                 message = message,
                                 parentId = replyTo?.key?.toLongOrNull(),
@@ -1559,14 +1520,14 @@ fun NativeDeckScreen(
                 val board = checkNotNull(boardState()?.board)
                 val record = checkNotNull(commentRecords[comment.key])
                 require(record.cardId == overlay.card.id) {
-                    "The Deck comment belongs to another card."
+                    "The comment belongs to another card."
                 }
                 runCommentMutation(
                     card = overlay.card,
                     request = {
                         writePlan().updateComment(
                             boardAccess(board),
-                            cardContext(overlay.card),
+                            overlay.card,
                             record,
                             currentUserId,
                             DeckCommentUpdate(message),
@@ -1586,14 +1547,14 @@ fun NativeDeckScreen(
                 val board = checkNotNull(boardState()?.board)
                 val record = checkNotNull(commentRecords[comment.key])
                 require(record.cardId == overlay.card.id) {
-                    "The Deck comment belongs to another card."
+                    "The comment belongs to another card."
                 }
                 runCommentMutation(
                     card = overlay.card,
                     request = {
                         writePlan().deleteComment(
                             boardAccess(board),
-                            cardContext(overlay.card),
+                            overlay.card,
                             record,
                             currentUserId,
                         )
@@ -1629,21 +1590,14 @@ fun NativeDeckScreen(
                 val board = checkNotNull(boardState()?.board)
                 val record = checkNotNull(attachmentRecords[attachment.key])
                 require(record.cardId == overlay.card.id) {
-                    "The Deck attachment belongs to another card."
+                    "The attachment belongs to another card."
                 }
                 scope.launch {
                     attachmentsState = attachmentsState.copy(errorMessage = null)
                     runCatching {
                         services.handoffDeckAttachmentToExternalApp(
                             session = session,
-                            target = writePlan().openAttachment(
-                                boardAccess(board),
-                                DeckAttachmentReference(
-                                    card = cardContext(overlay.card),
-                                    type = record.type,
-                                    attachmentId = record.id,
-                                ),
-                            ),
+                            target = writePlan().openAttachment(boardAccess(board), overlay.card, record),
                             attachment = record,
                         )
                     }.onSuccess { result ->
@@ -1665,14 +1619,14 @@ fun NativeDeckScreen(
             onDelete = { attachment ->
                 val record = checkNotNull(attachmentRecords[attachment.key])
                 require(record.cardId == overlay.card.id) {
-                    "The Deck attachment belongs to another card."
+                    "The attachment belongs to another card."
                 }
                 deleteAttachment(overlay.card, record)
             },
         )
         is DeckUiInteraction.DeleteBoard -> DeckUiDestructiveConfirmationDialog(
             title = "Delete ${overlay.board.title}?",
-            message = "This removes the board and its lists from Deck.",
+            message = "This removes the board and its lists.",
             busy = mutationBusy,
             errorMessage = mutationError,
             onDismiss = { if (!mutationBusy) interaction = null },
@@ -1712,7 +1666,7 @@ fun NativeDeckScreen(
                 val board = checkNotNull(boardState()?.board)
                 runMutation(
                     request = {
-                        writePlan().deleteCard(boardAccess(board), cardContext(overlay.card))
+                        writePlan().deleteCard(boardAccess(board), overlay.card)
                     },
                 )
             },

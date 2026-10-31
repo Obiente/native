@@ -1,31 +1,24 @@
 package dev.obiente.nextcloudnative.app
 
 /**
- * Archived Deck content and list ordering.
+ * Archived board content and list ordering.
  *
- * Sources: Deck `appinfo/routes.php` (`stack_api#getArchived` returns every stack of a board with
- * its archived cards, `card_api#archive` and `#unarchive`, `stack_api#update` with `title` and
- * `order`) and `BoardApiController::update`, whose `archived` flag archives or restores a board.
+ * The archived-lists read, card archive and unarchive, list order updates, and the board
+ * `archived` flag are each offered only when the board app's own contract describes them.
  */
 data class DeckArchivedCardGroup(
     val stack: DeckStack,
     val cards: List<DeckCard>,
 )
 
-fun DeckReadRoutePlan.archivedStacks(boardId: Long): NextcloudApiRequest {
-    require(boardId > 0L) { "The Deck board id is invalid." }
-    return stacks(boardId).copy(
-        relativePath = "$apiRoot/boards/$boardId/stacks/archived",
-        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
-    )
-}
-
 /** Groups archived cards by list, keeping list order and dropping lists without archived cards. */
 fun parseDeckArchivedCards(
     boardId: Long,
     response: NextcloudApiResponse,
-): List<DeckArchivedCardGroup> =
-    parseDeckStacks(boardId, response, includeArchivedCards = true).mapNotNull { stack ->
+): List<DeckArchivedCardGroup> = deckArchivedCardGroups(parseDeckStacks(boardId, response, includeArchivedCards = true))
+
+internal fun deckArchivedCardGroups(stacks: List<DeckStack>): List<DeckArchivedCardGroup> =
+    stacks.mapNotNull { stack ->
         val archived = stack.cards.filter(DeckCard::archived)
         archived.takeIf(List<DeckCard>::isNotEmpty)?.let { cards ->
             DeckArchivedCardGroup(stack.copy(cards = emptyList()), cards)
@@ -60,10 +53,10 @@ fun planDeckStackMove(
 ): List<DeckStackOrderUpdate> {
     val ordered = stacks.sortedWith(compareBy(DeckStack::order, DeckStack::id))
     require(ordered.map(DeckStack::boardId).distinct().size <= 1) {
-        "Deck lists from different boards cannot be reordered together."
+        "Lists from different boards cannot be reordered together."
     }
     val index = ordered.indexOfFirst { it.id == stackId }
-    require(index >= 0) { "The Deck list is not part of this board." }
+    require(index >= 0) { "The list is not part of this board." }
     val target = index + direction.offset
     if (target !in ordered.indices) return emptyList()
     val moving = ordered[index]

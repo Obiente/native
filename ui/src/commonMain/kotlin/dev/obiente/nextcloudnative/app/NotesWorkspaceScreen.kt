@@ -79,8 +79,11 @@ internal const val NEW_NOTE_TITLE = "New note"
 internal fun NextcloudNotesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    noteStore: NotesRepository,
     onBack: () -> Unit,
-    onOpenNote: (NextcloudNote) -> Unit,
+    /** Opens a note on its own page. Null keeps every note in place, including on phones. */
+    onOpenNote: ((NextcloudNote) -> Unit)? = null,
+    settings: SemanticSettings? = null,
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
     filesAccess: NotesFilesAccess? = null,
@@ -89,10 +92,10 @@ internal fun NextcloudNotesScreen(
     var deletionRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var deletionRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
     val deletionRecovery = remember(accountScope, deletionRecoveryState) {
-        deletionRecoveryState?.let { decodeNoteDeletionRecoveryState(it, accountScope) }
+        deletionRecoveryState?.let { decodeNoteDeletionRecoveryState(it, accountScope, noteStore.appId) }
     }
     var notes by remember(session.serverUrl, session.loginName) {
-        mutableStateOf(sharedNextcloudNotesCache.list(session))
+        mutableStateOf(sharedNextcloudNotesCache.list(session, noteStore.appId))
     }
     var query by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var currentPath by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
@@ -130,19 +133,20 @@ internal fun NextcloudNotesScreen(
     )
     val openNote = openNoteId?.let { id ->
         notes?.firstOrNull { it.id == id } ?: openNoteSnapshot?.takeIf { it.id == id }
-            ?: sharedNextcloudNotesCache.detail(session, id)
+            ?: sharedNextcloudNotesCache.detail(session, noteStore.appId, id)
     }
 
     // Choosing a note goes through the edit guard, which asks before a dirty draft is replaced.
     fun showNote(note: NextcloudNote) {
         if (note.id == openNoteId) return
-        if (opensInPlace || openNoteId != null) {
+        val openOnPage = onOpenNote
+        if (opensInPlace || openNoteId != null || openOnPage == null) {
             inlineNavigation.navigate {
                 openNoteSnapshot = note
                 openNoteId = note.id
             }
         } else {
-            onOpenNote(note)
+            openOnPage(note)
         }
     }
     val currentShowNote by rememberUpdatedState(::showNote)
@@ -154,11 +158,11 @@ internal fun NextcloudNotesScreen(
         actionMessage = null
         scope.launch {
             try {
-                val outcome = setNoteFavorite(services, session, note.id, !note.favorite)
+                val outcome = setNoteFavorite(noteStore, note.id, !note.favorite)
                 val latest = (outcome as? NoteFavoriteOutcome.Saved)?.note ?: (outcome as? NoteFavoriteOutcome.Failed)?.latest
                 latest?.let { updated ->
                     notes = notes?.map { listed -> if (listed.id == updated.id) updated else listed }
-                    sharedNextcloudNotesCache.storeList(session, notes.orEmpty(), cacheProducer)
+                    sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
                 }
                 when (outcome) {
                     is NoteFavoriteOutcome.Saved -> Unit
@@ -175,7 +179,7 @@ internal fun NextcloudNotesScreen(
     }
 
     fun noteActions(note: NextcloudNote): List<NextcloudCardAction> = buildList {
-        if (!note.readOnly && note.id != openNoteId) {
+        if (!note.readOnly && note.id != openNoteId && noteStore.capabilities.canFavorite) {
             add(NextcloudCardAction(if (note.favorite) "Remove from favorites" else "Add to favorites") { toggleFavorite(note) })
         }
         if (filesAccess?.canShareNotes() == true) add(NextcloudCardAction("Share") { shareNote = note })
@@ -190,10 +194,10 @@ internal fun NextcloudNotesScreen(
         createError = null
         scope.launch {
             try {
-                val created = services.createNote(session, NEW_NOTE_TITLE, "", category)
+                val created = noteStore.createNote(NEW_NOTE_TITLE, "", category)
                 notes = (notes.orEmpty() + created).distinctBy(NextcloudNote::id)
-                sharedNextcloudNotesCache.storeList(session, notes.orEmpty(), cacheProducer)
-                sharedNextcloudNotesCache.storeDetail(session, created, cacheProducer)
+                sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
+                sharedNextcloudNotesCache.storeDetail(session, noteStore.appId, created, cacheProducer)
                 createdNoteToOpen = created
             } catch (failure: CancellationException) {
                 throw failure
@@ -254,19 +258,20 @@ internal fun NextcloudNotesScreen(
         val cacheProducer = sharedNextcloudNotesCache.producer(session)
         error = null
         refreshing = true
-        val cachedEtag = notes?.let { sharedNextcloudNotesCache.listEtag(session) }
         runCatching {
-            when (val result = services.listNotesConditionally(session, cachedEtag)) {
+            when (val result: NextcloudConditionalRead<List<NextcloudNote>> =
+                NextcloudConditionalRead.Modified(noteStore.listNotes(), null)
+            ) {
                 is NextcloudConditionalRead.Modified -> {
                     notes = result.value
-                    sharedNextcloudNotesCache.storeList(session, result.value, cacheProducer, result.responseEtag)
+                    sharedNextcloudNotesCache.storeList(session, noteStore.appId, result.value, cacheProducer, result.responseEtag)
                 }
                 NextcloudConditionalRead.NotModified -> Unit
             }
             listVerified = true
             deletionRecovery?.let { recovery ->
                 val expectedEncoded = deletionRecoveryState ?: return@let
-                when (val presence = services.inspectNotePresence(session, recovery.noteId)) {
+                when (val presence = noteStore.inspectNotePresence(recovery.noteId)) {
                     NextcloudNotePresence.Absent -> {
                         if (services.clearDurableMutationRecovery(
                                 accountScope,
@@ -275,7 +280,7 @@ internal fun NextcloudNotesScreen(
                             )
                         ) {
                             notes = removeVerifiedDeletedNote(notes, recovery.noteId)
-                            sharedNextcloudNotesCache.remove(session, recovery.noteId, cacheProducer)
+                            sharedNextcloudNotesCache.remove(session, noteStore.appId, recovery.noteId, cacheProducer)
                             deletionRecoveryState = null
                         } else {
                             error = "The verified note-deletion recovery record could not be cleared safely. Refreshing the current pending change."
@@ -283,7 +288,7 @@ internal fun NextcloudNotesScreen(
                         }
                     }
                     is NextcloudNotePresence.Present -> {
-                        sharedNextcloudNotesCache.storeDetail(session, presence.note, cacheProducer)
+                        sharedNextcloudNotesCache.storeDetail(session, noteStore.appId, presence.note, cacheProducer)
                         currentShowNote(presence.note)
                     }
                 }
@@ -319,17 +324,21 @@ internal fun NextcloudNotesScreen(
                     },
                     action = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = { inlineNavigation.navigate(::createNote) },
-                                enabled = !interactionBlocked,
-                            ) {
-                                Icon(NextcloudIcons.Add, contentDescription = "Create note")
+                            if (noteStore.capabilities.canCreate) {
+                                IconButton(
+                                    onClick = { inlineNavigation.navigate(::createNote) },
+                                    enabled = !interactionBlocked,
+                                ) {
+                                    Icon(NextcloudIcons.Add, contentDescription = "Create note")
+                                }
                             }
-                            IconButton(
-                                onClick = { inlineNavigation.navigate { showSettings = true } },
-                                enabled = !interactionBlocked,
-                            ) {
-                                Icon(NextcloudIcons.Settings, contentDescription = "Notes settings")
+                            if (settings != null) {
+                                IconButton(
+                                    onClick = { inlineNavigation.navigate { showSettings = true } },
+                                    enabled = !interactionBlocked,
+                                ) {
+                                    Icon(NextcloudIcons.Settings, contentDescription = "Notes settings")
+                                }
                             }
                             IconButton(onClick = { loadAttempt += 1 }, enabled = !refreshing) {
                                 if (refreshing) {
@@ -360,8 +369,10 @@ internal fun NextcloudNotesScreen(
                         listState = notesListState,
                         onRetry = { loadAttempt += 1 },
                         onOpenNote = ::showNote,
-                        onRenameFolder = { folder -> inlineNavigation.navigate { renameFolder = folder } },
-                        onDeleteFolder = { folder -> inlineNavigation.navigate { deleteFolder = folder } },
+                        onRenameFolder = { folder: NativeNoteFolder -> inlineNavigation.navigate { renameFolder = folder } }
+                            .takeIf { noteStore.capabilities.canUpdate && noteStore.capabilities.canCategorize },
+                        onDeleteFolder = { folder: NativeNoteFolder -> inlineNavigation.navigate { deleteFolder = folder } }
+                            .takeIf { noteStore.capabilities.canDelete },
                         modifier = if (besideList) Modifier.width(NotesListPaneWidth).fillMaxHeight() else Modifier.fillMaxSize(),
                     )
                 }
@@ -376,6 +387,7 @@ internal fun NextcloudNotesScreen(
                                 NextcloudNoteEditor(
                                     services = services,
                                     session = session,
+                                    noteStore = noteStore,
                                     note = shown,
                                     onBack = {
                                         openNoteId = null
@@ -412,12 +424,12 @@ internal fun NextcloudNotesScreen(
     renameFolder?.takeIf { !recoveryMutationInProgress }?.let { folder ->
         RenameNoteFolderDialog(
             folder = folder,
-            services = services,
+            noteStore = noteStore,
             session = session,
             onDismiss = { renameFolder = null },
             onReconciled = { refreshed, cacheProducer ->
                 notes = refreshed
-                sharedNextcloudNotesCache.storeList(session, refreshed, cacheProducer)
+                sharedNextcloudNotesCache.storeList(session, noteStore.appId, refreshed, cacheProducer)
             },
             onRenamed = { destination, cacheProducer ->
                 val oldPrefix = folder.path + "/"
@@ -429,7 +441,7 @@ internal fun NextcloudNotesScreen(
                         else -> note
                     }
                 }
-                sharedNextcloudNotesCache.storeList(session, notes.orEmpty(), cacheProducer)
+                sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
                 currentPath = destination
                 renameFolder = null
             },
@@ -442,19 +454,19 @@ internal fun NextcloudNotesScreen(
     deleteFolder?.takeIf { !recoveryMutationInProgress }?.let { folder ->
         DeleteNoteFolderDialog(
             folder = folder,
-            services = services,
+            noteStore = noteStore,
             session = session,
             onDismiss = { deleteFolder = null },
             onReconciled = { refreshed, cacheProducer ->
                 notes = refreshed
-                sharedNextcloudNotesCache.storeList(session, refreshed, cacheProducer)
+                sharedNextcloudNotesCache.storeList(session, noteStore.appId, refreshed, cacheProducer)
             },
             onDeleted = { cacheProducer ->
                 val prefix = folder.path + "/"
                 notes = notes.orEmpty().filterNot { note ->
                     note.category == folder.path || note.category.startsWith(prefix)
                 }
-                sharedNextcloudNotesCache.storeList(session, notes.orEmpty(), cacheProducer)
+                sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
                 if (currentPath == folder.path || currentPath.startsWith(prefix)) {
                     currentPath = noteFolderParent(folder.path)
                 }
@@ -466,12 +478,13 @@ internal fun NextcloudNotesScreen(
             },
         )
     }
-    if (showSettings) {
-        NotesSettingsDialog(
+    if (showSettings && settings != null) {
+        NotesSettingsSheet(
             services = services,
             session = session,
+            settings = settings,
             filesAccess = filesAccess,
-            onNotesFolderChanged = {
+            onSettingChanged = {
                 openNoteId = null
                 currentPath = ""
                 loadAttempt += 1
@@ -545,8 +558,8 @@ private fun NotesListPane(
     listState: LazyListState,
     onRetry: () -> Unit,
     onOpenNote: (NextcloudNote) -> Unit,
-    onRenameFolder: (NativeNoteFolder) -> Unit,
-    onDeleteFolder: (NativeNoteFolder) -> Unit,
+    onRenameFolder: ((NativeNoteFolder) -> Unit)?,
+    onDeleteFolder: ((NativeNoteFolder) -> Unit)?,
     modifier: Modifier,
 ) {
     Box(modifier) {
@@ -633,8 +646,8 @@ private fun NotesListPane(
                                     folder = folder,
                                     mutationEnabled = !interactionBlocked,
                                     onOpen = { onPathChange(folder.path) },
-                                    onRename = { onRenameFolder(folder) },
-                                    onDelete = { onDeleteFolder(folder) },
+                                    onRename = onRenameFolder?.let { rename -> { rename(folder) } },
+                                    onDelete = onDeleteFolder?.let { delete -> { delete(folder) } },
                                 )
                             }
                         }

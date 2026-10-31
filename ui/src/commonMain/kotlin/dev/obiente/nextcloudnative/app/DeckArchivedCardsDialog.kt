@@ -77,9 +77,11 @@ internal fun DeckArchivedCardsDialog(
                             card = card,
                             busy = state.busyCardId == card.id,
                             actions = if (state.canChangeCards) {
-                                listOf(
-                                    NextcloudCardAction("Restore to board") { onRestore(card) },
-                                    NextcloudCardAction("Delete card", destructive = true) { onRequestDelete(card) },
+                                listOfNotNull(
+                                    NextcloudCardAction("Restore to board") { onRestore(card) }
+                                        .takeIf { state.canRestore },
+                                    NextcloudCardAction("Delete card", destructive = true) { onRequestDelete(card) }
+                                        .takeIf { state.canDelete },
                                 )
                             } else {
                                 emptyList()

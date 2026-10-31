@@ -62,7 +62,7 @@ internal class DeckBoardSharingController(private val context: DeckBoardToolCont
         val generation = ++searchGeneration
         state = current.copy(searching = true, searchError = null)
         try {
-            val response = context.execute(deckShareeSearchRequest(current.board.id, query))
+            val response = context.execute(deckShareeSearchRequest(context.routes.appId, current.board.id, query))
             val results = parseDeckResponseOffUi { parseDeckSharees(response) }
             if (generation == searchGeneration) {
                 state = state?.copy(results = results, searching = false)
@@ -99,7 +99,7 @@ internal class DeckBoardSharingController(private val context: DeckBoardToolCont
 
     suspend fun add(sharee: DeckSharee) = write(
         actionLabel = "share board",
-        request = { board -> context.writePlan().addBoardAcl(board, sharee) },
+        request = { board -> context.routes.addShare(board, sharee) },
         verify = { board -> verifyDeckAclAdded(board, sharee) },
         successNotice = "Shared with ${sharee.displayName}",
     )
@@ -107,7 +107,7 @@ internal class DeckBoardSharingController(private val context: DeckBoardToolCont
     suspend fun setPermissions(acl: DeckAcl, requested: DeckAclPermissions) = write(
         actionLabel = "change permissions",
         request = { board ->
-            context.writePlan().updateBoardAcl(board, acl, context.currentUserId, requested)
+            context.routes.updateShare(board, acl, context.currentUserId, requested)
         },
         verify = { board -> verifyDeckAclUpdated(board, acl.id, requested) },
         successNotice = "Permissions updated for ${acl.participant.displayName}",
@@ -130,7 +130,7 @@ internal class DeckBoardSharingController(private val context: DeckBoardToolCont
         write(
             actionLabel = "remove access",
             request = { board ->
-                context.writePlan().deleteBoardAcl(board, acl, context.currentUserId)
+                context.routes.deleteShare(board, acl, context.currentUserId)
             },
             verify = { board -> verifyDeckAclRemoved(board, acl.id) },
             successNotice = "Removed access for ${acl.participant.displayName}",
@@ -198,7 +198,7 @@ private fun requireDeckSharingResponse(response: NextcloudApiResponse) {
         when (response.status) {
             403 -> "You do not have permission to change sharing for this board."
             404 -> "This share or board no longer exists."
-            else -> "Deck refused the sharing change (HTTP ${response.status})."
+            else -> "The app refused the sharing change (HTTP ${response.status})."
         }
     }
 }

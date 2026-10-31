@@ -5,28 +5,12 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-
-data class DeckCapabilities(
-    val appVersion: String?,
-    val apiVersions: List<String>,
-    val canCreateBoards: Boolean,
-)
-
-data class DeckApiVersion(val value: String) : Comparable<DeckApiVersion> {
-    init {
-        require(value in SUPPORTED_DECK_API_VERSIONS) { "The Deck API version is unsupported." }
-    }
-
-    override fun compareTo(other: DeckApiVersion): Int =
-        SUPPORTED_DECK_API_VERSIONS.indexOf(other.value).compareTo(
-            SUPPORTED_DECK_API_VERSIONS.indexOf(value),
-        )
-}
 
 data class DeckUser(
     val id: String,
@@ -62,7 +46,9 @@ data class DeckBoard(
     val acl: List<DeckAcl> = emptyList(),
     /** False when the share list was present but malformed; sharing stays read-only then. */
     val aclReadable: Boolean = true,
-    val settings: DeckBoardSettings? = null,
+    val settings: Map<String, String> = emptyMap(),
+    /** Scalar server values, used only to keep unchanged fields in a full-replacement update. */
+    val rawFields: Map<String, String> = emptyMap(),
 )
 
 /** The board list response, split into active boards and boards the user archived. */
@@ -90,6 +76,8 @@ data class DeckCard(
     val attachmentCount: Int,
     val unreadCommentCount: Int,
     val etag: String?,
+    /** Scalar server values, used only to keep unchanged fields in a full-replacement update. */
+    val rawFields: Map<String, String> = emptyMap(),
 )
 
 data class DeckStack(
@@ -101,6 +89,9 @@ data class DeckStack(
     val cards: List<DeckCard>,
     val lastModified: Long?,
     val etag: String?,
+    /** False when the list record carried no card collection, so cards are read per list. */
+    val cardsEmbedded: Boolean = true,
+    val rawFields: Map<String, String> = emptyMap(),
 )
 
 sealed interface DeckWorkspaceState {
@@ -132,100 +123,13 @@ sealed interface DeckWorkspaceState {
     ) : DeckWorkspaceState
 }
 
-data class DeckReadRoutePlan(
-    val version: DeckApiVersion,
-    val apiRoot: String = "/index.php/apps/deck/api/v${version.value}",
-) {
-    fun boards(details: Boolean = false): NextcloudApiRequest = deckGet(
-        path = "$apiRoot/boards",
-        query = if (details) mapOf("details" to "true") else emptyMap(),
-    )
-
-    fun board(boardId: Long): NextcloudApiRequest = deckGet("$apiRoot/boards/${boardId.requireDeckId()}")
-
-    fun authoritativeBoard(boardId: Long): NextcloudApiRequest =
-        board(boardId).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
-
-    fun stacks(boardId: Long): NextcloudApiRequest =
-        deckGet("$apiRoot/boards/${boardId.requireDeckId()}/stacks")
-
-    fun card(boardId: Long, stackId: Long, cardId: Long): NextcloudApiRequest = deckGet(
-        "$apiRoot/boards/${boardId.requireDeckId()}/stacks/${stackId.requireDeckId()}/cards/" +
-            cardId.requireDeckId(),
-    )
-
-    fun authoritativeCard(
-        boardId: Long,
-        stackId: Long,
-        cardId: Long,
-    ): NextcloudApiRequest =
-        card(boardId, stackId, cardId).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
-
-    private fun deckGet(
-        path: String,
-        query: Map<String, String> = emptyMap(),
-    ): NextcloudApiRequest = NextcloudApiRequest(
-        method = NextcloudApiMethod.GET,
-        relativePath = path,
-        queryParameters = query,
-        ocsApiRequest = true,
-        maximumResponseBytes = DECK_READ_RESPONSE_BYTES,
-    )
-}
-
-data class DeckReadNegotiation(
-    val candidates: List<DeckReadRoutePlan>,
-    val capabilityBacked: Boolean,
-) {
-    init {
-        require(candidates.isNotEmpty()) { "At least one Deck read route is required." }
-    }
-
-    /**
-     * Only a route/version mismatch advances to the next verified read version. Authentication,
-     * permission, throttling, and server failures are surfaced without masking the real problem.
-     */
-    fun nextAfter(current: DeckReadRoutePlan, status: Int): DeckReadRoutePlan? {
-        if (status !in DECK_VERSION_MISMATCH_STATUSES) return null
-        val index = candidates.indexOf(current)
-        return candidates.getOrNull(index + 1)
-    }
-}
-
-internal fun DeckReadRoutePlan.workspaceBoardMetadata(boardId: Long): NextcloudApiRequest =
-    authoritativeBoard(boardId)
-
-fun negotiateDeckReadRoutes(capabilities: DeckCapabilities?): DeckReadNegotiation {
-    val advertised = capabilities?.apiVersions.orEmpty().mapNotNull { raw ->
-        raw.takeIf { it in SUPPORTED_DECK_API_VERSIONS }?.let(::DeckApiVersion)
-    }.distinct().sortedDescending()
-    val versions = advertised.ifEmpty { SUPPORTED_DECK_API_VERSIONS.map(::DeckApiVersion) }
-    return DeckReadNegotiation(
-        candidates = versions.map(::DeckReadRoutePlan),
-        capabilityBacked = advertised.isNotEmpty(),
-    )
-}
-
-fun parseDeckCapabilities(response: NextcloudApiResponse): DeckCapabilities? {
-    require(response.status in 200..299) { "Deck capability discovery failed (HTTP ${response.status})." }
-    val root = response.deckJsonObject("Deck capability discovery")
-    val deck = root.pathObject("ocs", "data", "capabilities", "deck")
-        ?: root.pathObject("capabilities", "deck")
-        ?: return null
-    return DeckCapabilities(
-        appVersion = deck.string("version"),
-        apiVersions = (deck["apiVersions"] as? JsonArray).orEmpty().mapNotNull { it.scalarString() },
-        canCreateBoards = deck.boolean("canCreateBoards") ?: false,
-    )
-}
-
 fun parseDeckBoards(response: NextcloudApiResponse): List<DeckBoard> =
     parseDeckBoardCollection(response).active
 
 fun parseDeckBoardCollection(response: NextcloudApiResponse): DeckBoardCollection {
-    require(response.status in 200..299) { "Deck boards failed to load (HTTP ${response.status})." }
-    val boards = response.deckPayload("Deck boards").requireArray("Deck boards").map { element ->
-        element.requireObject("Deck board").toDeckBoard()
+    require(response.status in 200..299) { "Boards failed to load (HTTP ${response.status})." }
+    val boards = response.deckPayload("Boards").requireArray("Boards").map { element ->
+        element.requireObject("Board").toDeckBoard()
     }.sortedBy { it.title.lowercase() }
     return DeckBoardCollection(
         active = boards.filterNot(DeckBoard::archived),
@@ -234,13 +138,16 @@ fun parseDeckBoardCollection(response: NextcloudApiResponse): DeckBoardCollectio
 }
 
 fun parseDeckBoard(response: NextcloudApiResponse): DeckBoard {
-    require(response.status in 200..299) { "The Deck board failed to load (HTTP ${response.status})." }
-    val board = response.deckPayload("Deck board").requireObject("Deck board").toDeckBoard()
-    return if (board.etag == null && response.etag != null) {
-        board.copy(etag = response.etag)
-    } else {
-        board
-    }
+    require(response.status in 200..299) { "The board failed to load (HTTP ${response.status})." }
+    val board = response.deckPayload("Board").requireObject("Board").toDeckBoard()
+    return if (board.etag == null && response.etag != null) board.copy(etag = response.etag) else board
+}
+
+/** Finds one board in a board-list response, for contracts that describe no single-board read. */
+fun parseDeckBoardFromList(boardId: Long, response: NextcloudApiResponse): DeckBoard {
+    val collection = parseDeckBoardCollection(response)
+    return (collection.active + collection.archived).firstOrNull { it.id == boardId }
+        ?: error("The board is no longer available.")
 }
 
 fun parseDeckStacks(
@@ -248,26 +155,42 @@ fun parseDeckStacks(
     response: NextcloudApiResponse,
     includeArchivedCards: Boolean = false,
 ): List<DeckStack> {
-    require(response.status in 200..299) { "Deck stacks failed to load (HTTP ${response.status})." }
+    require(response.status in 200..299) { "Lists failed to load (HTTP ${response.status})." }
     val safeBoardId = boardId.requireDeckId()
-    return response.deckPayload("Deck stacks").requireArray("Deck stacks").map { element ->
-        val value = element.requireObject("Deck stack")
-        val parsedBoardId = value.long("boardId") ?: safeBoardId
-        require(parsedBoardId == safeBoardId) { "A Deck stack belongs to an unexpected board." }
-        val stackId = value.requirePositiveId("id", "Deck stack")
+    return response.deckPayload("Lists").requireArray("Lists").map { element ->
+        val value = element.requireObject("List")
+        val parsedBoardId = value.firstLong(BOARD_REFERENCE_FIELDS) ?: safeBoardId
+        require(parsedBoardId == safeBoardId) { "A list belongs to an unexpected board." }
+        val stackId = value.requirePositiveId("id", "List")
+        val embedded = value.firstArray(CARD_COLLECTION_FIELDS)
         DeckStack(
             id = stackId,
             boardId = safeBoardId,
-            title = value.requireString("title", "Deck stack"),
-            order = value.long("order") ?: 0L,
+            title = value.requireTitle("List"),
+            order = value.firstLong(ORDER_FIELDS) ?: 0L,
             doneColumn = value.boolean("isDoneColumn") ?: false,
-            cards = value.array("cards").map { card ->
-                card.requireObject("Deck card").toDeckCard(safeBoardId, stackId)
+            cards = embedded.orEmpty().map { card ->
+                card.requireObject("Card").toDeckCard(safeBoardId, stackId)
             }.filter { includeArchivedCards || !it.archived }.sortedBy(DeckCard::order),
-            lastModified = value.long("lastModified"),
+            lastModified = value.firstLong(MODIFIED_FIELDS),
             etag = value.string("ETag") ?: value.string("etag"),
+            cardsEmbedded = embedded != null,
+            rawFields = value.scalarFields(),
         )
     }.sortedBy(DeckStack::order)
+}
+
+/** Cards of one list, for contracts that list cards separately from their lists. */
+fun parseDeckStackCards(
+    boardId: Long,
+    stackId: Long,
+    response: NextcloudApiResponse,
+    includeArchivedCards: Boolean = false,
+): List<DeckCard> {
+    require(response.status in 200..299) { "Cards failed to load (HTTP ${response.status})." }
+    return response.deckPayload("Cards").requireArray("Cards").map { element ->
+        element.requireObject("Card").toDeckCard(boardId.requireDeckId(), stackId.requireDeckId())
+    }.filter { includeArchivedCards || !it.archived }.sortedBy(DeckCard::order)
 }
 
 fun parseDeckCard(
@@ -275,14 +198,10 @@ fun parseDeckCard(
     stackId: Long,
     response: NextcloudApiResponse,
 ): DeckCard {
-    require(response.status in 200..299) { "The Deck card failed to load (HTTP ${response.status})." }
-    val card = response.deckPayload("Deck card").requireObject("Deck card")
+    require(response.status in 200..299) { "The card failed to load (HTTP ${response.status})." }
+    val card = response.deckPayload("Card").requireObject("Card")
         .toDeckCard(boardId.requireDeckId(), stackId.requireDeckId())
-    return if (card.etag == null && response.etag != null) {
-        card.copy(etag = response.etag)
-    } else {
-        card
-    }
+    return if (card.etag == null && response.etag != null) card.copy(etag = response.etag) else card
 }
 
 fun deckBoardState(
@@ -307,7 +226,7 @@ fun deckBoardState(
             message = "The board lists are unavailable. Try loading the board again.",
         )
     require(loadedStacks.all { it.boardId == selected.id }) {
-        "Deck stacks cannot be attached to the wrong board."
+        "Lists cannot be attached to the wrong board."
     }
     return DeckWorkspaceState.Board(
         board = selected,
@@ -317,27 +236,27 @@ fun deckBoardState(
 }
 
 private fun JsonObject.toDeckCard(boardId: Long, expectedStackId: Long): DeckCard {
-    val stackId = long("stackId") ?: expectedStackId
-    require(stackId == expectedStackId) { "A Deck card belongs to an unexpected stack." }
+    val stackId = firstLong(LANE_REFERENCE_FIELDS) ?: expectedStackId
+    require(stackId == expectedStackId) { "A card belongs to an unexpected list." }
     return DeckCard(
-        id = requirePositiveId("id", "Deck card"),
+        id = requirePositiveId("id", "Card"),
         boardId = boardId,
         stackId = stackId,
-        title = requireString("title", "Deck card"),
-        descriptionMarkdown = string("description"),
+        title = requireTitle("Card"),
+        descriptionMarkdown = firstString(DESCRIPTION_FIELDS),
         ownerId = string("owner")
             ?: (this["owner"] as? JsonObject)?.let { owner ->
                 owner.string("uid") ?: owner.string("primaryKey") ?: owner.string("id")
             },
         color = string("color")?.normalizeDeckColor(),
-        order = long("order") ?: 0L,
-        dueAt = string("duedate"),
-        startAt = string("startdate"),
-        completedAt = string("done"),
+        order = firstLong(ORDER_FIELDS) ?: 0L,
+        dueAt = firstString(DUE_FIELDS),
+        startAt = firstString(START_FIELDS),
+        completedAt = completion(),
         archived = boolean("archived") ?: false,
         overdue = (long("overdue") ?: 0L) > 0L,
-        labels = array("labels").mapNotNull(JsonElement::toDeckLabel),
-        assignees = array("assignedUsers").mapNotNull { element ->
+        labels = firstArray(LABEL_FIELDS).orEmpty().mapNotNull(JsonElement::toDeckLabel),
+        assignees = firstArray(ASSIGNEE_FIELDS).orEmpty().mapNotNull { element ->
             val assignment = element as? JsonObject ?: return@mapNotNull null
             (assignment["participant"] as? JsonObject)?.toDeckUser()
                 ?: (assignment["user"] as? JsonObject)?.toDeckUser()
@@ -346,7 +265,20 @@ private fun JsonObject.toDeckCard(boardId: Long, expectedStackId: Long): DeckCar
         attachmentCount = int("attachmentCount") ?: array("attachments").size,
         unreadCommentCount = int("commentsUnread") ?: 0,
         etag = string("ETag") ?: string("etag"),
+        rawFields = scalarFields(),
     )
+}
+
+/** A completion timestamp, or a marker when the record only reports a completed flag. */
+private fun JsonObject.completion(): String? {
+    COMPLETION_FIELDS.forEach { name ->
+        val element = this[name] ?: return@forEach
+        if (element is JsonNull) return null
+        val primitive = element as? JsonPrimitive ?: return@forEach
+        primitive.booleanOrNull?.let { done -> return if (done) COMPLETED_WITHOUT_TIMESTAMP else null }
+        return primitive.contentOrNull?.takeIf(String::isNotBlank)
+    }
+    return null
 }
 
 private fun JsonObject.toDeckBoard(): DeckBoard {
@@ -361,9 +293,9 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
                 ?: assignment.toDeckUser()
         }
     }.distinctBy(DeckUser::id)
-    val boardId = requirePositiveId("id", "Deck board")
+    val boardId = requirePositiveId("id", "Board")
     val acl = try {
-        parseDeckBoardAcl(boardId, array("acl"))
+        parseDeckBoardAcl(boardId, firstArray(SHARE_FIELDS) ?: JsonArray(emptyList()))
     } catch (_: IllegalArgumentException) {
         null
     } catch (_: IllegalStateException) {
@@ -371,31 +303,42 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
     }
     return DeckBoard(
         id = boardId,
-        title = requireString("title", "Deck board"),
+        title = requireTitle("Board"),
         color = string("color")?.normalizeDeckColor(),
         archived = boolean("archived") ?: false,
         owner = owner,
-        labels = array("labels").mapNotNull(JsonElement::toDeckLabel),
+        labels = firstArray(LABEL_FIELDS).orEmpty().mapNotNull(JsonElement::toDeckLabel),
         users = users,
-        permissions = DeckPermissions(
-            canRead = permissions?.boolean("PERMISSION_READ") ?: true,
-            canEdit = permissions?.boolean("PERMISSION_EDIT") ?: false,
-            canManage = permissions?.boolean("PERMISSION_MANAGE") ?: false,
-            canShare = permissions?.boolean("PERMISSION_SHARE") ?: false,
-        ),
+        permissions = permissions.toDeckPermissions(),
         shared = (long("shared") ?: 0L) > 0L,
-        lastModified = long("lastModified"),
+        lastModified = firstLong(MODIFIED_FIELDS),
         etag = string("ETag") ?: string("etag"),
         acl = acl.orEmpty(),
         aclReadable = acl != null,
-        settings = parseDeckBoardSettings(this["settings"] as? JsonObject),
+        settings = (this["settings"] as? JsonObject)?.scalarFields().orEmpty(),
+        rawFields = scalarFields(),
+    )
+}
+
+/**
+ * Permission evidence on the record restricts actions. A record without any permission object
+ * leaves enforcement to the server, so actions the contract describes remain available.
+ */
+private fun JsonObject?.toDeckPermissions(): DeckPermissions {
+    if (this == null) return DeckPermissions(canRead = true, canEdit = true, canManage = true, canShare = true)
+    fun flag(vararg names: String): Boolean? = names.firstNotNullOfOrNull { boolean(it) }
+    return DeckPermissions(
+        canRead = flag("PERMISSION_READ", "read", "canRead") ?: true,
+        canEdit = flag("PERMISSION_EDIT", "edit", "canEdit") ?: false,
+        canManage = flag("PERMISSION_MANAGE", "manage", "canManage") ?: false,
+        canShare = flag("PERMISSION_SHARE", "share", "canShare") ?: false,
     )
 }
 
 private fun JsonElement.toDeckLabel(): DeckLabel? {
     val value = this as? JsonObject ?: return null
     val id = value.long("id")?.takeIf { it > 0L } ?: return null
-    val title = value.string("title")?.takeIf(String::isNotBlank) ?: return null
+    val title = value.firstString(TITLE_FIELDS) ?: return null
     return DeckLabel(id, title, value.string("color")?.normalizeDeckColor())
 }
 
@@ -403,12 +346,6 @@ private fun JsonObject.toDeckUser(): DeckUser? {
     val id = string("uid") ?: string("primaryKey") ?: string("id") ?: return null
     val display = string("displayname") ?: string("displayName") ?: id
     return DeckUser(id = id, displayName = display, type = int("type"))
-}
-
-private fun NextcloudApiResponse.deckJsonObject(label: String): JsonObject {
-    require(body.size <= DECK_READ_RESPONSE_BYTES) { "$label returned too much data." }
-    return runCatching { deckJson.parseToJsonElement(body.decodeToString()) as? JsonObject }
-        .getOrNull() ?: error("$label returned invalid JSON.")
 }
 
 private fun NextcloudApiResponse.deckPayload(label: String): JsonElement {
@@ -434,44 +371,55 @@ private fun JsonElement.requireObject(label: String): JsonObject =
 private fun JsonObject.requirePositiveId(name: String, label: String): Long =
     long(name)?.takeIf { it > 0L } ?: error("$label has no valid $name.")
 
-private fun JsonObject.requireString(name: String, label: String): String =
-    string(name)?.trim()?.takeIf(String::isNotBlank) ?: error("$label has no valid $name.")
+private fun JsonObject.requireTitle(label: String): String =
+    TITLE_FIELDS.firstNotNullOfOrNull { name -> string(name)?.trim()?.takeIf(String::isNotBlank) }
+        ?: error("$label has no valid title.")
 
 private fun JsonObject.string(name: String): String? =
     this[name]?.scalarString()?.takeIf(String::isNotBlank)
 
-private fun JsonObject.long(name: String): Long? = this[name]?.let { element ->
-    if (element is JsonNull) null else element.jsonPrimitive.longOrNull
+private fun JsonObject.firstString(names: List<String>): String? = names.firstNotNullOfOrNull { string(it) }
+
+private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.let { element ->
+    if (element is JsonNull) null else element.longOrNull
 }
 
-private fun JsonObject.int(name: String): Int? = this[name]?.let { element ->
-    if (element is JsonNull) null else element.jsonPrimitive.intOrNull
+private fun JsonObject.firstLong(names: List<String>): Long? = names.firstNotNullOfOrNull { long(it) }
+
+private fun JsonObject.int(name: String): Int? = (this[name] as? JsonPrimitive)?.let { element ->
+    if (element is JsonNull) null else element.intOrNull
 }
 
-private fun JsonObject.boolean(name: String): Boolean? = this[name]?.let { element ->
-    if (element is JsonNull) null
-    else element.jsonPrimitive.booleanOrNull ?: when (element.jsonPrimitive.contentOrNull?.lowercase()) {
-        "1", "yes" -> true
-        "0", "no" -> false
-        else -> null
+private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.let { element ->
+    if (element is JsonNull) {
+        null
+    } else {
+        element.booleanOrNull ?: when (element.contentOrNull?.lowercase()) {
+            "1", "yes" -> true
+            "0", "no" -> false
+            else -> null
+        }
     }
 }
 
 private fun JsonObject.array(name: String): JsonArray =
     this[name] as? JsonArray ?: JsonArray(emptyList())
 
-private fun JsonElement.scalarString(): String? =
-    if (this is JsonNull) null else runCatching { jsonPrimitive.contentOrNull }.getOrNull()
+private fun JsonObject.firstArray(names: List<String>): JsonArray? =
+    names.firstNotNullOfOrNull { this[it] as? JsonArray }
 
-private fun JsonObject.pathObject(vararg path: String): JsonObject? {
-    var cursor: JsonObject = this
-    path.forEachIndexed { index, name ->
-        val next = cursor[name] as? JsonObject ?: return null
-        if (index == path.lastIndex) return next
-        cursor = next
+private fun JsonElement.scalarString(): String? =
+    if (this is JsonNull) null else (this as? JsonPrimitive)?.contentOrNull
+
+/** Bounded scalar values of a record, kept so a full replacement can echo unchanged fields. */
+private fun JsonObject.scalarFields(): Map<String, String> = entries.asSequence()
+    .mapNotNull { (name, value) ->
+        if (value is JsonNull) return@mapNotNull null
+        val primitive = value as? JsonPrimitive ?: return@mapNotNull null
+        primitive.contentOrNull?.takeIf { it.length <= MAX_ECHOED_SCALAR_CHARS }?.let { name to it }
     }
-    return cursor
-}
+    .take(MAX_ECHOED_SCALAR_FIELDS)
+    .toMap()
 
 private fun String.normalizeDeckColor(): String? {
     val normalized = trim().removePrefix("#")
@@ -481,14 +429,30 @@ private fun String.normalizeDeckColor(): String? {
 }
 
 private fun Long.requireDeckId(): Long {
-    require(this > 0L) { "The Deck resource id is invalid." }
+    require(this > 0L) { "The board resource id is invalid." }
     return this
 }
+
+/** Marks a card whose record reports completion without a timestamp. */
+internal const val COMPLETED_WITHOUT_TIMESTAMP = "completed"
 
 private val deckJson = Json {
     ignoreUnknownKeys = true
     isLenient = false
 }
-private val SUPPORTED_DECK_API_VERSIONS = listOf("1.1", "1.0")
-private val DECK_VERSION_MISMATCH_STATUSES = setOf(400, 404, 405, 406)
+private val TITLE_FIELDS = listOf("title", "name")
+private val DESCRIPTION_FIELDS = listOf("description", "details", "body", "content")
+private val ORDER_FIELDS = listOf("order", "position", "sortOrder", "sort", "index")
+private val DUE_FIELDS = listOf("duedate", "dueDate", "due", "dueAt", "deadline")
+private val START_FIELDS = listOf("startdate", "startDate", "startAt", "start")
+private val COMPLETION_FIELDS = listOf("done", "completedAt", "completed", "isDone")
+private val MODIFIED_FIELDS = listOf("lastModified", "modified", "updatedAt")
+private val LABEL_FIELDS = listOf("labels", "tags")
+private val ASSIGNEE_FIELDS = listOf("assignedUsers", "assignees", "members")
+private val SHARE_FIELDS = listOf("acl", "shares")
+private val BOARD_REFERENCE_FIELDS = listOf("boardId", "projectId")
+private val LANE_REFERENCE_FIELDS = listOf("stackId", "listId", "columnId", "laneId", "stageId")
+private val CARD_COLLECTION_FIELDS = listOf("cards", "tasks", "tickets", "issues")
 private const val DECK_READ_RESPONSE_BYTES = 8L * 1024L * 1024L
+private const val MAX_ECHOED_SCALAR_FIELDS = 64
+private const val MAX_ECHOED_SCALAR_CHARS = 4_096

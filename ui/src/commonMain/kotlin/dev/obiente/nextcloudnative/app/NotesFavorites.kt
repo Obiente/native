@@ -42,13 +42,12 @@ sealed interface NoteFavoriteOutcome {
  * idempotent, so a failed or unreadable write is resolved by reading the note again.
  */
 internal suspend fun setNoteFavorite(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
+    noteStore: NotesRepository,
     noteId: Long,
     favorite: Boolean,
 ): NoteFavoriteOutcome {
     val current = try {
-        services.loadNote(session, noteId)
+        noteStore.loadNote(noteId)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {
@@ -59,8 +58,7 @@ internal suspend fun setNoteFavorite(
     val content = current.content
         ?: return NoteFavoriteOutcome.Failed("The note content is unavailable. Refresh and try again.", current)
     val writeFailure = try {
-        val saved = services.updateNote(
-            session = session,
+        val saved = noteStore.updateNote(
             noteId = current.id,
             content = content,
             category = current.category,
@@ -76,15 +74,15 @@ internal suspend fun setNoteFavorite(
         failure
     }
     return try {
-        val latest = services.loadNote(session, noteId)
+        val latest = noteStore.loadNote(noteId)
         if (latest.favorite == favorite) {
             NoteFavoriteOutcome.Saved(latest)
         } else {
-            NoteFavoriteOutcome.Failed(writeFailure?.message ?: "Notes did not change the favorite.", latest)
+            NoteFavoriteOutcome.Failed(writeFailure?.message ?: "The app did not change the favorite.", latest)
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
-        NoteFavoriteOutcome.Unknown("Notes may have changed the favorite. Refresh to check.")
+        NoteFavoriteOutcome.Unknown("The app may have changed the favorite. Refresh to check.")
     }
 }

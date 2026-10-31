@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun RenameNoteFolderDialog(
     folder: NativeNoteFolder,
-    services: NextcloudPlatformServices,
+    noteStore: NotesRepository,
     session: NextcloudSession,
     onDismiss: () -> Unit,
     onReconciled: (List<NextcloudNote>, AccountPrivateMemoryProducer?) -> Unit,
@@ -64,7 +64,7 @@ internal fun RenameNoteFolderDialog(
                     onSubmittingChanged(true)
                     scope.launch {
                         try {
-                            services.renameNoteCategory(session, folder.path, destination)
+                            noteStore.renameNoteCategory(folder.path, destination)
                             onRenamed(destination, cacheProducer)
                         } catch (failure: CancellationException) {
                             throw failure
@@ -88,7 +88,7 @@ internal fun RenameNoteFolderDialog(
 @Composable
 internal fun DeleteNoteFolderDialog(
     folder: NativeNoteFolder,
-    services: NextcloudPlatformServices,
+    noteStore: NotesRepository,
     session: NextcloudSession,
     onDismiss: () -> Unit,
     onReconciled: (List<NextcloudNote>, AccountPrivateMemoryProducer?) -> Unit,
@@ -122,7 +122,7 @@ internal fun DeleteNoteFolderDialog(
                     onSubmittingChanged(true)
                     scope.launch {
                         try {
-                            services.deleteNoteCategory(session, folder.path)
+                            noteStore.deleteNoteCategory(folder.path)
                             onDeleted(cacheProducer)
                         } catch (failure: CancellationException) {
                             throw failure
