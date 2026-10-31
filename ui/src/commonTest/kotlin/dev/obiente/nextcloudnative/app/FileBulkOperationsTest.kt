@@ -32,6 +32,8 @@ class FileBulkOperationsTest {
         val appliedThenUnknown = mutableSetOf<String>()
         val mutations = mutableListOf<NextcloudFileMutation>()
         val favorites = mutableListOf<Pair<String, Boolean>>()
+        /** Sizes by item path for entries that differ from the default one-byte file. */
+        val sizes = mutableMapOf<String, Long>()
 
         fun mutate(mutation: NextcloudFileMutation): NextcloudFileMutationResult {
             mutations += mutation
@@ -58,7 +60,7 @@ class FileBulkOperationsTest {
 
         fun listing(folder: String) = NextcloudFileListing(
             folders.getValue(folder).map { name ->
-                NextcloudFile("$folder/$name", name, false, "text/plain", 1, null, 1, false, etag = "e")
+                NextcloudFile("$folder/$name", name, false, "text/plain", sizes["$folder/$name"] ?: 1, null, 1, false, etag = "e")
             },
             NextcloudFileListingSource.Network,
         )
@@ -103,6 +105,25 @@ class FileBulkOperationsTest {
         val result = runner(fake).transfer(listOf(file("Docs/a.txt")), "Archive", copy = false).results.single()
         assertEquals(BulkItemOutcome.Failed, result.outcome)
         assertTrue(result.retrySafe)
+    }
+
+    @Test
+    fun unknownCopyIsVerifiedAgainstTheMatchingDestinationFile(): Unit = runBlocking {
+        val fake = FakeFiles().apply { appliedThenUnknown += "Docs/a.txt" }
+        val result = runner(fake).transfer(listOf(file("Docs/a.txt")), "Archive", copy = true).results.single()
+        assertEquals(BulkItemOutcome.Completed, result.outcome)
+    }
+
+    @Test
+    fun unknownCopyIsNotConfirmedByADifferentFileWithTheSameName(): Unit = runBlocking {
+        val fake = FakeFiles().apply {
+            sizes["Archive/b.txt"] = 99
+            failures["Docs/b.txt"] = IllegalStateException("reset")
+        }
+        val result = runner(fake).transfer(listOf(file("Docs/b.txt")), "Archive", copy = true).results.single()
+        assertEquals(BulkItemOutcome.Failed, result.outcome)
+        assertEquals(false, result.retrySafe)
+        assertTrue(result.reason!!.contains("different item"))
     }
 
     @Test

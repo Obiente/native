@@ -72,6 +72,19 @@ class FileTrashbinProtocolTest {
     }
 
     @Test
+    fun oversizedListingKeepsTheNewestItemsAndReportsTruncation() {
+        val entries = listOf(entry("/remote.php/dav/trashbin/alice/trash/", folder = true)) +
+            (1..MAX_TRASH_ITEMS + 1).map { index ->
+                entry("/remote.php/dav/trashbin/alice/trash/file$index.txt.d$index", name = "file$index.txt", time = index.toLong())
+            }
+        val listing = parseTrashbinListing(multistatus(*entries.toTypedArray()), "alice")
+        assertTrue(listing.truncated)
+        assertEquals(MAX_TRASH_ITEMS, listing.items.size)
+        assertEquals("file${MAX_TRASH_ITEMS + 1}.txt.d${MAX_TRASH_ITEMS + 1}", listing.items.first().key)
+        assertFalse(listing.items.any { it.key == "file1.txt.d1" })
+    }
+
+    @Test
     fun malformedListingFailsClosed() {
         assertFailsWith<FilesDavProtocolException> {
             parseTrashbinListing(NextcloudApiResponse(200, "<html/>".encodeToByteArray(), "text/html", null), "alice")

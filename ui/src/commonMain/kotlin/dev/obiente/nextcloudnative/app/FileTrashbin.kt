@@ -100,9 +100,13 @@ fun trashbinEmptyRequest(userId: String): FilesDavRequest = FilesDavRequest(
     relativePath = trashCollectionPath(userId),
 )
 
-/** Parses the listing. Unreadable entries are skipped and counted instead of failing the list. */
+/**
+ * Parses the listing. Unreadable entries are skipped and counted instead of failing the list.
+ * A listing larger than [MAX_TRASH_ITEMS] keeps the newest entries and reports truncation; the
+ * parse ceiling only guards against a pathological body, which is already size-bounded.
+ */
 fun parseTrashbinListing(response: NextcloudApiResponse, userId: String): TrashbinListing {
-    val records = parseFilesDavMultistatus(response, MAX_TRASH_ITEMS)
+    val records = parseFilesDavMultistatus(response, MAX_TRASH_PARSED_ENTRIES)
     val encodedUser = encodeFilesDavSegment(userId)
     var skipped = 0
     val items = mutableListOf<NextcloudTrashItem>()
@@ -187,6 +191,7 @@ private fun String.isSafeTrashText(maximumLength: Int): Boolean =
     isNotBlank() && length <= maximumLength && none { it.isISOControl() }
 
 internal const val MAX_TRASH_ITEMS = 2_000
+private const val MAX_TRASH_PARSED_ENTRIES = 25_000
 private const val MAX_TRASH_NAME_LENGTH = 1_024
 private const val MAX_TRASH_LOCATION_LENGTH = 4_096
 private const val MAX_TRASH_LIST_BYTES = 8L * 1024L * 1024L

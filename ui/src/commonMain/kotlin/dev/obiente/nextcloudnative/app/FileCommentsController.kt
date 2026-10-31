@@ -12,6 +12,8 @@ data class FileCommentsState(
     /** Newest first. Null until the first page loads. */
     val comments: List<NextcloudFileComment>? = null,
     val mayHaveMore: Boolean = false,
+    /** Server entries read so far, including hidden ones; the offset of the next page. */
+    val serverOffset: Int = 0,
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
     /** Comments are not available for this file (comments app disabled or no access). */
@@ -71,17 +73,19 @@ class FileCommentsController(
     }
 
     fun loadMore() {
-        val loaded = state.comments ?: return
+        if (state.comments == null) return
         if (!state.mayHaveMore || state.loadingMore) return
+        val offset = state.serverOffset
         state = state.copy(loadingMore = true)
         scope.launch {
             try {
-                when (val read = read(fileCommentsListRequest(fileId, offset = loaded.size))) {
+                when (val read = read(fileCommentsListRequest(fileId, offset = offset))) {
                     is CommentsRead.Loaded -> {
                         val known = state.comments.orEmpty().mapTo(HashSet()) { it.id }
                         state = state.copy(
                             comments = state.comments.orEmpty() + read.page.comments.filterNot { it.id in known },
                             mayHaveMore = read.page.mayHaveMore,
+                            serverOffset = offset + read.page.serverEntries,
                         )
                     }
                     is CommentsRead.Failed -> state = state.copy(notice = "Couldn't load older comments. ${commentFailureReason(read.kind)}")
@@ -215,7 +219,13 @@ class FileCommentsController(
         val read = read(fileCommentsListRequest(fileId, offset = 0))
         if (read is CommentsRead.Loaded && sequence > appliedSequence) {
             appliedSequence = sequence
-            state = state.copy(comments = read.page.comments, mayHaveMore = read.page.mayHaveMore, unavailable = false, failure = null)
+            state = state.copy(
+                comments = read.page.comments,
+                mayHaveMore = read.page.mayHaveMore,
+                serverOffset = read.page.serverEntries,
+                unavailable = false,
+                failure = null,
+            )
         } else if (read is CommentsRead.Failed && read.kind in UNAVAILABLE_KINDS && state.comments == null) {
             state = state.copy(unavailable = true, comments = emptyList())
         }

@@ -87,10 +87,10 @@ internal class FileBulkOperationRunner(
             }
         }
         if (pendingVerification.isNotEmpty()) {
-            val destinationNames = readNames(destination)
+            val destinationEntries = readEntries(destination)
             pendingVerification.forEach { file ->
-                val sourceNames = if (copy) null else readNames(file.path.substringBeforeLast('/', missingDelimiterValue = ""))
-                results[file.path] = verifyTransfer(file, copy, destinationNames, sourceNames)
+                val sourceEntries = if (copy) null else readEntries(file.path.substringBeforeLast('/', missingDelimiterValue = ""))
+                results[file.path] = verifyTransfer(file, copy, destinationEntries, sourceEntries)
             }
         }
         val folderLabel = if (destination.isEmpty()) "All files" else destination
@@ -151,28 +151,66 @@ internal class FileBulkOperationRunner(
         return null
     }
 
-    /** Names in [folder] from a fresh server listing, or null when it could not be read. */
-    private suspend fun readNames(folder: String): Set<String>? = try {
+    /** Entries in [folder] by name from a fresh server listing, or null when it could not be read. */
+    private suspend fun readEntries(folder: String): Map<String, NextcloudFile>? = try {
         deletes.readFolder(folder) { readFolder(folder) }
             .takeIf { it.source == NextcloudFileListingSource.Network }
-            ?.files?.mapTo(HashSet()) { it.name }
+            ?.files?.associateBy { it.name }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
         null
     }
 
-    private fun verifyTransfer(file: NextcloudFile, copy: Boolean, destinationNames: Set<String>?, sourceNames: Set<String>?): BulkItemResult {
-        val atDestination = destinationNames?.contains(file.name)
-        val atSource = sourceNames?.contains(file.name)
+    private fun verifyTransfer(
+        file: NextcloudFile,
+        copy: Boolean,
+        destinationEntries: Map<String, NextcloudFile>?,
+        sourceEntries: Map<String, NextcloudFile>?,
+    ): BulkItemResult {
+        val destinationEntry = destinationEntries?.get(file.name)
+        val atDestination = destinationEntries?.let { destinationEntry != null }
+        val atSource = sourceEntries?.containsKey(file.name)
         return when {
-            copy && atDestination == true -> BulkItemResult(file.path, file.name, BulkItemOutcome.Completed, "Verified in the destination folder.")
+            // A copy never overwrites, so an entry with this name may have been there before the
+            // request. Only an entry that matches the source counts as the copy.
+            copy && destinationEntry != null -> when (copyEvidence(file, destinationEntry)) {
+                CopyEvidence.Matches -> BulkItemResult(file.path, file.name, BulkItemOutcome.Completed, "Verified in the destination folder.")
+                CopyEvidence.Different -> BulkItemResult(
+                    file.path,
+                    file.name,
+                    BulkItemOutcome.Failed,
+                    "A different item with this name is already in the destination folder.",
+                    retrySafe = false,
+                )
+                CopyEvidence.Inconclusive -> BulkItemResult(file.path, file.name, BulkItemOutcome.Unconfirmed, "Refresh both folders before trying again.")
+            }
             !copy && atDestination == true && atSource == false -> BulkItemResult(file.path, file.name, BulkItemOutcome.Completed, "Verified in the destination folder.")
             atDestination == false && (copy || atSource == true) ->
                 BulkItemResult(file.path, file.name, BulkItemOutcome.Failed, "Verified unchanged.", retrySafe = true)
             else -> BulkItemResult(file.path, file.name, BulkItemOutcome.Unconfirmed, "Refresh both folders before trying again.")
         }
     }
+}
+
+private enum class CopyEvidence { Matches, Different, Inconclusive }
+
+/**
+ * Compares a destination entry with the copied source. A folder, or a file without a known size,
+ * cannot be told apart from an item that was already there, so it stays inconclusive.
+ */
+private fun copyEvidence(source: NextcloudFile, destination: NextcloudFile): CopyEvidence {
+    if (source.isDirectory != destination.isDirectory) return CopyEvidence.Different
+    if (source.isDirectory) return CopyEvidence.Inconclusive
+    val sourceSize = source.size ?: return CopyEvidence.Inconclusive
+    val destinationSize = destination.size ?: return CopyEvidence.Inconclusive
+    if (sourceSize != destinationSize) return CopyEvidence.Different
+    val sourceType = source.mimeType
+    val destinationType = destination.mimeType
+    if (sourceType != null && destinationType != null && !sourceType.equals(destinationType, ignoreCase = true)) {
+        return CopyEvidence.Different
+    }
+    return CopyEvidence.Matches
 }
 
 private fun transferFailureReason(failure: NextcloudFileOperationException): String = when (failure.error) {

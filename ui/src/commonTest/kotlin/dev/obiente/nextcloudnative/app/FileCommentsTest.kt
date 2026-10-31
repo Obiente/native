@@ -114,6 +114,16 @@ class FileCommentsTest {
     }
 
     @Test
+    fun hiddenVerbsStillAdvanceTheServerOffset() {
+        val fake = FakeComments()
+        val body = fake.listing().replaceFirst("<oc:verb>comment</oc:verb>", "<oc:verb>reaction</oc:verb>")
+        val page = parseFileCommentsPage(response(207, body), 42, 2)
+        assertEquals(listOf(1L), page.comments.map { it.id })
+        assertEquals(2, page.serverEntries)
+        assertTrue(page.mayHaveMore)
+    }
+
+    @Test
     fun httpDateParserRejectsMalformedValues() {
         assertEquals(0L, parseHttpDateEpochSeconds("Thu, 01 Jan 1970 00:00:00 GMT"))
         assertNull(parseHttpDateEpochSeconds("2024-03-05T10:00:00Z"))

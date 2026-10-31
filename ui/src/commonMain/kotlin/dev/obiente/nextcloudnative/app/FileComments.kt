@@ -37,6 +37,11 @@ data class FileCommentsPage(
     /** True when the server returned a full page and more may exist. */
     val mayHaveMore: Boolean,
     val skippedEntries: Int,
+    /**
+     * Server entries this page consumed, including entries that are not shown (other verbs or
+     * unreadable records). The next page starts at this offset, not at the shown count.
+     */
+    val serverEntries: Int = 0,
 )
 
 /** Why a draft cannot be sent, or null when it is valid. */
@@ -142,10 +147,12 @@ fun parseFileCommentsPage(response: NextcloudApiResponse, fileId: Long, requeste
             else -> comments += comment
         }
     }
+    val serverEntries = records.count { filesDavHrefSegments(it.href)?.size == 4 }
     return FileCommentsPage(
         comments = comments.distinctBy(NextcloudFileComment::id),
-        mayHaveMore = records.count { filesDavHrefSegments(it.href)?.size == 4 } >= requestedLimit,
+        mayHaveMore = serverEntries >= requestedLimit,
         skippedEntries = skipped,
+        serverEntries = serverEntries,
     )
 }
 
