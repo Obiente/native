@@ -264,6 +264,7 @@ internal fun GenericEditableTableRecordList(
     loadMoreError: String?,
     modifier: Modifier = Modifier,
     recordsGeneration: Long = 0L,
+    rowActions: (NativeRecord) -> List<NextcloudCardAction> = { emptyList() },
 ) {
     val fields = remember(projection) {
         if (projection.composite) {
@@ -305,7 +306,7 @@ internal fun GenericEditableTableRecordList(
                 displayValues = record.displayValues - editedFields.keys,
             )
             val editPlans = fields.mapNotNull { field ->
-                nativeCellEditPlan(schema, sourceResource, projection, record, field)
+                nativeInlineCellEditPlan(schema, sourceResource, projection, record, field)
             }
             val rowCardResource = nativeTableRowCardResource(schema, projection)
             GenericCollectionCard(
@@ -323,7 +324,7 @@ internal fun GenericEditableTableRecordList(
                         enabled = !cellEdits.saving,
                         onClick = { cellEdits.begin(plan) },
                     )
-                },
+                } + rowActions(record),
             )
         }
         NativeCollectionPagingFooter(
