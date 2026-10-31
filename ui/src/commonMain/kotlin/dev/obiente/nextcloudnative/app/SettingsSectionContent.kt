@@ -517,7 +517,7 @@ internal data class SettingsAdministrationSectionState(
 @Composable
 internal fun SettingsAdministrationSectionContent(
     state: SettingsAdministrationSectionState,
-    onOpenServerApps: () -> Unit,
+    onOpenAdministration: (AdministrationTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -529,7 +529,25 @@ internal fun SettingsAdministrationSectionContent(
             description = state.serverAppsDescription,
             icon = NextcloudIcons.Apps,
             trailing = state.serverAppsStatus,
-            onClick = onOpenServerApps,
+            onClick = { onOpenAdministration(AdministrationTab.Apps) },
+        )
+        SettingsSectionActionRow(
+            title = "Accounts",
+            description = "Create, disable, and delete accounts; manage groups and quota",
+            icon = NextcloudIcons.Profile,
+            onClick = { onOpenAdministration(AdministrationTab.Accounts) },
+        )
+        SettingsSectionActionRow(
+            title = "Groups",
+            description = "Create and delete groups and review their members",
+            icon = NextcloudIcons.People,
+            onClick = { onOpenAdministration(AdministrationTab.Groups) },
+        )
+        SettingsSectionActionRow(
+            title = "Server information",
+            description = "System, usage, and software details from the Monitoring app",
+            icon = NextcloudIcons.Info,
+            onClick = { onOpenAdministration(AdministrationTab.Server) },
         )
         Surface(
             modifier = Modifier.fillMaxWidth(),

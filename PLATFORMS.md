@@ -80,7 +80,8 @@ parsing, capability gating, and write recovery live in `commonMain`
 reviewed `TalkTransportRequest` to `executeTalkRequest`. `jvmMain` shares login and
 authenticated request policy, application read sessions, App Store contract
 acquisition results and failures, cancellable Talk reads and long polls
-(`JvmTalkTransport.kt`), detached downloads,
+(`JvmTalkTransport.kt`), password-confirmed administrator and profile writes
+(`JvmAccountPasswordConfirmedTransport.kt`), detached downloads,
 the resumable chunk-upload state machine, staging-space reservations, support
 diagnostics and intake, text-draft encryption, and WebDAV href decoding.
 
@@ -482,6 +483,35 @@ interaction validation is still required.
   conversations from anywhere in the workspace, Enter sends, Shift+Enter adds a
   line, and Escape cancels a reply or edit. Compact windows show one pane and
   use system back. `TalkWorkspaceInteractionTest` covers both layouts.
+- The settings button in a conversation header opens a conversation settings
+  sheet: name, description, notification level, and, for moderators,
+  read-only, lobby, guest access, moderator roles, and participant removal.
+  Controls are shown only for the participant and conversation types that
+  Talk allows, removal and guest-access changes need a separate confirmation,
+  and every change is read back before it is reported as done. Read receipt
+  and typing privacy live in Settings. `TalkConversationSettingsTest` covers
+  the protocol and verification; there is no device evidence yet.
+
+**Settings and administration**
+
+- Settings adds Personal info, App settings, and (when Talk is installed) Talk
+  sections. Personal info edits the profile fields that the server lists as
+  editable, with a visibility choice per field, and links to the online status
+  screen. App settings lists every installed app and opens its workspace, or
+  the matching Settings section for Talk and status. These sections use the
+  same phone and two-pane layouts as the rest of Settings.
+- Administration opens one screen with Apps, Accounts, Groups, and Server tabs.
+  Accounts use a searchable, paged list beside the selected account on windows
+  720 dp and wider, and a list that opens the account on phones, returning on
+  system back. Secondary account and group actions live in the overflow menu.
+- Profile and administrator changes ask for the account password in a native
+  dialog for that change only; nothing opens the browser. The password is sent
+  with that request and then discarded, as described in
+  [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md#password-confirmed-writes).
+  Accounts with two-factor authentication cannot confirm these changes from a
+  client app. Android and desktop provide the transport with their normal
+  certificate trust. Protocol, transport, and state tests exist; there is no
+  device or live-server evidence yet.
 
 **Office**
 

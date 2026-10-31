@@ -19,7 +19,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
+import dev.obiente.nextcloudnative.app.LocalAccountPasswordConfirmedTransport
 import dev.obiente.nextcloudnative.app.LocalAppWindowVisibility
+import dev.obiente.nextcloudnative.app.androidAccountPasswordConfirmedTransport
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
@@ -139,6 +141,9 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalAppWindowVisibility provides windowVisibility,
                 LocalNextcloudReducedMotion provides rememberAndroidReducedMotion(),
+                LocalAccountPasswordConfirmedTransport provides remember {
+                    androidAccountPasswordConfirmedTransport(applicationContext)
+                },
             ) {
                 NextcloudNativeApp(
                     services = services,

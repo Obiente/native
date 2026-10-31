@@ -193,7 +193,7 @@ Every operation declares its risk before it reaches the UI:
 | Reversible | Small, visible, reversible write | Direct user intent and rollback on failure. |
 | Guarded | Content change with concurrency risk | Permission check, revision guard, conflict UI. |
 | Destructive | Delete, overwrite, or hard-to-reverse change | Target-specific confirmation and no blind background retry. |
-| Privileged handoff | Server administration or primary-password confirmation | Explain the effect and open authenticated server administration. |
+| Password-confirmed | Server administration or a route marked `PasswordConfirmationRequired` | Explain the effect, ask for the account password for that change only, and verify the result with a fresh read. See [Password-confirmed writes](#password-confirmed-writes). |
 
 Runtime evidence may raise the risk level, for example when a move would
 overwrite an existing target. It must never lower the declared level silently.
@@ -657,8 +657,83 @@ instead of navigating away silently when permission revalidation fails. An
 explicit refresh removes old access before requesting new evidence. Concurrent
 checks share the cached result, and cancellation cannot publish a late success.
 The ordinary Apps workspace remains available to regular users. Cached visibility
-never authorizes a mutation; strict operations still use authenticated browser
-handoff and server-side authorization.
+never authorizes a mutation; every administrator change is password-confirmed
+and authorized again by the server.
+
+### Password-confirmed writes
+
+Nextcloud's `PasswordConfirmationMiddleware` refuses app-password sessions for
+routes marked `PasswordConfirmationRequired`
+([source](https://github.com/nextcloud/server/blob/master/lib/private/AppFramework/Middleware/Security/PasswordConfirmationMiddleware.php)).
+Strict routes read the real password from the request's Basic credentials, and
+non-strict routes need a recent login with the real password in the same server
+session. A login with an app password does not count
+([`Session::logClientIn`](https://github.com/nextcloud/server/blob/master/lib/private/User/Session.php)).
+This covers profile edits and all user, group, and app administration in the
+provisioning API.
+
+`AccountPasswordConfirmation.kt` (common) and
+`JvmAccountPasswordConfirmedTransport.kt` (shared JVM) implement one rule for
+these writes:
+
+- The account password is typed into a native dialog for one change or one
+  batch of profile edits. It is held in a one-use
+  `AccountPasswordConfirmationSecret`, sent only as that request's
+  `loginName:password` Basic credential, and wiped after the request. It is
+  never stored, saved for restoration, logged, or used to replace the stored
+  app-password session.
+- The transport keeps the account origin and base path, sends no cookies,
+  refuses cross-origin redirects, bounds the response, and never retries.
+- `runPasswordConfirmedWrite` classifies the result. HTTP 401 (or OCS 997)
+  means the password was not accepted; 403, 404, 429, and other 4xx answers
+  are definitive rejections. A 2xx answer, a 5xx answer, or a network failure
+  after sending is followed by a fresh authoritative read, and the change is
+  reported as applied only when that read shows the requested state.
+- Each platform provides the transport through
+  `LocalAccountPasswordConfirmedTransport` with its normal certificate trust.
+  Without it, every password-confirmed control stays read-only.
+
+Limits: Nextcloud refuses password logins for accounts that use two-factor
+authentication and on servers that enforce token-only logins, so those accounts
+cannot confirm these changes from a client app. Single sign-on accounts whose
+backend cannot confirm a password are not modeled. The flow is covered by
+deterministic tests only and has not been integration-tested against the
+strict, lax, two-factor, delegated-administrator, brute-force, and
+maintenance-mode matrix that [ROADMAP.md](ROADMAP.md#18-m11-safe-administration)
+requires before it is supported for normal use.
+
+### Account settings, administration, and Talk settings
+
+- Personal info (`AccountProfileProtocol.kt`, `AccountProfileController.kt`)
+  reads `GET cloud/user` and `GET cloud/user/fields` from the provisioning API.
+  Only fields that the server lists as editable can change, one
+  `PUT cloud/users/{userId}` per changed value or visibility scope. A batch
+  stops at the first password, throttle, or offline failure and reports which
+  edits were saved and which were not sent. Language, locale, time zone,
+  groups, quota, and additional email addresses are shown read-only.
+- Administration (`AdminUsersProtocol.kt`, `AdminUsersController.kt`) lists
+  accounts with search and paging from `cloud/users/details`, reads one account
+  from `cloud/users/{userId}`, and lists groups from `cloud/groups/details`.
+  Create, enable, disable, delete, group membership, group administrator,
+  quota, and group create and delete changes are each bound to the exact
+  account or group ID and verified by a fresh read. The signed-in account
+  cannot disable or delete itself here, and the `admin` group cannot be
+  deleted. Server information is read-only from the Monitoring app's
+  `apps/serverinfo/api/v1/info` route.
+- App lifecycle (`AdminAppLifecycle.kt`) sends the plan from
+  `buildNativeAppMutationRequest` through the password-confirmed transport and
+  confirms the new state with a fresh catalog read. ExApps stay read-only.
+- Talk conversation settings (`TalkConversationSettingsProtocol.kt`,
+  `TalkConversationSettingsController.kt`) use the Talk mutation transport for
+  rename, description, notification level, read-only, lobby, guest access,
+  moderator role, and participant removal, gated by the participant type and
+  conversation type, and re-read the conversation after each change. Read
+  receipt and typing privacy use `POST settings/user` and the
+  `chat-read-status` and `typing-privacy` capabilities.
+
+Devices, sessions, and app passwords are not listed natively: Nextcloud serves
+them only to the web settings page, and its `AuthSettingsController` refuses
+app-password sessions. Avatar upload is not implemented.
 
 ## Account removal and recovery
 

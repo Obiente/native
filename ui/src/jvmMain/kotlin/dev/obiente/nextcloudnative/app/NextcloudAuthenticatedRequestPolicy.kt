@@ -10,16 +10,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
-class NextcloudAuthenticatedRequestPolicy(
-    session: NextcloudSession,
+class NextcloudAuthenticatedRequestPolicy internal constructor(
+    serverUrl: String,
+    loginName: String,
+    credential: String,
     private val userAgent: String,
 ) {
-    private val account = requireAccountUrl(session.serverUrl)
-    private val authorization = Credentials.basic(
-        session.loginName,
-        session.appPassword,
-        StandardCharsets.UTF_8,
-    )
+    constructor(session: NextcloudSession, userAgent: String) :
+        this(session.serverUrl, session.loginName, session.appPassword, userAgent)
+
+    private val account = requireAccountUrl(serverUrl)
+    private val authorization = Credentials.basic(loginName, credential, StandardCharsets.UTF_8)
 
     fun requestBuilder(targetUrl: String): Request.Builder {
         val target = requireSafeTarget(targetUrl)
