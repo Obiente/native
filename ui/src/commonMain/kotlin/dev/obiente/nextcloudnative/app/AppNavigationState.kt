@@ -40,6 +40,8 @@ internal sealed interface Screen {
     @Serializable
     data object News : Screen
     @Serializable
+    data object Mail : Screen
+    @Serializable
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
@@ -94,6 +96,7 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     Screen.Tasks,
     Screen.Deck,
     Screen.News,
+    Screen.Mail,
     Screen.AdminApps,
     Screen.OfflineCenter,
     Screen.Transfers,
@@ -199,6 +202,7 @@ internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
     Screen.Tasks -> SavedScreen("tasks")
     Screen.Deck -> SavedScreen("deck")
     Screen.News -> SavedScreen("news")
+    Screen.Mail -> SavedScreen("mail")
     Screen.AdminApps -> SavedScreen("admin-apps")
     Screen.OfflineCenter -> SavedScreen("offline-center")
     Screen.Transfers -> SavedScreen("transfers")
@@ -260,6 +264,7 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
     "tasks" -> Screen.Tasks
     "deck" -> Screen.Deck
     "news" -> Screen.News
+    "mail" -> Screen.Mail
     "admin-apps" -> Screen.AdminApps
     "offline-center" -> Screen.OfflineCenter
     "transfers" -> Screen.Transfers

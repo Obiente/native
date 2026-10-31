@@ -285,6 +285,15 @@ interaction validation is still required.
   article list and back, two panes fade between articles, and an article's
   title carries from its row into the reader. Rows ease in, and their
   selection, unread dot, and star fade or pop instead of switching.
+- Mail uses the shared collection navigator for its folders, Outbox, and
+  settings. At 840dp and wider the message list stays beside the reader or the
+  composer; narrower layouts show one at a time, and system back closes the
+  composer, then the reader. Message actions are in the shared overflow menu,
+  which long press also opens; moving to Trash, permanent deletion, folder
+  deletion, cancelling an Outbox message, discarding a draft, and removing an
+  alias each need a separate confirmation. Attachments come from the platform
+  file picker or a Nextcloud Files picker. Unsent drafts use the platform's
+  encrypted, account-scoped text draft storage on Android and desktop.
 - Text shown on both sides of a navigation carries across it
   (`NextcloudSharedElements`). A conversation's name flies from the Talk list
   into the chat header, a file's name from the Files list into file details,

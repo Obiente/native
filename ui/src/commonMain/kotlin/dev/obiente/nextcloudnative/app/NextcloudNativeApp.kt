@@ -380,18 +380,6 @@ private class PhotoFolderViewportUiState(
     var browseState by mutableStateOf(initialBrowseState)
 }
 
-internal val nativeAppIds = setOf(
-    "files",
-    "photos",
-    "memories",
-    "spreed",
-    "talk",
-    "activity",
-    "notes",
-    "dashboard",
-    "user_status",
-)
-
 enum class NextcloudNativeRoute {
     Home,
     Settings,
@@ -686,6 +674,7 @@ private fun AuthenticatedApp(
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
     val newsController = rememberNewsWorkspaceController(services, session)
+    val mailSession = rememberMailWorkspaceSession(services, session)
     val notificationsInbox = rememberNotificationsInboxController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
@@ -968,6 +957,7 @@ private fun AuthenticatedApp(
             "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
             NEWS_APP_ID -> Screen.News
+            MAIL_APP_ID -> Screen.Mail
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -1382,6 +1372,7 @@ private fun AuthenticatedApp(
             Screen.Tasks,
             Screen.Deck,
             Screen.News,
+            Screen.Mail,
             is Screen.AppInfo,
             -> {
                 leaveAppWorkspace()
@@ -1753,6 +1744,7 @@ private fun AuthenticatedApp(
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
         Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
+        Screen.Mail -> MailWorkspaceScreen(services, session, serverInfo?.userId ?: session.loginName, mailSession, ::navigateBack)
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,

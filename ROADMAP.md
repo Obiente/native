@@ -547,7 +547,7 @@ Adapters follow advertised capabilities, official DAV/OCS protocols, version-pin
 3. Deck and Tasks through reusable schema- and data-shape-driven board/list/detail/edit flows, with related-resource label hydration rather than app-specific ID rendering.
 4. Cospend, Budget, and Tables through reusable typed table, amount, participant, metric, chart, and form components. Currency and other parent context propagate into child datasets generically.
 5. Cookbook with native recipe, ingredient, step, image, search, and offline cooking mode.
-6. Mail discovery, search, and schema-declared reads through the automatic runtime first. MIME attachments, drafts, threading, compose, identities, encryption/signing feasibility, and notifications require version-pinned verified action policies where the generic contract cannot prove safe behavior.
+6. Mail through a reviewed, version-pinned adapter (present in source for Mail 5.0.0 through 5.12.x; see [COMPATIBILITY.md](COMPATIBILITY.md)). Remaining: downloading and saving received attachments, snooze, filters, out-of-office, encryption/signing feasibility, notifications, a non-administrator way to confirm the installed version, and live-server qualification of the Outbox send path.
 7. Music through the documented Subsonic-compatible boundary first, with secure credential bootstrap and platform media session/download support.
 8. Read-only GitHub integration with authenticated web handoff for OAuth/settings and no attempt to extract server-stored tokens.
 

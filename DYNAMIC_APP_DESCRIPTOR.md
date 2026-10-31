@@ -719,7 +719,10 @@ loading, retry, and later pages.
 
 ### Mail reading hierarchy
 
-Mail reading sections put the verified message body and thread reads first.
+The Nextcloud Mail app itself now opens in the reviewed Mail adapter described in
+[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md#mail-composing-and-organizing).
+The rules below still apply to any other app whose contract has mail
+semantics. Mail reading sections put the verified message body and thread reads first.
 DKIM, raw source, smart-reply, and itinerary probe routes stay in the contract
 but are left out of the ordinary section chooser. This issues no optional reads
 and invents no diagnostics destination. Attachment cards show bounded metadata
