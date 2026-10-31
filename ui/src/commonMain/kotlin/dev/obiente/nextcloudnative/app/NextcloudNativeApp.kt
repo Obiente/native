@@ -6907,6 +6907,7 @@ internal fun FilesScreen(
                     },
                     onRefresh = { loadAttempt += 1 },
                     onAction = { file, action -> dispatchFileAction(file, action, loadedFiles) },
+                    deletes = fileDeletes,
                 )
             }
         }
@@ -8260,7 +8261,13 @@ private fun MediaScreen(
                     NativeMediaCollectionType.SystemTag -> "Tagged media"
                 },
                 onBack = ::closeCollection,
-            )
+            ) {
+                NativeAlbumManagementMenu(collection, userId, catalog?.albums.orEmpty(), session, collectionMutationService) {
+                    closeCollection()
+                    catalog = null
+                    loadAttempt += 1
+                }
+            }
             when {
                 error != null && collectionItems.isEmpty() -> ErrorMessage(requireNotNull(error)) {
                     scope.launch { loadCollectionPage(collection, reset = true) }
@@ -8600,7 +8607,7 @@ private fun MediaScreen(
                                             }
                                             mediaToAdd = null
                                         }
-                                        NativeMediaCollectionAction.RemoveItem -> Unit
+                                        else -> Unit
                                     }
                                     pendingAction = null
                                     mutationRunning = false
@@ -10298,95 +10305,6 @@ internal fun MediaTile(
 internal enum class MediaTileLayout {
     SquareCrop,
     FullWidthFit,
-}
-
-@Composable
-private fun FileInfoScreen(
-    services: NextcloudPlatformServices, writeFence: FileWriteFence,
-    session: NextcloudSession,
-    userId: String,
-    file: NextcloudFile,
-    onBack: () -> Unit,
-    showVersions: Boolean,
-    onVersionRestored: () -> Unit,
-    onEdit: (() -> Unit)?,
-) {
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(file.name, if (file.isDirectory) "Folder details" else "File details", onBack,
-            titleSharedKey = SharedElementKeys.fileName(file.path))
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
-        ) {
-            item {
-                FileAudioPlaybackOrIcon(session, userId, file,
-                    if (file.isDirectory) NextcloudIcons.Folder else fileIcon(file))
-            }
-            item {
-                Text(file.name, style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    file.path,
-                    modifier = Modifier.padding(top = NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    ) {
-                        FileMetadataLine("Type", if (file.isDirectory) "Folder" else file.mimeType ?: "Unknown")
-                        if (!file.isDirectory) FileMetadataLine("Size", formatOptionalByteSize(file.size))
-                        file.lastModified?.let { FileMetadataLine("Modified", it) }
-                        if (!file.isDirectory) {
-                            FileMetadataLine("Image preview", if (file.hasPreview) "Available" else "Unavailable")
-                        }
-                    }
-                }
-            }
-            if (!file.isDirectory && file.fileId != null) {
-                item {
-                    FileVersionHistorySection(
-                        services = services, writeFence = writeFence,
-                        session = session,
-                        userId = userId,
-                        file = file,
-                        initiallyExpanded = showVersions,
-                        onVersionRestored = onVersionRestored,
-                    )
-                }
-            }
-            onEdit?.let { edit ->
-                item {
-                    Button(onClick = edit) {
-                        Icon(NextcloudIcons.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text("Edit text")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileMetadataLine(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            value,
-            modifier = Modifier.padding(start = NextcloudSpacing.Large),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
 }
 
 @Composable
