@@ -139,6 +139,7 @@ enum class NativeComponent {
     documentEditor,
     conversationList,
     chatThread,
+    feedReader,
 }
 
 @Serializable

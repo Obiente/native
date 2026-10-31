@@ -628,6 +628,7 @@ fn component_suffix(component: &NativeComponent) -> &'static str {
         NativeComponent::DocumentEditor => "editor",
         NativeComponent::ConversationList => "conversations",
         NativeComponent::ChatThread => "chat",
+        NativeComponent::FeedReader => "feeds",
     }
 }
 

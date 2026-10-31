@@ -60,7 +60,9 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     id = layout.id,
                     title = layout.title,
                     resourceId = layout.resourceId,
-                    component = layout.toNativeComponent(
+                    component = if (layout.kind == LayoutKind.list && isFeedItemCollection(resource)) {
+                        NativeComponent.feedReader
+                    } else layout.toNativeComponent(
                         resource,
                         sourceAction,
                         hasWritableAction = actions.any { candidate ->

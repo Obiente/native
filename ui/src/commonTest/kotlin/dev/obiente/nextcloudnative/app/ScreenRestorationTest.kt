@@ -136,4 +136,16 @@ class ScreenRestorationTest {
         assertNull(restored.etag)
         assertTrue(restored.readOnly)
     }
+
+    @Test
+    fun `saved routes from the former Mail and News screens open the dynamic app workspace`() {
+        listOf("mail" to "Mail", "news" to "News").forEach { (kind, name) ->
+            val encoded = """{"kind":"$kind"}"""
+            val restored = assertIs<Screen.AppInfo>(screenSaver.restore(encoded))
+            assertEquals(kind, restored.app.id)
+            assertEquals(name, restored.app.name)
+            assertEquals(DynamicAppNavigationState(), restored.navigation)
+            assertEquals("app-info", restored.toSavedScreen().kind)
+        }
+    }
 }
