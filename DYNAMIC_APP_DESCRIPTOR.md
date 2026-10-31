@@ -22,6 +22,7 @@ exchanging models.
 | Mapping to the native schema | `DynamicDescriptorMapper.kt` (`toNativeAppSchema()`) |
 | Signed App Store acquisition | [`SignedAppStoreContractAcquirer.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt) in the `contractAcquisition` module |
 | Runtime orchestration | `DynamicNativeRuntime.kt` in `ui/src/commonMain/.../app` |
+| Board and notes surface selection | `SemanticBoardContract.kt`, `SemanticNotesContract.kt`, and `SemanticSettingsContract.kt` in `ui/src/commonMain/.../nativeui/runtime` |
 | Rust reference model and compiler | [`src/dynamic.rs`](src/dynamic.rs) and [`src/dynamic_compiler.rs`](src/dynamic_compiler.rs) |
 
 Both the Kotlin and Rust models serialize camel-case JSON with
@@ -534,6 +535,67 @@ content, throttling, server failure, or rejected request.
 [`DynamicReadFailureTest`](ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/DynamicReadFailureTest.kt)
 covers message privacy, status classification, malformed and oversized error
 bodies, invalid text, and deeply nested JSON.
+
+## Semantic surfaces: boards and notes
+
+**Last reviewed: 2026-10-31.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. No board or notes write chosen this way has been validated
+against a live server or shipped in a published release.
+
+After discovery, the app screen asks whether the discovered contract has the
+shape of a board or of a notes collection
+([`SemanticAppWorkspace.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticAppWorkspace.kt)).
+The answer never depends on the app ID or its version; anything else stays
+with the generic renderer.
+
+- Route shape: mount prefixes (`/index.php`, `/ocs/v2.php`, `/apps/{app}`),
+  `api`, and version segments are removed. Each placeholder is bound to the
+  entity its name states (`stackId` is a list, `cardId` a card) or, for a
+  generic `{id}`, to the collection word before it
+  ([`SemanticRouteShape.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticRouteShape.kt)).
+- Board: a board collection read, a list collection read inside a board, and a
+  card read, create, or list. Each operation (board, list, and card edits,
+  card move, archive, labels, assignees, comments, attachments, sharing) is
+  resolved separately
+  ([`SemanticBoardContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticBoardContract.kt)).
+  A move needs a declared list field in its body, so a contract without one
+  offers no move or drag.
+- Notes: a collection read and an item read whose records carry a title and a
+  text body, and that the contract words as notes or whose records also carry
+  two of folder, favorite, and modification fields
+  ([`SemanticNotesContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticNotesContract.kt)).
+- Settings: a parameter-free settings read plus either one document write that
+  declares each setting or a `{key}` write with a single `value` field. A keyed
+  write uses only keys the server returned
+  ([`SemanticSettingsContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticSettingsContract.kt)).
+- Writes: only actions with trusted contract provenance (advertised OpenAPI,
+  verified package, or linked source tag), only while the contract is verified
+  for the installed version, and each request waits for the contract write
+  gate. Every request is built by the shared dynamic request builder from the
+  chosen action, so paths stay inside the approved API prefixes.
+- Inputs: request fields are matched to roles by name (title, description,
+  order, due date, list, label, user, and so on). A required field the client
+  cannot name makes a create unavailable. A full-replacement `PUT` fills
+  undeclared fields from the server's current record, and a field with a
+  single contract-declared value (a one-member enum or `const`) is sent with
+  that value. Nothing else is invented.
+- Duplicates: app API routes win over web routes, then the newest version
+  segment, then the route with fewer path inputs.
+
+Requests: [`SemanticBoardRoutes.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticBoardRoutes.kt)
+and [`NotesRepository.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesRepository.kt).
+Note saves and deletes send the last known ETag as `If-Match`. Tests:
+`SemanticBoardContractTest`, `SemanticNotesContractTest`,
+`SemanticBoardRoutesTest`, `SemanticNotesRepositoryTest`, and
+`SemanticSettingsTest`, including a board-shaped app `kanban_x` at `42.0.0` and
+a notes-shaped app `jotter` at `0.0.1`.
+
+Not derivable from a contract, so not offered: board-scoped settings whose keys
+need an app-specific key format (shown read-only from the board record), an
+attachment type value that the contract does not fix, and writes the static
+route rules do not retain (for example label assignment in the signed Deck
+package).
 
 ## Reviewed write adapters
 
