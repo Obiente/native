@@ -535,7 +535,7 @@ content, throttling, server failure, or rejected request.
 covers message privacy, status classification, malformed and oversized error
 bodies, invalid text, and deeply nested JSON.
 
-## Reviewed write adapters
+## Contract-driven record writes
 
 **Last reviewed: 2026-10-31.** This section describes source and deterministic
 test behavior; the code may have changed since, and the linked sources are
@@ -543,55 +543,89 @@ authoritative. None of these writes has been validated against a live server or
 shipped in a published release. See [COMPATIBILITY.md](COMPATIBILITY.md) for
 recorded device and server evidence.
 
-Some contracts declare a write but not the meaning of its payload. A reviewed
-write adapter explains that meaning from the app's own source at a reviewed
-version. It never adds an operation:
-[`NativeReviewedContractActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeReviewedContractActions.kt)
-selects only actions already in the verified schema, with trusted provenance,
-the exact method and route shape, matching path parameters, and the body
-fields the adapter relies on. Two matching actions are ambiguous and select
-none. A restored read-only contract has no write actions, so it offers no
-adapter writes either.
+Record editors are semantic patterns, not per-app adapters. They never test an
+app ID, an exact version, a version range, or a reviewed source tag, so any app
+whose published contract and data match a pattern gets its editor. Every
+operation comes from the installed app's own contract: a server-advertised
+OpenAPI document, or the verified package or exact source tag acquired for that
+installation. Observed reads never authorize a write.
 
-| App and versions | Workflow | Payload meaning from reviewed source |
+[`NativeContractActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeContractActions.kt)
+starts from the collection read that opened the screen, a route ending in
+`.../{container}/{parent}/{collection}`, and selects writes at the matching
+positions: create is a POST on exactly that route; an item write is the route
+followed by one identity placeholder, or the collection directly below the
+route base followed by one placeholder. Each candidate needs trusted
+provenance, the matching intent, and matching path parameters. Two candidates
+for one position are ambiguous and select none, and a restored read-only
+contract offers nothing.
+
+| Pattern | Recognized from | Editor |
 | --- | --- | --- |
-| Tables 2.x | New, edit, and delete rows in a table or view grid | `data` keys are column IDs and each value uses its column type parser ([Tables v2.4.0](https://github.com/nextcloud/tables/tree/v2.4.0/lib/Service/ColumnTypes)) |
-| Cospend 4.x | New, edit, and delete bills in a project's bill list | `payer` and `payedFor` are member IDs of that project, a new bill sends `repeat` `n`, and dates are YYYY-MM-DD ([Cospend v4.3.0](https://github.com/julien-nc/cospend-nc/blob/v4.3.0/lib/Service/LocalProjectService.php)) |
-| Forms 5.x | Fill in and send a form from its detail | `answers` maps question IDs to string arrays: option IDs, scale values, or fixed date and time formats ([Forms v5.4.1](https://github.com/nextcloud/forms/blob/v5.4.1/lib/Service/SubmissionService.php)) |
+| Column-defined grid rows ([`NativeGridRowWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeGridRowWrites.kt)) | A grid view whose parent record has column records and rows that store `[{column, value}]` cells; one write body property declared as an open key-value map | New, edit, and delete rows; one input per column type word (`text`, `number`, `selection`, `datetime` and their variants) with the options, limits, and mandatory flag the column states |
+| Child records in a parent ([`NativeChildRecordWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeChildRecordWrites.kt)) | A parent-scoped collection whose write bodies declare typed properties | New, edit, and delete with inputs derived from the body schema: text, money, date, choice or enum, one person, several people, and yes or no; choices come from the parent record or a related resource that lists them, such as a project's members or categories |
+| Questionnaire responses ([`NativeQuestionnaireSubmission.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeQuestionnaireSubmission.kt)) | A record holding a `questions` list, and a POST below its item route whose body declares exactly one map of string arrays | Fill in and send answers keyed by question identity |
 
-Rules shared by the adapters:
+Rules shared by the editors:
 
-- Identities come from authoritative records: the table or view, the project,
-  the form, the row, and the bill. A row ID never replaces a table or view ID,
-  and a bill ID never replaces a project ID. Routes with two placeholders bind
-  them by route position.
-- Permissions gate each write before it is offered: Tables share flags (an
-  unknown share state grants nothing), Cospend access level participant or
-  higher, and the Forms submit permission, open state, and `canSubmit`.
-- Tables updates send only the changed cells, because the server merges cells
-  into the stored row. Rich text, user and group, and relation columns are kept
-  unchanged. The generic inline cell editor is off for Tables grids because its
-  row-object reconstruction would send a `{columnId, value}` wrapper as a
+- Field names only decide presentation and choice sources. The schema decides
+  what is sent: property names, JSON types, enums, formats, limits, and the
+  required list. A required field missing from the draft blocks the request.
+- A field whose meaning is recognized but whose encoding the contract does not
+  determine, for example several people packed into one string, makes that
+  write unavailable with an explanation. Other optional fields without a
+  recognized role are not shown and not sent.
+- Identities come from authoritative records: the parent, the row, the child
+  record, the questionnaire. A row ID never replaces a table or view ID, and a
+  child ID never replaces a parent ID. Route values bind by position. A global
+  item route is used only when the contract lets it name the parent, or the
+  item record itself names that parent.
+- Permissions come from what the parent record states: an owner field naming
+  the signed-in account, `isShared: false`, a permission object, or `can...`
+  flags. A parent that states nothing, or states only a value whose meaning the
+  contract does not define, such as a numeric access level, offers no write.
+  Questionnaires need a `canSubmit`-style flag, and a permission list or a
+  closed or limit flag that refuses a response is explained.
+- PATCH sends only the changed values. PUT replaces the record, so it is
+  offered only when the contract declares the same-route read that can verify
+  the result, and it sends every value read back; a record that holds a value
+  the editor cannot encode is then not edited. No precondition is declared by
+  these contracts, so a concurrent change made elsewhere can be overwritten.
+- Grid cells whose representation neither the contract nor the data fixes are
+  never encoded: links, rich text, and people columns, and boolean or
+  date-time columns until a stored cell shows their representation. The
+  generic inline cell editor is off for every column-defined grid, because its
+  row-object reconstruction would send the `{column, value}` wrapper as a
   value.
-- Cospend edits send every editable field. Deletes keep Cospend's default of
-  moving the bill to the project trash. An existing bill keeps a payer or ower
-  who was later deactivated.
-- Forms questions of type file, grid, ranking, color, and date or time range
-  are not answered natively. If such a question is required, the form explains
-  that instead of offering a send.
-- [`NativeReviewedWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeReviewedWriteSession.kt)
-  sends each request once. A rejection keeps the draft. An unconfirmed create,
-  bill, or response triggers an authoritative refresh and blocks sending again
-  until that refresh arrives, so the person can check for the change first.
+- Questionnaire questions of type file, grid, ranking, color, combined date and
+  time, and date or time range are not answered natively. If such a question
+  is required, the questionnaire explains that instead of offering a send.
+- [`NativeEditorWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeEditorWriteSession.kt)
+  sends each request once. A rejection keeps the draft. An unconfirmed create
+  or response triggers an authoritative refresh and blocks sending again until
+  that refresh arrives, so the person can check for the change first.
   Repeating an unconfirmed update or delete is allowed because it is
   idempotent. Cancellation is rethrown and the result stays unconfirmed.
 - Drafts are ordinary remembered UI state and are not kept across process
   death. Nothing is stored on the server until a request is confirmed.
 
-Not covered yet: Tables table, column, and view management beyond the generic
-contract forms; Cospend member management, recurring bills, and settlement
-actions beyond the generic contract surfaces; Forms results for owners; and a
-new bill in a project without bills, because the empty bill list uses the
+Writes this model leaves unavailable for contracts verified in this
+repository's fixtures, because the contract does not express what the write
+needs:
+
+- Expense create and edit when the people a bill was for are sent as one plain
+  string (the Cospend OpenAPI excerpt), and expense edit when the contract
+  offers only an unverifiable replacement.
+- Any parent-scoped write in a container that states its access only as a
+  numeric level.
+- Questionnaire answers to combined date and time questions, and a
+  questionnaire's closed state when it is stated only as a numeric code.
+- Grid link, rich text, and people cells.
+
+Not covered yet: grid table, column, and view management beyond the generic
+contract forms; member management, recurring entries, and settlement actions
+beyond the generic contract surfaces; questionnaire results for owners; and a
+new child record in an empty collection, because the empty list uses the
 generic empty state.
 
 ## Reviewed limits

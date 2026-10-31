@@ -160,16 +160,27 @@ Dynamic support is evidence-driven. Use this order:
 4. An exact App Store-linked source tag only through the documented lower-trust
    fallback and identity checks.
 5. Approved successful `2xx` read observations for read-only shape inference.
-6. A reviewed, versioned adapter enhancement for behavior that cannot be
-   inferred safely.
+6. Version-agnostic semantic patterns over that evidence: rules that map the
+   data structures and wording found across apps (record collections,
+   parent-scoped child records, column-defined grids, questionnaires,
+   expenses, recipes, mailboxes, feeds) to the native UI that belongs to them.
+   Writes come only from the installed app's own published contract for the
+   operation (items 2 to 4).
 
 Rules:
 
 - Deterministic contracts and typed models outrank naming heuristics.
 - Reusable semantic inference outranks app-ID conditionals.
-- A small app-specific adapter is valid when it provides verified behavior,
-  protocol compatibility, or substantially better UX that cannot be expressed
-  generically.
+- Do not choose behavior by app ID, exact version, version range, or a pinned
+  upstream source tag. Any app whose contract and data match a pattern gets
+  that pattern's UI, whatever its name or version. Presentation-only hints such
+  as icons, accent colors, or one-line descriptions may use the app ID but
+  never gate behavior.
+- Offer a write only when the installed app's own published contract declares
+  the operation, its route, and its payload. A pattern may decide how a
+  declared value is presented; it may not supply an encoding, a required
+  value, or a permission that the contract and the data do not express. When
+  they do not, keep that write unavailable and explain why.
 - Prefer reusable concepts inside adapters: parent-child relationships,
   record collections, money, dates, participants, status, attachments,
   pagination, settings, and mutations.

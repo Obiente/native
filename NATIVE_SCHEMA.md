@@ -1,7 +1,8 @@
 # nati.ve Schema 0.1
 
 The native schema is the trust boundary between discovery and presentation.
-Discovery may use deterministic inspection, verified adapters, or local AI, but
+Discovery may use deterministic inspection of the installed app's published
+contract, version-agnostic semantic patterns over its data, or local AI, but
 the renderer accepts only this typed document. Read this before changing a
 schema field, a component family, or how the renderer presents records and
 forms.
@@ -51,7 +52,7 @@ Rules for changing the contract:
 
 | Level | Meaning |
 | --- | --- |
-| `verified` | A signed or reviewed adapter confirmed the semantics. |
+| `verified` | The installed app's signed package contract or a verified protocol confirmed the semantics. |
 | `high` | Typed API metadata provides strong evidence. |
 | `medium` | Deterministic inference selected a likely interpretation. |
 | `low` | The evidence is insufficient for normal interaction. |
@@ -82,8 +83,9 @@ contact lists, task lists, data tables, media libraries, recipe lists, document
 editors, conversation lists, and chat threads.
 
 A new component should represent an interaction pattern shared by more than one
-app. App-specific behavior belongs in a verified adapter, not in the generic
-component library.
+app. Behavior is chosen by semantic patterns over contracts and data, never by
+app identity or version. When a contract cannot express a behavior, the
+component stays read-only and explains why.
 
 ## Adaptive collection presentation
 

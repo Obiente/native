@@ -18,9 +18,9 @@ and the [releases page](https://github.com/obiente/native/releases).
   heavily in them.
 - Never put real server URLs, usernames, app passwords, share tokens,
   filenames, message bodies or private API responses in issues or fixtures.
-- Prefer reusable semantic behavior over code that checks a specific app ID.
-  A small app-specific adapter is fine when it adds verified behavior that
-  cannot be inferred safely.
+- Build reusable semantic behavior, not code that checks a specific app ID or
+  version. Map the data structures and wording an app exposes to the native UI
+  that belongs to them, so any app with the same shape works.
 - You may explore reads against a test server. Writes need an explicit,
   reviewed contract and tests for permission, conflict and failure behavior.
 - Read [AI_POLICY.md](AI_POLICY.md) before using AI assistance. Contributions

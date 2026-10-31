@@ -139,7 +139,12 @@ entries and successful guesses do not prove that an operation is safe.
 - Revalidate cached descriptors when the server version, app version,
   capability fingerprint, OpenAPI fingerprint, or adapter version changes.
 - Treat response-shape inference as read-only evidence.
-- Require advertised OpenAPI or a reviewed adapter for writes.
+- Require the installed app's own published contract for writes: an
+  advertised OpenAPI document, or the verified package or exact source tag
+  acquired for that installation. Dynamic app behavior follows semantic
+  patterns over that contract and its data, never an app ID, an exact
+  version, a version range, or a pinned source tag; see
+  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes).
 - Keep dynamic endpoints relative and inside approved same-origin prefixes.
 - Omit behavior whose provenance or permission model is ambiguous.
 
