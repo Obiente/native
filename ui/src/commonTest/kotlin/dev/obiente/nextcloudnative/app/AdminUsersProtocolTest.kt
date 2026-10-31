@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,108 +64,47 @@ class AdminUsersProtocolTest {
     }
 
     @Test
-    fun `mutations map to exact provisioning routes`() {
-        fun plan(mutation: AdminUserMutation) = AdminUserRequests.mutation(mutation)
-        plan(AdminUserMutation.SetEnabled("a b", false)).let {
-            assertEquals(NextcloudApiMethod.PUT, it.method)
-            assertEquals("/ocs/v2.php/cloud/users/a%20b/disable", it.relativePath)
-        }
-        plan(AdminUserMutation.AddToGroup("alice", "staff")).let {
-            assertEquals(NextcloudApiMethod.POST, it.method)
-            assertEquals("groupid=staff", it.body?.decodeToString())
-        }
-        plan(AdminUserMutation.RemoveFromGroup("alice", "staff")).let {
-            assertEquals(NextcloudApiMethod.DELETE, it.method)
-            assertEquals("staff", it.queryParameters["groupid"])
-            assertEquals("/ocs/v2.php/cloud/users/alice/groups", it.relativePath)
-        }
-        plan(AdminUserMutation.SetQuota("alice", AdminQuotaPreset.Unlimited)).let {
-            assertEquals("key=quota&value=none", it.body?.decodeToString())
-        }
-        plan(AdminUserMutation.Delete("alice")).let {
-            assertEquals(NextcloudApiMethod.DELETE, it.method)
-            assertEquals("/ocs/v2.php/cloud/users/alice", it.relativePath)
-        }
-        assertFailsWith<IllegalArgumentException> { plan(AdminUserMutation.SetEnabled("../alice", true)) }
-        assertFailsWith<IllegalArgumentException> { plan(AdminUserMutation.SetEmail("alice", "not-an-email")) }
+    fun `reads are forced network GETs bound to the exact account`() {
+        val page = AdminUserRequests.usersPage("a&b", offset = 25)
+        assertEquals(NextcloudApiMethod.GET, page.method)
+        assertEquals("/ocs/v2.php/cloud/users/details", page.relativePath)
+        assertEquals("a&b", page.queryParameters["search"])
+        assertEquals("25", page.queryParameters["offset"])
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, page.cachePolicy)
+        assertEquals("/ocs/v2.php/cloud/users/a%20b", AdminUserRequests.user("a b").relativePath)
+        assertEquals("/ocs/v2.php/cloud/groups/details", AdminUserRequests.groups().relativePath)
+        assertFailsWith<IllegalArgumentException> { AdminUserRequests.user("../alice") }
+        assertFailsWith<IllegalArgumentException> { AdminUserRequests.usersPage("", offset = -1) }
     }
 
     @Test
-    fun `new accounts need a password or a welcome email and never print the password`() {
-        val withPassword = AdminNewUser("new.user", "New User", "", "s3cret-pass", listOf("staff"), AdminQuotaPreset.FiveGigabytes)
-        val body = AdminUserRequests.createUser(withPassword).body?.decodeToString().orEmpty()
-        assertTrue(body.startsWith("userid=new.user&password="))
-        assertTrue("groups%5B%5D=staff" in body)
-        assertTrue("quota=5%20GB" in body)
-        assertFalse("s3cret" in withPassword.toString())
-        assertFailsWith<IllegalArgumentException> { AdminUserRequests.createUser(withPassword.copy(password = "", email = "")) }
-        AdminUserRequests.createUser(withPassword.copy(password = "", email = "new@example.test"))
-        assertFailsWith<IllegalArgumentException> { AdminUserRequests.createUser(withPassword.copy(userId = "bad/id")) }
-        assertFailsWith<IllegalArgumentException> { AdminUserRequests.createUser(withPassword.copy(userId = " padded")) }
-    }
-
-    @Test
-    fun `group deletion refuses the admin group`() {
-        assertFailsWith<IllegalArgumentException> { AdminUserRequests.groupMutation(AdminGroupMutation.Delete("admin")) }
-        assertEquals(
-            "/ocs/v2.php/cloud/groups/team%20a",
-            AdminUserRequests.groupMutation(AdminGroupMutation.Delete("team a")).relativePath,
-        )
-    }
-
-    @Test
-    fun `postconditions and self-protection`() {
-        val user = AdminUser("bob", "Bob", null, enabled = false, groups = listOf("staff"), subadminGroups = emptyList(),
-            quota = AccountQuota(0, null, null, 5 * 1_073_741_824L), lastLoginEpochMillis = null, backend = "Database")
-        assertTrue(user.reflects(AdminUserMutation.SetEnabled("bob", false)))
-        assertFalse(user.reflects(AdminUserMutation.SetEnabled("bob", true)))
-        assertTrue(user.reflects(AdminUserMutation.RemoveFromGroup("bob", "other")))
-        assertTrue(user.reflects(AdminUserMutation.SetQuota("bob", AdminQuotaPreset.FiveGigabytes)))
-        assertFalse(user.reflects(AdminUserMutation.SetQuota("bob", AdminQuotaPreset.TenGigabytes)))
-        assertFalse(user.reflects(AdminUserMutation.AddToGroup("someone-else", "staff")))
-        assertFalse(adminUserActionsAllowed(user, signedInUserId = "bob"))
-        assertTrue(adminUserActionsAllowed(user, signedInUserId = "admin"))
-        assertFalse(adminUserActionsAllowed(user.copy(detailsVisible = false), signedInUserId = "admin"))
-    }
-
-    @Test
-    fun `app lifecycle sends the reviewed plan and verifies the new catalog state`() = runBlocking {
-        val app = NativeManagedApp("sample_app", "Sample", installedVersion = "1.0.0", installed = true, enabled = true)
-        val catalog = NativeAppCatalog(NativeAppCatalogContract.ProvisioningOcsV1, listOf(app), true, false, false)
-        val session = NextcloudSession("https://cloud.example.test", "admin", "app-token")
-        val sent = mutableListOf<NextcloudApiRequest>()
-        val transport = AccountPasswordConfirmedTransport { _, request, _ ->
-            sent += request
-            PasswordConfirmedApiResult.Delivered(response(200, """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}"""))
+    fun `controller drops stale search and detail completions`() = runBlocking {
+        val pending = mutableMapOf<String, CompletableDeferred<NextcloudApiResponse>>()
+        val controller = AdminUsersController(CoroutineScope(Dispatchers.Unconfined)) { request ->
+            val key = request.queryParameters["search"] ?: request.relativePath
+            CompletableDeferred<NextcloudApiResponse>().also { pending[key] = it }.await()
         }
-        val secret = AccountPasswordConfirmationSecret("pw".toCharArray())
-        val outcome = runNativeAppLifecycle(transport, session, catalog, app, NativeAppLifecycleAction.Disable, secret) {
-            NativeAppCatalogResult.Available(catalog.copy(apps = listOf(app.copy(enabled = false))))
-        }
-        assertEquals(ConfirmedWriteOutcome.Applied, outcome)
-        assertTrue(secret.isCleared)
-        assertEquals(NextcloudApiMethod.DELETE, sent.single().method)
-        assertEquals("/ocs/v1.php/cloud/apps/sample_app", sent.single().relativePath)
+        controller.search("al")
+        val first = pending.getValue("al")
+        controller.search("bo")
+        first.complete(response(200, ocs("""{"users":{"alice":{"id":"alice","displayname":"Alice"}}}""")))
+        pending.getValue("bo").complete(response(200, ocs("""{"users":{"bob":{"id":"bob","displayname":"Bob"}}}""")))
+        assertEquals(listOf("bob"), controller.state.users.map { it.id })
 
-        val stale = runNativeAppLifecycle(transport, session, catalog, app.copy(installedVersion = "2.0.0"),
-            NativeAppLifecycleAction.Disable, AccountPasswordConfirmationSecret("pw".toCharArray())) { error("not read") }
-        assertEquals(ConfirmedWriteRejection.Invalid, (stale as ConfirmedWriteOutcome.Rejected).reason)
-        assertEquals(1, sent.size)
-
-        val unchanged = runNativeAppLifecycle(transport, session, catalog, app, NativeAppLifecycleAction.Disable,
-            AccountPasswordConfirmationSecret("pw".toCharArray())) { NativeAppCatalogResult.Available(catalog) }
-        assertEquals(ConfirmedWriteOutcome.Unverified, unchanged)
+        controller.select("bob")
+        val detail = pending.getValue("/ocs/v2.php/cloud/users/bob")
+        controller.select(null)
+        detail.complete(response(200, ocs("""{"id":"bob","displayname":"Bob","enabled":false}""")))
+        assertEquals(null, controller.state.selectedUser)
+        assertEquals(true, controller.state.users.single().detailsVisible)
     }
 
     @Test
-    fun `lifecycle postconditions`() {
-        val before = NativeManagedApp("a", "A", installedVersion = "1", availableVersion = "2", installed = true, enabled = true)
-        assertTrue(nativeAppLifecycleApplied(before, NativeAppLifecycleAction.Update, before.copy(installedVersion = "2", availableVersion = null)))
-        assertFalse(nativeAppLifecycleApplied(before, NativeAppLifecycleAction.Update, before))
-        assertTrue(nativeAppLifecycleApplied(before, NativeAppLifecycleAction.Uninstall, null))
-        assertTrue(nativeAppLifecycleApplied(before, NativeAppLifecycleAction.Uninstall, before.copy(installed = false, enabled = false)))
-        assertFalse(nativeAppLifecycleApplied(before, NativeAppLifecycleAction.Enable, before.copy(enabled = false)))
-        assertEquals(NativeAdminAuthorization.AccountPasswordOnRequest, nativeAppRequiredAuthorization(NativeAppLifecycleAction.Enable))
+    fun `forbidden reads explain the permission instead of an empty list`() = runBlocking {
+        val controller = AdminUsersController(CoroutineScope(Dispatchers.Unconfined)) { response(403, "") }
+        controller.search("")
+        assertTrue(controller.state.users.isEmpty())
+        assertEquals(AdminReadResult.Forbidden.failureMessage("accounts"), controller.state.listFailure)
     }
 
     private fun ocs(data: String) = """{"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":$data}}"""

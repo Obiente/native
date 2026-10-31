@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Settings adds Personal info, App settings, and Talk sections, and conversations get a native settings sheet. Administrators manage apps, accounts, groups, and server information in one native screen. Profile and administrator changes ask for the account password for that change only and are checked against the server; accounts with two-factor sign-in cannot make these changes from the app yet.
+Settings adds Personal info, App settings, and Talk sections, and conversations get a native settings sheet for name, notifications, lobby, guest access, and participants. Administrators can review apps, accounts, groups, and server information natively. Profile and administrator changes stay read-only because Nextcloud requires a password confirmation that the app's sign-in cannot provide; they wait for a secure sign-in handoff.

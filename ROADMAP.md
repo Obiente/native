@@ -621,10 +621,10 @@ Administration is valuable but must not weaken server authentication.
 
 - Read-only server/app inventory, enabled state, updates, compatibility, dependencies, group restrictions, classic-app versus ExApp identity, and system health where authorized.
 - Native explanation and preflight for enable, disable, update, uninstall, bundle, force, and Memories maintenance actions.
-- Mutations use a native password-confirmed request followed by an inventory refresh and postcondition check, with no browser handoff. The flow is present in source with deterministic tests ([contract](ADAPTER_ARCHITECTURE.md#password-confirmed-writes)).
+- Default mutation flow is an explicit authenticated handoff, followed by capability/navigation/inventory refresh. It is not built yet; until then the native profile and administration screens are read-only and explain why ([contract](ADAPTER_ARCHITECTURE.md#account-settings-administration-and-talk-settings)).
+- Open investigation: whether Nextcloud's `core/apppassword/confirm` session confirmation can serve non-strict routes without the app collecting the primary password. Strict routes still need the password on the request.
 - Direct mutation remains experimental until strict/lax password confirmation, SSO, 2FA, delegated admin, brute-force delay, maintenance mode, and recovery are integration-tested.
-- The primary password exists only in request-scoped memory, is excluded from logs/crash state, and never replaces the stored app-password session.
-- Accounts that use two-factor authentication or token-only logins cannot confirm administrator changes from a client app; supporting them needs further authentication research.
+- The primary password, if a future direct strict flow genuinely requires it, exists only in request-scoped memory, is excluded from logs/crash state, and never replaces the stored app-password session.
 - ExApps remain read-only/deep-linked until AppAPI asynchronous lifecycle/state is separately modeled.
 
 ### Acceptance criteria
@@ -848,7 +848,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 | Talk signaling/WebRTC complexity | Unreliable calls/privacy bugs | Separate compatibility matrix, platform media drivers, soak/chaos/threat tests |
 | Office is a provider-specific web/WOPI integration | Broken servers or a false promise of native editing | Capability-driven editor choices, isolated Android web integration, external desktop handoff, native preview first, and an SDK feasibility gate |
 | Recognize API-key gate | Direct people DAV unavailable | Memories clusters, explicit unavailable state, wait for official external flow |
-| Strict admin password confirmation | App password cannot authorize | Request-scoped password confirmation, primary password never stored, experimental until the auth matrix passes |
+| Strict admin password confirmation | App password cannot authorize | Browser handoff first, primary password never stored, direct flow only after auth matrix |
 | Client-side E2EE/mounted storage | Incorrect content/permission behavior | Capability-specific adapter; fail closed/read-only until supported and tested |
 | Five platform scopes | Quality dilution | Shared domain rules, staged platform tiers, platform acceptance matrix, no fake parity |
 | Cache/device loss or theft | Offline data exposure | Threat model, platform protection/encryption, app lock semantics, remote/account removal controls |

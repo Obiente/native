@@ -1,27 +1,24 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AccountProfileProtocolTest {
     @Test
-    fun `profile parses values, scopes, and server-editable fields`() {
-        val profile = loaded(profileJson(), fieldsJson("displayname", "phone", "biography"))
+    fun `profile parses values and visibility scopes`() {
+        val profile = loaded(profileJson())
         assertEquals("alice", profile.userId)
-        val name = assertNotNullValue(profile.value(AccountProfileField.DisplayName))
+        val name = assertNotNull(profile.value(AccountProfileField.DisplayName))
         assertEquals("Alice Example", name.value)
         assertEquals(AccountPropertyScope.Federated, name.scope)
-        assertTrue(name.editable)
-        val email = assertNotNullValue(profile.value(AccountProfileField.Email))
-        assertFalse(email.editable)
         // Legacy scope names still map onto the current scope model.
         assertEquals(AccountPropertyScope.Local, profile.value(AccountProfileField.Phone)?.scope)
         assertEquals(listOf("team@example.test"), profile.additionalEmails.map { it.address })
@@ -29,116 +26,84 @@ class AccountProfileProtocolTest {
         assertEquals(true, profile.profileEnabled)
         assertEquals(listOf("staff"), profile.groups)
         assertEquals(1_024L, profile.quota?.usedBytes)
+        // Negative server quota values mean unlimited or not computed, not a byte count.
+        assertNull(profile.quota?.quotaBytes)
     }
 
     @Test
-    fun `without the editable-field list every value stays read-only`() {
-        val profile = loaded(profileJson(), null)
-        assertTrue(profile.values.none { it.editable })
-        assertFalse(profile.additionalEmailsEditable)
+    fun `values are bounded and absent fields are omitted`() {
+        val long = "x".repeat(200)
+        val profile = loaded(ocs("""{"id":"alice","displayname":"$long","phone":null}"""))
+        assertEquals(64, profile.value(AccountProfileField.DisplayName)?.value?.length)
+        assertEquals("", profile.value(AccountProfileField.Phone)?.value)
+        assertNull(profile.value(AccountProfileField.Biography))
     }
 
     @Test
     fun `missing, unauthorized, and malformed responses are distinct`() {
-        assertEquals(AccountProfileLoadResult.Unauthorized, parseAccountProfile(response(401, ""), null))
-        assertEquals(AccountProfileLoadResult.Unavailable, parseAccountProfile(response(503, ""), null))
-        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, "not json"), null))
-        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, ocs("""{"displayname":"x"}""")), null))
-        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, ocs("""{"id":"../x"}""")), null))
-    }
-
-    @Test
-    fun `edits contain only changed editable values, then changed scopes`() {
-        val profile = loaded(profileJson(), fieldsJson("displayname", "phone"))
-        val edits = accountProfileEdits(
-            profile,
-            draftValues = mapOf(
-                AccountProfileField.DisplayName to "  Alice Example  ",
-                AccountProfileField.Phone to "+1 555 0199",
-                AccountProfileField.Email to "changed@example.test",
-            ),
-            draftScopes = mapOf(AccountProfileField.DisplayName to AccountPropertyScope.Local),
-        )
+        assertEquals(AccountProfileLoadResult.Unauthorized, parseAccountProfile(response(401, "")))
+        assertEquals(AccountProfileLoadResult.Unavailable, parseAccountProfile(response(503, "")))
+        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, "not json")))
+        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, ocs("""{"displayname":"x"}"""))))
+        assertEquals(AccountProfileLoadResult.Malformed, parseAccountProfile(response(200, ocs("""{"id":"../x"}"""))))
         assertEquals(
-            listOf<AccountProfileEdit>(
-                AccountProfileEdit.Value(AccountProfileField.Phone, "+1 555 0199"),
-                AccountProfileEdit.Scope(AccountProfileField.DisplayName, AccountPropertyScope.Local),
-            ),
-            edits,
+            AccountProfileLoadResult.Malformed,
+            parseAccountProfile(response(200, """{"ocs":{"meta":{"status":"failure","statuscode":997},"data":{"id":"alice"}}}""")),
         )
     }
 
     @Test
-    fun `edit request targets the exact account through OCS v2`() {
-        val request = AccountProfileRequests.edit("alice smith", AccountProfileEdit.Scope(AccountProfileField.Phone, AccountPropertyScope.Private))
-        assertEquals(NextcloudApiMethod.PUT, request.method)
-        assertEquals("/ocs/v2.php/cloud/users/alice%20smith", request.relativePath)
-        assertEquals("key=phoneScope&value=v2-private", request.body?.decodeToString())
-        assertFailsWith<IllegalArgumentException> {
-            AccountProfileRequests.edit("alice", AccountProfileEdit.Value(AccountProfileField.Phone, "1\u0000"))
+    fun `profile read is a forced network GET of the signed-in account`() {
+        val request = AccountProfileRequests.currentUser()
+        assertEquals(NextcloudApiMethod.GET, request.method)
+        assertEquals("/ocs/v2.php/cloud/user", request.relativePath)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, request.cachePolicy)
+        assertTrue(request.ocsApiRequest)
+    }
+
+    @Test
+    fun `controller keeps the last profile when a refresh fails and drops stale completions`() = runBlocking {
+        val responses = ArrayDeque<CompletableDeferred<NextcloudApiResponse>>()
+        val requests = mutableListOf<NextcloudApiRequest>()
+        val controller = AccountProfileController(CoroutineScope(Dispatchers.Unconfined)) { request ->
+            requests += request
+            CompletableDeferred<NextcloudApiResponse>().also(responses::addLast).await()
         }
-        AccountProfileRequests.edit("alice", AccountProfileEdit.Value(AccountProfileField.Biography, "line one\nline two"))
-        assertFailsWith<IllegalArgumentException> { AccountProfileRequests.edit("a/b", AccountProfileEdit.ProfileEnabled(true)) }
+        controller.refresh()
+        responses.removeFirst().complete(response(200, profileJson()))
+        assertEquals("alice", controller.state.profile?.userId)
+
+        controller.refresh()
+        val stale = responses.removeFirst()
+        controller.refresh()
+        // The first refresh was cancelled by the second; its late answer must not apply.
+        stale.complete(response(200, ocs("""{"id":"mallory"}""")))
+        responses.removeFirst().complete(response(503, ""))
+        assertEquals("alice", controller.state.profile?.userId)
+        assertTrue(controller.state.loadFailure.orEmpty().contains("could not be loaded"))
+        assertTrue(requests.all { it.method == NextcloudApiMethod.GET })
     }
 
     @Test
-    fun `postcondition check uses the fresh profile`() {
-        val profile = loaded(profileJson(), null)
-        assertTrue(profile.reflects(AccountProfileEdit.Value(AccountProfileField.DisplayName, "Alice Example")))
-        assertFalse(profile.reflects(AccountProfileEdit.Value(AccountProfileField.DisplayName, "Someone else")))
-        assertTrue(profile.reflects(AccountProfileEdit.Value(AccountProfileField.Email, "ALICE@example.test")))
-        assertTrue(profile.reflects(AccountProfileEdit.Scope(AccountProfileField.DisplayName, AccountPropertyScope.Federated)))
-        assertTrue(profile.reflects(AccountProfileEdit.ProfileEnabled(true)))
+    fun `transport faults become an unavailable state`() = runBlocking {
+        val controller = AccountProfileController(CoroutineScope(Dispatchers.Unconfined)) { error("socket closed") }
+        controller.refresh()
+        assertNull(controller.state.profile)
+        assertEquals(AccountProfileLoadResult.Unavailable.loadFailureMessage(), controller.state.loadFailure)
     }
 
     @Test
-    fun `batch save stops after a rejected password and reports what was not sent`() = runBlocking {
-        val session = NextcloudSession("https://cloud.example.test", "alice", "app-token")
-        var phone = "+1 555 0100"
-        val controller = AccountProfileController(
-            CoroutineScope(Dispatchers.Unconfined), session,
-            execute = { request ->
-                if (request.relativePath.endsWith("/fields")) response(200, fieldsJson("phone", "website"))
-                else response(200, profileJson(phone = phone))
-            },
-            transport = null,
-        )
-        var sends = 0
-        val transport = AccountPasswordConfirmedTransport { _, request, _ ->
-            sends++
-            if (sends == 1) {
-                phone = "+1 555 0199"
-                PasswordConfirmedApiResult.Delivered(response(200, ocs("[]")))
-            } else {
-                PasswordConfirmedApiResult.Delivered(response(401, ""))
-            }.also { assertTrue(request.relativePath.endsWith("/alice")) }
-        }
-        val edits = listOf(
-            AccountProfileEdit.Value(AccountProfileField.Phone, "+1 555 0199"),
-            AccountProfileEdit.Value(AccountProfileField.Website, "https://example.test"),
-            AccountProfileEdit.Scope(AccountProfileField.Phone, AccountPropertyScope.Private),
-        )
-        val report = controller.applyAccountProfileEdits(transport, "alice", edits, AccountPasswordConfirmationSecret("pw".toCharArray()))
-        assertEquals(listOf(edits[0]), report.applied)
-        assertEquals(edits[1], report.failed.single().first)
-        assertEquals(listOf(edits[2]), report.skipped)
-        assertEquals(2, sends)
-        assertTrue(report.failureSummary().orEmpty().contains("1 change(s) were saved"))
+    fun `unknown scope stays unknown`() {
+        assertNull(AccountPropertyScope.fromWire("v9-unknown"))
     }
 
-    private fun loaded(profile: String, fields: String?): AccountProfile = assertIs<AccountProfileLoadResult.Loaded>(
-        parseAccountProfile(response(200, profile), fields?.let { response(200, it) }),
-    ).profile
+    private fun loaded(profile: String): AccountProfile =
+        assertIs<AccountProfileLoadResult.Loaded>(parseAccountProfile(response(200, profile))).profile
 
-    private fun <T> assertNotNullValue(value: T?): T {
-        assertTrue(value != null)
-        return value
-    }
-
-    private fun profileJson(phone: String = "+1 555 0100") = ocs(
+    private fun profileJson() = ocs(
         """
         {"id":"alice","displayname":"Alice Example","displaynameScope":"v2-federated",
-         "email":"alice@example.test","emailScope":"v2-local","phone":"$phone","phoneScope":"contacts",
+         "email":"alice@example.test","emailScope":"v2-local","phone":"+1 555 0100","phoneScope":"contacts",
          "website":"","websiteScope":"v2-local","biography":"","biographyScope":"v2-local",
          "additional_mail":["team@example.test"],"additional_mailScope":["v2-private"],
          "profile_enabled":"1","language":"en","locale":"en_US","groups":["staff"],
@@ -146,14 +111,7 @@ class AccountProfileProtocolTest {
         """.trimIndent(),
     )
 
-    private fun fieldsJson(vararg keys: String) = ocs(keys.joinToString(",", "[", "]") { "\"$it\"" })
-
     private fun ocs(data: String) = """{"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":$data}}"""
 
     private fun response(status: Int, body: String) = NextcloudApiResponse(status, body.encodeToByteArray(), "application/json", null)
-
-    @Test
-    fun `unknown scope stays unknown`() {
-        assertNull(AccountPropertyScope.fromWire("v9-unknown"))
-    }
 }

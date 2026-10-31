@@ -1763,7 +1763,7 @@ private fun AuthenticatedApp(
             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         )
         Screen.AdminApps -> AdminAppsScreen(
-            access = administration, session = session, signedInUserId = serverInfo?.userId ?: session.loginName,
+            access = administration, session = session,
             execute = { services.executeNextcloudApi(session, it) }, serverInfo = serverInfo,
             onOpenApp = { openApp(it, NextcloudDestination.Settings) },
             onBack = ::navigateBack,

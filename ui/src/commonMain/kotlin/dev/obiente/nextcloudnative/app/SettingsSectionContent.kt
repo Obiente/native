@@ -533,13 +533,13 @@ internal fun SettingsAdministrationSectionContent(
         )
         SettingsSectionActionRow(
             title = "Accounts",
-            description = "Create, disable, and delete accounts; manage groups and quota",
+            description = "Search accounts and review their status, groups, and storage",
             icon = NextcloudIcons.Profile,
             onClick = { onOpenAdministration(AdministrationTab.Accounts) },
         )
         SettingsSectionActionRow(
             title = "Groups",
-            description = "Create and delete groups and review their members",
+            description = "Review groups and their member counts",
             icon = NextcloudIcons.People,
             onClick = { onOpenAdministration(AdministrationTab.Groups) },
         )

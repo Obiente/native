@@ -388,8 +388,6 @@ private fun launchDesktopProcess(arguments: Array<String>) {
         CompositionLocalProvider(
             LocalAppWindowVisibility provides administrationWindowVisibility,
             dev.obiente.nextcloudnative.app.LocalDesktopWindow provides window,
-            dev.obiente.nextcloudnative.app.LocalAccountPasswordConfirmedTransport provides
-                remember { dev.obiente.nextcloudnative.app.desktopAccountPasswordConfirmedTransport() },
         ) {
         Box(Modifier.fillMaxSize().background(background)) {
             NextcloudNativeApp(

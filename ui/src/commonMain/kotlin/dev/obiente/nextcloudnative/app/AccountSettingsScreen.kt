@@ -268,7 +268,7 @@ internal fun SettingsScreen(
 
             SettingsWorkspaceSection.Administration -> SettingsAdministrationSectionContent(
                 state = SettingsAdministrationSectionState(
-                    serverAppsDescription = "Install, update, enable, or disable apps as an administrator",
+                    serverAppsDescription = "Review installed and available apps, versions, and updates",
                     serverAppsStatus = serverInfo?.apps?.size?.let { "$it active" },
                     installedApps = serverInfo?.apps.orEmpty()
                         .filterNot { app -> app.id == "dashboard" }

@@ -42,7 +42,6 @@ class AdminAppsScreenRecoveryTest {
                                 state.value, permissionCheck = { state.value.canAdminister }, refresh = { retries++ },
                             ),
                             session = NextcloudSession("https://cloud.example.test", "admin", "synthetic-token"),
-                            signedInUserId = "admin",
                             execute = { error("A failed check must never load administration data") },
                             serverInfo = null,
                             onOpenApp = {},

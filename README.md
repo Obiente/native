@@ -201,10 +201,9 @@ Windows, and an early macOS package) with:
 - News, as a feed reader with unread and starred views, folders, feeds and an
   article reader that does not load remote images;
 - Activity, global search, Dashboard, user status and app navigation;
-- native Settings for personal info and profile visibility, Talk privacy and
-  conversation settings, and, for administrators, apps, accounts, groups and
-  server information, with password-confirmed changes that are still
-  experimental;
+- native Settings for personal info, Talk privacy and conversation settings,
+  and, for administrators, read-only views of apps, accounts, groups and server
+  information;
 - native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;
@@ -242,7 +241,7 @@ The project is strengthening the foundations a dependable daily client needs.
 | Talk | Complete messages and attachments first, then push, notifications, system media integration, signaling, and separately gated WebRTC calling |
 | Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, semantic layouts, and small verified adapters where they genuinely improve the workflow |
 | Desktop product | Resizable multi-pane workspaces, keyboard and pointer UX, dense tables, persistent inspectors, desktop file integration, notifications, and update/packaging quality |
-| Administration | Native inventory and diagnostics, password-confirmed app, account, and group changes verified against the server, settings generated from verified schemas, and authentication research for accounts with two-factor sign-in |
+| Administration | Native read-only inventory and diagnostics, safe preflight and lifecycle plans, settings generated from verified schemas, and explicit browser/authentication handoff for strict operations |
 
 [ROADMAP.md](ROADMAP.md) has the dependency order and data-safety gates. The
 [GitHub Project](https://github.com/orgs/Obiente/projects/4) has live status,

@@ -57,7 +57,6 @@ data class AccountProfileValue(
     val field: AccountProfileField,
     val value: String,
     val scope: AccountPropertyScope?,
-    val editable: Boolean,
 )
 
 data class AccountAdditionalEmail(val address: String, val scope: AccountPropertyScope?)
@@ -68,7 +67,6 @@ data class AccountProfile(
     val userId: String,
     val values: List<AccountProfileValue>,
     val additionalEmails: List<AccountAdditionalEmail>,
-    val additionalEmailsEditable: Boolean,
     val profileEnabled: Boolean?,
     val language: String?,
     val locale: String?,
@@ -86,26 +84,6 @@ sealed interface AccountProfileLoadResult {
     data object Malformed : AccountProfileLoadResult
 }
 
-/** One requested change to the signed-in account, sent through `PUT cloud/users/{userId}`. */
-sealed interface AccountProfileEdit {
-    val key: String
-    val value: String
-
-    data class Value(val field: AccountProfileField, override val value: String) : AccountProfileEdit {
-        override val key: String get() = this.field.key
-    }
-
-    data class Scope(val field: AccountProfileField, val scope: AccountPropertyScope) : AccountProfileEdit {
-        override val key: String get() = this.field.key + "Scope"
-        override val value: String get() = scope.wireValue
-    }
-
-    data class ProfileEnabled(val enabled: Boolean) : AccountProfileEdit {
-        override val key: String get() = "profile_enabled"
-        override val value: String get() = if (enabled) "1" else "0"
-    }
-}
-
 object AccountProfileRequests {
     fun currentUser(): NextcloudApiRequest = NextcloudApiRequest(
         method = NextcloudApiMethod.GET,
@@ -115,50 +93,22 @@ object AccountProfileRequests {
         maximumResponseBytes = PROFILE_RESPONSE_BYTES,
         cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
     )
-
-    fun editableFields(): NextcloudApiRequest = NextcloudApiRequest(
-        method = NextcloudApiMethod.GET,
-        relativePath = "/ocs/v2.php/cloud/user/fields",
-        queryParameters = mapOf("format" to "json"),
-        ocsApiRequest = true,
-        maximumResponseBytes = PROFILE_RESPONSE_BYTES,
-        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
-    )
-
-    /** Password-confirmed edit of one key for [userId], the exact signed-in account. */
-    fun edit(userId: String, edit: AccountProfileEdit): NextcloudApiRequest {
-        require(userId.isProvisioningIdentifier()) { "The account ID is invalid." }
-        val multiline = edit is AccountProfileEdit.Value && edit.field.multiline
-        require(
-            edit.value.length <= MAX_PROFILE_VALUE_LENGTH &&
-                edit.value.all { !it.isISOControl() || (multiline && it == '\n') },
-        ) { "The profile value is invalid." }
-        return confirmedOcsFormRequest(
-            NextcloudApiMethod.PUT,
-            "/ocs/v2.php/cloud/users/${encodeUrlComponent(userId)}",
-            listOf("key" to edit.key, "value" to edit.value),
-        )
-    }
 }
 
-fun parseAccountProfile(profileResponse: NextcloudApiResponse, fieldsResponse: NextcloudApiResponse?): AccountProfileLoadResult {
+/** Parses `GET cloud/user`, which includes visibility scopes only for the signed-in account. */
+fun parseAccountProfile(profileResponse: NextcloudApiResponse): AccountProfileLoadResult {
     when (profileResponse.status) {
         401 -> return AccountProfileLoadResult.Unauthorized
         !in 200..299 -> return AccountProfileLoadResult.Unavailable
     }
     val data = profileResponse.successfulOcsData() as? JsonObject ?: return AccountProfileLoadResult.Malformed
     val userId = data.text("id")?.takeIf(String::isProvisioningIdentifier) ?: return AccountProfileLoadResult.Malformed
-    // Without the editable-field list every value stays read-only; that is the safe default.
-    val editable = fieldsResponse?.successfulOcsData()?.let { element ->
-        (element as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet()
-    }.orEmpty()
     val values = AccountProfileField.entries.mapNotNull { field ->
         val raw = data[field.key] ?: return@mapNotNull null
         AccountProfileValue(
             field = field,
             value = (raw as? JsonPrimitive)?.contentOrNull.orEmpty().take(field.maximumLength),
             scope = AccountPropertyScope.fromWire(data.text(field.key + "Scope")),
-            editable = field.key in editable,
         )
     }
     val additionalAddresses = (data["additional_mail"] as? JsonArray)
@@ -174,7 +124,6 @@ fun parseAccountProfile(profileResponse: NextcloudApiResponse, fieldsResponse: N
             additionalEmails = additionalAddresses.take(MAX_ADDITIONAL_EMAILS).mapIndexed { index, address ->
                 AccountAdditionalEmail(address, AccountPropertyScope.fromWire(additionalScopes.getOrNull(index)))
             },
-            additionalEmailsEditable = "additional_mail" in editable,
             profileEnabled = data.flag("profile_enabled"),
             language = data.text("language")?.takeIf { it.isNotBlank() && it.length <= 32 },
             locale = data.text("locale")?.takeIf { it.isNotBlank() && it.length <= 32 },
@@ -184,35 +133,6 @@ fun parseAccountProfile(profileResponse: NextcloudApiResponse, fieldsResponse: N
             quota = parseAccountQuota(data["quota"]),
         ),
     )
-}
-
-/** The edits that turn [profile] into [draft], one key per request, scopes after values. */
-fun accountProfileEdits(
-    profile: AccountProfile,
-    draftValues: Map<AccountProfileField, String>,
-    draftScopes: Map<AccountProfileField, AccountPropertyScope>,
-): List<AccountProfileEdit> = buildList {
-    profile.values.forEach { current ->
-        val draft = draftValues[current.field]
-        if (current.editable && draft != null && draft.trim() != current.value) {
-            add(AccountProfileEdit.Value(current.field, draft.trim()))
-        }
-    }
-    profile.values.forEach { current ->
-        val scope = draftScopes[current.field]
-        if (scope != null && current.scope != null && scope != current.scope) {
-            add(AccountProfileEdit.Scope(current.field, scope))
-        }
-    }
-}
-
-/** True when a fresh read shows [edit] applied to [profile]. */
-fun AccountProfile.reflects(edit: AccountProfileEdit): Boolean = when (edit) {
-    is AccountProfileEdit.Value -> value(edit.field)?.value == edit.value ||
-        // The server lowercases and trims email addresses.
-        edit.field == AccountProfileField.Email && value(edit.field)?.value.equals(edit.value, ignoreCase = true)
-    is AccountProfileEdit.Scope -> value(edit.field)?.scope == edit.scope
-    is AccountProfileEdit.ProfileEnabled -> profileEnabled == edit.enabled
 }
 
 internal fun parseAccountQuota(element: JsonElement?): AccountQuota? {
@@ -242,6 +162,5 @@ private fun JsonObject.flag(name: String): Boolean? = (this[name] as? JsonPrimit
 }
 
 private const val PROFILE_RESPONSE_BYTES = 512L * 1024L
-private const val MAX_PROFILE_VALUE_LENGTH = 4_096
 private const val MAX_ADDITIONAL_EMAILS = 32
 private const val MAX_PROFILE_GROUPS = 256
