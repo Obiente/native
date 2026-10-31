@@ -59,6 +59,16 @@ data class DeckBoard(
     val shared: Boolean,
     val lastModified: Long?,
     val etag: String?,
+    val acl: List<DeckAcl> = emptyList(),
+    /** False when the share list was present but malformed; sharing stays read-only then. */
+    val aclReadable: Boolean = true,
+    val settings: DeckBoardSettings? = null,
+)
+
+/** The board list response, split into active boards and boards the user archived. */
+data class DeckBoardCollection(
+    val active: List<DeckBoard>,
+    val archived: List<DeckBoard>,
 )
 
 data class DeckCard(
@@ -98,6 +108,7 @@ sealed interface DeckWorkspaceState {
     data class BoardPicker(
         val boards: List<DeckBoard>,
         val canCreateBoards: Boolean,
+        val archivedBoards: List<DeckBoard> = emptyList(),
     ) : DeckWorkspaceState
     data class Board(
         val board: DeckBoard,
@@ -208,11 +219,18 @@ fun parseDeckCapabilities(response: NextcloudApiResponse): DeckCapabilities? {
     )
 }
 
-fun parseDeckBoards(response: NextcloudApiResponse): List<DeckBoard> {
+fun parseDeckBoards(response: NextcloudApiResponse): List<DeckBoard> =
+    parseDeckBoardCollection(response).active
+
+fun parseDeckBoardCollection(response: NextcloudApiResponse): DeckBoardCollection {
     require(response.status in 200..299) { "Deck boards failed to load (HTTP ${response.status})." }
-    return response.deckPayload("Deck boards").requireArray("Deck boards").map { element ->
+    val boards = response.deckPayload("Deck boards").requireArray("Deck boards").map { element ->
         element.requireObject("Deck board").toDeckBoard()
-    }.filterNot(DeckBoard::archived).sortedBy { it.title.lowercase() }
+    }.sortedBy { it.title.lowercase() }
+    return DeckBoardCollection(
+        active = boards.filterNot(DeckBoard::archived),
+        archived = boards.filter(DeckBoard::archived),
+    )
 }
 
 fun parseDeckBoard(response: NextcloudApiResponse): DeckBoard {
@@ -228,6 +246,7 @@ fun parseDeckBoard(response: NextcloudApiResponse): DeckBoard {
 fun parseDeckStacks(
     boardId: Long,
     response: NextcloudApiResponse,
+    includeArchivedCards: Boolean = false,
 ): List<DeckStack> {
     require(response.status in 200..299) { "Deck stacks failed to load (HTTP ${response.status})." }
     val safeBoardId = boardId.requireDeckId()
@@ -244,7 +263,7 @@ fun parseDeckStacks(
             doneColumn = value.boolean("isDoneColumn") ?: false,
             cards = value.array("cards").map { card ->
                 card.requireObject("Deck card").toDeckCard(safeBoardId, stackId)
-            }.filterNot(DeckCard::archived).sortedBy(DeckCard::order),
+            }.filter { includeArchivedCards || !it.archived }.sortedBy(DeckCard::order),
             lastModified = value.long("lastModified"),
             etag = value.string("ETag") ?: value.string("etag"),
         )
@@ -342,8 +361,16 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
                 ?: assignment.toDeckUser()
         }
     }.distinctBy(DeckUser::id)
+    val boardId = requirePositiveId("id", "Deck board")
+    val acl = try {
+        parseDeckBoardAcl(boardId, array("acl"))
+    } catch (_: IllegalArgumentException) {
+        null
+    } catch (_: IllegalStateException) {
+        null
+    }
     return DeckBoard(
-        id = requirePositiveId("id", "Deck board"),
+        id = boardId,
         title = requireString("title", "Deck board"),
         color = string("color")?.normalizeDeckColor(),
         archived = boolean("archived") ?: false,
@@ -359,6 +386,9 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
         shared = (long("shared") ?: 0L) > 0L,
         lastModified = long("lastModified"),
         etag = string("ETag") ?: string("etag"),
+        acl = acl.orEmpty(),
+        aclReadable = acl != null,
+        settings = parseDeckBoardSettings(this["settings"] as? JsonObject),
     )
 }
 
