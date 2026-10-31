@@ -621,7 +621,8 @@ Administration is valuable but must not weaken server authentication.
 
 - Read-only server/app inventory, enabled state, updates, compatibility, dependencies, group restrictions, classic-app versus ExApp identity, and system health where authorized.
 - Native explanation and preflight for enable, disable, update, uninstall, bundle, force, and Memories maintenance actions.
-- Default mutation flow is an authenticated browser handoff, followed by capability/navigation/inventory refresh.
+- Default mutation flow is an explicit authenticated handoff, followed by capability/navigation/inventory refresh. It is not built yet; until then the native profile and administration screens are read-only and explain why ([contract](ADAPTER_ARCHITECTURE.md#account-settings-administration-and-talk-settings)).
+- Open investigation: whether Nextcloud's `core/apppassword/confirm` session confirmation can serve non-strict routes without the app collecting the primary password. Strict routes still need the password on the request.
 - Direct mutation remains experimental until strict/lax password confirmation, SSO, 2FA, delegated admin, brute-force delay, maintenance mode, and recovery are integration-tested.
 - The primary password, if a future direct strict flow genuinely requires it, exists only in request-scoped memory, is excluded from logs/crash state, and never replaces the stored app-password session.
 - ExApps remain read-only/deep-linked until AppAPI asynchronous lifecycle/state is separately modeled.

@@ -193,7 +193,7 @@ Every operation declares its risk before it reaches the UI:
 | Reversible | Small, visible, reversible write | Direct user intent and rollback on failure. |
 | Guarded | Content change with concurrency risk | Permission check, revision guard, conflict UI. |
 | Destructive | Delete, overwrite, or hard-to-reverse change | Target-specific confirmation and no blind background retry. |
-| Privileged handoff | Server administration or primary-password confirmation | Explain the effect and open authenticated server administration. |
+| Privileged handoff | Server administration or primary-password confirmation | Explain why the change is unavailable. Perform it only through an explicit authenticated handoff, which is not built yet. |
 
 Runtime evidence may raise the risk level, for example when a move would
 overwrite an existing target. It must never lower the declared level silently.
@@ -657,8 +657,51 @@ instead of navigating away silently when permission revalidation fails. An
 explicit refresh removes old access before requesting new evidence. Concurrent
 checks share the cached result, and cancellation cannot publish a late success.
 The ordinary Apps workspace remains available to regular users. Cached visibility
-never authorizes a mutation; strict operations still use authenticated browser
-handoff and server-side authorization.
+never authorizes a mutation; administration stays read-only until an explicit
+authenticated handoff exists, as described below.
+
+### Account settings, administration, and Talk settings
+
+Nextcloud marks every profile edit and every user, group, and app
+administration route `PasswordConfirmationRequired`: the provisioning
+[`UsersController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/UsersController.php),
+[`GroupsController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/GroupsController.php),
+and `AppsController`, and the app store `ApiController`. The
+[`PasswordConfirmationMiddleware`](https://github.com/nextcloud/server/blob/master/lib/private/AppFramework/Middleware/Security/PasswordConfirmationMiddleware.php)
+does not accept an app-password sign-in as that confirmation, and the
+provisioning Preferences API accepts only keys that the theming and DAV apps
+validate. nati.ve signs in with an app password and never collects the
+primary account password, so these surfaces are read-only until an explicit
+authenticated handoff exists. Each one explains that state instead of offering
+an action.
+
+- Personal info (`AccountProfileProtocol.kt`, `AccountProfileController.kt`)
+  reads `GET cloud/user` with each field's visibility scope, plus language,
+  locale, time zone, groups, quota, and additional email addresses.
+- Administration (`AdminUsersProtocol.kt`, `AdminUsersController.kt`) reads
+  accounts with search and paging from `cloud/users/details`, one account from
+  `cloud/users/{userId}`, and groups from `cloud/groups/details`. A newer search
+  or selection discards an older completion. The app catalog keeps its
+  lifecycle plans but offers no action. Server information is read from the
+  Monitoring app's `apps/serverinfo/api/v1/info` route.
+- Talk conversation settings (`TalkConversationSettingsProtocol.kt`,
+  `TalkConversationSettingsController.kt`) work with the app password and use
+  the Talk mutation transport for rename, description, notification level,
+  read-only, lobby, guest access, moderator role, and participant removal,
+  gated by participant and conversation type, and re-read the conversation
+  after each change. Read receipt and typing privacy use `POST settings/user`
+  and the `chat-read-status` and `typing-privacy` capabilities.
+
+Devices, sessions, and app passwords are not listed: Nextcloud serves them only
+to the web settings page, and `AuthSettingsController` refuses app-password
+sessions. Avatar upload is not implemented.
+
+Open investigation: `PUT core/apppassword/confirm`
+([`AppPasswordController::confirmUserPassword`](https://github.com/nextcloud/server/blob/master/core/Controller/AppPasswordController.php))
+records a confirmation in a server session. Whether a client could reuse that
+session cookie for non-strict routes is unverified, the endpoint itself takes
+the account password, and strict routes still read the password from the
+request, so it does not satisfy the handoff rule as it stands.
 
 ## Account removal and recovery
 

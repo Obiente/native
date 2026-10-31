@@ -201,6 +201,9 @@ Windows, and an early macOS package) with:
 - News, as a feed reader with unread and starred views, folders, feeds and an
   article reader that does not load remote images;
 - Activity, global search, Dashboard, user status and app navigation;
+- native Settings for personal info, Talk privacy and conversation settings,
+  and, for administrators, read-only views of apps, accounts, groups and server
+  information;
 - native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;

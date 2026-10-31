@@ -482,6 +482,33 @@ interaction validation is still required.
   conversations from anywhere in the workspace, Enter sends, Shift+Enter adds a
   line, and Escape cancels a reply or edit. Compact windows show one pane and
   use system back. `TalkWorkspaceInteractionTest` covers both layouts.
+- The settings button in a conversation header opens a conversation settings
+  sheet: name, description, notification level, and, for moderators,
+  read-only, lobby, guest access, moderator roles, and participant removal.
+  Controls are shown only for the participant and conversation types that
+  Talk allows, removal and guest-access changes need a separate confirmation,
+  and every change is read back before it is reported as done. Read receipt
+  and typing privacy live in Settings. `TalkConversationSettingsTest` covers
+  the protocol and verification; there is no device evidence yet.
+
+**Settings and administration**
+
+- Settings adds Personal info, App settings, and (when Talk is installed) Talk
+  sections. Personal info shows the profile with each field's visibility and
+  links to the online status screen. App settings lists every installed app
+  and opens its workspace, or the matching Settings section for Talk and
+  status. These sections use the same phone and two-pane layouts as the rest
+  of Settings.
+- Administration opens one screen with Apps, Accounts, Groups, and Server tabs.
+  Accounts use a searchable, paged list beside the selected account on windows
+  720 dp and wider, and a list that opens the account on phones, returning on
+  system back.
+- Profile and administration are read-only. Nextcloud requires a password
+  confirmation for those changes that the app-password sign-in cannot provide,
+  so each screen explains that the change waits for an explicit authenticated
+  handoff. Nothing opens the browser, and the app never asks for the account
+  password. `NativeSettingsScreensSceneTest` covers the phone and desktop
+  layouts; there is no device or live-server evidence yet.
 
 **Office**
 

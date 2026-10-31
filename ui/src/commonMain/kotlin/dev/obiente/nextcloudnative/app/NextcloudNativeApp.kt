@@ -1596,6 +1596,8 @@ private fun AuthenticatedApp(
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     canAdminister = administration.canAdminister,
                     onAdminApps = { if (administration.canAdminister) screen = Screen.AdminApps },
+                    onOpenStatus = serverInfo?.apps?.firstOrNull { it.id == "user_status" }?.let { app -> { openApp(app, NextcloudDestination.Settings) } },
+                    onOpenApp = { openApp(it, NextcloudDestination.Settings) },
                     onOfflineCenter = {
                         if (presentation == NextcloudPresentation.Desktop) {
                             screen = Screen.Root
@@ -1761,11 +1763,8 @@ private fun AuthenticatedApp(
             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         )
         Screen.AdminApps -> AdminAppsScreen(
-            access = administration,
-            onContinueInBrowser = {
-                services.openExternalUrl(session.serverUrl.trimEnd('/') + "/index.php/settings/apps")
-            },
-            serverInfo = serverInfo,
+            access = administration, session = session,
+            execute = { services.executeNextcloudApi(session, it) }, serverInfo = serverInfo,
             onOpenApp = { openApp(it, NextcloudDestination.Settings) },
             onBack = ::navigateBack,
         )

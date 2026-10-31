@@ -127,6 +127,7 @@ internal fun ChatScreen(
     var reactingTo by remember(controller) { mutableStateOf<Long?>(null) }
     var confirmDelete by remember(controller) { mutableStateOf<TalkMessage?>(null) }
     var confirmResend by remember(controller) { mutableStateOf(false) }
+    var settingsOpen by rememberSaveable(session.accountId, room.token) { mutableStateOf(false) }
     val messageListState = rememberLazyListState()
     val messages = state.messages
     val historyHeaderVisible = (state.hasMoreHistory && state.olderCursor != null) || state.historyFailure != null
@@ -147,11 +148,16 @@ internal fun ChatScreen(
             ScreenHeader(room.displayName, talkLiveStatusLabel(state.live), onBack,
                 titleSharedKey = SharedElementKeys.talkRoomTitle(room.token)) {
                 TalkRefreshButton(state.refreshing, controller::refresh)
+                TalkConversationSettingsButton { settingsOpen = true }
             }
         } else {
             TalkPaneHeader(room.displayName, talkLiveStatusLabel(state.live)) {
                 TalkRefreshButton(state.refreshing, controller::refresh)
+                TalkConversationSettingsButton { settingsOpen = true }
             }
+        }
+        if (settingsOpen) {
+            TalkConversationSettingsSheet(room.token, "Conversation settings", execute) { settingsOpen = false }
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
