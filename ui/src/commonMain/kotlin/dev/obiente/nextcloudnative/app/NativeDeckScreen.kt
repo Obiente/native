@@ -38,6 +38,9 @@ fun NativeDeckScreen(
     var loadedBoards by remember(session) {
         mutableStateOf(retainedWorkspace?.loadedBoards.orEmpty())
     }
+    var archivedBoards by remember(session) {
+        mutableStateOf((retainedWorkspace?.state as? DeckWorkspaceState.BoardPicker)?.archivedBoards.orEmpty())
+    }
     var capabilities by remember(session) { mutableStateOf(retainedWorkspace?.capabilities) }
     var activeRoute by remember(session) { mutableStateOf(retainedWorkspace?.activeRoute) }
     var requestedBoard by remember(session) { mutableStateOf(retainedWorkspace?.requestedBoard) }
@@ -99,6 +102,23 @@ fun NativeDeckScreen(
     }
 
     fun boardState(): DeckWorkspaceState.Board? = state as? DeckWorkspaceState.Board
+
+    fun pickerState(): DeckWorkspaceState = if (loadedBoards.isEmpty() && archivedBoards.isEmpty()) {
+        DeckWorkspaceState.Empty(
+            title = "No boards",
+            message = "Create a board to start organizing cards.",
+            canCreateBoards = capabilities?.canCreateBoards == true,
+        )
+    } else {
+        DeckWorkspaceState.BoardPicker(loadedBoards, capabilities?.canCreateBoards == true, archivedBoards)
+    }
+
+    fun adoptBoard(board: DeckBoard) {
+        if (requestedBoard?.id == board.id) requestedBoard = board
+        loadedBoards = loadedBoards.map { if (it.id == board.id) board else it }
+        archivedBoards = archivedBoards.map { if (it.id == board.id) board else it }
+        state = boardState()?.takeIf { it.board.id == board.id }?.copy(board = board) ?: state
+    }
 
     fun stackFor(card: DeckCard): DeckStack =
         boardState()?.stacks?.firstOrNull { it.id == card.stackId }
@@ -335,11 +355,7 @@ fun NativeDeckScreen(
             mutationError = null
             runCatching { fetchAuthoritativeBoard(original) }
                 .onSuccess { current ->
-                    requestedBoard = current
-                    loadedBoards = loadedBoards.map { board ->
-                        if (board.id == current.id) current else board
-                    }
-                    state = boardState()?.copy(board = current) ?: state
+                    adoptBoard(current)
                     if (!original.hasSameAuthoritativeRevision(current)) {
                         interaction = DeckUiInteraction.BoardEditor(current)
                         mutationError =
@@ -827,6 +843,39 @@ fun NativeDeckScreen(
         }
     }
 
+    val boardTools = remember(services, session) {
+        DeckBoardTools(
+            DeckBoardToolContext(
+                execute = { request -> services.executeNextcloudApi(session, request) },
+                readPlan = ::selectedRoute,
+                writePlan = ::writePlan,
+                currentUserId = currentUserId,
+                onBoardRefreshed = ::adoptBoard,
+                onBoardContentChanged = ::refreshBoard,
+            ),
+        )
+    }
+
+    fun toggleBoardArchived(board: DeckBoard) = runRevalidatedBoardMutation(board) { current ->
+        DeckBoardUpdate(current.title, checkNotNull(current.color), archived = !current.archived)
+    }
+
+    fun moveStack(stack: DeckStack, direction: DeckStackMoveDirection) {
+        val current = boardState() ?: return
+        if (mutationBusy || mutationOutcomeUnknown) return
+        scope.launch {
+            mutationBusy = true
+            mutationError = try {
+                val updates = planDeckStackMove(current.stacks, stack.id, direction)
+                runDeckStackMove({ services.executeNextcloudApi(session, it) }, writePlan(), current.board, updates)
+            } catch (invalid: IllegalArgumentException) {
+                invalid.deckMessage()
+            }
+            mutationBusy = false
+            refreshBoard()
+        }
+    }
+
     LaunchedEffect(interaction) {
         val editor = interaction as? DeckUiInteraction.CardEditor
         if (editor == null) {
@@ -846,6 +895,7 @@ fun NativeDeckScreen(
             }.onSuccess { loaded ->
                 val reconciledUnknownMutation = mutationOutcomeUnknown
                 loadedBoards = loaded.boards
+                archivedBoards = loaded.archivedBoards
                 capabilities = loaded.capabilities
                 activeRoute = loaded.route
                 if (reconciledUnknownMutation) {
@@ -854,7 +904,7 @@ fun NativeDeckScreen(
                     }
                 }
                 val restoredBoard = requestedBoardId?.let { boardId ->
-                    loaded.boards.firstOrNull { it.id == boardId }
+                    (loaded.boards + loaded.archivedBoards).firstOrNull { it.id == boardId }
                 }
                 if (restoredBoard != null) {
                     requestedBoard = restoredBoard
@@ -862,18 +912,7 @@ fun NativeDeckScreen(
                 } else {
                     requestedBoardId = null
                     requestedCardId = null
-                    state = if (loaded.boards.isEmpty()) {
-                        DeckWorkspaceState.Empty(
-                            title = "No boards",
-                            message = "Create a board to start organizing cards.",
-                            canCreateBoards = loaded.capabilities?.canCreateBoards == true,
-                        )
-                    } else {
-                        DeckWorkspaceState.BoardPicker(
-                            boards = loaded.boards,
-                            canCreateBoards = loaded.capabilities?.canCreateBoards == true,
-                        )
-                    }
+                    state = pickerState()
                 }
                 if (reconciledUnknownMutation) {
                     mutationOutcomeUnknown = false
@@ -885,12 +924,7 @@ fun NativeDeckScreen(
                 state = DeckWorkspaceState.Error(
                     title = "Deck could not load",
                     message = error.deckMessage(),
-                    cachedState = loadedBoards.takeIf(List<DeckBoard>::isNotEmpty)?.let {
-                        DeckWorkspaceState.BoardPicker(
-                            boards = it,
-                            canCreateBoards = capabilities?.canCreateBoards == true,
-                        )
-                    },
+                    cachedState = pickerState().takeIf { it is DeckWorkspaceState.BoardPicker },
                 )
             }
         } else {
@@ -929,11 +963,7 @@ fun NativeDeckScreen(
                 state = DeckWorkspaceState.Error(
                     title = "Board could not load",
                     message = error.deckMessage(),
-                    cachedState = boardState()
-                        ?: DeckWorkspaceState.BoardPicker(
-                            loadedBoards,
-                            capabilities?.canCreateBoards == true,
-                        ),
+                    cachedState = boardState() ?: pickerState(),
                 )
             }
         }
@@ -947,18 +977,7 @@ fun NativeDeckScreen(
         requestedBoard = null
         requestedBoardId = null
         requestedCardId = null
-        state = if (loadedBoards.isEmpty()) {
-            DeckWorkspaceState.Empty(
-                title = "No boards",
-                message = "Create a board to start organizing cards.",
-                canCreateBoards = capabilities?.canCreateBoards == true,
-            )
-        } else {
-            DeckWorkspaceState.BoardPicker(
-                loadedBoards,
-                capabilities?.canCreateBoards == true,
-            )
-        }
+        state = pickerState()
     }
 
     fun dismissSelectedCard() {
@@ -1015,10 +1034,10 @@ fun NativeDeckScreen(
         onCreateBoard = capabilities?.takeIf(DeckCapabilities::canCreateBoards)?.let {
             { interaction = DeckUiInteraction.BoardEditor(null) }
         },
-        onCreateStack = currentBoard?.takeIf { it.permissions.canManage }?.let { board ->
+        onCreateStack = currentBoard?.takeIf { it.permissions.canManage && !it.archived }?.let { board ->
             { interaction = DeckUiInteraction.StackEditor(board, null) }
         },
-        onCreateCard = currentBoard?.takeIf { it.permissions.canEdit }?.let {
+        onCreateCard = currentBoard?.takeIf { it.permissions.canEdit && !it.archived }?.let {
             { stack -> interaction = DeckUiInteraction.CardEditor(stack, null) }
         },
         boardActions = { board ->
@@ -1043,14 +1062,20 @@ fun NativeDeckScreen(
                         },
                     )
                 }
+                addAll(
+                    boardTools.actions(board, boardState()?.board?.id == board.id, ::toggleBoardArchived)
+                        .map { action -> action.copy(enabled = !mutationBusy && !mutationOutcomeUnknown) },
+                )
             }
         },
         stackActions = { stack ->
             val board = boardState()?.board
-            if (board?.permissions?.canManage != true) {
+            if (board?.permissions?.canManage != true || board.archived) {
                 emptyList()
             } else {
-                listOf(
+                DeckStackMoveDirection.entries.filter { stack.canMove(boardState()?.stacks.orEmpty(), it) }.map {
+                    NextcloudCardAction(it.label, enabled = !mutationBusy) { moveStack(stack, it) }
+                } + listOf(
                     NextcloudCardAction("Rename list") {
                         interaction = DeckUiInteraction.StackEditor(board, stack)
                     },
@@ -1063,7 +1088,7 @@ fun NativeDeckScreen(
         cardActions = { card ->
             val board = boardState()?.board
             buildList {
-                if (board?.permissions?.canEdit == true) {
+                if (board?.permissions?.canEdit == true && !board.archived) {
                     add(
                         NextcloudCardAction("Edit card") {
                             showAuthoritativeCard(card) { current, stack ->
@@ -1123,6 +1148,11 @@ fun NativeDeckScreen(
                         },
                     )
                     add(
+                        NextcloudCardAction("Archive card") {
+                            runMutation(request = { writePlan().archiveCard(boardAccess(board), cardContext(card)) })
+                        },
+                    )
+                    add(
                         NextcloudCardAction("Delete card", destructive = true) {
                             interaction = DeckUiInteraction.DeleteCard(card)
                         },
@@ -1135,13 +1165,15 @@ fun NativeDeckScreen(
             }
         },
         onMoveCard = currentBoard?.takeIf {
-            it.permissions.canEdit && !mutationBusy
+            it.permissions.canEdit && !it.archived && !mutationBusy
         }?.let {
             { card, destinationStack, insertionIndex ->
                 moveCardToIndex(card, destinationStack, insertionIndex)
             }
         },
         boardRecovery = boardRecovery.takeIf { requestedBoard == null },
+        statusMessage = mutationError.takeIf { interaction == null },
+        onDismissStatus = { mutationError = null },
         onRestoreBoard = boardRecovery
             ?.takeIf { requestedBoard == null }
             ?.takeUnless { it.restoring || it.verifying }
@@ -1686,192 +1718,5 @@ fun NativeDeckScreen(
             },
         )
     }
+    DeckBoardToolsHost(boardTools, currentUserId)
 }
-
-
-private data class LoadedDeckBoards(
-    val route: DeckReadRoutePlan,
-    val boards: List<DeckBoard>,
-    val capabilities: DeckCapabilities?,
-)
-
-private data class LoadedDeckStacks(
-    val route: DeckReadRoutePlan,
-    val board: DeckBoard,
-    val stacks: List<DeckStack>,
-)
-
-private suspend fun loadDeckBoards(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-): LoadedDeckBoards {
-    val capabilityResponse = services.executeNextcloudApi(
-        session,
-        NextcloudApiRequest(
-            method = NextcloudApiMethod.GET,
-            relativePath = "/ocs/v2.php/cloud/capabilities",
-            queryParameters = mapOf("format" to "json"),
-            ocsApiRequest = true,
-            maximumResponseBytes = DECK_CAPABILITY_RESPONSE_BYTES,
-        ),
-    )
-    val capabilities = capabilityResponse.takeIf { it.status in 200..299 }
-        ?.let { response ->
-            parseDeckResponseOffUi {
-                parseDeckCapabilities(response)
-            }
-        }
-    val negotiation = negotiateDeckReadRoutes(capabilities)
-    var route = negotiation.candidates.first()
-    while (true) {
-        val response = services.executeNextcloudApi(session, route.boards(details = true))
-        if (response.status in 200..299) {
-            return LoadedDeckBoards(
-                route = route,
-                boards = parseDeckResponseOffUi {
-                    parseDeckBoards(response)
-                },
-                capabilities = capabilities,
-            )
-        }
-        route = negotiation.nextAfter(route, response.status)
-            ?: return LoadedDeckBoards(
-                route = route,
-                boards = parseDeckResponseOffUi {
-                    parseDeckBoards(response)
-                },
-                capabilities = capabilities,
-            )
-    }
-}
-
-private suspend fun loadDeckStacks(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    board: DeckBoard,
-    preferredRoute: DeckReadRoutePlan?,
-): LoadedDeckStacks {
-    val negotiation = negotiateDeckReadRoutes(null)
-    var route = preferredRoute ?: negotiation.candidates.first()
-    while (true) {
-        val boardResponse = services.executeNextcloudApi(
-            session,
-            route.workspaceBoardMetadata(board.id),
-        )
-        if (boardResponse.status !in 200..299) {
-            route = negotiation.nextAfter(route, boardResponse.status)
-                ?: return LoadedDeckStacks(
-                    route = route,
-                    board = parseDeckResponseOffUi {
-                        parseDeckBoard(boardResponse)
-                    },
-                    stacks = emptyList(),
-                )
-            continue
-        }
-        val authoritativeBoard = parseDeckResponseOffUi {
-            parseDeckBoard(boardResponse)
-        }
-        val stacksResponse = services.executeNextcloudApi(session, route.stacks(board.id))
-        if (stacksResponse.status in 200..299) {
-            return LoadedDeckStacks(
-                route = route,
-                board = authoritativeBoard,
-                stacks = parseDeckResponseOffUi {
-                    parseDeckStacks(board.id, stacksResponse)
-                },
-            )
-        }
-        route = negotiation.nextAfter(route, stacksResponse.status)
-            ?: return LoadedDeckStacks(
-                route = route,
-                board = authoritativeBoard,
-                stacks = parseDeckResponseOffUi {
-                    parseDeckStacks(board.id, stacksResponse)
-                },
-            )
-    }
-}
-
-private fun DeckCard.toUpdate(
-    title: String = this.title,
-    description: String = descriptionMarkdown.orEmpty(),
-    dueAt: String? = this.dueAt,
-    completedAt: String? = this.completedAt,
-): DeckCardUpdate = DeckCardUpdate(
-    original = this,
-    title = title,
-    order = order,
-    descriptionMarkdown = description,
-    dueAt = dueAt,
-    startAt = startAt,
-    archived = archived,
-    completedAt = completedAt,
-)
-
-private fun deckUiInstant(date: String, time: String): String? {
-    val normalizedDate = date.trim()
-    if (normalizedDate.isEmpty()) return null
-    val normalizedTime = time.trim().ifEmpty { "23:59" }
-    return deckLocalDateTimeToInstant(normalizedDate, normalizedTime)
-}
-
-private fun deckQuickDueDates(): List<DeckUiDueDateOption> = listOf(
-    DeckUiDueDateOption("Today", deckLocalDatePlusDays(0)),
-    DeckUiDueDateOption("Tomorrow", deckLocalDatePlusDays(1)),
-    DeckUiDueDateOption("Next week", deckLocalDatePlusDays(7)),
-)
-
-private val DeckBoard.canWriteDeckComments: Boolean
-    get() = permissions.canRead && !archived
-
-private fun DeckComment.toDeckUiComment(
-    currentUserId: String,
-    canWriteComments: Boolean,
-): DeckUiComment =
-    DeckUiComment(
-        key = id.toString(),
-        author = authorId?.let { DeckUser(it, authorDisplayName) },
-        messageMarkdown = message,
-        createdLabel = createdAt ?: "Unknown time",
-        edited = false,
-        canEdit = canWriteComments && authorId == currentUserId,
-        canDelete = canWriteComments && authorId == currentUserId,
-        replyToLabel = replyToId?.let { "Reply to comment $it" },
-    )
-
-private fun DeckAttachment.deckUiKey(): String = "${type.serverValue}:$id"
-
-private fun DeckAttachment.toDeckUiAttachment(
-    canEdit: Boolean,
-    handoffCapability: ExternalFileHandoffCapability?,
-): DeckUiAttachment =
-    DeckUiAttachment(
-        key = deckUiKey(),
-        fileName = name,
-        supportingText = listOfNotNull(
-            mimeType,
-        byteCount?.let(::formatByteSize),
-        createdBy,
-    ).joinToString(" - ").ifBlank { null },
-        canOpen = handoffCapability != null &&
-            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions,
-        canDelete = canEdit,
-    )
-
-private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = when (this) {
-    is ExternalFileHandoffResult.Launched -> null
-    is ExternalFileHandoffResult.Cancelled -> null
-    is ExternalFileHandoffResult.NoCompatibleApplication ->
-        "No installed app can open this attachment."
-    is ExternalFileHandoffResult.Rejected -> message
-    is ExternalFileHandoffResult.Unsupported -> reason
-}
-
-private fun Throwable.deckMessage(): String =
-    message?.takeIf(String::isNotBlank) ?: "Deck could not complete the action."
-
-private const val DECK_CAPABILITY_RESPONSE_BYTES = 2L * 1024L * 1024L
-private const val DECK_COMMENT_PAGE_SIZE = 20
-private const val DECK_STACK_ORDER_STEP = 1_000L
-private const val DECK_ATTACHMENT_MUTATION_RESPONSE_BYTES = 2L * 1024L * 1024L

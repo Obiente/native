@@ -447,8 +447,7 @@ interaction validation is still required.
   when it is writable. Tasks does the same with task lists, which show their
   open-task counts and mark read-only lists.
 - Contact and task editors remain dialogs on every layout. A to Z contact
-  sections, task grouping, and note sorting and favorite filters are not
-  implemented.
+  sections, task grouping, and note sorting are not implemented.
 - Contacts edit several labelled (home, work, mobile, other) emails, phone
   numbers, postal addresses, and websites, plus groups (vCard `CATEGORIES`),
   job title, and birthday. Properties the editor does not show, such as
@@ -462,6 +461,11 @@ interaction validation is still required.
   their parent in the list, indented, and task details list them with "Add
   subtask". A task cannot be moved under its own subtasks. The header menu
   creates, edits, shares, and deletes task lists and opens the trash bin.
+- The Notes list has All notes and Favorites filters. Favorites lists favorite
+  notes from every folder. Each note card has a menu, also reachable by long
+  press, to add or remove a favorite and to share the note's file. The header
+  opens Notes settings, which picks the notes folder with the native remote
+  folder browser and the file type for new notes.
 - `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
   `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
   recreation, and the dirty-draft guard against synthetic servers. They do not

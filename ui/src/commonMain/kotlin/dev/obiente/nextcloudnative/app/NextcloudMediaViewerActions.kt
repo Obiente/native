@@ -502,7 +502,7 @@ private fun MediaAlbumDialog(
 }
 
 @Composable
-private fun MediaShareDialog(
+internal fun MediaShareDialog(
     file: NextcloudFile,
     session: NextcloudSession,
     services: NextcloudPlatformServices,

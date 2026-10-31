@@ -89,6 +89,7 @@ internal fun NextcloudNoteEditor(
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
     inPlace: NoteEditorInPlace? = null,
+    filesAccess: NotesFilesAccess? = null,
 ) {
     val accountKey = remember(session.serverUrl, session.loginName) { session.accountId }
     val accountScope = remember(session.serverUrl, session.loginName) {
@@ -130,6 +131,7 @@ internal fun NextcloudNoteEditor(
     var refreshing by remember(note.id, session) { mutableStateOf(false) }
     var showDiscardConfirmation by remember(note.id, session) { mutableStateOf(false) }
     var showDeleteConfirmation by remember(note.id, session) { mutableStateOf(false) }
+    var sharing by remember(note.id, session) { mutableStateOf(false) }
     var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     var viewMode by rememberSaveable(accountKey, note.id) { mutableStateOf(NoteViewMode.Edit) }
@@ -384,6 +386,9 @@ internal fun NextcloudNoteEditor(
                             tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (filesAccess?.canShareNotes() == true) {
+                        TextButton(onClick = { sharing = true }, enabled = contentAvailable && !mutationInProgress) { Text("Share") }
+                    }
                     TextButton(
                         onClick = {
                             deleteError = if (loaded.etag.isUsableNoteDeletionEtag()) {
@@ -446,6 +451,9 @@ internal fun NextcloudNoteEditor(
                 }) { Text("Discard") }
             },
         )
+    }
+    if (sharing && filesAccess != null) {
+        NoteFileShareHost(loaded, services, session, filesAccess, { sharing = false }, {})
     }
     if (showDeleteConfirmation) {
         AlertDialog(

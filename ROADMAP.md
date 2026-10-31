@@ -542,7 +542,7 @@ Adapters follow advertised capabilities, official DAV/OCS protocols, version-pin
 
 ### Delivery order
 
-1. Notes completion: chunking, attachments, settings, offline drafts, conflict resolution.
+1. Notes completion: chunking, attachments, offline drafts, conflict resolution. Settings (notes folder and file suffix) are present in source with deterministic tests.
 2. CardDAV Contacts and CalDAV Calendar/Tasks with sync-token fallback, ETag writes, recurrence/timezone correctness, invitations, and platform contacts/calendar bridges where the user opts in.
 3. Deck and Tasks through reusable schema- and data-shape-driven board/list/detail/edit flows, with related-resource label hydration rather than app-specific ID rendering.
 4. Cospend, Budget, and Tables through reusable typed table, amount, participant, metric, chart, and form components. Currency and other parent context propagate into child datasets generically.

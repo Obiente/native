@@ -1818,7 +1818,7 @@ private fun AuthenticatedApp(
             onBack = ::navigateBack,
             onOpenNote = { screen = Screen.NoteEditor(it) },
             navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it },
+            onMutationInProgressChanged = { groupwareMutationInProgress = it }, filesAccess = serverInfo?.notesFilesAccess(),
         )
         is Screen.NoteEditor -> NextcloudNoteEditor(
             services = services,
@@ -1829,7 +1829,7 @@ private fun AuthenticatedApp(
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
             navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it },
+            onMutationInProgressChanged = { groupwareMutationInProgress = it }, filesAccess = serverInfo?.notesFilesAccess(),
         )
         is Screen.AppInfo -> {
             val resumePlan = planDynamicContractResume(
