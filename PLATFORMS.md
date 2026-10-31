@@ -414,7 +414,12 @@ interaction validation is still required.
   open-task counts and mark read-only lists.
 - Contact and task editors remain dialogs on every layout. Multiple email
   addresses and phone numbers per contact, A to Z contact sections, task
-  grouping, and note sorting and favorite filters are not implemented.
+  grouping, and note sorting are not implemented.
+- The Notes list has All notes and Favorites filters. Favorites lists favorite
+  notes from every folder. Each note card has a menu, also reachable by long
+  press, to add or remove a favorite and to share the note's file. The header
+  opens Notes settings, which picks the notes folder with the native remote
+  folder browser and the file type for new notes.
 - `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
   `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
   recreation, and the dirty-draft guard against synthetic servers. They do not
