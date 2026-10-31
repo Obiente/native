@@ -281,19 +281,20 @@ interaction validation is still required.
   open, the screen below takes no pointer input, keyboard focus cannot move into
   it, and it is hidden from accessibility services. Reduced motion opens and
   closes the viewer at once.
-- News moves like other workspaces: on one pane the reader slides in over the
-  article list and back, two panes fade between articles, and an article's
-  title carries from its row into the reader. Rows ease in, and their
-  selection, unread dot, and star fade or pop instead of switching.
-- Mail uses the shared collection navigator for its folders, Outbox, and
-  settings. At 840dp and wider the message list stays beside the reader or the
-  composer; narrower layouts show one at a time, and system back closes the
-  composer, then the reader. Message actions are in the shared overflow menu,
-  which long press also opens; moving to Trash, permanent deletion, folder
-  deletion, cancelling an Outbox message, discarding a draft, and removing an
-  alias each need a separate confirmation. Attachments come from the platform
-  file picker or a Nextcloud Files picker. Unsent drafts use the platform's
-  encrypted, account-scoped text draft storage on Android and desktop.
+- Feed readers (any app whose contract exposes feeds and articles) show
+  filters and feeds in a rail beside the article list and reader from 980dp,
+  a rail beside the list or reader from 680dp, and filter chips above the list
+  on narrower screens, where system back closes the open article. The selected
+  filter and feed survive recreation; the open article does not.
+- Mailboxes (any app whose contract exposes accounts, mailboxes, and
+  messages) use the shared mailbox workspace. When the contract describes a
+  send operation, a Compose button opens a composer that fills the screen on
+  compact layouts and is a dialog on wider ones; Reply, Reply all, and Forward
+  sit with the opened message. Closing a draft with content needs a separate
+  discard confirmation, and sending again after an unconfirmed result needs
+  its own confirmation. Drafts are in-memory UI state on Android and desktop:
+  they are not written to saved instance state or device storage, so they do
+  not survive process death.
 - Text shown on both sides of a navigation carries across it
   (`NextcloudSharedElements`). A conversation's name flies from the Talk list
   into the chat header, a file's name from the Files list into file details,
@@ -414,7 +415,7 @@ interaction validation is still required.
 - Notes uses an editor toolbar with Save outside the scrolling content. In
   short windows, title and folder controls move into an accessible Details
   dialog. Shared Markdown typography uses content-sized headings in Notes,
-  Files, Deck, Talk, and news. `NoteEditorContentTest` covers the short-window
+  Files, Deck, and Talk. `NoteEditorContentTest` covers the short-window
   controls and preservation of temporary form values.
 - Contact detail bodies scroll independently of their Edit and Delete buttons.
   Email addresses and phone numbers open the system mail or phone app with one
@@ -425,8 +426,7 @@ interaction validation is still required.
 
 **Notes, Contacts, and Tasks**
 
-- At 840dp and wider (`NextcloudWorkspaceBreakpoints.TwoPaneDp`, shared with
-  News), these apps show the selected item beside the list on Android and
+- At 840dp and wider (`NextcloudWorkspaceBreakpoints.TwoPaneDp`), these apps show the selected item beside the list on Android and
   desktop. Narrower phone layouts keep their single list.
 - Notes opens the editor beside the folder and note list on wide layouts and
   in every desktop window. Narrow desktop windows show the editor alone with

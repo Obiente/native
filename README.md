@@ -198,16 +198,21 @@ Windows, and an early macOS package) with:
   deleting your own messages where the server allows it, and message cards for
   text, files, recordings, calls, system events and shared objects;
 - Notes, with folders, ETag-aware saving and Markdown editing and preview;
-- News, as a feed reader with unread and starred views, folders, feeds and an
-  article reader that does not load remote images;
+- feed readers for any app whose contract exposes feeds and articles,
+  including News: unread and starred filters over the loaded articles, feeds
+  beside the list, and an article reader that does not load remote images.
+  Read and star changes appear only when the app's own contract describes
+  them, so News opens read-only;
 - Activity, global search, Dashboard, user status and app navigation;
 - native Settings for personal info, Talk privacy and conversation settings,
   and, for administrators, read-only views of apps, accounts, groups and server
   information;
-- Mail, with folders, reply, reply all and forward, a composer with address
-  suggestions, identities and attachments, undo and scheduled sending, drafts
-  kept on the device, message and folder organizing, and signature and alias
-  settings, for Mail 5.0 to 5.12 when the installed version can be confirmed;
+- mailboxes for any app whose contract exposes accounts, folders and
+  messages, including Mail: folders, paged messages, a reader, and read, flag,
+  archive and delete where the contract describes them. Compose, reply, reply
+  all and forward appear when the app's own contract describes a send whose
+  result can be checked; Mail's synchronous send cannot, so Mail has no
+  composer yet. No app version is allowlisted;
 - native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;

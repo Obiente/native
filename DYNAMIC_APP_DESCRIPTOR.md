@@ -778,15 +778,84 @@ loading, retry, and later pages.
 
 ### Mail reading hierarchy
 
-The Nextcloud Mail app itself now opens in the reviewed Mail adapter described in
-[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md#mail-composing-and-organizing).
-The rules below still apply to any other app whose contract has mail
-semantics. Mail reading sections put the verified message body and thread reads first.
+Every app whose contract has mailbox semantics, including Nextcloud Mail,
+opens in the same mailbox workspace; no app identifier or version selects it.
+Mail reading sections put the verified message body and thread reads first.
 DKIM, raw source, smart-reply, and itinerary probe routes stay in the contract
 but are left out of the ordinary section chooser. This issues no optional reads
 and invents no diagnostics destination. Attachment cards show bounded metadata
 only; opening an attachment needs a separate validated message and attachment
 binding plus native download integration.
+
+### Mailbox composing
+
+[`NativeMailSendPlanning.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailSendPlanning.kt)
+offers Compose, Reply, Reply all, and Forward only when the contract describes
+exactly one send operation that the composer can fill without inventing a
+value.
+
+- The descriptor compiler already withholds send, share, and merge writes
+  unless an unknown result can be checked: it keeps only an idempotent PUT from
+  a signed package with an exact same-route read. The planner accepts such a
+  PUT, or a POST if a contract policy ever retains one, with high or verified
+  confidence, a JSON body, and the word `send` in its ID, label, operation ID,
+  or route. Draft, test, preview, invitation, and share routes are excluded.
+  Mail's synchronous OCS `message/send` has no such read, so the compiler
+  withholds it and Mail opens without a composer.
+- Every required body, path, and query input maps to a mail role:
+  recipients, Cc, Bcc, subject, body, an HTML flag (sent as false), the
+  sending account's identity or address, or a threading header. Recipients
+  use the declared shape: an array of objects with an address field and an
+  optional label field, an array of strings, or a single address string,
+  which accepts one recipient.
+- The sending account comes from a loaded account record with an action-safe
+  identity; its address comes from the record's email field. Without such a
+  record the composer is not offered.
+- A reply uses Reply-To when present, leaves the sender's own addresses out
+  of Reply all, and threads through the original Message-ID only when it has
+  the `<...@...>` form and the operation declares a threading field.
+- A send is not idempotent. A rejected send keeps the draft for editing. An
+  unknown outcome, a transport failure, or cancellation after the request may
+  have left keeps the draft and requires an explicit confirmation before
+  another attempt.
+
+`NativeMailSemanticPatternTest`, `NativeMailComposerStateTest`, and
+`NativeMailComposeTest` cover the same contracts under several app IDs and
+versions, a withheld synchronous send, a missing send, an unknown required
+input, a missing account,
+a contract that only mentions mail in a field, threading, and every send
+outcome.
+
+### Feed readers
+
+[`DynamicFeedSemantics.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicFeedSemantics.kt)
+marks an article collection as a `feedReader` view, and
+[`NativeFeedReader.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFeedReader.kt)
+renders it, whatever the app identifier or version.
+
+- An article collection has a title, a link, content, and a publication
+  marker or feed reference. When a sparse contract declares no response
+  fields, an `items`, `articles`, or `entries` collection beside a feed or
+  subscription collection qualifies, and the records are checked again when
+  they arrive. A titled link list without content or publication markers is
+  not a feed.
+- The reader opens on articles, ahead of the subscription list. Parameter-free
+  verified feed and folder reads load beside it through the bounded relation
+  cache. Articles are grouped by feed only through their feed reference and a
+  loaded feed record; this is display only.
+- Unread and Starred filters work on loaded pages and say so. Article links
+  other than HTTP(S) are dropped, and bodies use the mail HTML sanitizer.
+- [`NativeFeedItemActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFeedItemActions.kt)
+  offers read, unread, star, and unstar for verified writes on an article
+  with a contract-declared identity: a body-free route ending in the state
+  word, or a write whose only non-identity body field is one boolean state
+  field. Changes apply optimistically and roll back for that article alone;
+  an unknown result also reads the articles again. Opening an unread article
+  marks it read when that change is available.
+
+`NativeFeedSemanticPatternTest` covers the same contract under two app IDs and
+versions, the entry point, observed identities, missing state routes,
+bookmark lists, and unsafe links.
 
 ### Pantry timestamps and cards
 

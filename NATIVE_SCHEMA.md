@@ -79,7 +79,13 @@ not add an operation that was absent from the discovery snapshot.
 The `NativeComponent` grammar covers dashboards, file browsers, collection
 lists, media grids, details, forms, timelines, calendars, boards, mailboxes,
 contact lists, task lists, data tables, media libraries, recipe lists, document
-editors, conversation lists, and chat threads.
+editors, conversation lists, chat threads, and feed readers.
+
+`feedReader` marks an article collection: its records have a title, a link,
+content, and a publication marker or feed reference, or, when a sparse contract
+declares no response fields, the collection is named as articles or items
+beside a feed collection. Records are checked again when they arrive, and a
+collection whose records are not articles keeps the ordinary list.
 
 A new component should represent an interaction pattern shared by more than one
 app. App-specific behavior belongs in a verified adapter, not in the generic
@@ -101,12 +107,26 @@ component library.
 - Permission summaries use explicit known boolean fields and never infer a role
   or grant.
 
-**Boards and Mail**
+**Boards, mailboxes, and feed readers**
 
 - Boards share lane navigation and action state, with widths adapted to the
   window.
-- Compact Mail exposes the same loaded accounts and mailboxes as the desktop
-  rail. Message actions stay limited to verified available contracts.
+- Compact mailboxes expose the same loaded accounts and mailboxes as the
+  desktop rail. Message actions stay limited to verified available contracts.
+- A mailbox offers composing only for one verified send write that the
+  descriptor retained (see
+  [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#mailbox-composing))
+  and whose body declares recipients and a message body. Every
+  required input must map to a mail role: recipients (declared object or
+  string arrays, or a single address string), subject, body, an HTML flag
+  sent as false, the sending account's identity or address from a loaded
+  account record, or a threading header. Any other required input, an
+  undeclared recipient shape, or two equal candidates offers nothing.
+- A feed reader offers read, unread, star, and unstar only for idempotent
+  verified writes on an article with a contract-declared identity: a
+  body-free route whose last segment names the state, or a write with a
+  single boolean state field. Broader updates that would resend other fields
+  are not used.
 
 **Editing**
 

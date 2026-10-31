@@ -576,125 +576,27 @@ Invalid actionable links reject the response; invalid optional widget, item,
 and overlay icons are omitted. This policy does not change transport consent
 or authorize requests to another HTTP origin.
 
-### News reading
+### Mailboxes and feed readers
 
-News publishes no OpenAPI document. Its verified route contract lets the
-generic workspace list feeds, folders, and items as records, but it cannot
-express a reading workflow: unread and starred views, an article reader, and
-read state. A reviewed adapter in
-[`NewsApi.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsApi.kt)
-therefore implements the documented
-[v1-3 API](https://nextcloud.github.io/news/api/api-v1-3/) through the shared
-same-origin transport.
+Mail, News, and other apps with the same data structures have no dedicated
+adapter. The dynamic descriptor selects a mailbox or feed reader from the
+contract's resources, field names, and wording, and offers only the writes the
+installed app's own contract describes. No app identifier, exact version, or
+version range enables a write. The rules are in
+[DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#mailbox-composing) and
+[DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#feed-readers); the
+current state for Mail and News is in [COMPATIBILITY.md](COMPATIBILITY.md).
 
-- The adapter first reads the API version index and reports an unsupported
-  version, without retrying, when `v1-3` is absent.
-- Feeds, folders, and article pages are typed and bounded. Feed text is
-  normalized; only HTTP(S) article, favicon, and enclosure links are kept.
-- Article bodies render through the same HTML sanitizer as Mail, so scripts,
-  forms, embeds, and images are removed and opening an article does not contact
-  the publisher.
-- The only writes are the idempotent per-article read, unread, star, and unstar
-  routes. A change is applied optimistically and rolled back for that article
-  alone when the server rejects it or does not confirm it. Read state and star
-  state change independently, so opening an article while its star is
-  pending still marks it read. While a change is
-  pending, refreshed or newly selected pages show the requested state, and a
-  confirmed change is reapplied, so a read that raced the change cannot show
-  the opposite of the server state. Each pending change records the unread
-  and starred count adjustment it made, so a rejection reverses the counts
-  even after the user moved to another view. Counts read while a change is in
-  flight may or may not include it, so they are shown as read and read again
-  once every change has settled. Feed, folder, filter, and mark-all
-  operations stay in the web interface.
-- `NewsWorkspaceController` fences every load by generation, so a late response
-  for an earlier selection, refresh, or page cannot overwrite newer state. When
-  a refresh finds that the selected feed or folder was removed, it falls back
-  to Unread and loads it, invalidating the removed selection's page. A failed
-  refresh keeps the articles as they are, including changes made while it ran,
-  and offers a refresh retry separately from the older-page retry.
-- The account shell retains the controller, so switching to another app and
-  back keeps the selected view, the open article, and loaded pages. The list
-  scroll position is held above the list and reader switch, so returning from
-  the compact reader keeps the reading position. The open article is kept apart
-  from the list, so a refresh that drops it from the list (an opened article
-  is read and leaves Unread) does not close the reader. Each fetched page that
-  contains the open article updates the reader's copy, so it keeps the latest
-  server state after a later page omits it. The reader's scroll
-  position belongs to the open article and is held above the pane-layout
-  switch, so returning to News or resizing across the two-pane width resumes
-  where the reader stopped, and another article starts at the top. Only the
-  selected view is saved across process recreation; the open article is not
-  restored, because a fresh Unread list no longer contains an article that
-  opening marked read.
-
-`NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
-request shapes, parsing of malformed and adversarial input, stale completion,
-pending changes racing a refresh, failed refreshes, removed selections,
-rollback, and paging.
-
-### Mail composing and organizing
-
-Mail publishes an OpenAPI document only for its OCS controllers: an account
-list, message reads, and a synchronous send that cannot be undone, scheduled,
-or verified after a lost response. The routes its web client uses for the
-Outbox, drafts, attachments, message state, folders, and account settings are
-declared in the signed package's `appinfo/routes.php` but are excluded from the
-generated OpenAPI. A reviewed adapter in
-[`MailProtocol.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailProtocol.kt),
-[`MailApiRequests.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailApiRequests.kt),
-and
-[`MailApiParsing.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailApiParsing.kt)
-uses those routes through the shared same-origin transport. Parameter names
-and response shapes were read from the
-[v5.0.0](https://github.com/nextcloud/mail/blob/v5.0.0/appinfo/routes.php),
-[v5.10.9](https://github.com/nextcloud/mail/blob/v5.10.9/appinfo/routes.php),
-[v5.11.7](https://github.com/nextcloud/mail/blob/v5.11.7/appinfo/routes.php), and
-[v5.12.6](https://github.com/nextcloud/mail/blob/v5.12.6/appinfo/routes.php)
-routes and controllers.
-
-- Writes are offered only when the installed Mail version is confirmed to be
-  at least 5.0.0 and below 5.13.0. The version comes from the OCS app
-  information endpoint, which needs an administrator account; when it is
-  unavailable the workspace reads but changes nothing, and says why.
-- Requests carry the OCS API header, which Nextcloud accepts in place of a
-  CSRF token for app-password clients without a browser session.
-- Account responses also contain IMAP and SMTP host and user names. The parser
-  never reads them. A folder whose account differs from the requested account,
-  a message body for another message, and an Outbox response that is not
-  Mail's success envelope are rejected.
-- Sending stores the message in Mail's server Outbox with a send time 10
-  seconds ahead, or the chosen scheduled time, then asks Mail to send it when
-  the undo window ends. Mail's own background job sends every due message, so
-  a stored message is sent even if the app is closed. Before the store request
-  leaves, the composer records the send time in its draft; after a lost
-  response or a restart it finds exactly that message in the Outbox instead of
-  storing it twice. If no match exists and the send time has passed, the user
-  is told it may already have been sent and must confirm before sending again.
-- A send that answers 500 or loses its response is read back from the Outbox:
-  a message that left the Outbox was processed, and one that stayed shows its
-  Mail status. Retrying a held message asks Mail to send what it already holds,
-  and Mail's status chain decides what that does; it is not offered after
-  Mail's unclear SMTP status.
-- The Outbox reports how many attachments it stored. When a Files attachment
-  is missing or not downloadable, Mail drops it silently; the composer holds
-  the message and asks whether to send without it or cancel.
-- Flags and tags are idempotent and applied optimistically; a rejection rolls
-  back that message alone, and an unknown result re-reads the folder. Moves,
-  deletes, and folder changes re-read the server state after an unknown result
-  and never retry. Folder changes are reported done only when the re-read
-  folder list shows the requested result. Folder and message actions follow
-  the IMAP rights Mail reports for each folder.
-- Unsent drafts are stored through the platform's encrypted, account-scoped
-  text draft storage, keyed by a random local slot, bounded in count and size,
-  and strictly decoded. They are offered again after a restart.
-
-`MailProtocolTest`, `MailComposeTest`, `MailSendingTest`, and
-`MailWorkspaceControllerTest` cover version gating, request shapes, malformed
-and adversarial responses, reply and forward addressing, quoting, signatures,
-draft persistence, lost and rejected store and send results, undo, scheduling,
-restart recovery, dropped attachments, stale reads, rollback, and folder
-verification.
+- Sending is offered only for a send the descriptor retained because its
+  unknown result can be checked. An unknown result still keeps the draft and
+  requires an explicit confirmation before another attempt.
+- Message state changes read the mailbox again after the server confirms
+  them and show the failure otherwise. Article state changes are idempotent;
+  they apply optimistically and roll back for that article alone when the
+  server rejects them or the result is unknown, and an unknown result also
+  reads the articles again.
+- When a contract lacks an operation, the workspace stays a native read-only
+  view and says so, rather than reporting a version error.
 
 ### Administration visibility
 
@@ -1023,5 +925,3 @@ recovery.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
-- [News external API v1-3](https://nextcloud.github.io/news/api/api-v1-3/)
-- [Nextcloud Mail routes, v5.12.6](https://github.com/nextcloud/mail/blob/v5.12.6/appinfo/routes.php)
