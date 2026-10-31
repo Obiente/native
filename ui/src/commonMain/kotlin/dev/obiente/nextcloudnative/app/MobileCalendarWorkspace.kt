@@ -175,7 +175,11 @@ internal fun MobileGroupwareCalendarWorkspace(
             collectionActions?.let { actions ->
                 item {
                     CalendarCollectionCreateButton(
-                        CalendarCollectionActions(onCreate = { sourcesVisible = false; actions.onCreate(it) }, onManage = actions.onManage),
+                        CalendarCollectionActions(
+                            onCreate = { sourcesVisible = false; actions.onCreate(it) }, onManage = actions.onManage,
+                            onOpenTrash = actions.onOpenTrash?.let { open -> { sourcesVisible = false; open() } },
+                            onEnableBirthdays = actions.onEnableBirthdays,
+                        ),
                         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                     )
                 }

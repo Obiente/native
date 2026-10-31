@@ -75,6 +75,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
     onCreateAt: ((String) -> Unit)? = null,
     todayDate: String = currentCalendarDate(),
     collectionActions: CalendarCollectionActions? = null,
+    invitation: CalendarInvitationActions? = null,
 ) {
     val now by produceState(calendarLocalNow()) {
         while (true) {
@@ -187,6 +188,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                             onClose = { detailsRequested = false },
                             onShowDay = { onSelectEvent(null) },
                             modifier = Modifier.fillMaxSize(),
+                            invitation = invitation,
                         )
                     }
                 }
@@ -220,6 +222,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                         { event -> detailsRequested = false; onDeleteEvent(event) },
                         onClose = null, onShowDay = { onSelectEvent(null) },
                         modifier = Modifier.fillMaxWidth().height(480.dp),
+                        invitation = invitation,
                     )
                 },
                 confirmButton = { TextButton(onClick = { detailsRequested = false }) { Text("Close") } },

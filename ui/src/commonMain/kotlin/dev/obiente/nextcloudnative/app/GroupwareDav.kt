@@ -501,15 +501,8 @@ private fun parseGroupwareCalendarEventComponent(
     content: String,
     eventLines: List<String>,
 ): GroupwareCalendarEvent? {
-    fun property(name: String): CalendarProperty? = eventLines.firstNotNullOfOrNull { line ->
-        val separator = line.indexOf(':')
-        if (separator <= 0) return@firstNotNullOfOrNull null
-        val declaration = line.substring(0, separator)
-        if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
-            return@firstNotNullOfOrNull null
-        }
-        CalendarProperty(declaration, line.substring(separator + 1))
-    }
+    // Nested components such as VALARM have their own DESCRIPTION and must not be read as the event's.
+    fun property(name: String): CalendarProperty? = eventLines.calendarProperty(name)
     val start = property("DTSTART") ?: return null
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
