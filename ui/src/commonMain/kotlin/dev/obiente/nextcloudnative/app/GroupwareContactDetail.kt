@@ -22,6 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -188,22 +189,34 @@ private fun ColumnScope.ContactFacts(
     onCopy: ((String, String) -> Boolean)?,
     includeOrganization: Boolean = true,
 ) {
+    val card = remember(contact.rawVCard) { contact.card() }
     if (includeOrganization) contact.organization?.let { ContactFact("Organization", it) }
+    card.jobTitle.takeIf(String::isNotBlank)?.let { ContactFact("Job title", it) }
     // Each way to reach someone is one tap away, handed to the system's mail or phone app.
-    contact.emails.forEach { email ->
-        ContactFact("Email", email, onOpenUri?.let { open ->
-            nativeContactEmailUri(email)?.let { uri -> ContactFactAction("Email $email", NextcloudIcons.Mail) { open(uri) } }
+    card.emails.forEach { email ->
+        ContactFact(email.label.factTitle("Email"), email.value, onOpenUri?.let { open ->
+            nativeContactEmailUri(email.value)?.let { uri -> ContactFactAction("Email ${email.value}", NextcloudIcons.Mail) { open(uri) } }
         })
     }
-    contact.phones.forEach { phone ->
-        ContactFact("Phone", phone, onOpenUri?.let { open ->
-            nativeContactPhoneUri(phone)?.let { uri -> ContactFactAction("Call $phone", NextcloudIcons.Phone) { open(uri) } }
+    card.phones.forEach { phone ->
+        ContactFact(phone.label.factTitle("Phone"), phone.value, onOpenUri?.let { open ->
+            nativeContactPhoneUri(phone.value)?.let { uri -> ContactFactAction("Call ${phone.value}", NextcloudIcons.Phone) { open(uri) } }
         })
     }
-    contact.address?.let { address ->
-        ContactFact("Address", address, onCopy?.let { copy -> ContactFactAction("Copy address", NextcloudIcons.Copy) { copy("Address", address) } })
+    card.addresses.forEach { entry ->
+        val address = entry.singleLine
+        ContactFact(entry.label.factTitle("Address"), address,
+            onCopy?.let { copy -> ContactFactAction("Copy address", NextcloudIcons.Copy) { copy("Address", address) } })
     }
-    contact.birthday?.let { ContactFact("Birthday", it) }
+    card.websites.forEach { website ->
+        // Only a plain web address is handed to the browser; anything else stays text.
+        val webAddress = website.value.takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
+        ContactFact(website.label.factTitle("Website"), website.value, onOpenUri?.let { open ->
+            webAddress?.let { address -> ContactFactAction("Open $address", NextcloudIcons.FormatLink) { open(address) } }
+        })
+    }
+    card.birthday.takeIf(String::isNotBlank)?.let { ContactFact("Birthday", it.displayContactBirthday()) }
+    card.groups.takeIf(List<String>::isNotEmpty)?.let { ContactFact("Groups", it.joinToString(", ")) }
     contact.notes?.let { ContactFact("Notes", it) }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 }
@@ -226,6 +239,19 @@ private fun ContactFact(label: String, value: String, action: ContactFactAction?
                 color = if (action != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
         }
         action?.let { Icon(it.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp)) }
+    }
+}
+
+private fun ContactValueLabel.factTitle(kind: String): String =
+    if (this == ContactValueLabel.Other) kind else "$kind, ${title.lowercase()}"
+
+/** A birthday for reading: `15 January 1990`, or `15 January` without a year. */
+internal fun String.displayContactBirthday(): String {
+    val compact = contactBirthdayCompact() ?: return this
+    return if (compact.startsWith("--")) {
+        "2000${compact.drop(2)}".displayCalendarDate().removeSuffix(" 2000")
+    } else {
+        compact.displayCalendarDate()
     }
 }
 

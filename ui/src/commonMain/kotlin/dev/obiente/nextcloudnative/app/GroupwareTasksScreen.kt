@@ -65,6 +65,12 @@ fun NativeGroupwareTasksScreen(
         mutableStateOf<GroupwareTaskSelection?>(null)
     }
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
+    // The parent of a subtask being created, as "calendar href" and "uid"; null for a top-level task.
+    var subtaskParentUid by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var subtaskCalendarHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    val taskLists = rememberCalendarCollectionManager(services, session, userId, forTasks = true) { loadAttempt += 1 }
+    val taskListSharing = rememberGroupwareSharingManager(services, session)
+    val taskTrash = rememberCalendarTrashBinManager(services, session, userId) { loadAttempt += 1 }
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<GroupwareTask?>(null) }
     var mutationError by remember { mutableStateOf<String?>(null) }
@@ -262,9 +268,10 @@ fun NativeGroupwareTasksScreen(
         }
     }
     val filterCalendar = taskFilterCalendar(ready, taskListFilterHref)
-    val visibleTasks = remember(ready?.tasks, filter, filterCalendar, query) {
-        filterGroupwareTasks(ready?.tasks.orEmpty(), filter, filterCalendar, query)
+    val visibleHierarchy = remember(ready?.tasks, filter, filterCalendar, query) {
+        filterGroupwareTasks(ready?.tasks.orEmpty(), filter, filterCalendar, query).inTaskHierarchy()
     }
+    val visibleTasks = visibleHierarchy.map { it.first }
     val detailState = selectedTask?.let { task ->
         TaskDetailState(
             writable = selectedTaskWritable,
@@ -273,6 +280,10 @@ fun NativeGroupwareTasksScreen(
             error = mutationError,
             onEdit = { editing = true },
             onDelete = { deleting = task },
+            relations = taskRelations(task, ready?.tasks.orEmpty()),
+            onOpenTask = { related -> selectedTaskSelection = related.selection() },
+            onAddSubtask = { subtaskParentUid = task.uid; subtaskCalendarHref = task.calendarHref; creating = true }
+                .takeIf { selectedTaskWritable && task.recurrenceId == null && !interactionBlocked },
         )
     }
 
@@ -292,7 +303,7 @@ fun NativeGroupwareTasksScreen(
         val content = prepareGroupwareDavMutation(
             onInvalid = { mutationError = "Review the task fields and try again." },
         ) {
-            target?.let { task ->
+            val base = target?.let { task ->
                 updateGroupwareTaskContent(
                     task,
                     normalizedDraft.title,
@@ -307,6 +318,9 @@ fun NativeGroupwareTasksScreen(
                 normalizedDraft.completed,
                 normalizedDraft.description,
             )
+            normalizedDraft.extras?.let { extras ->
+                applyGroupwareTaskExtras(base, uid, target?.recurrenceId, extras, normalizedDraft.completed)
+            } ?: base
         } ?: return
         val request = prepareGroupwareDavMutation(
             onInvalid = { mutationError = "The task cannot be changed safely. Refresh and try again." },
@@ -383,6 +397,7 @@ fun NativeGroupwareTasksScreen(
                 IconButton(onClick = { if (!operations.busy) loadAttempt += 1 }, enabled = !operations.busy) {
                     Icon(NextcloudIcons.Refresh, contentDescription = "Refresh tasks")
                 }
+                TaskListMenu(filterCalendar, enabled = !interactionBlocked, lists = taskLists, trash = taskTrash)
                 IconButton(
                     onClick = { if (!interactionBlocked) creating = true },
                     enabled = !interactionBlocked && ready?.calendars?.any { ready.canWrite(it.href) } == true,
@@ -462,6 +477,7 @@ fun NativeGroupwareTasksScreen(
                         is TasksLoadState.Error -> WorkspaceLoadError(current.message) { if (!operations.busy) loadAttempt += 1 }
                         is TasksLoadState.Ready -> TaskList(
                             tasks = visibleTasks,
+                            depths = visibleHierarchy.associate { (task, depth) -> task.instanceId to depth },
                             emptyMessage = current.emptyMessage,
                             selectedInstanceId = selectedTask?.instanceId,
                             listState = taskListState,
@@ -509,6 +525,8 @@ fun NativeGroupwareTasksScreen(
             task = selectedTask.takeIf { editing },
             calendars = if (editing) {
                 ready.calendars.filter { calendar -> calendar.href == selectedTask?.calendarHref }
+            } else if (subtaskParentUid != null) {
+                ready.calendars.filter { calendar -> calendar.href == subtaskCalendarHref && ready.canWrite(calendar.href) }
             } else {
                 ready.calendars.filter { ready.canWrite(it.href) }
                     .sortedByDescending { calendar -> calendar.href == filterCalendar?.href }
@@ -518,11 +536,18 @@ fun NativeGroupwareTasksScreen(
             onDismiss = {
                 creating = false
                 editing = false
+                subtaskParentUid = null
                 if (selectedTask == null) selectedTaskSelection = null
             },
             onSave = { draft, calendar, editStartEtag ->
-                saveTask(selectedTask, draft, calendar, editStartEtag) { creating = false; editing = false }
+                saveTask(selectedTask.takeIf { editing }, draft, calendar, editStartEtag) {
+                    creating = false
+                    editing = false
+                    subtaskParentUid = null
+                }
             },
+            tasks = ready.tasks,
+            initialParentUid = subtaskParentUid.takeIf { !editing },
         )
     }
 
@@ -583,6 +608,12 @@ fun NativeGroupwareTasksScreen(
             },
         )
     }
+
+    CalendarCollectionDialogs(taskLists, onShare = { list ->
+        taskListSharing.open(GroupwareShareTarget(list.href, list.displayName, publishable = false))
+    })
+    GroupwareShareDialog(taskListSharing)
+    CalendarTrashBinDialog(taskTrash)
 
     if (unreadableRecovery && unreadableRecoveryDiscardRequested) {
         AlertDialog(

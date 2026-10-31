@@ -11,11 +11,14 @@ internal data class TaskDraft(
     val dueDate: String,
     val description: String,
     val completed: Boolean,
+    /** Priority, progress, start, tags and parent; null in records written before they existed. */
+    val extras: TaskExtras? = null,
 ) {
     fun normalized(): TaskDraft = copy(
         title = title.trim().normalizeGroupwareTextLineEndings(),
         dueDate = dueDate.trim(),
         description = description.normalizeGroupwareTextLineEndings(),
+        extras = extras?.normalized(),
     )
 
     fun compactDueDateOrNull(): String? = dueDate.trim().takeIf(String::isNotBlank)?.let { value ->
@@ -64,6 +67,15 @@ internal sealed interface TaskMutationPostcondition {
             ).singleOrNull { candidate ->
                 candidate.uid == expectedUid && candidate.recurrenceId == expectedRecurrenceId
             } ?: return false
+            if (expected.extras != null) {
+                val stored = task.extras().normalized()
+                val wanted = expected.extras
+                if (stored.priority != wanted.priority || stored.startDate.taskCompactDate() != wanted.startDate.taskCompactDate() ||
+                    stored.categories != wanted.categories || stored.parentUid != wanted.parentUid
+                ) {
+                    return false
+                }
+            }
             return task.href == href &&
                 task.uid == expectedUid &&
                 task.recurrenceId == expectedRecurrenceId &&

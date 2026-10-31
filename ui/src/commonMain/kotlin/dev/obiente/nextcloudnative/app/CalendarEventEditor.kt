@@ -82,6 +82,9 @@ internal fun EventEditorDialog(
     embedded: Boolean = false,
     inPlace: Boolean = false,
     backLabel: String = "Back to calendar",
+    /** Set when editing a repeating event: whether this edit is for one occurrence or the series. */
+    changeScope: CalendarChangeScope? = null,
+    identity: CalendarUserIdentity? = null,
 ) {
     // A new event may start at a time picked on the grid, given as a compact date-time.
     val initialIsoDate = (event?.start ?: initialDate).take(8).compactDateToIso()
@@ -100,6 +103,10 @@ internal fun EventEditorDialog(
         else -> initialRecurrencePreset.rule
     }
     val initialCalendarHref = calendars.firstOrNull { it.href == event?.calendarHref }?.href ?: calendars.firstOrNull()?.href
+    val storedReminders = remember(event) { event?.reminders().orEmpty() }
+    val invitation = remember(event) { event?.invitation() ?: CalendarEventInvitation(null, emptyList()) }
+    val initialReminders = storedReminders.mapNotNull(CalendarEventReminder::minutesBeforeStart).sorted()
+    val initialGuests = invitation.attendees.map(CalendarEventParticipant::address)
     val initialDraft = remember(event, initialDate) {
         EventDraft(
             title = initialTitle,
@@ -110,6 +117,8 @@ internal fun EventEditorDialog(
             location = initialLocation,
             description = initialDescription,
             recurrenceRule = initialRecurrenceRule,
+            reminderMinutes = initialReminders,
+            attendees = initialGuests,
         )
     }
     val editorStateKey = event?.instanceId ?: "new:$initialDate"
@@ -126,6 +135,11 @@ internal fun EventEditorDialog(
     var customRecurrenceRule by rememberSaveable(editorStateKey) {
         mutableStateOf(event?.recurrenceRule.orEmpty())
     }
+    // Lists are saved as text so they restore on every platform after recreation.
+    var reminderText by rememberSaveable(editorStateKey) { mutableStateOf(initialReminders.joinToString(",")) }
+    var guestText by rememberSaveable(editorStateKey) { mutableStateOf(initialGuests.joinToString(",")) }
+    val reminders = reminderText.split(',').mapNotNull(String::toIntOrNull)
+    val guests = guestText.split(',').filter(String::isNotBlank)
     var selectedCalendarHref by rememberSaveable(editorStateKey) {
         mutableStateOf(initialCalendarHref)
     }
@@ -148,8 +162,11 @@ internal fun EventEditorDialog(
         allDay = allDay,
         location = location,
         description = description,
-        recurrenceRule = recurrenceRule,
+        recurrenceRule = if (changeScope == CalendarChangeScope.Occurrence) null else recurrenceRule,
+        reminderMinutes = reminders,
+        attendees = guests,
     )
+    val guestsChanged = calendarEventDraftChangesGuests(initialDraft, currentDraft)
     val dirty = calendarEventDraftIsDirty(
         initial = initialDraft,
         current = currentDraft,
@@ -244,7 +261,7 @@ internal fun EventEditorDialog(
                         }
                         CalendarDateField(date, onDateChanged = { date = it }, enabled = !mutationInProgress)
                         if (!allDay) CalendarTimeRangeFields(startTime, endTime, { startTime = it }, { endTime = it }, !mutationInProgress)
-                        CalendarEventChoice(
+                        if (changeScope != CalendarChangeScope.Occurrence) CalendarEventChoice(
                             label = "Repeats", value = recurrencePreset.label, enabled = !mutationInProgress,
                             options = EventRecurrencePreset.entries.map { NextcloudChoiceOption(it.name, it.label) },
                             selectedId = recurrencePreset.name,
@@ -262,8 +279,13 @@ internal fun EventEditorDialog(
                                 supportingText = { Text("Daily, weekly, or monthly rule, for example FREQ=WEEKLY;BYDAY=MO,WE") },
                                 isError = !recurrenceValid, modifier = Modifier.fillMaxWidth(), enabled = !mutationInProgress)
                         }
-                        if (event?.recurrenceRule != null) Text("Changes apply to the complete recurring series.",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        changeScope?.let { scope ->
+                            Text(
+                                if (scope == CalendarChangeScope.Occurrence) "Changes apply only to this occurrence."
+                                else "Changes apply to every occurrence.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 item {
@@ -278,6 +300,24 @@ internal fun EventEditorDialog(
                             modifier = Modifier.fillMaxWidth(), minLines = 3, enabled = !mutationInProgress)
                     }
                 }
+                item {
+                    CalendarReminderEditor(
+                        minutes = reminders,
+                        keptReminders = storedReminders.filterNot(CalendarEventReminder::editable),
+                        enabled = !mutationInProgress,
+                        onChange = { reminderText = it.sorted().joinToString(",") },
+                    )
+                }
+                item {
+                    CalendarGuestEditor(
+                        addresses = guests,
+                        known = invitation.attendees.associateBy(CalendarEventParticipant::address),
+                        editable = invitation.canManageAttendees(identity),
+                        readOnlyReason = calendarGuestReadOnlyReason(invitation, identity),
+                        enabled = !mutationInProgress,
+                        onChange = { guestText = it.joinToString(",") },
+                    )
+                }
                 error?.let { message ->
                     item { Text(message, color = MaterialTheme.colorScheme.error) }
                 }
@@ -288,12 +328,14 @@ internal fun EventEditorDialog(
                 enabled = valid && calendar != null && hasDavChanges && !mutationInProgress,
                 onClick = {
                     // The fields are in device time; storage keeps the event's own zone, or UTC.
-                    onSave(
-                        currentDraft.inDavFrame(event?.startZone),
-                        requireNotNull(calendar),
+                    // Only changed lists are written, so a save never rewrites reminders or guests it did not touch.
+                    val changes = currentDraft.copy(
+                        reminderMinutes = reminders.sorted().takeIf { it != initialReminders },
+                        attendees = guests.takeIf { guestsChanged },
                     )
+                    onSave(changes.inDavFrame(event?.startZone), requireNotNull(calendar))
                 },
-            ) { Text("Save") }
+            ) { Text(if (guestsChanged) "Save and notify guests" else "Save") }
         },
         dismissButton = {
             if (recoveryAvailable) {
@@ -355,5 +397,6 @@ internal fun EventEditorDialog(
 internal fun calendarEditorTitle(event: GroupwareCalendarEvent?): String = when {
     event == null -> "New event"
     event.recurrenceRule != null -> "Edit series"
+    event.recurrenceId != null -> "Edit occurrence"
     else -> "Edit event"
 }

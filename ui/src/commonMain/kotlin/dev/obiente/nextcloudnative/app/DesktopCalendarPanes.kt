@@ -83,6 +83,7 @@ internal fun DesktopCalendarInspectorPane(
     onClose: (() -> Unit)?,
     onShowDay: () -> Unit,
     modifier: Modifier,
+    invitation: CalendarInvitationActions? = null,
 ) {
     val calendar = event?.let { calendarByHref[it.calendarHref] }
     Surface(
@@ -125,15 +126,15 @@ internal fun DesktopCalendarInspectorPane(
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                     )
                 }
-                item { CalendarEventDetailsBody(event) }
+                item { CalendarEventDetailsBody(event, invitation = invitation) }
                 item {
-                    val editable = mutationsEnabled && calendar?.writable == true && event.etag != null && !event.isGeneratedOccurrence
+                    val editable = mutationsEnabled && calendar?.writable == true && event.etag != null
                     OutlinedButton(onClick = { onEditEvent(event) }, enabled = editable, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (event.recurrenceRule != null) "Edit series" else "Edit event")
+                        Text("Edit event")
                     }
                     TextButton(onClick = { onDeleteEvent(event) }, enabled = editable, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            if (event.recurrenceRule != null) "Delete series" else "Delete event",
+                            "Delete event",
                             color = if (editable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

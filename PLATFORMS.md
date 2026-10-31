@@ -412,9 +412,22 @@ interaction validation is still required.
   on wide desktop windows. New contacts default to the filtered address book
   when it is writable. Tasks does the same with task lists, which show their
   open-task counts and mark read-only lists.
-- Contact and task editors remain dialogs on every layout. Multiple email
-  addresses and phone numbers per contact, A to Z contact sections, task
-  grouping, and note sorting and favorite filters are not implemented.
+- Contact and task editors remain dialogs on every layout. A to Z contact
+  sections, task grouping, and note sorting and favorite filters are not
+  implemented.
+- Contacts edit several labelled (home, work, mobile, other) emails, phone
+  numbers, postal addresses, and websites, plus groups (vCard `CATEGORIES`),
+  job title, and birthday. Properties the editor does not show, such as
+  photos and fields written by other apps, are kept, and unchanged entries keep
+  their original vCard lines. "Manage address books" creates (`MKCOL`),
+  renames (`PROPPATCH`), shares, and deletes address books; server-generated
+  address books stay read-only. Contact photos are not shown and cannot be
+  changed yet.
+- Tasks edit priority, progress, start date, tags, and the parent task
+  (`RELATED-TO;RELTYPE=PARENT`, as Nextcloud Tasks writes it). Subtasks follow
+  their parent in the list, indented, and task details list them with "Add
+  subtask". A task cannot be moved under its own subtasks. The header menu
+  creates, edits, shares, and deletes task lists and opens the trash bin.
 - `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
   `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
   recreation, and the dirty-draft guard against synthetic servers. They do not
@@ -449,8 +462,25 @@ interaction validation is still required.
   read-only. Every change is confirmed against a fresh calendar list, so a
   lost response is reported as unknown rather than as success or failure, and
   retrying a new calendar reuses its address instead of creating a second one.
-  Calendars in Nextcloud's trash bin are not listed; restoring them, sharing,
-  publishing, and importing still happen in the web calendar.
+  Calendars in Nextcloud's trash bin are not listed as calendars; the "Trash
+  bin" below the calendar list restores deleted calendars, events, and tasks
+  (`MOVE` into `trashbin/restore/`) or deletes them for good, one at a time or
+  all at once with a report of any that failed. Owned calendars can be shared
+  with people and groups, read-only or with edit rights, and published as a
+  public read-only link, through Nextcloud's DAV sharing and publishing
+  `POST`s; people and groups are found with a DAV principal search. "Show
+  contact birthdays" turns the birthdays calendar back on. Importing and
+  exporting `.ics` files, free/busy lookup, and the web calendar's own
+  settings (such as a default reminder) are not available.
+- Events carry reminders (`VALARM`) and guests. Reminders set relative to the
+  start can be added and removed; others are kept as stored. The organizer,
+  or anyone on an event without guests, can invite people by email, which
+  makes them the organizer; the server then sends invitations, updates, and
+  cancellations, and Save says so. An invited user answers Going, Maybe, or
+  Not going from the event details. Editing or deleting a repeating event asks
+  whether the change is for this occurrence (an exception with
+  `RECURRENCE-ID`, or an `EXDATE`) or for every occurrence. "This and following
+  occurrences" is not offered.
 - Time-grid events show only the lines that fit: short events keep one
   readable line, and narrow overlapping lanes wrap at words rather than inside
   them.

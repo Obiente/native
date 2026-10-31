@@ -54,6 +54,10 @@ internal fun contactsFilterAddressBook(
     filterHref: String?,
 ): GroupwareAddressBook? = filterHref?.let { href -> ready?.addressBooks?.firstOrNull { it.href == href } }
 
+/** Every contact group in use, for suggestions while editing. */
+internal fun contactGroupNames(contacts: List<GroupwareContact>): List<String> =
+    contacts.asSequence().flatMap { it.card().groups }.distinctBy(String::lowercase).sortedBy(String::lowercase).take(200).toList()
+
 internal fun filterContacts(
     contacts: List<GroupwareContact>,
     addressBook: GroupwareAddressBook?,

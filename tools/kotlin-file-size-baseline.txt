@@ -12,8 +12,8 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2417
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|960
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1380
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|929
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt|1103
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|847
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt|1096
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaSearchDav.kt|1172
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.kt|996
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckRelationDialogs.kt|1234

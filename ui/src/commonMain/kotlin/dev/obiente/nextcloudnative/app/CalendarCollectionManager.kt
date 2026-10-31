@@ -16,6 +16,10 @@ import kotlinx.coroutines.launch
 internal class CalendarCollectionActions(
     val onCreate: (subscription: Boolean) -> Unit,
     val onManage: (GroupwareCalendar) -> Unit,
+    /** Opens the deleted calendars, events and tasks. */
+    val onOpenTrash: (() -> Unit)? = null,
+    /** Set while the contact birthdays calendar is off: turns it back on. */
+    val onEnableBirthdays: (() -> Unit)? = null,
 )
 
 internal sealed interface CalendarCollectionEdit {
@@ -37,6 +41,8 @@ internal class CalendarCollectionManager(
     private val session: NextcloudSession,
     private val userId: String,
     private val scope: CoroutineScope,
+    /** Manages task lists: new collections hold only tasks. */
+    val forTasks: Boolean = false,
 ) {
     var edit by mutableStateOf<CalendarCollectionEdit?>(null)
         private set
@@ -69,6 +75,21 @@ internal class CalendarCollectionManager(
         newHref = null
     }
 
+    /** Turns the contact birthdays calendar on; the calendar list confirms it appeared. */
+    fun enableBirthdayCalendar() {
+        if (busy) return
+        change(
+            birthdayCalendarEnableRequest(userId),
+            provesRejection = ::groupwareMutationResponseProvesRejection,
+            applied = { true },
+            confirmed = { calendars -> calendars.any(GroupwareCalendar::isBirthdayCalendar) },
+            onFailure = { message -> birthdayError = message },
+        )
+    }
+
+    var birthdayError by mutableStateOf<String?>(null)
+        private set
+
     fun requestDelete(calendar: GroupwareCalendar) {
         if (busy) return
         edit = null
@@ -88,7 +109,7 @@ internal class CalendarCollectionManager(
                     return
                 }
                 val request = if (target.subscription) calendarSubscriptionCreateRequest(href, draft)
-                    else calendarCollectionCreateRequest(href, draft)
+                    else calendarCollectionCreateRequest(href, draft.copy(tasksOnly = forTasks))
                 change(
                     request,
                     // An address that already exists may be this dialog's earlier attempt; the list decides.
@@ -133,10 +154,12 @@ internal class CalendarCollectionManager(
         provesRejection: (Int) -> Boolean,
         applied: (NextcloudApiResponse) -> Boolean,
         confirmed: (List<GroupwareCalendar>) -> Boolean,
+        onFailure: (String) -> Unit = { error = it },
     ) {
         if (busy) return
         busy = true
         error = null
+        birthdayError = null
         scope.launch {
             try {
                 val response = try {
@@ -147,11 +170,11 @@ internal class CalendarCollectionManager(
                     null
                 }
                 if (response != null && provesRejection(response.status)) {
-                    error = calendarCollectionRejectionMessage(response.status)
+                    onFailure(calendarCollectionRejectionMessage(response.status))
                     return@launch
                 }
                 if (response != null && response.status in 200..299 && !applied(response)) {
-                    error = "The server did not accept every change. Check the name and color, then try again."
+                    onFailure("The server did not accept every change. Check the name and color, then try again.")
                     return@launch
                 }
                 val listed = try {
@@ -170,11 +193,13 @@ internal class CalendarCollectionManager(
                     newHref = null
                     onChanged()
                 } else {
-                    error = if (response != null && response.status in 200..299) {
-                        "The change has not appeared on the server yet. Refresh your calendars to check it."
-                    } else {
-                        "The result is unknown. Refresh your calendars before trying again."
-                    }
+                    onFailure(
+                        if (response != null && response.status in 200..299) {
+                            "The change has not appeared on the server yet. Refresh your calendars to check it."
+                        } else {
+                            "The result is unknown. Refresh your calendars before trying again."
+                        },
+                    )
                 }
             } finally {
                 busy = false
@@ -188,12 +213,13 @@ internal fun rememberCalendarCollectionManager(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String,
+    forTasks: Boolean = false,
     onChanged: () -> Unit,
 ): CalendarCollectionManager {
     val scope = rememberCoroutineScope()
     val currentOnChanged by rememberUpdatedState(onChanged)
-    return remember(services, session, userId, scope) {
-        CalendarCollectionManager(services, session, userId, scope).apply { this.onChanged = { currentOnChanged() } }
+    return remember(services, session, userId, scope, forTasks) {
+        CalendarCollectionManager(services, session, userId, scope, forTasks).apply { this.onChanged = { currentOnChanged() } }
     }
 }
 

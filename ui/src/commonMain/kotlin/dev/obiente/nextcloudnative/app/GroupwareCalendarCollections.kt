@@ -64,6 +64,8 @@ internal data class CalendarCollectionDraft(
     val name: String,
     val color: String,
     val withTasks: Boolean = false,
+    /** A task list: a calendar that holds only tasks. */
+    val tasksOnly: Boolean = false,
     /** Set only for a new subscription. */
     val sourceUrl: String? = null,
 )
@@ -93,7 +95,11 @@ internal fun newCalendarCollectionHref(homeHref: String, name: String, random: R
 /** An RFC 4791 MKCALENDAR for a new calendar, optionally also holding tasks. */
 internal fun calendarCollectionCreateRequest(href: String, draft: CalendarCollectionDraft): GroupwareDavRequest {
     requireValidDraft(draft, subscription = false)
-    val components = if (draft.withTasks) """<c:comp name="VEVENT"/><c:comp name="VTODO"/>""" else """<c:comp name="VEVENT"/>"""
+    val components = when {
+        draft.tasksOnly -> """<c:comp name="VTODO"/>"""
+        draft.withTasks -> """<c:comp name="VEVENT"/><c:comp name="VTODO"/>"""
+        else -> """<c:comp name="VEVENT"/>"""
+    }
     return calendarCollectionRequest(
         "MKCALENDAR", href,
         """<c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:x1="http://apple.com/ns/ical/">""" +

@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-30
+lastUpdated: 2026-10-31
 captureScenarios: guide-android-calendar-month, guide-android-calendar-agenda, guide-android-calendar-edit
 prerequisites: Calendar installed on the connected Nextcloud server, At least one CalDAV calendar, Write permission for creating or changing events
 ---
 
 # Use Nextcloud Calendar on Android
 
-**Last reviewed: 2026-08-30.** The software and published packages may have
+**Last reviewed: 2026-10-31.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -39,19 +39,32 @@ Refresh keeps the last matching in-memory result visible while CalDAV reloads. I
 @capture-alt: nati.ve Android Calendar agenda with touch-sized event rows, times, locations, multiple calendar sources, and the create-event control
 @capture-caption: Agenda prioritizes readable event order on a phone while the add action remains disabled when no writable calendar is available.
 
-Choose the add action in the Calendar header. Enter a title, then complete **Schedule**. Choose the date using the calendar button or type YYYY-MM-DD. For a timed event, choose start and end times with the clock buttons or type them; editor times are shown and submitted in UTC. For an all-day event, enable **All day**. Open **Repeats** to choose no recurrence, daily, weekly, monthly, or a validated custom rule. Add a location or description when useful, then select the intended calendar if more than one writable source exists.
+Choose the add action in the Calendar header. Enter a title, then complete **Schedule**. Choose the date using the calendar button or type YYYY-MM-DD. For a timed event, choose start and end times with the clock buttons or type them; editor times are shown in the device's time zone, and an event keeps its own time zone when it has one. For an all-day event, enable **All day**. Open **Repeats** to choose no recurrence, daily, weekly, monthly, or a validated custom rule. Add a location or description when useful, then select the intended calendar if more than one writable source exists.
 
 Save once and wait for the CalDAV result. A successful response triggers a fresh read. If the connection result is unknown, do not create a duplicate immediately. First refresh the target date and calendar to see whether the event exists.
 
-## 3. Edit or delete only an authoritative event or series
+## 3. Edit or delete an event, an occurrence, or a series
 
-@capture-alt: nati.ve Android event detail showing date, time, recurrence, Edit series, Delete series, and the authoritative recurring event context
-@capture-caption: Android exposes edit and delete only for writable events with an ETag, and recurring occurrences direct changes to the authoritative series.
+@capture-alt: nati.ve Android event detail showing date, time, recurrence, edit and delete actions, and the recurring event context
+@capture-caption: Android exposes edit and delete only for writable events with an ETag.
 
-Open an event. Editing is available only when its calendar is writable, its current ETag is known, and the row is not a generated recurrence occurrence. A generated occurrence is read-only to protect the series. Open the authoritative series to use **Edit series** or **Delete series**; deleting a repeating event permanently removes the complete series.
+Open an event. Editing is available only when its calendar is writable and its current ETag is known. For a repeating event, **Edit** asks whether to change **Only this occurrence** or **Every occurrence**. Changing one occurrence stores an exception for that date and leaves the rest of the series as it was. **Delete** on a repeating event offers **Delete this occurrence**, which removes only that date, or **Delete every occurrence**.
 
 Updates and deletes send the current ETag as a precondition. If another client changed the event first, refresh and review that version before applying your intent again. Read-only subscribed calendars remain browsable but do not expose mutation actions.
 
-Open an event to view its details on a page. **Edit** or **Edit series** changes that page into the shared editor, without opening another modal. Back returns to the event details and asks before discarding a changed draft. Creating an event and choosing dates or times still use dialogs.
+Open an event to view its details on a page. **Edit** changes that page into the shared editor, without opening another modal. Back returns to the event details and asks before discarding a changed draft. Creating an event and choosing dates or times still use dialogs.
 
-The phone and desktop editor share validation, recurrence and calendar selectors, and date/time fields. Save and Cancel remain outside the scrolling form. **Edit series** states that changes apply to the complete recurring series. These controls do not enable editing a generated occurrence.
+The phone and desktop editor share validation, recurrence and calendar selectors, and date/time fields. Save and Cancel remain outside the scrolling form. When you edit a repeating event, the editor states whether changes apply to this occurrence only or to every occurrence.
+
+## 4. Guests, reminders, sharing, and the trash bin
+
+**Reminders** in the editor add on-screen reminders before the start, such as 15 minutes or 1 day. Reminders set another way, for example at a fixed time, are kept as they are and listed as kept.
+
+**Guests** invites people by email. Only the organizer can change the guest list, and the first guest makes you the organizer. When the guest list changes, Save reads **Save and notify guests**: Nextcloud sends the invitations, updates, and cancellations by email. If you were invited by someone else, the event details show **Going**, **Maybe**, and **Not going**; your answer is sent to the organizer. For a repeating event without its own exception, the answer applies to every occurrence.
+
+Open a calendar's menu in the calendar list and choose **Share calendar** to share it with people or groups, read-only or with **Can edit**, or to create a public read-only link. Stopping a share or deleting the link asks first; a deleted link stops working for everyone.
+
+**Trash bin**, below the calendar list, lists deleted calendars, events, and tasks for as long as the server keeps them. **Restore** puts an item back; **Delete** and **Empty trash bin** remove items for good after a confirmation. **Show contact birthdays** appears while the birthdays calendar is turned off.
+
+Importing or exporting `.ics` files, free/busy lookup, and the web calendar's own settings are not available in the app.
+

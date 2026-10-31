@@ -49,15 +49,23 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
 /** The editor and removal confirmation the calendar list opens. */
 @Composable
-internal fun CalendarCollectionDialogs(manager: CalendarCollectionManager) {
+internal fun CalendarCollectionDialogs(
+    manager: CalendarCollectionManager,
+    onShare: ((GroupwareCalendar) -> Unit)? = null,
+) {
     manager.edit?.let { edit ->
+        val existing = (edit as? CalendarCollectionEdit.Existing)?.calendar
         CalendarCollectionEditorDialog(
             edit = edit,
             busy = manager.busy,
             error = manager.error,
             onSave = manager::save,
-            onDelete = (edit as? CalendarCollectionEdit.Existing)?.calendar?.let { calendar -> { manager.requestDelete(calendar) } },
+            onDelete = existing?.let { calendar -> { manager.requestDelete(calendar) } },
             onDismiss = manager::dismiss,
+            forTasks = manager.forTasks,
+            // Only the owner of a calendar can share it; subscriptions are someone else's feed.
+            onShare = existing?.takeIf { it.kind == GroupwareCalendarKind.Owned && !it.isBirthdayCalendar() }
+                ?.let { calendar -> onShare?.let { share -> { manager.dismiss(); share(calendar) } } },
         )
     }
     manager.deleting?.let { calendar ->
@@ -69,7 +77,8 @@ internal fun CalendarCollectionDialogs(manager: CalendarCollectionManager) {
 @Composable
 internal fun CalendarCollectionCreateButton(actions: CalendarCollectionActions, modifier: Modifier = Modifier) {
     var menuOpen by remember { mutableStateOf(false) }
-    Box(modifier) {
+    Column(modifier) {
+      Box(Modifier.fillMaxWidth()) {
         OutlinedButton(onClick = { menuOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Text("New calendar", Modifier.padding(start = 8.dp))
@@ -85,6 +94,16 @@ internal fun CalendarCollectionCreateButton(actions: CalendarCollectionActions, 
                 leadingIcon = { Icon(NextcloudIcons.Cloud, contentDescription = null) },
                 onClick = { menuOpen = false; actions.onCreate(true) },
             )
+        }
+      }
+        actions.onEnableBirthdays?.let { enable ->
+            TextButton(onClick = enable, modifier = Modifier.fillMaxWidth()) { Text("Show contact birthdays") }
+        }
+        actions.onOpenTrash?.let { openTrash ->
+            TextButton(onClick = openTrash, modifier = Modifier.fillMaxWidth()) {
+                Icon(NextcloudIcons.Empty, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Trash bin", Modifier.padding(start = 8.dp))
+            }
         }
     }
 }
@@ -114,6 +133,8 @@ private fun CalendarCollectionEditorDialog(
     onSave: (CalendarCollectionDraft) -> Unit,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
+    onShare: (() -> Unit)? = null,
+    forTasks: Boolean = false,
 ) {
     val existing = (edit as? CalendarCollectionEdit.Existing)?.calendar
     val subscription = existing?.kind == GroupwareCalendarKind.Subscription || (edit as? CalendarCollectionEdit.New)?.subscription == true
@@ -131,7 +152,9 @@ private fun CalendarCollectionEditorDialog(
             Text(
                 when {
                     existing == null && subscription -> "New subscription"
+                    existing == null && forTasks -> "New task list"
                     existing == null -> "New calendar"
+                    forTasks -> "Edit task list"
                     subscription -> "Edit subscription"
                     else -> "Edit calendar"
                 },
@@ -164,7 +187,7 @@ private fun CalendarCollectionEditorDialog(
                 }
                 Text("Color", style = MaterialTheme.typography.labelLarge)
                 CalendarColorPicker(color, original = existing?.color, enabled = !busy) { color = it }
-                if (existing == null && !subscription) {
+                if (existing == null && !subscription && !forTasks) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 48.dp)
                             .toggleable(withTasks, enabled = !busy, role = Role.Switch) { withTasks = it },
@@ -179,9 +202,15 @@ private fun CalendarCollectionEditorDialog(
                     }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                onShare?.let { share ->
+                    OutlinedButton(onClick = share, enabled = !busy) {
+                        Icon(NextcloudIcons.People, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(if (forTasks) "Share list" else "Share calendar", Modifier.padding(start = 8.dp))
+                    }
+                }
                 if (onDelete != null) {
                     TextButton(onClick = onDelete, enabled = !busy) {
-                        Text(if (subscription) "Unsubscribe" else "Delete calendar", color = MaterialTheme.colorScheme.error)
+                        Text(if (subscription) "Unsubscribe" else if (forTasks) "Delete list" else "Delete calendar", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -234,8 +263,8 @@ private fun CalendarCollectionDeleteDialog(
     val (title, message, action) = when (calendar.kind) {
         GroupwareCalendarKind.Owned -> Triple(
             "Delete calendar?",
-            "\"$name\" and all its events will be deleted. If your server keeps a calendar trash bin, " +
-                "you can restore it from the Nextcloud calendar on the web for a limited time.",
+            "\"$name\" and all its events will be deleted. You can restore it from the trash bin " +
+                "below your calendars for a limited time.",
             "Delete",
         )
         GroupwareCalendarKind.Subscription -> Triple(

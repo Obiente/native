@@ -136,7 +136,7 @@ class CalendarEditorRefinementTest {
         nativeSceneTest(390, 800, content = { CalendarEventDetailsBody(occurrence) }) {
             assertTrue(has("20 August 2026 - 23 August 2026"))
             assertTrue(has("All day"))
-            assertTrue(has("This occurrence is read-only to protect the complete recurring series."))
+            assertTrue(has("This event repeats. When you edit or delete it, you choose this occurrence or the whole series."))
         }
     }
 

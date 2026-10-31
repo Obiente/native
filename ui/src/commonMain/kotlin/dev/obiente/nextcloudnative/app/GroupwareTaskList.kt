@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -96,6 +97,8 @@ internal fun TaskList(
     listState: LazyListState,
     actions: TaskRowActions,
     modifier: Modifier = Modifier,
+    /** How deeply each task is nested under its parent, by instance id. */
+    depths: Map<String, Int> = emptyMap(),
 ) {
     LazyColumn(
         modifier = modifier,
@@ -104,7 +107,7 @@ internal fun TaskList(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(tasks, key = GroupwareTask::instanceId) { task ->
-            TaskRow(task, selected = task.instanceId == selectedInstanceId, actions)
+            TaskRow(task, selected = task.instanceId == selectedInstanceId, actions, depths[task.instanceId] ?: 0)
         }
         if (tasks.isEmpty()) item {
             Text(emptyMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -113,10 +116,11 @@ internal fun TaskList(
 }
 
 @Composable
-private fun TaskRow(task: GroupwareTask, selected: Boolean, actions: TaskRowActions) {
+private fun TaskRow(task: GroupwareTask, selected: Boolean, actions: TaskRowActions, depth: Int = 0) {
     var menuExpanded by remember(task.instanceId) { mutableStateOf(false) }
     Card(
-        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }.combinedClickable(
+        modifier = Modifier.padding(start = (depth.coerceAtMost(4) * 24).dp).fillMaxWidth()
+            .semantics { this.selected = selected }.combinedClickable(
             onClickLabel = "Open ${task.title}",
             onLongClickLabel = "Show actions for ${task.title}",
             onClick = { actions.onOpen(task) },
@@ -143,8 +147,8 @@ private fun TaskRow(task: GroupwareTask, selected: Boolean, actions: TaskRowActi
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                task.due?.let { due ->
-                    Text("Due ${due.displayTaskDueDate()}", style = MaterialTheme.typography.bodySmall)
+                taskRowSummary(task)?.let { summary ->
+                    Text(summary, style = MaterialTheme.typography.bodySmall)
                 }
             }
             Box {
