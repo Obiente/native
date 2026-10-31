@@ -33,6 +33,10 @@ internal data class TaskDetailState(
     val error: String?,
     val onEdit: () -> Unit,
     val onDelete: () -> Unit,
+    val relations: TaskRelations = TaskRelations(null, emptyList()),
+    val onOpenTask: (GroupwareTask) -> Unit = {},
+    /** Null when a subtask cannot be added here. */
+    val onAddSubtask: (() -> Unit)? = null,
 )
 
 /**
@@ -60,6 +64,7 @@ internal fun TaskDetailOverlay(task: GroupwareTask, state: TaskDetailState, onDi
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
             TaskFacts(task, state.writable, state.deleteSafe, state.error)
+            TaskRelationsSection(state)
         }
         TaskActionRow(state, Modifier.padding(NextcloudSpacing.Large))
     }
@@ -115,6 +120,7 @@ internal fun TaskInspector(task: GroupwareTask, state: TaskDetailState) {
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
             TaskFacts(task, state.writable, state.deleteSafe, state.error)
+            TaskRelationsSection(state)
         }
     }
 }
@@ -131,8 +137,11 @@ private fun TaskActionRow(state: TaskDetailState, modifier: Modifier) {
 
 @Composable
 private fun ColumnScope.TaskFacts(task: GroupwareTask, writable: Boolean, deleteSafe: Boolean, error: String?) {
-    Text(if (task.completed) "Completed" else "Open")
+    Text(if (task.completed) "Completed" else if ((task.percentComplete ?: 0) > 0) "${task.percentComplete}% done" else "Open")
+    task.start?.let { Text("Starts ${it.displayTaskDueDate()}") }
     task.due?.let { Text("Due ${it.displayTaskDueDate()}") }
+    TaskPriority.of(task.priority).takeIf { it != TaskPriority.None }?.let { Text("${it.label} priority") }
+    task.categories.takeIf(List<String>::isNotEmpty)?.let { Text("Tags: ${it.joinToString(", ")}") }
     task.description?.let { Text(it) }
     if (!writable) {
         Text("This task list is read-only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
