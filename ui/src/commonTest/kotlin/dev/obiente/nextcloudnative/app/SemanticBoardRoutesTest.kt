@@ -5,10 +5,12 @@ import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperation
 import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperationUnavailableException
 import dev.obiente.nextcloudnative.nativeui.runtime.boardRoutes
 import dev.obiente.nextcloudnative.nativeui.runtime.forApp
+import dev.obiente.nextcloudnative.nativeui.runtime.nestedBoardRoutes
 import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
 import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import dev.obiente.nextcloudnative.nativeui.runtime.write
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -81,7 +83,73 @@ class SemanticBoardRoutesTest {
         assertEquals(JsonPrimitive("plain"), sent["type"])
         assertEquals(JsonPrimitive("owner"), sent["owner"])
         assertEquals(JsonPrimitive("Ship it"), sent["title"])
-        assertFalse("duedate" in sent)
+        // A full replacement without a due date clears the nullable field rather than omitting it.
+        assertEquals(JsonNull, sent["duedate"])
+    }
+
+    @Test
+    fun `a nested move binds the source list in the path and the destination list in the body`() {
+        val move = DeckCardMove(
+            source = DeckCardContext(DeckStackContext(DeckBoardId(7), 10), 42),
+            destinationStack = DeckStackContext(DeckBoardId(7), 11),
+            order = 2,
+        )
+
+        val request = nestedRoutes().moveCard(access(), card, move)
+
+        assertEquals(NextcloudApiMethod.PUT, request.method)
+        assertEquals("/apps/kanban_x/api/v1.1/boards/7/stacks/10/cards/42/reorder", request.relativePath)
+        assertEquals<Map<String, Any>>(mapOf("stackId" to JsonPrimitive(11), "order" to JsonPrimitive(2)), body(request))
+    }
+
+    @Test
+    fun `clearing nullable optional card fields sends null and leaves other fields set`() {
+        val dated = card.copy(descriptionMarkdown = "Notes", dueAt = "2026-08-01T10:00:00Z")
+        val request = nestedRoutes().updateCard(
+            access(),
+            DeckCardContext(DeckStackContext(DeckBoardId(7), 10), 42),
+            DeckCardUpdate(dated, "Ship", 1, descriptionMarkdown = "", dueAt = null, startAt = null, archived = false, completedAt = null),
+        )
+
+        val sent = body(request)
+        assertEquals(JsonNull, sent["description"])
+        assertEquals(JsonNull, sent["duedate"])
+        assertEquals(JsonPrimitive("Ship"), sent["title"])
+        assertEquals(JsonPrimitive("plain"), sent["type"])
+    }
+
+    @Test
+    fun `a set optional field keeps its value and a create omits an absent one`() {
+        val routes = nestedRoutes()
+        val update = routes.updateCard(
+            access(),
+            DeckCardContext(DeckStackContext(DeckBoardId(7), 10), 42),
+            DeckCardUpdate(card, "Ship", 1, "Body", dueAt = "2026-08-01T10:00:00Z", startAt = null, archived = false, completedAt = null),
+        )
+        val create = routes.createCard(access(), DeckStackContext(DeckBoardId(7), 10), DeckCardDraft("New"))
+
+        assertEquals(JsonPrimitive("Body"), body(update)["description"])
+        assertEquals(JsonPrimitive("2026-08-01T10:00:00Z"), body(update)["duedate"])
+        assertFalse("duedate" in body(create))
+    }
+
+    @Test
+    fun `card relationship and restore routes of a signed board package are offered`() {
+        val routes = nestedRoutes()
+
+        assertTrue(routes.assignsLabels())
+        assertTrue(routes.assignsUsers())
+        assertTrue(routes.supports(BoardOperation.RestoreBoard))
+        assertFalse(routes.supports(BoardOperation.DeleteLabel))
+        val assign = routes.assignLabel(access(), card, 3)
+        val remove = routes.removeLabel(access(), card, 3)
+        assertEquals(NextcloudApiMethod.POST to "/apps/kanban_x/cards/42/label/3", assign.method to assign.relativePath)
+        assertEquals(NextcloudApiMethod.DELETE to "/apps/kanban_x/cards/42/label/3", remove.method to remove.relativePath)
+        val user = routes.assignUser(access(), card, "owner")
+        assertEquals("/apps/kanban_x/cards/42/assign", user.relativePath)
+        assertEquals<Map<String, Any>>(mapOf("userId" to JsonPrimitive("owner")), body(user))
+        assertEquals("/apps/kanban_x/cards/42/unassign", routes.unassignUser(access(), card, "owner").relativePath)
+        assertEquals("/apps/kanban_x/boards/7/deleteUndo", routes.restoreBoard(access()).relativePath)
     }
 
     @Test
@@ -159,6 +227,15 @@ class SemanticBoardRoutesTest {
         requireNotNull(
             resolveSemanticBoardContract(
                 semanticDescriptor(appId, "42.0.0", boardRoutes(includeMove = includeMove).forApp(appId)),
+                writesAuthorized = true,
+            ),
+        ),
+    )
+
+    private fun nestedRoutes() = SemanticBoardRoutes(
+        requireNotNull(
+            resolveSemanticBoardContract(
+                semanticDescriptor("kanban_x", "1.15.0", nestedBoardRoutes().forApp("kanban_x")),
                 writesAuthorized = true,
             ),
         ),

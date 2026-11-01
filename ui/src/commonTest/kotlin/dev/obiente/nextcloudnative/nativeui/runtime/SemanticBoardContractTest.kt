@@ -63,6 +63,35 @@ class SemanticBoardContractTest {
     }
 
     @Test
+    fun `a projects-and-members ledger is not a board`() {
+        val project = "/apps/APP/api/v1/projects/{projectId}"
+        val routes = listOf(
+            get("/apps/APP/api/v1/projects"),
+            get(project),
+            write(HttpMethod.POST, "/apps/APP/api/v1/projects", mapOf("name" to "string"), setOf("name")),
+            get("$project/members"),
+            write(HttpMethod.POST, "$project/members", mapOf("name" to "string", "weight" to "number"), setOf("name")),
+            get("$project/bills"),
+            get("$project/bills/{billId}"),
+            write(HttpMethod.POST, "$project/bills", mapOf("what" to "string", "amount" to "number", "payer" to "integer")),
+        ).forApp("ledger_x")
+
+        assertNull(resolve("ledger_x", "2.0.0", routes, raw = true))
+    }
+
+    @Test
+    fun `a label inside a card relates it to the card and never deletes the board label`() {
+        val contract = assertNotNull(resolve("kanban_x", "1.15.0", nestedBoardRoutes()))
+
+        val remove = contract.binding(BoardOperation.RemoveLabel)
+        assertEquals("/apps/kanban_x/cards/{cardId}/label/{labelId}", remove.action.binding.path)
+        assertEquals(BoardValueRole.Identity(BoardEntity.Label), remove.pathRoles["labelId"])
+        assertFalse(contract.supports(BoardOperation.DeleteLabel))
+        assertTrue(contract.supports(BoardOperation.AssignUser) && contract.supports(BoardOperation.UnassignUser))
+        assertTrue(contract.supports(BoardOperation.RestoreBoard))
+    }
+
+    @Test
     fun `boards without lanes inside a board are not boards`() {
         val routes = listOf(
             get("/apps/APP/api/boards"),

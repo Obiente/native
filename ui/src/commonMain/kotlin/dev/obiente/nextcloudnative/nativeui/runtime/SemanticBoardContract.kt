@@ -135,6 +135,8 @@ private data class RouteTarget(
     val item: Boolean,
     val verb: String?,
     val pathRoles: Map<String, BoardValueRole>,
+    /** The addressed item the target is nested under, as a card in `/cards/{cardId}/labels/{labelId}`. */
+    val parent: BoardEntity? = null,
 )
 
 private fun classifyBoardRoute(action: DynamicAction, shape: SemanticRouteShape): BoardOperationBinding? {
@@ -201,6 +203,7 @@ private fun JsonObject.singleDeclaredValue(): String? =
 
 private fun SemanticRouteShape.boardTarget(): RouteTarget? {
     var current: BoardEntity? = null
+    var parent: BoardEntity? = null
     var item = false
     var verb: String? = null
     val roles = linkedMapOf<String, BoardValueRole>()
@@ -211,6 +214,7 @@ private fun SemanticRouteShape.boardTarget(): RouteTarget? {
                 when {
                     verb != null -> return null
                     entity != null -> {
+                        parent = current?.takeIf { item }
                         current = entity
                         item = false
                     }
@@ -237,7 +241,7 @@ private fun SemanticRouteShape.boardTarget(): RouteTarget? {
             }
         }
     }
-    return current?.let { entity -> RouteTarget(entity, item, verb, roles) }
+    return current?.let { entity -> RouteTarget(entity, item, verb, roles, parent) }
 }
 
 private fun boardOperation(
@@ -250,6 +254,16 @@ private fun boardOperation(
     val write = method in setOf(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH)
     val delete = method == HttpMethod.DELETE
     val itemUpdate = method in setOf(HttpMethod.PUT, HttpMethod.PATCH)
+    // A label or user addressed inside a card relates it to that card; it never edits the label.
+    if (target.parent == BoardEntity.Card && target.entity in setOf(BoardEntity.Label, BoardEntity.User)) {
+        val label = target.entity == BoardEntity.Label
+        return when {
+            verb != null || !target.item -> null
+            write -> if (label) BoardOperation.AssignLabel else BoardOperation.AssignUser
+            delete -> if (label) BoardOperation.RemoveLabel else BoardOperation.UnassignUser
+            else -> null
+        }
+    }
     return when (target.entity) {
         BoardEntity.Board -> when {
             verb in RESTORE_VERBS && target.item && write -> BoardOperation.RestoreBoard
@@ -406,7 +420,7 @@ private val TITLED_CREATES = setOf(
     BoardOperation.CreateBoard, BoardOperation.CreateLane, BoardOperation.CreateCard, BoardOperation.CreateLabel,
 )
 private val MESSAGE_WRITES = setOf(BoardOperation.CreateComment, BoardOperation.UpdateComment)
-private val RESTORE_VERBS = setOf("undodelete", "undelete", "restore")
+private val RESTORE_VERBS = setOf("undodelete", "deleteundo", "undelete", "restore")
 private val ARCHIVE_VERBS = setOf("archive")
 private val UNARCHIVE_VERBS = setOf("unarchive")
 private val MOVE_VERBS = setOf("reorder", "move", "relocate")

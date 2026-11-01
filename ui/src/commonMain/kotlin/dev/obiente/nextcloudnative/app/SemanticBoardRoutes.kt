@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperationBinding
 import dev.obiente.nextcloudnative.nativeui.runtime.BoardValueRole
 import dev.obiente.nextcloudnative.nativeui.runtime.SemanticBoardContract
 import dev.obiente.nextcloudnative.nativeui.runtime.declaredJsonType
+import dev.obiente.nextcloudnative.nativeui.runtime.declaresNull
 import dev.obiente.nextcloudnative.nativeui.runtime.semanticRouteId
 import kotlinx.serialization.json.JsonObject
 
@@ -19,6 +20,9 @@ internal sealed interface BoardInput {
 
     /** A completion state: a timestamp for date fields, or a flag for boolean fields. */
     data class Completion(val completedAt: String?) : BoardInput
+
+    /** An optional value the user removed: JSON null when the contract declares the field nullable. */
+    data object Clear : BoardInput
 }
 
 /**
@@ -156,9 +160,9 @@ internal class SemanticBoardRoutes(val contract: SemanticBoardContract) {
                 BoardField.Title to text(update.normalizedTitle),
                 BoardField.Owner to text(update.normalizedOwnerId),
                 BoardField.Order to BoardInput.Number(update.order),
-                BoardField.Description to text(update.normalizedDescription),
-                BoardField.DueDate to text(update.normalizedDueAt),
-                BoardField.StartDate to text(update.normalizedStartAt),
+                BoardField.Description to clearable(update.normalizedDescription),
+                BoardField.DueDate to clearable(update.normalizedDueAt),
+                BoardField.StartDate to clearable(update.normalizedStartAt),
                 BoardField.Archived to BoardInput.Flag(update.archived),
                 BoardField.Done to BoardInput.Completion(update.normalizedCompletedAt),
                 BoardField.Color to text(update.normalizedColor),
@@ -397,24 +401,39 @@ internal class SemanticBoardRoutes(val contract: SemanticBoardContract) {
         extraValues: Map<String, String> = emptyMap(),
     ): NextcloudApiRequest {
         val binding = contract.binding(operation)
-        val values = linkedMapOf<String, String>()
-        values.putAll(binding.fixedBodyValues)
-        values.putAll(extraValues)
-        fun resolve(role: BoardValueRole, property: JsonObject?, body: Boolean): String? = when (role) {
-            is BoardValueRole.Identity -> (if (body) bodyIdentities[role.entity] else null) ?: identities[role.entity]
+        // Each location has its own map: the path addresses the card where it is now, while a body
+        // field with the same name (a move's destination list) may carry a different value.
+        val path = linkedMapOf<String, String>()
+        val query = linkedMapOf<String, String>()
+        val body = linkedMapOf<String, String>()
+        val nulls = mutableSetOf<String>()
+        body.putAll(binding.fixedBodyValues)
+        body.putAll(extraValues)
+        fun resolve(role: BoardValueRole, property: JsonObject?, inBody: Boolean): String? = when (role) {
+            is BoardValueRole.Identity -> (if (inBody) bodyIdentities[role.entity] else null) ?: identities[role.entity]
             is BoardValueRole.Attribute -> attributes[role.name]
             is BoardValueRole.Field -> fields[role.field]?.wireValue(property)
         }
         binding.pathRoles.forEach { (name, role) ->
-            values[name] = resolve(role, null, body = false)
+            path[name] = resolve(role, null, inBody = false)
                 ?: error("The board context is missing for ${operation.name}.")
         }
-        binding.queryRoles.forEach { (name, role) -> resolve(role, null, body = false)?.let { values[name] = it } }
+        binding.queryRoles.forEach { (name, role) -> resolve(role, null, inBody = false)?.let { query[name] = it } }
         binding.bodyRoles.forEach { (name, role) ->
-            resolve(role, binding.bodyProperties[name], body = true)?.let { values[name] = it }
+            val property = binding.bodyProperties[name]
+            if (role is BoardValueRole.Field && fields[role.field]?.clearsTo(property) == true) nulls += name
+            resolve(role, property, inBody = true)?.let { body[name] = it }
         }
-        if (binding.action.binding.method == HttpMethod.PUT) binding.echoFrom(record, values)
-        val built = buildDynamicApiRequest(contract.descriptor, binding.action, values, values)
+        if (binding.action.binding.method == HttpMethod.PUT) binding.echoFrom(record, body, nulls)
+        val built = buildDynamicApiRequest(
+            descriptor = contract.descriptor,
+            action = binding.action,
+            values = path,
+            runtimeContext = path,
+            queryValues = query,
+            bodyValues = body,
+            nullBodyFields = nulls,
+        )
         return built.copy(
             maximumResponseBytes = if (read) BOARD_READ_RESPONSE_BYTES else BOARD_WRITE_RESPONSE_BYTES,
             cachePolicy = if (authoritative || !read) NextcloudApiCachePolicy.ForceNetwork else built.cachePolicy,
@@ -423,10 +442,14 @@ internal class SemanticBoardRoutes(val contract: SemanticBoardContract) {
 }
 
 /** A full replacement keeps every declared field the client did not change at its server value. */
-private fun BoardOperationBinding.echoFrom(record: Map<String, String>, values: MutableMap<String, String>) {
+private fun BoardOperationBinding.echoFrom(
+    record: Map<String, String>,
+    values: MutableMap<String, String>,
+    nulls: Set<String>,
+) {
     val byName = record.entries.associateBy({ it.key.semanticRouteId() }, { it.value })
     echoedBodyFields.forEach { name ->
-        if (name !in values) byName[name.semanticRouteId()]?.let { values[name] = it }
+        if (name !in values && name !in nulls) byName[name.semanticRouteId()]?.let { values[name] = it }
     }
 }
 
@@ -441,10 +464,22 @@ private fun BoardInput.wireValue(property: JsonObject?): String? {
             "integer" -> if (completedAt != null) "1" else "0"
             else -> completedAt.orEmpty()
         }
+        // A non-nullable text field is cleared by an empty string; anything else stays unsent.
+        BoardInput.Clear -> "".takeIf { type == "string" && property?.declaresNull() != true }
     }
 }
 
+/** Whether this input removes a value the contract lets the client set to JSON null. */
+private fun BoardInput.clearsTo(property: JsonObject?): Boolean = property?.declaresNull() == true && when (this) {
+    BoardInput.Clear -> true
+    is BoardInput.Completion -> completedAt == null && property.declaredJsonType() !in setOf("boolean", "integer")
+    else -> false
+}
+
 private fun text(value: String?): BoardInput = BoardInput.Text(value)
+
+private fun clearable(value: String?): BoardInput =
+    value?.takeIf(String::isNotBlank)?.let(BoardInput::Text) ?: BoardInput.Clear
 
 private fun ids(vararg pairs: Pair<BoardEntity, Long>): Map<BoardEntity, String> =
     pairs.associate { (entity, id) ->

@@ -22,7 +22,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** One synthetic contract route. Body fields map a name to its JSON type. */
+/**
+ * One synthetic contract route. Body fields map a name to its JSON type. A query entry is a
+ * parameter name, optionally followed by `=a|b` for the values its schema enumerates.
+ */
 internal data class FixtureRoute(
     val method: HttpMethod,
     val path: String,
@@ -89,8 +92,14 @@ private fun FixtureRoute.toAction(id: String): DynamicAction {
             pathParameters = placeholders.map { name ->
                 HttpParameter(name, required = true, schema = typeSchema("string"), source = ParameterSource.resourceField)
             },
-            queryParameters = query.map { name ->
-                HttpParameter(name, required = false, schema = typeSchema("string"), source = ParameterSource.userInput)
+            queryParameters = query.map { entry ->
+                val schema = entry.substringAfter('=', "").takeIf(String::isNotEmpty)?.let { values ->
+                    buildJsonObject {
+                        put("type", "string")
+                        put("enum", JsonArray(values.split('|').map(::JsonPrimitive)))
+                    }
+                } ?: typeSchema("string")
+                HttpParameter(entry.substringBefore('='), required = false, schema = schema, source = ParameterSource.userInput)
             },
             body = body.takeIf { it.isNotEmpty() }?.let { fields ->
                 HttpBody(
@@ -202,10 +211,40 @@ internal fun boardRoutes(
 
 internal fun List<FixtureRoute>.forApp(appId: String) = map { it.copy(path = it.path.replace("APP", appId)) }
 
+/**
+ * A board contract in the nested shape a signed Kanban-style package publishes: every card route
+ * sits under its board and list, a move names the destination list with the same name as the path
+ * list, card relationships use web routes, and optional card fields are nullable.
+ */
+internal fun nestedBoardRoutes(): List<FixtureRoute> {
+    val base = "/apps/APP/api/v1.1"
+    val board = "$base/boards/{boardId}"
+    val stack = "$board/stacks/{stackId}"
+    val card = "$stack/cards/{cardId}"
+    val cardFields = mapOf(
+        "title" to "string", "type" to "string", "owner" to "string", "description" to "string?",
+        "order" to "integer", "duedate" to "string?", "archived" to "boolean",
+    )
+    return listOf(
+        get("$base/boards"),
+        get(board),
+        get("$board/stacks"),
+        get(card),
+        write(HttpMethod.POST, "$stack/cards", cardFields - "owner" - "archived", setOf("title")),
+        write(HttpMethod.PUT, card, cardFields, setOf("title", "type", "owner")),
+        write(HttpMethod.PUT, "$card/reorder", mapOf("stackId" to "integer", "order" to "integer"), setOf("stackId", "order")),
+        write(HttpMethod.POST, "/apps/APP/cards/{cardId}/label/{labelId}"),
+        write(HttpMethod.DELETE, "/apps/APP/cards/{cardId}/label/{labelId}"),
+        write(HttpMethod.POST, "/apps/APP/cards/{cardId}/assign", mapOf("userId" to "string", "type" to "integer"), setOf("userId")),
+        write(HttpMethod.PUT, "/apps/APP/cards/{cardId}/unassign", mapOf("userId" to "string", "type" to "integer"), setOf("userId")),
+        write(HttpMethod.POST, "/apps/APP/boards/{boardId}/deleteUndo"),
+    )
+}
+
 internal fun notesRoutes(collection: String = "notes", includeUpdate: Boolean = true): List<FixtureRoute> {
     val base = "/apps/APP/api/v1/$collection"
     return buildList {
-        add(get(base, query = listOf("exclude")))
+        add(get(base, query = listOf("exclude=content|etag")))
         add(get("$base/{id}"))
         add(write(HttpMethod.POST, base, mapOf("title" to "string", "content" to "string", "category" to "string")))
         if (includeUpdate) {

@@ -894,12 +894,21 @@ private suspend fun executeDynamicAction(
     )
 }
 
+/**
+ * Builds the request [action] declares. [values] and [runtimeContext] feed every location unless a
+ * caller supplies [queryValues] or [bodyValues], which are then the only source for that location,
+ * so a path identity and a same-named body field can carry different values. Names in
+ * [nullBodyFields] are sent as JSON null when the body schema declares the property nullable.
+ */
 internal fun buildDynamicApiRequest(
     descriptor: DynamicAppDescriptor,
     action: DynamicAction,
     values: Map<String, String>,
     runtimeContext: Map<String, String> = emptyMap(),
     observedInputSchema: JsonElement? = null,
+    queryValues: Map<String, String>? = null,
+    bodyValues: Map<String, String>? = null,
+    nullBodyFields: Set<String> = emptySet(),
 ): NextcloudApiRequest {
     descriptor.requireValid()
     require(action in descriptor.actions) { "The action is not part of the validated descriptor." }
@@ -913,8 +922,8 @@ internal fun buildDynamicApiRequest(
     }
     val query = buildDynamicQuery(
         binding = binding,
-        values = values,
-        runtimeContext = runtimeContext,
+        values = queryValues ?: values,
+        runtimeContext = queryValues ?: runtimeContext,
         actionResourceId = action.resourceId,
         collectionRead = action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list,
     ).toMutableMap()
@@ -925,11 +934,11 @@ internal fun buildDynamicApiRequest(
         ?.lowercase()
     val multipartBody = binding.body
         ?.takeIf { normalizedBodyContentType == "multipart/form-data" }
-        ?.let { declaredBody -> buildDynamicMultipartBody(declaredBody.schema, values) }
+        ?.let { declaredBody -> buildDynamicMultipartBody(declaredBody.schema, bodyValues ?: values) }
     val body = binding.body
         ?.takeUnless { normalizedBodyContentType == "multipart/form-data" }
         ?.let { declaredBody ->
-            buildDynamicBody(declaredBody.contentType, declaredBody.schema, values, observedInputSchema)
+            buildDynamicBody(declaredBody.contentType, declaredBody.schema, bodyValues ?: values, observedInputSchema, nullBodyFields)
         }
     return NextcloudApiRequest(
         method = binding.method.toTransportMethod(),
@@ -1373,6 +1382,7 @@ private fun buildDynamicBody(
     schema: JsonElement,
     values: Map<String, String>,
     observedInputSchema: JsonElement? = null,
+    nullFields: Set<String> = emptySet(),
 ): ByteArray {
     val objectSchema = schema as? JsonObject
         ?: error("Only object-shaped dynamic request bodies are supported.")
@@ -1385,8 +1395,9 @@ private fun buildDynamicBody(
     val requiredProperties = (objectSchema["required"] as? JsonArray)
         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         .orEmpty()
+    val nulls = nullFields.filterTo(mutableSetOf()) { (properties[it] as? JsonObject)?.acceptsDynamicNull() == true }
     requiredProperties.forEach { property ->
-        require(!values[property].isNullOrBlank()) { "$property is required." }
+        require(property in nulls || !values[property].isNullOrBlank()) { "$property is required." }
     }
     val allowed = if (allowsObservedSettings) {
         values.entries.asSequence()
@@ -1397,7 +1408,7 @@ private fun buildDynamicBody(
             .take(MAX_EPHEMERAL_FIELDS_PER_RECORD)
             .associate(Map.Entry<String, String>::toPair)
     } else {
-        values.filterKeys(properties::containsKey)
+        values.filterKeys { it in properties && it !in nulls }
     }
     val normalizedContentType = contentType.substringBefore(';').trim().lowercase()
     if (normalizedContentType == "application/x-www-form-urlencoded") {
@@ -1413,11 +1424,11 @@ private fun buildDynamicBody(
         "application/json" -> {
             buildJsonObject {
                 val wireNames = mutableSetOf<String>()
-                allowed.forEach { (name, value) ->
+                (allowed + nulls.associateWith { "" }).forEach { (name, value) ->
                     val property = properties[name] as? JsonObject
                     val propertyType = property?.dynamicPropertyType()
                     if (
-                        value.isBlank() &&
+                        value.isBlank() && name !in nulls &&
                         name !in requiredProperties &&
                         (
                             property?.acceptsDynamicNull() == true ||
@@ -1436,7 +1447,7 @@ private fun buildDynamicBody(
                     require(wireNames.add(wireName)) { "The request maps more than one field to $wireName." }
                     put(
                         wireName,
-                        property?.let(value::toTypedJsonValue)
+                        if (name in nulls) JsonNull else property?.let(value::toTypedJsonValue)
                             ?: observedProperty?.let(value::toObservedTypedJsonValue)
                             ?: value.toObservedSettingsJsonValue(),
                     )

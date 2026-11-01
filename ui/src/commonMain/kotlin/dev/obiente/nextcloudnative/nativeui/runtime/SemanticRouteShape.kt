@@ -96,6 +96,11 @@ internal fun JsonObject.declaredJsonType(): String? = (this["type"] as? JsonPrim
     ?: (this["type"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         ?.firstOrNull { it != "null" }
 
+/** Whether the schema accepts JSON null (`nullable: true` or a `null` member of a type union). */
+internal fun JsonObject.declaresNull(): Boolean =
+    (this["nullable"] as? JsonPrimitive)?.contentOrNull == "true" ||
+        (this["type"] as? JsonArray)?.any { (it as? JsonPrimitive)?.contentOrNull == "null" } == true
+
 internal fun JsonObject.declaredEnumValues(): List<String> = (this["enum"] as? JsonArray).orEmpty()
     .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 
