@@ -224,21 +224,12 @@ internal class DesktopDeckCardDraftStore(
     }
 
     private fun storageFileName(accountStorageKey: String, key: DeckCardDraftKey): String {
-        val scope = listOf(
-            key.boardId.toString(),
-            key.stackId.toString(),
-            key.cardId?.toString() ?: "new",
-        ).joinToString(separator = ":")
+        val scope = key.storageScope
         return "${accountDraftPrefix(accountStorageKey)}${sha256Hex(scope)}$FILE_SUFFIX"
     }
 
     internal fun legacyStorageFileName(accountIdentity: String, key: DeckCardDraftKey): String {
-        val scope = listOf(
-            accountIdentity,
-            key.boardId.toString(),
-            key.stackId.toString(),
-            key.cardId?.toString() ?: "new",
-        ).joinToString(separator = ":")
+        val scope = "$accountIdentity:${key.storageScope}"
         return "$LEGACY_FILE_PREFIX${sha256Hex(scope)}$FILE_SUFFIX"
     }
 
@@ -320,6 +311,7 @@ internal class DesktopDeckCardDraftStore(
         .put("boardId", persisted.key.boardId)
         .put("stackId", persisted.key.stackId)
         .put("cardId", persisted.key.cardId)
+        .put("appId", persisted.key.appId)
         .put("title", persisted.draft.title)
         .put("descriptionMarkdown", persisted.draft.descriptionMarkdown)
         .put("dueDate", persisted.draft.dueDate)
@@ -400,6 +392,7 @@ internal class DesktopDeckCardDraftStore(
                     boardId = value.getLong("boardId"),
                     stackId = value.getLong("stackId"),
                     cardId = if (value.isNull("cardId")) null else value.getLong("cardId"),
+                    appId = value.optString("appId", LEGACY_CARD_DRAFT_APP_ID),
                 ),
                 draft = DeckUiCardDraft(
                     title = value.getString("title"),

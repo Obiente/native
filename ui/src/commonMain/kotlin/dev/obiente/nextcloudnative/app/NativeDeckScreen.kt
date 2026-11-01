@@ -143,11 +143,7 @@ internal fun NativeDeckScreen(
         )
 
     fun cardDraftKey(editor: DeckUiInteraction.CardEditor): DeckCardDraftKey =
-        DeckCardDraftKey(
-            boardId = editor.card?.boardId ?: editor.stack.boardId,
-            stackId = editor.stack.id,
-            cardId = editor.card?.id,
-        )
+        DeckCardDraftKey(editor.card?.boardId ?: editor.stack.boardId, editor.stack.id, editor.card?.id, routes.appId)
 
     suspend fun fetchAuthoritativeCard(card: DeckCard): DeckCard = fetchAuthoritativeCard(execute, routes, card)
 

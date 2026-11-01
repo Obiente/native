@@ -1,17 +1,40 @@
 package dev.obiente.nextcloudnative.app
 
-/** Resource identity for one unsaved Deck card editor. Account identity is added by the platform. */
+/**
+ * Resource identity for one unsaved card editor of one board app. Account identity is added by the
+ * platform. [appId] keeps two board apps on one account from sharing drafts for equal ids.
+ */
 data class DeckCardDraftKey(
     val boardId: Long,
     val stackId: Long,
     val cardId: Long?,
+    val appId: String = LEGACY_CARD_DRAFT_APP_ID,
 ) {
     init {
         require(boardId > 0L) { "A draft needs a board." }
         require(stackId > 0L) { "A draft needs a stack." }
         require(cardId == null || cardId > 0L) { "A draft card id is invalid." }
+        require(appId.length in 1..64 && appId.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+            "A draft app id is invalid."
+        }
     }
+
+    /**
+     * The storage identity of this draft. Drafts were stored before boards were scoped by app, and
+     * only the Deck app could create them, so a Deck draft keeps that original identity and is still
+     * found after an upgrade. Every other board app adds its id.
+     */
+    val storageScope: String
+        get() = listOfNotNull(
+            appId.takeUnless { it == LEGACY_CARD_DRAFT_APP_ID }?.let { "app=$it" },
+            boardId.toString(),
+            stackId.toString(),
+            cardId?.toString() ?: "new",
+        ).joinToString(separator = ":")
 }
+
+/** The only app whose card drafts predate app scoping. */
+const val LEGACY_CARD_DRAFT_APP_ID = "deck"
 
 data class PersistedDeckCardDraft(
     val key: DeckCardDraftKey,
