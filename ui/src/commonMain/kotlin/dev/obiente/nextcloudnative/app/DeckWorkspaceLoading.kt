@@ -66,7 +66,8 @@ internal suspend fun fetchAuthoritativeCard(
 
 /**
  * Reads a board's lists. Lists that do not embed their cards are completed through the contract's
- * per-list card read, bounded so a very wide board cannot issue an unbounded request burst.
+ * per-list card read, bounded so a very wide board cannot issue an unbounded request burst. A list
+ * past that bound is marked as not loaded, so it is never presented as an empty list.
  */
 internal suspend fun fetchBoardStacks(
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
@@ -80,8 +81,10 @@ internal suspend fun fetchBoardStacks(
     val stacks = parseDeckResponseOffUi { parseDeckStacks(boardId, response, includeArchivedCards = archived) }
     if (!routes.supports(BoardOperation.ListCards)) return stacks
     return stacks.mapIndexed { index, stack ->
-        if (stack.cardsEmbedded || index >= MAX_SEPARATE_CARD_LIST_READS) {
+        if (stack.cardsEmbedded) {
             stack
+        } else if (index >= MAX_SEPARATE_CARD_LIST_READS) {
+            stack.copy(cardsLoaded = false)
         } else {
             val cardsResponse = execute(routes.cards(boardId, stack.id))
             stack.copy(
@@ -93,4 +96,7 @@ internal suspend fun fetchBoardStacks(
     }
 }
 
-private const val MAX_SEPARATE_CARD_LIST_READS = 40
+internal const val MAX_SEPARATE_CARD_LIST_READS = 40
+internal const val DECK_UNLOADED_LIST_MESSAGE =
+    "This board has more lists than can be loaded at once, so this list's cards were not loaded. " +
+        "Archive lists you no longer need to see its cards here."

@@ -596,7 +596,7 @@ private fun DeckLanes(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stack.title, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${stack.cards.size} cards",
+                            if (stack.cardsLoaded) "${stack.cards.size} cards" else "Cards not loaded",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -694,7 +694,7 @@ private fun DeckLanes(
                     if (stack.cards.isEmpty()) {
                         item {
                             Text(
-                                "No cards",
+                                if (stack.cardsLoaded) "No cards" else DECK_UNLOADED_LIST_MESSAGE,
                                 modifier = Modifier.padding(NextcloudSpacing.Medium),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

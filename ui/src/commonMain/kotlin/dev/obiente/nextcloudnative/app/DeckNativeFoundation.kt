@@ -91,6 +91,8 @@ data class DeckStack(
     val etag: String?,
     /** False when the list record carried no card collection, so cards are read per list. */
     val cardsEmbedded: Boolean = true,
+    /** False when this list's cards were not read, so an empty [cards] does not mean an empty list. */
+    val cardsLoaded: Boolean = true,
     val rawFields: Map<String, String> = emptyMap(),
 )
 
