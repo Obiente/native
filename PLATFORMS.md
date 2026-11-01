@@ -432,7 +432,10 @@ interaction validation is still required.
   in every desktop window. Narrow windows and phones show the editor alone
   with Back to the list, inside the notes app's own screen. A note opened
   beside the list stays open when the window narrows, so its draft is kept,
-  and the open note is saved selection that reopens after recreation.
+  and the open note is saved selection that reopens after recreation. The
+  open note is also the notes app's saved location, so it reopens after a
+  relaunch, and a note editor saved by an earlier version reopens that note
+  when it still exists.
 - The in-place note editor registers with the shell's edit guard
   (`NativeInlineEditorNavigation`): choosing another note, creating a note,
   renaming or deleting a folder, switching apps, following a link, and Back

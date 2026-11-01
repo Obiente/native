@@ -244,7 +244,11 @@ are not queued by default.
 Note mutation validators keep valid quoted opaque ETags verbatim, including
 backslashes and HTTP `obs-text` bytes, without quoted-string unescaping. Bare
 validators are quoted once. The shared request type carries the validator as an
-`If-Match` precondition, which both platform transports send unchanged. Malformed and oversized validators are
+`If-Match` precondition, which both platform transports send unchanged. A
+read may carry a cached validator as `If-None-Match`; the shared request type
+accepts it only on `GET`, and a conditional read bypasses the shared dynamic
+read cache and request coalescing so a `304` answers only for the caller's own
+cached copy. Malformed and oversized validators are
 rejected before a request. The grammar follows
 [HTTP entity-tags](https://httpwg.org/specs/rfc9110.html#field.etag).
 
