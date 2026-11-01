@@ -228,7 +228,8 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
         ?: Screen.Talk
     // Screens saved before boards and notes became contract-selected surfaces reopen the same
     // installed app through discovery, which picks its native surface from the contract again.
-    "notes", "note-editor" -> legacySemanticAppScreen("notes", "Notes")
+    "notes" -> legacySemanticAppScreen("notes", "Notes")
+    "note-editor" -> legacySemanticAppScreen("notes", "Notes", legacyOpenNoteNavigation(noteId))
     "dashboard" -> Screen.Dashboard
     "user-status" -> Screen.UserStatus
     "calendar" -> Screen.Calendar
@@ -262,8 +263,18 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
     else -> Screen.Root
 }
 
-private fun legacySemanticAppScreen(appId: String, appName: String): Screen =
-    Screen.AppInfo(app = NextcloudAppEntry(id = appId, name = appName, href = null))
+private fun legacySemanticAppScreen(
+    appId: String,
+    appName: String,
+    navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
+): Screen = Screen.AppInfo(app = NextcloudAppEntry(id = appId, name = appName, href = null), navigation = navigation)
+
+/**
+ * A note editor saved before notes became a contract-selected surface reopens that note when its
+ * id is valid and the app still opens as notes; otherwise the notes app opens at its root.
+ */
+private fun legacyOpenNoteNavigation(noteId: Long?): DynamicAppNavigationState =
+    noteId?.takeIf { it >= 0L }?.let(::openNoteNavigation) ?: DynamicAppNavigationState()
 
 internal val screenSaver = Saver<Screen, String>(
     save = { screen -> navigationStateJson.encodeToString(screen.toSavedScreen()) },

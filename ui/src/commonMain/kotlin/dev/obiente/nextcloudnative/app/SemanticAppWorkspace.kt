@@ -5,6 +5,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NoteOperation
 import dev.obiente.nextcloudnative.nativeui.runtime.SemanticBoardContract
 import dev.obiente.nextcloudnative.nativeui.runtime.SemanticNotesContract
 import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
@@ -56,6 +58,18 @@ internal fun gatedSemanticExecute(
     services.executeNextcloudApi(session, request)
 }
 
+/** The saved location of an open note: its id as the selected record of the notes collection. */
+internal fun openNoteNavigation(noteId: Long): DynamicAppNavigationState = DynamicAppNavigationState(
+    selectedRecord = NativeRecord(id = noteId.toString(), values = emptyMap(), actionSafeIdentity = false),
+    selectedRecordResourceId = OPEN_NOTE_RESOURCE,
+)
+
+/** A saved open note, or null when the location names no valid note. */
+internal fun DynamicAppNavigationState.openNoteId(): Long? =
+    selectedRecord?.id?.toLongOrNull()?.takeIf { it >= 0L && selectedRecordResourceId == OPEN_NOTE_RESOURCE }
+
+private const val OPEN_NOTE_RESOURCE = "notes"
+
 @Composable
 internal fun SemanticAppWorkspaceScreen(
     workspace: SemanticAppWorkspace,
@@ -67,6 +81,8 @@ internal fun SemanticAppWorkspaceScreen(
     onMutationInProgressChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
+    onNavigationChanged: (DynamicAppNavigationState) -> Unit = {},
 ) {
     val execute = remember(services, session, writeGate, workspace.descriptor) {
         gatedSemanticExecute(services, session, writeGate, workspace.descriptor)
@@ -96,6 +112,9 @@ internal fun SemanticAppWorkspaceScreen(
             onBack = onBack,
             // Settings writes go through the same contract-gated execute as note writes.
             settings = remember(settings, execute) { settings?.let { NotesSettingsAccess(it, execute) } },
+            // The open note is the app's saved location, so relaunch and older saved editors reopen it.
+            initialOpenNoteId = remember(workspace) { navigation.openNoteId() },
+            onOpenNoteChanged = { noteId -> onNavigationChanged(noteId?.let(::openNoteNavigation) ?: DynamicAppNavigationState()) },
             onMutationInProgressChanged = onMutationInProgressChanged,
             filesAccess = filesAccess,
         )

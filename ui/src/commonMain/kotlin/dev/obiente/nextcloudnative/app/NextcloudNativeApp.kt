@@ -2135,7 +2135,7 @@ private fun AppInfoScreen(
         } else if (semanticWorkspace != null) {
             SemanticAppWorkspaceScreen(
                 semanticWorkspace, services, session, currentUserId, writeGate, notesFilesAccess,
-                onMutationInProgressChanged, onBack, Modifier.weight(1f),
+                onMutationInProgressChanged, onBack, Modifier.weight(1f), navigation, onNavigationChanged,
             )
         } else {
             DynamicDiscoveredAppScreen(

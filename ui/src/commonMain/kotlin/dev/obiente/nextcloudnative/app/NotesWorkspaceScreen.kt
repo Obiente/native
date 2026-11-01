@@ -87,6 +87,9 @@ internal fun NextcloudNotesScreen(
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
     filesAccess: NotesFilesAccess? = null,
+    /** A note to reopen from a saved location; a note that no longer exists closes after refresh. */
+    initialOpenNoteId: Long? = null,
+    onOpenNoteChanged: (Long?) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) { durableMutationAccountScope(session) }
     var deletionRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
@@ -99,7 +102,9 @@ internal fun NextcloudNotesScreen(
     }
     var query by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
     var currentPath by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("") }
-    var openNoteId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf<Long?>(null) }
+    var openNoteId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf(initialOpenNoteId) }
+    val currentOnOpenNoteChanged by rememberUpdatedState(onOpenNoteChanged)
+    LaunchedEffect(openNoteId) { currentOnOpenNoteChanged(openNoteId) }
     var openNoteSnapshot by remember(session) { mutableStateOf<NextcloudNote?>(null) }
     var listFilter by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf(NotesListFilter.All) }
     var showSettings by remember(session) { mutableStateOf(false) }

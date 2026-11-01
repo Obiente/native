@@ -111,10 +111,20 @@ class ScreenRestorationTest {
 
     @Test
     fun `board and notes screens saved before contract selection reopen through discovery`() {
-        for ((kind, appId) in listOf("deck" to "deck", "notes" to "notes", "note-editor" to "notes")) {
+        for ((kind, appId) in listOf("deck" to "deck", "notes" to "notes")) {
             val restored = assertIs<Screen.AppInfo>(SavedScreen(kind, noteId = 91L).toScreen())
             assertEquals(appId, restored.app.id)
             assertEquals(DynamicAppNavigationState(), restored.navigation)
+        }
+        val editor = assertIs<Screen.AppInfo>(SavedScreen("note-editor", noteId = 91L).toScreen())
+        assertEquals("notes", editor.app.id)
+        assertEquals(91L, editor.navigation.openNoteId())
+        val roundTrip = assertIs<Screen.AppInfo>(editor.toSavedScreen().toScreen())
+        assertEquals(91L, roundTrip.navigation.openNoteId())
+        for (unsafe in listOf(-1L, null)) {
+            val root = assertIs<Screen.AppInfo>(SavedScreen("note-editor", noteId = unsafe).toScreen())
+            assertEquals(DynamicAppNavigationState(), root.navigation)
+            assertNull(root.navigation.openNoteId())
         }
         val encoded = Json.encodeToString(Screen.AppInfo(NextcloudAppEntry("jotter", "Jotter", null)).toSavedScreen())
         assertFalse(encoded.contains("noteId\":9"))
