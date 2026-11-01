@@ -37,13 +37,18 @@ class DeckNativeFoundationTest {
     }
 
     @Test
-    fun `a board record without permission evidence leaves enforcement to the server`() {
+    fun `a board record without permission evidence grants no write, manage, or share action`() {
         val board = parseDeckBoard(
             NextcloudApiResponse(200, """{"id":7,"name":"Roadmap"}""".encodeToByteArray(), "application/json", null),
         )
 
         assertEquals("Roadmap", board.title)
-        assertTrue(board.permissions.canEdit && board.permissions.canManage && board.permissions.canShare)
+        assertTrue(board.permissions.canRead)
+        assertFalse(board.permissions.canEdit || board.permissions.canManage || board.permissions.canShare)
+        val access = DeckBoardAccess.from(board)
+        assertFailsWith<IllegalArgumentException> { access.requireEdit(DeckBoardId(7)) }
+        assertFailsWith<IllegalArgumentException> { access.requireManage(DeckBoardId(7)) }
+        assertFalse(board.canAddShares())
         assertEquals(mapOf("id" to "7", "name" to "Roadmap"), board.rawFields)
     }
 

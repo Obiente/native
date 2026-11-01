@@ -321,11 +321,11 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
 }
 
 /**
- * Permission evidence on the record restricts actions. A record without any permission object
- * leaves enforcement to the server, so actions the contract describes remain available.
+ * Only observed permission evidence grants an action. A record without a permission object is
+ * readable (the server returned it) but offers no edit, manage, or share action.
  */
 private fun JsonObject?.toDeckPermissions(): DeckPermissions {
-    if (this == null) return DeckPermissions(canRead = true, canEdit = true, canManage = true, canShare = true)
+    if (this == null) return DeckPermissions(canRead = true, canEdit = false, canManage = false, canShare = false)
     fun flag(vararg names: String): Boolean? = names.firstNotNullOfOrNull { boolean(it) }
     return DeckPermissions(
         canRead = flag("PERMISSION_READ", "read", "canRead") ?: true,
