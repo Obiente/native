@@ -36,8 +36,9 @@ internal data class NativeMailQuote(
  * Everything the semantic composer edits.
  *
  * Recipient fields keep the text the user typed, so an entry that is not an address yet stays
- * visible instead of disappearing. [inReplyTo] is the original Message-ID header and is only sent
- * when the installed app's send operation declares a threading field.
+ * visible instead of disappearing. [inReplyTo] is the original Message-ID header and [references]
+ * the original's References chain followed by that Message-ID; each is only sent when the
+ * installed app's send operation declares the matching threading field.
  */
 internal data class NativeMailComposeDraft(
     val mode: NativeMailComposeMode,
@@ -50,6 +51,7 @@ internal data class NativeMailComposeDraft(
     val quote: NativeMailQuote? = null,
     val includeQuote: Boolean = true,
     val inReplyTo: String? = null,
+    val references: String? = null,
 ) {
     val hasContent: Boolean
         get() = to.isNotBlank() || cc.isNotBlank() || bcc.isNotBlank() || subject.isNotBlank() || body.isNotBlank()
@@ -63,6 +65,8 @@ internal data class NativeMailOriginal(
     val cc: List<NativeMailAddress>,
     val replyTo: List<NativeMailAddress>,
     val messageIdHeader: String?,
+    /** Message-IDs of the original's own References header, oldest first. */
+    val references: List<String> = emptyList(),
     val dateLabel: String?,
     val bodyText: String,
 )
@@ -87,6 +91,10 @@ internal fun nativeMailOriginal(
         messageIdHeader = record.semanticScalar("messageid", "messageidheader", "internetmessageid")
             ?.trim()
             ?.takeIf { value -> value.length <= MAX_MESSAGE_ID_LENGTH && value.matches(MESSAGE_ID_HEADER) },
+        references = record.semanticScalar("references", "referencesheader")
+            ?.takeIf { it.length <= MAX_REFERENCES_FIELD_LENGTH }
+            ?.let { raw -> MESSAGE_ID_IN_TEXT.findAll(raw).map { it.value }.filter { it.length <= MAX_MESSAGE_ID_LENGTH }.toList() }
+            .orEmpty(),
         dateLabel = presentation.timestamp,
         bodyText = if (presentation.htmlBody || body.contains('<') && body.contains('>')) {
             emailBodyToPlainText(body)
@@ -138,7 +146,19 @@ internal fun nativeMailResponseDraft(
         },
         quote = original.toQuote(forward),
         inReplyTo = original.messageIdHeader.takeUnless { forward },
+        references = original.messageIdHeader?.takeUnless { forward }?.let { id -> nativeMailReferences(original.references, id) },
     )
+}
+
+/**
+ * The References header of a reply: the original's chain followed by its Message-ID, without
+ * duplicates. Long chains keep the first (thread root) and the most recent identifiers, as RFC 5322
+ * clients conventionally trim them.
+ */
+internal fun nativeMailReferences(chain: List<String>, messageId: String): String {
+    val ids = (chain + messageId).distinct()
+    val kept = if (ids.size <= MAX_REFERENCES) ids else listOf(ids.first()) + ids.takeLast(MAX_REFERENCES - 1)
+    return kept.joinToString(" ")
 }
 
 internal fun String.withNativeMailSubjectPrefix(prefix: String, existing: Set<String>): String {
@@ -281,10 +301,13 @@ internal fun String.nativeMailRoleKey(): String = lowercase().filter(Char::isLet
 
 private val ADDRESS_WITH_LABEL = Regex("^(.*)<([^<>]+)>$")
 private val MESSAGE_ID_HEADER = Regex("^<[^<>\\s]+@[^<>\\s]+>$")
+private val MESSAGE_ID_IN_TEXT = Regex("<[^<>\\s]+@[^<>\\s]+>")
 private val REPLY_PREFIXES = setOf("re", "aw", "sv", "antw")
 private val FORWARD_PREFIXES = setOf("fwd", "fw", "wg", "tr")
 private const val MAX_ADDRESS_LENGTH = 254
 private const val MAX_ADDRESS_FIELD_LENGTH = 64_000
 private const val MAX_ADDRESSES_PER_ROLE = 200
 private const val MAX_MESSAGE_ID_LENGTH = 998
+private const val MAX_REFERENCES = 20
+private const val MAX_REFERENCES_FIELD_LENGTH = 64_000
 internal const val MAX_NATIVE_MAIL_QUOTE_CHARACTERS = 200_000

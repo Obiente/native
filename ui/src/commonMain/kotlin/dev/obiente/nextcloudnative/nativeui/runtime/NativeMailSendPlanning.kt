@@ -11,6 +11,7 @@ import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
+import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.repeatableObjectInputSpec
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -62,9 +63,13 @@ internal data class NativeMailSendCapability(
     val subjectField: String?,
     val bodyField: String,
     val htmlFlagField: String?,
+    /** Fields and parameters that take the sending account's record identity, and nothing else. */
     val senderIdentityFields: List<String>,
     val senderAddressField: String?,
-    val threadingField: String?,
+    /** Takes the original's Message-ID. */
+    val inReplyToField: String? = null,
+    /** Takes the original's References chain followed by its Message-ID. */
+    val referencesField: String? = null,
 ) {
     val supportsCc: Boolean get() = cc != null
     val supportsBcc: Boolean get() = bcc != null
@@ -116,7 +121,8 @@ internal data class NativeMailSendCapability(
             htmlFlagField?.let { put(it, "false") }
             senderIdentityFields.forEach { field -> put(field, requireNotNull(sender.id)) }
             senderAddressField?.let { put(it, requireNotNull(sender.email)) }
-            threadingField?.let { field -> draft.inReplyTo?.let { put(field, it) } }
+            inReplyToField?.let { field -> draft.inReplyTo?.let { put(field, it) } }
+            referencesField?.let { field -> (draft.references ?: draft.inReplyTo)?.let { put(field, it) } }
         }
         return NativeActionRequest.Submit(action = action, values = values, confirmed = true)
     }
@@ -127,7 +133,8 @@ internal data class NativeMailSendCapability(
  *
  * The operation must be a verified write whose name or route says it sends, and whose body declares
  * recipients and a message body. Every required input must map to a known mail role: recipients,
- * subject, body, an HTML flag, the sending account's identity or address, or a threading header.
+ * subject, body, an HTML flag, the sending account's identity or address, or a threading header
+ * (In-Reply-To or References).
  * Attachments and every other required input make the operation unavailable, because the client
  * would have to invent a value. Two equally good candidates are ambiguous and offer nothing.
  */
@@ -169,14 +176,21 @@ private fun ActionSpec.toSendCandidate(
     val body = fieldFor(BODY_ROLES)?.takeIf { properties[it].declaredType() == "string" } ?: return null
     val html = fieldFor(HTML_FLAG_ROLES)?.takeIf { properties[it].declaredType() == "boolean" }
     val senderAddress = fieldFor(SENDER_ADDRESS_ROLES)?.takeIf { properties[it].declaredType() == "string" }
-    val identityBody = properties.keys.filter { it.nativeMailRoleKey() in SENDER_IDENTITY_ROLES }
-    val threading = fieldFor(THREADING_ROLES)?.takeIf { properties[it].declaredType() == "string" }
-    val assigned = setOfNotNull(toName, cc?.name, bcc?.name, subject, body, html, senderAddress, threading) + identityBody
+    // Each identity input has exactly one role, read from its own name. Sending accounts are the
+    // only identity records the composer loads, so only account-role inputs can be bound. A
+    // required sender-identity (alias) input would need a record from another resource and makes
+    // the operation unavailable; an optional one is left for the server to default.
+    val accountBody = properties.keys.filter { it.nativeMailRoleKey() in ACCOUNT_IDENTITY_ROLES }
+    if (properties.keys.any { it.nativeMailRoleKey() in ALIAS_IDENTITY_ROLES && it in required }) return null
+    val inReplyTo = fieldFor(IN_REPLY_TO_ROLES)?.takeIf { properties[it].declaredType() == "string" }
+    val references = fieldFor(REFERENCES_ROLES)?.takeIf { properties[it].declaredType() == "string" }
+    val assigned = setOfNotNull(toName, cc?.name, bcc?.name, subject, body, html, senderAddress, inReplyTo, references) +
+        accountBody
     // A required field without a role would need an invented value.
     if (!assigned.containsAll(required)) return null
     val parameterNames = binding.requiredPathParameterNames + binding.requiredQueryParameterNames
-    if (parameterNames.any { it.nativeMailRoleKey() !in SENDER_IDENTITY_ROLES }) return null
-    val identityFields = (identityBody + parameterNames).distinct()
+    if (parameterNames.any { it.nativeMailRoleKey() !in ACCOUNT_IDENTITY_ROLES }) return null
+    val identityFields = (accountBody + parameterNames).distinct()
     val addressRequired = senderAddress != null && senderAddress in required
     val senders = context.nativeMailSenders(schema).filter { sender ->
         (identityFields.isEmpty() || sender.id != null) && (!addressRequired || sender.email != null)
@@ -196,11 +210,16 @@ private fun ActionSpec.toSendCandidate(
         htmlFlagField = html,
         senderIdentityFields = identityFields,
         senderAddressField = senderAddress,
-        threadingField = threading,
+        inReplyToField = inReplyTo,
+        referencesField = references,
     )
 }
 
-/** Account-like records already loaded in this workspace, in a stable order. */
+/**
+ * Sending accounts already loaded in this workspace, in a stable order. Only records of a resource
+ * named as a mail account count: a contact, suggestion, or recipient list also carries addresses,
+ * but its identities are not accounts the operation can send from.
+ */
 internal fun NativeDatasetContext.nativeMailSenders(schema: NativeAppSchema): List<NativeMailSender> {
     val records = buildList {
         relatedRecords.forEach { (resourceId, records) ->
@@ -208,7 +227,7 @@ internal fun NativeDatasetContext.nativeMailSenders(schema: NativeAppSchema): Li
         }
         parentResourceId?.let(schema::resource)?.let { resource -> parentRecord?.let { add(resource to it) } }
     }
-    return records.mapNotNull { (resource, record) ->
+    return records.filter { (resource, _) -> resource.isMailAccountResource() }.mapNotNull { (resource, record) ->
         if (nativeMailboxPresentation(resource, record).kind != NativeMailboxItemKind.Account) return@mapNotNull null
         val id = record.id.takeIf { record.actionSafeIdentity && record.actionBindingProvenanceValid && it.isNotBlank() }
         val email = record.nativeMailAddresses("email", "emailaddress", "address").firstOrNull()?.email
@@ -226,6 +245,16 @@ internal fun NativeDatasetContext.nativeMailSenders(schema: NativeAppSchema): Li
         )
     }.distinctBy { it.id to it.email }.sortedBy(NativeMailSender::label)
 }
+
+private fun ResourceSpec.isMailAccountResource(): Boolean =
+    "$id $name".nativeMailWords().any { it in ACCOUNT_RESOURCE_WORDS }
+
+/** Lowercase words of identifiers such as `mail_accounts` or `mailAccounts`. */
+internal fun String.nativeMailWords(): Set<String> = replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
+    .lowercase()
+    .split(Regex("[^a-z0-9]+"))
+    .filter(String::isNotBlank)
+    .toSet()
 
 private fun JsonElement.recipientEncoding(): NativeMailRecipientEncoding? {
     val schema = this as? JsonObject ?: return null
@@ -295,8 +324,11 @@ private val SUBJECT_ROLES = setOf("subject")
 private val BODY_ROLES = setOf("body", "bodyplain", "plainbody", "bodytext", "messagebody", "text", "content", "message")
 private val HTML_FLAG_ROLES = setOf("ishtml", "html", "bodyishtml")
 private val SENDER_ADDRESS_ROLES = setOf("fromemail", "fromaddress", "senderemail", "senderaddress", "from")
-private val SENDER_IDENTITY_ROLES = setOf("accountid", "mailaccountid", "identityid", "account")
-private val THREADING_ROLES = setOf("references", "inreplyto", "inreplytomessageid")
+private val ACCOUNT_IDENTITY_ROLES = setOf("accountid", "mailaccountid", "account")
+private val ALIAS_IDENTITY_ROLES = setOf("identityid", "aliasid", "senderidentityid", "fromidentityid")
+private val ACCOUNT_RESOURCE_WORDS = setOf("account", "accounts")
+private val IN_REPLY_TO_ROLES = setOf("inreplyto", "inreplytomessageid")
+private val REFERENCES_ROLES = setOf("references")
 private val ADDRESS_KEYS = setOf("email", "address", "mail", "emailaddress")
 private val LABEL_KEYS = setOf("label", "name", "displayname")
 private const val MAX_SEND_RECIPIENTS = 100

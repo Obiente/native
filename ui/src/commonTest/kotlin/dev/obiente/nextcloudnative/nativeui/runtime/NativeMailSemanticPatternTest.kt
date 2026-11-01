@@ -142,6 +142,71 @@ class NativeMailSemanticPatternTest {
         assertTrue(assertNotNull(values["body"]).contains("> See you there."))
     }
 
+    @Test
+    fun `a contract that needs both an account id and a sender identity id offers no composer`() {
+        val schema = compile("acme_mail", "1.0.0", mailOpenApi("acme_mail", SendShape.RecoverablePut, extraRequiredSendField = "identityId"))
+        assertNull(nativeMailSendCapability(schema, accountContext(schema)), schema.describeSendActions())
+    }
+
+    @Test
+    fun `an optional sender identity id is left for the server instead of receiving the account id`() {
+        val schema = compile("acme_mail", "1.0.0", mailOpenApi("acme_mail", SendShape.RecoverablePut, optionalSendField = "aliasId"))
+        val capability = assertNotNull(nativeMailSendCapability(schema, accountContext(schema)), schema.describeSendActions())
+        assertEquals(listOf("accountId"), capability.senderIdentityFields)
+        val values = capability.request(
+            NativeMailComposeDraft(NativeMailComposeMode.New, capability.senders.single().key, to = "grace@example.test", body = "Hi"),
+        ).values
+        assertEquals("7", values["accountId"])
+        assertFalse("aliasId" in values)
+    }
+
+    @Test
+    fun `contacts with addresses never become sending accounts`() {
+        val schema = compile("acme_mail", "1.0.0", mailOpenApi("acme_mail", SendShape.RecoverablePut, includeContacts = true))
+        val contacts = assertNotNull(schema.resources.firstOrNull { it.id == "suggestions" }, "${schema.resources.map { it.id }}")
+        val suggestion = NativeRecord("9", mapOf("id" to "9", "email" to "lin@example.test", "name" to "Lin"))
+        assertNull(nativeMailSendCapability(schema, NativeDatasetContext(relatedRecords = mapOf(contacts.id to listOf(suggestion)))))
+        val withAccount = accountContext(schema).let { it.copy(relatedRecords = it.relatedRecords + (contacts.id to listOf(suggestion))) }
+        val capability = assertNotNull(nativeMailSendCapability(schema, withAccount))
+        assertEquals(listOf("ada@example.test"), capability.senders.map(NativeMailSender::email))
+    }
+
+    @Test
+    fun `the recoverable send keeps its declared status read for unknown outcomes`() {
+        val schema = compile("acme_mail", "1.0.0", mailOpenApi("acme_mail", SendShape.RecoverablePut))
+        val capability = assertNotNull(nativeMailSendCapability(schema, accountContext(schema)))
+        val recovery = assertNotNull(schema.action(assertNotNull(capability.action.resultRecoveryActionId)))
+        assertEquals(capability.action.binding.path, recovery.binding.path)
+        assertEquals("GET", recovery.binding.method.name)
+    }
+
+    @Test
+    fun `a reply sends the original references chain`() {
+        val schema = compile("acme_mail", "2.0.0", mailOpenApi("acme_mail", SendShape.RecoverablePut))
+        val capability = assertNotNull(nativeMailSendCapability(schema, accountContext(schema)))
+        val messageResource = assertNotNull(schema.resources.firstOrNull { it.id == "messages" })
+        val original = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Plans",
+                "from" to "grace@example.test",
+                "messageId" to "<plans-42@example.test>",
+                "references" to "<plans-1@example.test> <plans-41@example.test>",
+                "body" to "Later.",
+            ),
+        )
+        val draft = nativeMailResponseDraft(
+            NativeMailComposeMode.Reply,
+            assertNotNull(nativeMailOriginal(messageResource, original)),
+            capability.senders.single().key,
+            setOf("ada@example.test"),
+        )
+        assertEquals(
+            "<plans-1@example.test> <plans-41@example.test> <plans-42@example.test>",
+            capability.request(draft).values["references"],
+        )
+    }
+
     private fun NativeAppSchema.describeSendActions(): String = actions.filter { "send" in it.id.lowercase() }.joinToString { action ->
         listOf(
             action.id, action.binding.method, action.intent, action.risk, action.confidence, action.evidence.map { it.source },
@@ -187,8 +252,11 @@ class NativeMailSemanticPatternTest {
             appId: String,
             sendShape: SendShape,
             extraRequiredSendField: String? = null,
+            optionalSendField: String? = null,
+            includeContacts: Boolean = false,
         ): String {
-            val extraProperty = extraRequiredSendField?.let { """, "$it": { "type": "string" }""" }.orEmpty()
+            val extraProperty = listOfNotNull(extraRequiredSendField, optionalSendField)
+                .joinToString("") { """, "$it": { "type": "string" }""" }
             val extraRequired = extraRequiredSendField?.let { """, "$it"""" }.orEmpty()
             val synchronous = sendShape == SendShape.SynchronousPost
             val identityRequired = if (synchronous) """"accountId", """ else ""
@@ -289,11 +357,27 @@ class NativeMailSemanticPatternTest {
                       } } }
                     } } } } }
                   }
-                }$send
+                }$send${if (includeContacts) CONTACTS_PATH.replace("APP", appId) else ""}
               }
             }
             """.trimIndent()
         }
+
+        val CONTACTS_PATH = """
+            ,
+            "/ocs/v2.php/apps/APP/contacts/suggestions": {
+              "get": {
+                "operationId": "contacts_api-suggestions", "tags": ["contacts_api"],
+                "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": {
+                  "type": "object", "properties": { "ocs": { "type": "object", "properties": {
+                    "data": { "type": "array", "items": { "type": "object", "required": ["id"], "properties": {
+                      "id": { "type": "integer" }, "email": { "type": "string" }, "name": { "type": "string" }
+                    } } }
+                  } } }
+                } } } } }
+              }
+            }
+        """.trimIndent()
 
         val CRM_OPEN_API = """
             {

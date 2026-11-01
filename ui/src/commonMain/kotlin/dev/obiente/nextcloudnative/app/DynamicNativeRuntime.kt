@@ -36,6 +36,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryRead
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryReader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -345,10 +347,13 @@ class DynamicNextcloudActionExecutor(
     private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
     private val writeGate: DynamicContractWriteGate? = null,
     private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
-) : NativeActionExecutor {
+) : NativeActionExecutor, NativeResultRecoveryReader {
     init {
         descriptor.requireValid()
     }
+
+    override suspend fun readResult(request: NativeActionRequest.Submit): NativeResultRecoveryRead =
+        readDynamicResultRecovery(services, session, descriptor, request, runtimeContext)
 
     override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
         val action = descriptor.actions.firstOrNull { it.id == request.action.id }
@@ -1067,47 +1072,6 @@ internal fun buildDynamicRefreshRecoveryRequest(
             }.getOrNull()
         }
         .firstOrNull()
-}
-
-/**
- * Builds the exact authoritative GET declared for an idempotent replacement mutation.
- *
- * The descriptor validator proves same-route PUT/GET pairing. This function repeats the critical
- * checks at the execution boundary so deserialized or independently constructed descriptors fail
- * closed instead of turning an arbitrary action reference into a recovery read.
- */
-internal fun buildDynamicResultRecoveryRequest(
-    descriptor: DynamicAppDescriptor,
-    mutation: DynamicAction,
-    values: Map<String, String>,
-    runtimeContext: Map<String, String> = values,
-): NextcloudApiRequest? {
-    if (mutation.binding.method != HttpMethod.PUT) return null
-    val recoveryId = mutation.resultRecoveryActionId ?: return null
-    val recovery = descriptor.actions.singleOrNull { action -> action.id == recoveryId } ?: return null
-    val safeKinds = setOf(
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.verifiedAppPackage,
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.appStoreLinkedSourceTag,
-    )
-    if (
-        recovery.binding.method != HttpMethod.GET ||
-        recovery.binding.path != mutation.binding.path ||
-        recovery.binding.body != null ||
-        recovery.binding.queryParameters.any(HttpParameter::required) ||
-        recovery.fallbackOnly ||
-        mutation.provenance.none { provenance -> provenance.kind in safeKinds } ||
-        recovery.provenance.none { provenance -> provenance.kind in safeKinds }
-    ) {
-        return null
-    }
-    return runCatching {
-        buildDynamicApiRequest(
-            descriptor = descriptor,
-            action = recovery,
-            values = values,
-            runtimeContext = runtimeContext,
-        )
-    }.getOrNull()
 }
 
 internal fun Throwable.isUnsynchronizedDynamicCollectionFailure(): Boolean =

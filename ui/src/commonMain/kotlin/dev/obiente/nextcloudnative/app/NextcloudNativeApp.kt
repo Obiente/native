@@ -4679,11 +4679,8 @@ private fun DynamicDiscoveredAppScreen(
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
-                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
-                        ::selectChoresDestination
-                    } else {
-                        null
-                    },
+                    onWorkspaceNavigate = ::selectChoresDestination.takeIf { choresWorkspaceActive && choresNavigationItems.size > 1 },
+                    mailComposerRetention = remember(services, session) { NativeMailComposerRegistry.retention(services, session) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

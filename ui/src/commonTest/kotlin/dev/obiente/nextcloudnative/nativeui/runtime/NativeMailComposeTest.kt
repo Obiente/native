@@ -121,4 +121,42 @@ class NativeMailComposeTest {
         )
         assertEquals(listOf(NativeMailAddress("grace@example.test", "Grace")), record.nativeMailAddresses("from"))
     }
+
+    @Test
+    fun `a reply carries the original references chain followed by its message id`() {
+        val draft = nativeMailResponseDraft(
+            NativeMailComposeMode.Reply,
+            original(
+                "from" to "grace@example.test",
+                "messageId" to "<c@example.test>",
+                "references" to "<a@example.test> <b@example.test>",
+            ),
+            senderId = "7",
+            ownAddresses = emptySet(),
+        )
+        assertEquals("<c@example.test>", draft.inReplyTo)
+        assertEquals("<a@example.test> <b@example.test> <c@example.test>", draft.references)
+    }
+
+    @Test
+    fun `a long references chain keeps the thread root and the newest ids`() {
+        val chain = (1..30).map { "<m$it@example.test>" }
+        val ids = nativeMailReferences(chain, "<new@example.test>").split(' ')
+        assertEquals(20, ids.size)
+        assertEquals("<m1@example.test>", ids.first())
+        assertEquals("<new@example.test>", ids.last())
+        assertEquals("<m13@example.test>", ids[1])
+    }
+
+    @Test
+    fun `a forward carries no threading headers`() {
+        val draft = nativeMailResponseDraft(
+            NativeMailComposeMode.Forward,
+            original("from" to "grace@example.test", "messageId" to "<c@example.test>", "references" to "<a@example.test>"),
+            senderId = "7",
+            ownAddresses = emptySet(),
+        )
+        assertNull(draft.inReplyTo)
+        assertNull(draft.references)
+    }
 }

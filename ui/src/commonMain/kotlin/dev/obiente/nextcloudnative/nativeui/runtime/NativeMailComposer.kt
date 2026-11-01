@@ -51,11 +51,10 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
-import kotlinx.coroutines.launch
 
 /**
  * Everything a mailbox surface needs to offer composing: the contract-described send operation,
- * the executor that runs it, and the workspace's draft state. Null means the contract describes no
+ * the executor that runs it, and the retained draft state. Null means the contract describes no
  * usable send operation, so no compose, reply, or forward control is shown.
  */
 internal class NativeMailComposerHost(
@@ -64,6 +63,11 @@ internal class NativeMailComposerHost(
     val executor: NativeActionExecutor,
     val onSent: () -> Unit,
 ) {
+    /** Sends in the state owner's scope; leaving the dialog or the screen does not cancel it. */
+    fun send(confirmedResend: Boolean) = state.launchSend(capability, executor, confirmedResend, onSent)
+
+    fun checkStatus() = state.launchStatusCheck(capability, executor, onSent)
+
     fun startNew() {
         state.open(NativeMailComposeDraft(mode = NativeMailComposeMode.New, senderId = capability.senders.firstOrNull()?.key))
     }
@@ -79,14 +83,23 @@ internal class NativeMailComposerHost(
     }
 }
 
+/**
+ * The composer for [schema]'s mailbox. With a [retention] from the account owner, the draft, its
+ * device copy, and any in-flight send outlive this composition. Without one (previews and hosts
+ * without account ownership) the draft lives only as long as this composition.
+ */
 @Composable
 internal fun rememberNativeMailComposerHost(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
     executor: NativeActionExecutor,
+    retention: NativeMailComposerRetention?,
     onSent: (ActionSpec) -> Unit,
 ): NativeMailComposerHost? {
-    val state = remember(schema.app.id) { NativeMailComposerState() }
+    val fallbackScope = rememberCoroutineScope()
+    val state = remember(retention, schema.app.id) {
+        retention?.stateFor(schema.app.id) ?: NativeMailComposerState(fallbackScope)
+    }
     val currentOnSent by rememberUpdatedState(onSent)
     val capability = remember(schema, context.relatedRecords, context.parentRecord, context.parentResourceId) {
         nativeMailSendCapability(schema, context)
@@ -158,16 +171,14 @@ internal fun NativeMailComposerOverlay(host: NativeMailComposerHost) {
 private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: NativeMailComposeDraft) {
     val state = host.state
     val capability = host.capability
-    val scope = rememberCoroutineScope()
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmResend by remember { mutableStateOf(false) }
     var showCopies by remember(draft.mode) { mutableStateOf(draft.cc.isNotBlank() || draft.bcc.isNotBlank()) }
     val problems = capability.problems(draft)
-    fun send(confirmed: Boolean) {
-        scope.launch { state.send(capability, host.executor, confirmedResend = confirmed, onSent = host.onSent) }
-    }
+    val editable = !state.busy
     fun requestClose() {
-        if (draft.hasContent && !state.sending) confirmDiscard = true else state.discard()
+        if (state.busy) return
+        if (draft.hasContent || state.phase is NativeMailSendPhase.Unknown) confirmDiscard = true else state.discard()
     }
     Dialog(
         onDismissRequest = ::requestClose,
@@ -185,7 +196,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                         Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Small, vertical = NextcloudSpacing.Small),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = ::requestClose, enabled = !state.sending) {
+                        IconButton(onClick = ::requestClose, enabled = editable) {
                             Icon(NextcloudIcons.Close, contentDescription = "Close composer")
                         }
                         Text(
@@ -194,12 +205,12 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
                         )
-                        if (state.sending) {
+                        if (state.busy) {
                             CircularProgressIndicator(Modifier.size(24.dp).padding(end = NextcloudSpacing.Small), strokeWidth = 2.dp)
                         }
                         Button(
-                            onClick = { if (state.resendNeedsConfirmation) confirmResend = true else send(confirmed = false) },
-                            enabled = !state.sending && problems.isEmpty(),
+                            onClick = { if (state.resendNeedsConfirmation) confirmResend = true else host.send(confirmedResend = false) },
+                            enabled = editable && state.sendAvailable && problems.isEmpty(),
                         ) {
                             Icon(NextcloudIcons.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                             Text("Send", modifier = Modifier.padding(start = NextcloudSpacing.Small))
@@ -210,9 +221,12 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                             .padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
-                        NativeMailSendPhaseBanner(state.phase)
+                        NativeMailSendPhaseBanner(state.phase, onCheckStatus = host::checkStatus.takeIf { state.statusCheckAvailable })
+                        state.storageProblem?.let { problem ->
+                            Text(problem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
                         if (capability.senders.size > 1) {
-                            NativeMailSenderPicker(capability, draft, enabled = !state.sending) { id ->
+                            NativeMailSenderPicker(capability, draft, enabled = editable) { id ->
                                 state.update { it.copy(senderId = id) }
                             }
                         }
@@ -220,7 +234,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                             value = draft.to,
                             onValueChange = { value -> state.update { it.copy(to = value) } },
                             label = { Text("To") },
-                            enabled = !state.sending,
+                            enabled = editable,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         if (capability.supportsCc || capability.supportsBcc) {
@@ -230,7 +244,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                                         value = draft.cc,
                                         onValueChange = { value -> state.update { it.copy(cc = value) } },
                                         label = { Text("Cc") },
-                                        enabled = !state.sending,
+                                        enabled = editable,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
@@ -239,7 +253,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                                         value = draft.bcc,
                                         onValueChange = { value -> state.update { it.copy(bcc = value) } },
                                         label = { Text("Bcc") },
-                                        enabled = !state.sending,
+                                        enabled = editable,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
@@ -253,7 +267,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                                 onValueChange = { value -> state.update { it.copy(subject = value) } },
                                 label = { Text("Subject") },
                                 singleLine = true,
-                                enabled = !state.sending,
+                                enabled = editable,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -262,7 +276,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                             onValueChange = { value -> state.update { it.copy(body = value) } },
                             label = { Text("Message") },
                             minLines = 8,
-                            enabled = !state.sending,
+                            enabled = editable,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         draft.quote?.let { quote ->
@@ -270,7 +284,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                                 Checkbox(
                                     checked = draft.includeQuote,
                                     onCheckedChange = { checked -> state.update { it.copy(includeQuote = checked) } },
-                                    enabled = !state.sending,
+                                    enabled = editable,
                                 )
                                 Text(if (quote.forward) "Include the forwarded message" else "Include the original message")
                             }
@@ -295,7 +309,15 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
             title = { Text("Discard this message?") },
-            text = { Text("What you wrote is not saved anywhere else.") },
+            text = {
+                Text(
+                    if (state.phase is NativeMailSendPhase.Unknown) {
+                        "The last attempt may already have been sent. Discarding removes this draft from this device."
+                    } else {
+                        "This removes the draft from this device."
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { confirmDiscard = false; state.discard() }) {
                     Text("Discard", color = MaterialTheme.colorScheme.error)
@@ -309,17 +331,17 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
             onDismissRequest = { confirmResend = false },
             title = { Text("Send again?") },
             text = { Text("The first attempt may already have been delivered. Sending again can deliver it twice.") },
-            confirmButton = { TextButton(onClick = { confirmResend = false; send(confirmed = true) }) { Text("Send again") } },
+            confirmButton = { TextButton(onClick = { confirmResend = false; host.send(confirmedResend = true) }) { Text("Send again") } },
             dismissButton = { TextButton(onClick = { confirmResend = false }) { Text("Cancel") } },
         )
     }
 }
 
 @Composable
-private fun NativeMailSendPhaseBanner(phase: NativeMailSendPhase) {
+private fun NativeMailSendPhaseBanner(phase: NativeMailSendPhase, onCheckStatus: (() -> Unit)?) {
     val message = when (phase) {
         is NativeMailSendPhase.Rejected -> phase.message
-        is NativeMailSendPhase.Unknown -> phase.message
+        is NativeMailSendPhase.Unknown -> phase.recovery.description()
         NativeMailSendPhase.Sending -> "Sending..."
         NativeMailSendPhase.Editing -> null
     } ?: return
@@ -336,7 +358,8 @@ private fun NativeMailSendPhaseBanner(phase: NativeMailSendPhase) {
             if (phase !is NativeMailSendPhase.Sending) {
                 Icon(NextcloudIcons.Error, contentDescription = null, modifier = Modifier.padding(end = NextcloudSpacing.Small))
             }
-            Text(message, style = MaterialTheme.typography.bodyMedium)
+            Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            onCheckStatus?.let { check -> TextButton(onClick = check) { Text("Check status") } }
         }
     }
 }

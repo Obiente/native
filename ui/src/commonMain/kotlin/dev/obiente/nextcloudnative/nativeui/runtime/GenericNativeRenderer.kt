@@ -221,6 +221,7 @@ fun GenericNativeAppScreen(
     collectionBatchRelationLoader: NativeCollectionBatchRelationLoader? = null,
     workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
     onWorkspaceNavigate: ((String) -> Unit)? = null,
+    mailComposerRetention: NativeMailComposerRetention? = null,
 ) {
     var pendingCollectionReorderActionId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
     var pendingCollectionReorderResourceId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
@@ -730,13 +731,9 @@ fun GenericNativeAppScreen(
             }
         }
     }
-    val mailComposer = if (mailWorkspacePlan != null) {
-        rememberNativeMailComposerHost(schema, datasetContext, actionExecutor) { action ->
-            (onInlineActionSucceeded ?: onActionSucceeded)?.invoke(action)
-        }
-    } else {
-        null
-    }
+    val mailComposer = if (mailWorkspacePlan == null) null else rememberNativeMailComposerHost(
+        schema, datasetContext, actionExecutor, mailComposerRetention,
+    ) { action -> (onInlineActionSucceeded ?: onActionSucceeded)?.invoke(action) }
     val mailWorkspace: @Composable (detailContent: (@Composable () -> Unit)?) -> Unit = { detailContent ->
         NativeMailWorkspace(
             plan = requireNotNull(mailWorkspacePlan),
