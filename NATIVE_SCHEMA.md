@@ -120,13 +120,16 @@ component library.
   required input must map to a mail role: recipients (declared object or
   string arrays, or a single address string), subject, body, an HTML flag
   sent as false, the sending account's identity or address from a loaded
-  account record, or a threading header. Any other required input, an
-  undeclared recipient shape, or two equal candidates offers nothing.
+  account record, or In-Reply-To and References headers. Each identity input
+  takes the one value its own role names; a required sender-identity (alias)
+  input, any other required input, an undeclared recipient shape, or two equal
+  candidates offers nothing.
 - A feed reader offers read, unread, star, and unstar only for idempotent
-  verified writes on an article with a contract-declared identity: a
-  body-free route whose last segment names the state, or a write with a
-  single boolean state field. Broader updates that would resend other fields
-  are not used.
+  verified writes on an article with a contract-declared identity whose
+  route takes that identity as a required path parameter: a body-free route
+  whose last segment names the state, or a write with a single boolean state
+  field. Routes for every article or a whole feed, and broader updates that
+  would resend other fields, are not used.
 
 **Editing**
 

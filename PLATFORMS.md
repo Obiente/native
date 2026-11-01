@@ -284,7 +284,8 @@ interaction validation is still required.
 - Feed readers (any app whose contract exposes feeds and articles) show
   filters and feeds in a rail beside the article list and reader from 980dp,
   a rail beside the list or reader from 680dp, and filter chips above the list
-  on narrower screens, where system back closes the open article. The selected
+  on narrower screens, where system back closes the open article. A filtered
+  list says in one line that it covers only the loaded articles. The selected
   filter and feed survive recreation; the open article does not.
 - Mailboxes (any app whose contract exposes accounts, mailboxes, and
   messages) use the shared mailbox workspace. When the contract describes a
@@ -292,9 +293,14 @@ interaction validation is still required.
   compact layouts and is a dialog on wider ones; Reply, Reply all, and Forward
   sit with the opened message. Closing a draft with content needs a separate
   discard confirmation, and sending again after an unconfirmed result needs
-  its own confirmation. Drafts are in-memory UI state on Android and desktop:
-  they are not written to saved instance state or device storage, so they do
-  not survive process death.
+  its own confirmation. The draft and any running send belong to a per-account
+  owner outside every screen, so closing the composer, leaving the workspace,
+  or recreating the activity neither cancels a send nor loses the draft. The
+  draft is saved shortly after each edit to the encrypted, account-scoped text
+  draft storage that the text editor uses, and restored after process death;
+  an attempt is recorded before its request starts, so a send interrupted by
+  process death comes back as unconfirmed. Drafts are never written to saved
+  instance state, and removing the account deletes them.
 - Text shown on both sides of a navigation carries across it
   (`NextcloudSharedElements`). A conversation's name flies from the Talk list
   into the chat header, a file's name from the Files list into file details,

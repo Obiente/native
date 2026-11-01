@@ -588,13 +588,17 @@ version range enables a write. The rules are in
 current state for Mail and News is in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 - Sending is offered only for a send the descriptor retained because its
-  unknown result can be checked. An unknown result still keeps the draft and
-  requires an explicit confirmation before another attempt.
+  unknown result can be checked. An unknown result keeps the draft and runs
+  the declared recovery read; another attempt is offered only when that read
+  does not show the message as sent, and needs an explicit confirmation.
+  Drafts and running sends belong to a per-account owner outside every screen
+  and are saved in the encrypted text draft storage.
 - Message state changes read the mailbox again after the server confirms
   them and show the failure otherwise. Article state changes are idempotent;
   they apply optimistically and roll back for that article alone when the
   server rejects them or the result is unknown, and an unknown result also
-  reads the articles again.
+  reads the articles again. Only routes bound to one article's identity are
+  used.
 - When a contract lacks an operation, the workspace stays a native read-only
   view and says so, rather than reporting a version error.
 

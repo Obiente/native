@@ -804,27 +804,49 @@ value.
   withholds it and Mail opens without a composer.
 - Every required body, path, and query input maps to a mail role:
   recipients, Cc, Bcc, subject, body, an HTML flag (sent as false), the
-  sending account's identity or address, or a threading header. Recipients
+  sending account's identity or address, or a threading header (In-Reply-To
+  or References). Recipients
   use the declared shape: an array of objects with an address field and an
   optional label field, an array of strings, or a single address string,
   which accepts one recipient.
-- The sending account comes from a loaded account record with an action-safe
-  identity; its address comes from the record's email field. Without such a
-  record the composer is not offered.
-- A reply uses Reply-To when present, leaves the sender's own addresses out
-  of Reply all, and threads through the original Message-ID only when it has
-  the `<...@...>` form and the operation declares a threading field.
+- The sending account comes from a loaded record of a resource named as an
+  account, with an action-safe identity; its address comes from the record's
+  email field. Contacts, suggestions, and other records with addresses are
+  never senders. Without such a record the composer is not offered.
+- Each identity input takes the value of the one role its name states. Account
+  inputs (`accountId`, `account`) take the sending account's identity. A
+  sender-identity input (`identityId`, `aliasId`) would need a record from
+  another resource: when required, the composer is not offered; when optional,
+  it is left out so the server uses its default.
+- A reply uses Reply-To when present and leaves the sender's own addresses out
+  of Reply all. A declared In-Reply-To field takes the original Message-ID, and
+  a declared References field takes the original's References chain followed
+  by that Message-ID (at most 20 identifiers, keeping the thread root). Only
+  identifiers of the `<...@...>` form are used.
 - A send is not idempotent. A rejected send keeps the draft for editing. An
   unknown outcome, a transport failure, or cancellation after the request may
-  have left keeps the draft and requires an explicit confirmation before
-  another attempt.
+  have left keeps the draft. The composer then runs the operation's declared
+  recovery read with the same bindings: a status that names a sent state, or
+  a record holding exactly the attempted body and subject, closes the draft as
+  sent; a queued state or a failed read keeps sending again unavailable and
+  offers Check status; any other answer, or an operation without a recovery
+  read, allows another attempt after an explicit confirmation.
+- Drafts and running sends belong to a per-account owner outside every screen,
+  so leaving the composer or recreating the activity does not cancel a send.
+  The draft is saved shortly after each edit to the encrypted, account-scoped
+  text draft storage, and an attempt is recorded before its request starts, so
+  after process death the draft returns with its unconfirmed outcome. If the
+  attempt cannot be recorded, nothing is sent.
 
 `NativeMailSemanticPatternTest`, `NativeMailComposerStateTest`, and
 `NativeMailComposeTest` cover the same contracts under several app IDs and
 versions, a withheld synchronous send, a missing send, an unknown required
 input, a missing account,
-a contract that only mentions mail in a field, threading, and every send
-outcome.
+a contract that only mentions mail in a field, sender identity roles,
+contacts that are not senders, threading and References chains, every send
+outcome and status read, and draft save, restore, and removal after a
+confirmed send. `NativeMailComposerRegistryTest` covers the encrypted text
+draft binding and account retirement.
 
 ### Feed readers
 
@@ -843,19 +865,30 @@ renders it, whatever the app identifier or version.
   verified feed and folder reads load beside it through the bounded relation
   cache. Articles are grouped by feed only through their feed reference and a
   loaded feed record; this is display only.
-- Unread and Starred filters work on loaded pages and say so. Article links
-  other than HTTP(S) are dropped, and bodies use the mail HTML sanitizer.
+- Unread, Starred, and feed filters work on loaded pages and say so in a
+  caption above the list. Reaching the end of a filtered list loads further
+  pages automatically until three pages in a row add nothing visible; Load
+  more stays available. Article links other than HTTP(S) are dropped, and
+  bodies use the mail HTML sanitizer. An integer publication time is shown
+  only when its field's format declares epoch seconds; other integers are not
+  guessed.
 - [`NativeFeedItemActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFeedItemActions.kt)
   offers read, unread, star, and unstar for verified writes on an article
   with a contract-declared identity: a body-free route ending in the state
   word, or a write whose only non-identity body field is one boolean state
-  field. Changes apply optimistically and roll back for that article alone;
-  an unknown result also reads the articles again. Opening an unread article
-  marks it read when that change is available.
+  field. The route must take the article's identity as a required path
+  parameter, named for the article resource or placed after the article
+  collection; a route without one (`POST /items/read`) or bound to a feed
+  marks many articles and is never used. Changes apply optimistically and roll
+  back for that article alone; an unknown result also reads the articles
+  again. A pending or unconfirmed change survives loading another page. Opening
+  an unread article marks it read when that per-article change is available.
 
 `NativeFeedSemanticPatternTest` covers the same contract under two app IDs and
-versions, the entry point, observed identities, missing state routes,
-bookmark lists, and unsafe links.
+versions, the entry point, observed identities, missing state routes, bulk and
+feed-wide routes, declared epoch dates, bookmark lists, and unsafe links.
+`NativeFeedReaderSessionTest` covers local state across page appends and
+refreshes, automatic loading under a filter, and the filter caption.
 
 ### Pantry timestamps and cards
 

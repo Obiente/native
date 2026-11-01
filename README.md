@@ -202,7 +202,7 @@ Windows, and an early macOS package) with:
   including News: unread and starred filters over the loaded articles, feeds
   beside the list, and an article reader that does not load remote images.
   Read and star changes appear only when the app's own contract describes
-  them, so News opens read-only;
+  them for one article, so News opens read-only;
 - Activity, global search, Dashboard, user status and app navigation;
 - native Settings for personal info, Talk privacy and conversation settings,
   and, for administrators, read-only views of apps, accounts, groups and server
@@ -211,8 +211,9 @@ Windows, and an early macOS package) with:
   messages, including Mail: folders, paged messages, a reader, and read, flag,
   archive and delete where the contract describes them. Compose, reply, reply
   all and forward appear when the app's own contract describes a send whose
-  result can be checked; Mail's synchronous send cannot, so Mail has no
-  composer yet. No app version is allowlisted;
+  result can be checked, with unsent drafts kept on the device; Mail's
+  synchronous send cannot, so Mail has no composer yet. No app version is
+  allowlisted;
 - native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;
