@@ -45,9 +45,11 @@ internal data class NativeFeedItemActions(
  *
  * Two shapes are accepted, both idempotent state changes: a body-free route whose last segment
  * names the state (`.../{id}/read`, `.../{id}/star`), or a write with one boolean state field
- * (`unread`, `starred`, ...). The article must carry a contract-declared identity and every
- * required input must be bound; otherwise the reader stays read-only. Equal-ranked candidates are
- * ambiguous and offer nothing.
+ * (`unread`, `starred`, ...). Either must take this article's identity as a required path
+ * parameter: a route without one (`POST /items/read`) or bound to the article's feed or folder
+ * changes many articles at once and is never offered. The article must carry a contract-declared
+ * identity and every required input must be bound; otherwise the reader stays read-only.
+ * Equal-ranked candidates are ambiguous and offer nothing.
  */
 internal fun nativeFeedItemActions(
     schema: NativeAppSchema,
@@ -78,7 +80,8 @@ internal fun nativeFeedItemActions(
         null -> null
     }
     fun planFor(kind: NativeFeedItemActionKind?): NativeFeedItemActionPlan? = kind?.let {
-        candidates.mapNotNull { action -> action.toFeedStateCandidate(kind, binding, article.resource.id) }
+        candidates.filter { action -> action.binding.bindsArticleIdentity(article.resource.id, listPaths) }
+            .mapNotNull { action -> action.toFeedStateCandidate(kind, binding, article.resource.id) }
             .singleHighestFeedPlan()
     }
     return NativeFeedItemActions(planFor(readKind), planFor(starKind))
@@ -126,6 +129,26 @@ private fun ApiBinding.canResolveFeedValues(available: Set<String>, resourceId: 
     return requiredPathParameterNames.all { it.resolvable() } &&
         requiredQueryParameterNames.all { it.resolvable() } &&
         requiredBodyFieldNames.all { it.resolvable() }
+}
+
+/**
+ * True when a required path parameter names one article: the segment before it is the article
+ * collection (its list path or its resource name), or the parameter is named after the article
+ * resource (`itemId` for `items`).
+ */
+internal fun ApiBinding.bindsArticleIdentity(resourceId: String, listPaths: List<String>): Boolean {
+    val segments = path.split('/').filter(String::isNotBlank)
+    val collectionSegments = listPaths.mapNotNullTo(mutableSetOf()) { list ->
+        list.split('/').lastOrNull(String::isNotBlank)?.feedKey()
+    }
+    return requiredPathParameterNames.any { name ->
+        val key = name.feedKey()
+        val namedForArticle = key.length > 2 && key.endsWith("id") && key.removeSuffix("id").sameFeedResource(resourceId)
+        val index = segments.indexOf("{$name}")
+        val previous = segments.getOrNull(index - 1)?.takeIf { index > 0 && !it.startsWith('{') }?.feedKey()
+        val underCollection = previous != null && (previous in collectionSegments || previous.sameFeedResource(resourceId))
+        index >= 0 && (namedForArticle || underCollection)
+    }
 }
 
 private fun List<RankedFeedPlan>.singleHighestFeedPlan(): NativeFeedItemActionPlan? {

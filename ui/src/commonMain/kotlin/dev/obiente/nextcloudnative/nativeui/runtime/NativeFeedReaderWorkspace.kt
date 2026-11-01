@@ -75,9 +75,11 @@ internal fun NativeFeedReaderWorkspace(
     val filter = savedFilter.takeIf { it in plan.filters } ?: plan.filters.first()
     val feedId = savedFeedId?.takeIf { id -> plan.feeds.any { it.record.id == id } }
     var openKey by remember(schema.app.id) { mutableStateOf<String?>(null) }
-    // Optimistic states are dropped whenever an authoritative page replaces the articles.
-    var overrides by remember(plan.articles) { mutableStateOf(emptyMap<String, NativeFeedArticleState>()) }
-    var actionError by remember(plan.articles) { mutableStateOf<String?>(null) }
+    // Local read and star state belongs to the app, so loading another page keeps it.
+    val session = remember(schema.app.id) { NativeFeedReaderSession() }
+    LaunchedEffect(session, plan.articles) { session.reconcile(plan.articles) }
+    val overrides = session.overrides
+    val actionError = session.actionError
     val scope = rememberCoroutineScope()
     val visible = plan.visible(filter, feedId, overrides)
     val open = (openKey ?: plan.selectedArticle?.key)
@@ -85,23 +87,24 @@ internal fun NativeFeedReaderWorkspace(
         ?.withOverride(overrides[openKey ?: plan.selectedArticle?.key])
 
     fun apply(change: NativeFeedItemActionPlan, article: NativeFeedArticle) {
-        overrides = overrides + (article.key to (overrides[article.key] ?: NativeFeedArticleState()).merge(change.requestedState))
-        actionError = null
+        session.begin(article, change)
         scope.launch {
             val result = runCatchingUnlessCancelled { actionExecutor.execute(change.request()) }.getOrElse { failure ->
                 NativeActionExecutionResult.Failure(failure.message.orEmpty(), NativeActionFailureOutcome.Unknown)
             }
             when (result) {
-                is NativeActionExecutionResult.Success -> onStateChanged?.invoke(change.action)
+                is NativeActionExecutionResult.Success -> {
+                    session.succeeded(article)
+                    onStateChanged?.invoke(change.action)
+                }
                 is NativeActionExecutionResult.Failure -> {
                     // A rejected change is rolled back for this article alone. An unknown result is
                     // also rolled back and the list is read again, so the server state wins.
-                    overrides = overrides - article.key
-                    actionError = if (result.outcome == NativeActionFailureOutcome.Rejected) {
-                        result.message.ifBlank { "The app did not accept this change." }
+                    if (result.outcome == NativeActionFailureOutcome.Rejected) {
+                        session.failed(article, result.message.ifBlank { "The app did not accept this change." })
                     } else {
+                        session.failed(article, "The change could not be confirmed. The articles were read again.")
                         onStateChanged?.invoke(change.action)
-                        "The change could not be confirmed. The articles were read again."
                     }
                 }
             }
@@ -110,6 +113,7 @@ internal fun NativeFeedReaderWorkspace(
 
     fun openArticle(article: NativeFeedArticle) {
         openKey = article.key
+        // Opening marks only this article read, through a route bound to its identity.
         if (article.unread == true) {
             nativeFeedItemActions(schema, article).readState
                 ?.takeIf { it.kind == NativeFeedItemActionKind.MarkRead }
@@ -120,7 +124,7 @@ internal fun NativeFeedReaderWorkspace(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val width = maxWidth
         val list: @Composable (Modifier) -> Unit = { modifier ->
-            NativeFeedArticleList(plan, visible, open?.key, filter, ::openArticle, onLoadMore, loadingMore, loadMoreError, modifier)
+            NativeFeedArticleList(plan, visible, open?.key, filter, feedId, ::openArticle, onLoadMore, loadingMore, loadMoreError, modifier)
         }
         val reader: @Composable (Modifier) -> Unit = { modifier ->
             if (open == null) {
@@ -169,9 +173,6 @@ internal fun NativeFeedReaderWorkspace(
         }
     }
 }
-
-private fun NativeFeedArticleState.merge(other: NativeFeedArticleState) =
-    NativeFeedArticleState(unread = other.unread ?: unread, starred = other.starred ?: starred)
 
 @Composable
 private fun NativeFeedSourceRail(
@@ -266,6 +267,7 @@ private fun NativeFeedArticleList(
     articles: List<NativeFeedArticle>,
     openKey: String?,
     filter: NativeFeedFilter,
+    feedId: String?,
     onOpen: (NativeFeedArticle) -> Unit,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
@@ -273,6 +275,8 @@ private fun NativeFeedArticleList(
     modifier: Modifier,
 ) {
     val listState = rememberLazyListState()
+    val autoLoad = remember(filter, feedId) { NativeFeedAutoLoad() }
+    val loadedCount = plan.articles.size
     if (articles.isEmpty()) {
         NativeFeedPlaceholder(
             when (filter) {
@@ -286,6 +290,16 @@ private fun NativeFeedArticleList(
         return
     }
     LazyColumn(modifier, state = listState) {
+        nativeFeedFilterCaption(plan, filter, feedId)?.let { caption ->
+            item(key = "filter-caption") {
+                Text(
+                    caption,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.XSmall),
+                )
+            }
+        }
         items(articles, key = NativeFeedArticle::key) { article ->
             val selected = article.key == openKey
             Column(
@@ -328,13 +342,30 @@ private fun NativeFeedArticleList(
                     if (loadingMore) {
                         Text("Loading more articles...", style = MaterialTheme.typography.bodySmall)
                     } else if (onLoadMore != null) {
-                        LaunchedEffect(articles.size, loadMoreError) { if (loadMoreError == null) onLoadMore() }
+                        // Keyed by loaded pages, not visible rows, so a filter that hides a new page
+                        // still advances; NativeFeedAutoLoad stops after repeated empty pages.
+                        LaunchedEffect(loadedCount, loadMoreError) {
+                            if (loadMoreError == null && autoLoad.shouldLoad(loadedCount, articles.size)) onLoadMore()
+                        }
                         TextButton(onClick = onLoadMore) { Text(if (loadMoreError != null) "Try again" else "Load more") }
                     }
                 }
             }
         }
     }
+}
+
+/** One line saying that a filter covers only the loaded pages, or null when nothing is filtered. */
+internal fun nativeFeedFilterCaption(plan: NativeFeedReaderPlan, filter: NativeFeedFilter, feedId: String?): String? {
+    val feed = feedId?.let { id -> plan.feeds.firstOrNull { it.record.id == id }?.title }
+    val subject = when {
+        feed != null -> "articles from $feed"
+        filter == NativeFeedFilter.Unread -> "unread articles"
+        filter == NativeFeedFilter.Starred -> "starred articles"
+        else -> return null
+    }
+    val loaded = plan.articles.size
+    return "Showing $subject among the $loaded loaded ${if (loaded == 1) "article" else "articles"}."
 }
 
 @OptIn(ExperimentalRichTextApi::class)

@@ -152,12 +152,24 @@ internal fun nativeFeedArticle(resource: ResourceSpec, record: NativeRecord): Na
             ?: values.boolean(setOf("read", "isread", "seen"))?.not(),
         starred = values.boolean(setOf("starred", "isstarred", "favorite", "favourite", "saved", "bookmarked")),
         sourceId = values.first(FEED_ITEM_SOURCE_FIELDS)?.trim()?.takeIf { it.isNotBlank() && it.length <= MAX_ID },
-        publishedLabel = values.first(setOf("published", "publishedat", "pubdate", "date", "updated", "updatedat"))
-            ?.trim()
-            ?.takeIf { ISO_DATE.matches(it) }
-            ?.take(16)
-            ?.replace('T', ' '),
+        publishedLabel = nativeFeedPublishedLabel(resource, record),
     )
+}
+
+/**
+ * The article's publication time from the first date-role field that can be shown: an ISO date
+ * string, or an integer that the contract declares as epoch seconds. Integers of an undeclared
+ * unit are not shown, because their unit cannot be told from the number.
+ */
+private fun nativeFeedPublishedLabel(resource: ResourceSpec, record: NativeRecord): String? {
+    val entries = record.values.mapNotNull { (key, value) -> value?.let { key to it } } + record.displayValues.toList()
+    return PUBLISHED_FIELDS.firstNotNullOfOrNull { role ->
+        val (key, raw) = entries.firstOrNull { (key, _) -> key.feedSemanticId() == role } ?: return@firstNotNullOfOrNull null
+        val value = raw.trim()
+        if (ISO_DATE.matches(value)) return@firstNotNullOfOrNull value.take(16).replace('T', ' ')
+        val field = resource.fields.firstOrNull { it.id == key } ?: resource.fields.firstOrNull { it.id.feedSemanticId() == role }
+        field?.formatDeclaredEpochSeconds(value)
+    }
 }
 
 private fun nativeFeedSource(resource: ResourceSpec, record: NativeRecord, folder: Boolean): NativeFeedSource? {
@@ -201,6 +213,7 @@ private fun String.isSafeFeedHttpLink(): Boolean =
     length <= MAX_LINK && (startsWith("https://", ignoreCase = true) || startsWith("http://", ignoreCase = true)) &&
         none { it.isWhitespace() || it.isISOControl() }
 
+private val PUBLISHED_FIELDS = listOf("published", "publishedat", "pubdate", "date", "updated", "updatedat")
 private val ISO_DATE = Regex("^\\d{4}-\\d{2}-\\d{2}(?:[T ]\\d{2}:\\d{2}.*)?$")
 private const val SHAPE_SAMPLE = 16
 private const val MAX_FEED_SOURCES = 500
