@@ -4692,7 +4692,7 @@ class DesktopNextcloudServices(
                     contentType = safeRequest.contentType,
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
-                    headers = safeRequest.ifMatch?.let { mapOf("If-Match" to it) }.orEmpty(),
+                    headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
                     client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
                         recordDesktopRequestDiagnostic(session, it)

@@ -45,6 +45,60 @@ class SemanticNotesRepositoryTest {
     }
 
     @Test
+    fun `a revalidated list sends its cached validator and reuses the cache on 304`() = runBlocking<Unit> {
+        var status = 304
+        val notes = repository("jotter") {
+            json(if (status == 304) "" else """[{"id":4,"title":"Plan"}]""", status = status, etag = "\"list-2\"")
+        }
+
+        assertIs<NextcloudConditionalRead.NotModified>(notes.listNotesConditionally("\"list-1\""))
+        assertEquals("\"list-1\"", sent.last().ifNoneMatch)
+        status = 200
+        val modified = assertIs<NextcloudConditionalRead.Modified<List<NextcloudNote>>>(notes.listNotesConditionally(null))
+        assertNull(sent.last().ifNoneMatch)
+        assertEquals("\"list-2\"", modified.responseEtag)
+        assertEquals(listOf(4L), modified.value.map(NextcloudNote::id))
+    }
+
+    @Test
+    fun `a 304 without a sent validator is not treated as unchanged`() = runBlocking<Unit> {
+        val notes = repository("jotter") { json("", status = 304) }
+
+        assertFailsWith<IllegalStateException> { notes.listNotesConditionally(null) }
+        assertFailsWith<IllegalStateException> { notes.loadNoteConditionally(4, " ") }
+    }
+
+    @Test
+    fun `a revalidated note body reuses the cache on 304 and returns the new version otherwise`() = runBlocking<Unit> {
+        var status = 304
+        val notes = repository("jotter") {
+            json(if (status == 304) "" else """{"id":4,"title":"Plan","content":"v2"}""", status = status, etag = "\"n2\"")
+        }
+
+        assertIs<NextcloudConditionalRead.NotModified>(notes.loadNoteConditionally(4, "\"n1\""))
+        assertEquals("\"n1\"", sent.last().ifNoneMatch)
+        assertEquals("/apps/jotter/api/v1/notes/4", sent.last().relativePath)
+        status = 200
+        val modified = assertIs<NextcloudConditionalRead.Modified<NextcloudNote>>(notes.loadNoteConditionally(4, "\"n1\""))
+        assertEquals("v2", modified.value.content)
+        assertEquals("\"n2\"", modified.responseEtag)
+    }
+
+    @Test
+    fun `response fields match by the same normalization as contract evidence`() = runBlocking<Unit> {
+        val notes = repository("jotter") {
+            json("""[{"id":4,"Title":"Plan","last_modified":1700000000,"is_read_only":true,"Favorite":1}]""")
+        }
+
+        val note = notes.listNotes().single()
+
+        assertEquals("Plan", note.title)
+        assertEquals(1_700_000_000L, note.modified)
+        assertTrue(note.favorite)
+        assertTrue(note.readOnly)
+    }
+
+    @Test
     fun `saving sends the last known version as a precondition and only declared fields`() = runBlocking<Unit> {
         val notes = repository("jotter") { json("""{"id":4,"title":"Plan","content":"new","category":"","favorite":false}""") }
 

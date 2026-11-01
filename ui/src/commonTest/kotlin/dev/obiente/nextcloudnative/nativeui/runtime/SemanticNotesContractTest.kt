@@ -45,6 +45,31 @@ class SemanticNotesContractTest {
     }
 
     @Test
+    fun `a list query value is sent only when the contract enumerates it`() {
+        val undeclared = notesRoutes().map { route ->
+            if (route.query.isNotEmpty()) route.copy(query = listOf("exclude")) else route
+        }
+        val otherValues = notesRoutes().map { route ->
+            if (route.query.isNotEmpty()) route.copy(query = listOf("exclude=etag|category")) else route
+        }
+
+        assertNull(assertNotNull(resolve("jotter", "0.0.1", undeclared)).binding(NoteOperation.ListNotes).excludeContentQuery)
+        assertNull(assertNotNull(resolve("jotter", "0.0.1", otherValues)).binding(NoteOperation.ListNotes).excludeContentQuery)
+    }
+
+    @Test
+    fun `a titled text collection with only one metadata field is not notes`() {
+        val routes = listOf(
+            get("/apps/APP/api/entries"),
+            get("/apps/APP/api/entries/{id}"),
+            write(HttpMethod.POST, "/apps/APP/api/entries", mapOf("title" to "string", "body" to "string", "category" to "string")),
+            write(HttpMethod.PUT, "/apps/APP/api/entries/{id}", mapOf("title" to "string", "body" to "string", "category" to "string")),
+        )
+
+        assertNull(resolve("journal_x", "1.0.0", routes))
+    }
+
+    @Test
     fun `without an update route notes stay readable and the editor cannot save`() {
         val contract = assertNotNull(resolve("jotter", "0.0.1", notesRoutes(includeUpdate = false)))
 

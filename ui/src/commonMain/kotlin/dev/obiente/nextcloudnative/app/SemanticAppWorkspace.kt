@@ -94,7 +94,8 @@ internal fun SemanticAppWorkspaceScreen(
             session = session,
             noteStore = remember(workspace, execute) { SemanticNotesRepository(execute, workspace.contract) },
             onBack = onBack,
-            settings = settings,
+            // Settings writes go through the same contract-gated execute as note writes.
+            settings = remember(settings, execute) { settings?.let { NotesSettingsAccess(it, execute) } },
             onMutationInProgressChanged = onMutationInProgressChanged,
             filesAccess = filesAccess,
         )

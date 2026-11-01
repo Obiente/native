@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NOTE_FIELD_NAMES
 import dev.obiente.nextcloudnative.nativeui.runtime.NoteField
 import dev.obiente.nextcloudnative.nativeui.runtime.NoteOperation
 import dev.obiente.nextcloudnative.nativeui.runtime.SemanticNotesContract
+import dev.obiente.nextcloudnative.nativeui.runtime.semanticRouteId
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -37,6 +38,14 @@ internal interface NotesRepository {
 
     suspend fun listNotes(): List<NextcloudNote>
     suspend fun loadNote(noteId: Long): NextcloudNote
+
+    /** Revalidates a cached list: [NextcloudConditionalRead.NotModified] means the cache is current. */
+    suspend fun listNotesConditionally(expectedEtag: String?): NextcloudConditionalRead<List<NextcloudNote>> =
+        NextcloudConditionalRead.Modified(listNotes(), null)
+
+    /** Revalidates a cached note body the same way, using the note's last known ETag. */
+    suspend fun loadNoteConditionally(noteId: Long, expectedEtag: String?): NextcloudConditionalRead<NextcloudNote> =
+        NextcloudConditionalRead.Modified(loadNote(noteId), null)
 
     /** Returns [NextcloudNotePresence.Absent] only when an authoritative read answers 404 or 410. */
     suspend fun inspectNotePresence(noteId: Long): NextcloudNotePresence
@@ -114,20 +123,36 @@ internal class SemanticNotesRepository(
         canCategorize = contract.canWrite(NoteField.Category),
     )
 
-    override suspend fun listNotes(): List<NextcloudNote> {
+    override suspend fun listNotes(): List<NextcloudNote> =
+        (listNotesConditionally(expectedEtag = null) as NextcloudConditionalRead.Modified).value
+
+    override suspend fun listNotesConditionally(expectedEtag: String?): NextcloudConditionalRead<List<NextcloudNote>> {
         val binding = contract.binding(NoteOperation.ListNotes)
-        val values = binding.excludeContentQuery?.let { (name, value) -> mapOf(name to value) }.orEmpty()
-        val response = execute(read(NoteOperation.ListNotes, values))
+        val query = binding.excludeContentQuery?.let { (name, value) -> mapOf(name to value) }.orEmpty()
+        val validator = expectedEtag?.takeIf(String::isNotBlank)
+        val response = execute(read(NoteOperation.ListNotes, query = query, ifNoneMatch = validator))
+        if (response.status == 304 && validator != null) return NextcloudConditionalRead.NotModified
         check(response.status in 200..299) { "Loading notes failed (HTTP ${response.status})." }
         val records = parseNotesResponseOffUi { response.notesPayload() as? JsonArray }
             ?: error("The notes list returned an unexpected response.")
-        return records.mapNotNull { (it as? JsonObject)?.toNote(null) }
+        val notes = records.mapNotNull { (it as? JsonObject)?.toNote(null) }
             .sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
+        return NextcloudConditionalRead.Modified(notes, response.etag?.takeIf(String::isNotBlank))
     }
 
     override suspend fun loadNote(noteId: Long): NextcloudNote = when (val presence = inspectNotePresence(noteId)) {
         NextcloudNotePresence.Absent -> error("The note no longer exists.")
         is NextcloudNotePresence.Present -> presence.note
+    }
+
+    override suspend fun loadNoteConditionally(noteId: Long, expectedEtag: String?): NextcloudConditionalRead<NextcloudNote> {
+        val validator = expectedEtag?.takeIf(String::isNotBlank)
+        val response = execute(read(NoteOperation.ReadNote, identity(NoteOperation.ReadNote, noteId), ifNoneMatch = validator))
+        if (response.status == 304 && validator != null) return NextcloudConditionalRead.NotModified
+        check(response.status != 404 && response.status != 410) { "The note no longer exists." }
+        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
+        val note = response.requireNote("The note response is invalid.")
+        return NextcloudConditionalRead.Modified(note, note.etag)
     }
 
     override suspend fun inspectNotePresence(noteId: Long): NextcloudNotePresence {
@@ -151,7 +176,8 @@ internal class SemanticNotesRepository(
         val response = execute(
             write(
                 NoteOperation.UpdateNote,
-                identity(NoteOperation.UpdateNote, noteId) + fields(
+                identity(NoteOperation.UpdateNote, noteId),
+                fields(
                     NoteOperation.UpdateNote,
                     NoteField.Content to content,
                     NoteField.Category to category,
@@ -174,7 +200,8 @@ internal class SemanticNotesRepository(
         val response = execute(
             write(
                 NoteOperation.CreateNote,
-                fields(
+                path = emptyMap(),
+                body = fields(
                     NoteOperation.CreateNote,
                     NoteField.Title to normalizeNoteTitle(title),
                     NoteField.Content to content,
@@ -188,7 +215,7 @@ internal class SemanticNotesRepository(
     }
 
     override suspend fun deleteNote(noteId: Long, expectedEtag: String?) {
-        val response = execute(write(NoteOperation.DeleteNote, identity(NoteOperation.DeleteNote, noteId), expectedEtag))
+        val response = execute(write(NoteOperation.DeleteNote, identity(NoteOperation.DeleteNote, noteId), emptyMap(), expectedEtag))
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -209,17 +236,25 @@ internal class SemanticNotesRepository(
         }.toMap()
     }
 
-    private fun read(operation: NoteOperation, values: Map<String, String>): NextcloudApiRequest =
-        buildDynamicApiRequest(contract.descriptor, contract.binding(operation).action, values, values).copy(
-            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
-            maximumResponseBytes = NOTES_RESPONSE_BYTES,
-        )
+    // Path, query, and body inputs stay in separate maps so a same-named body field can never
+    // rebind the note the path addresses.
+    private fun read(
+        operation: NoteOperation,
+        path: Map<String, String> = emptyMap(),
+        query: Map<String, String> = emptyMap(),
+        ifNoneMatch: String? = null,
+    ): NextcloudApiRequest = buildDynamicApiRequest(
+        contract.descriptor, contract.binding(operation).action, path, path, queryValues = query, bodyValues = emptyMap(),
+    ).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork, maximumResponseBytes = NOTES_RESPONSE_BYTES, ifNoneMatch = ifNoneMatch)
 
-    private fun write(operation: NoteOperation, values: Map<String, String>, expectedEtag: String?): NextcloudApiRequest =
-        buildDynamicApiRequest(contract.descriptor, contract.binding(operation).action, values, values).copy(
-            maximumResponseBytes = NOTES_RESPONSE_BYTES,
-            ifMatch = notesMutationHeaders(expectedEtag)["If-Match"],
-        )
+    private fun write(
+        operation: NoteOperation,
+        path: Map<String, String>,
+        body: Map<String, String>,
+        expectedEtag: String?,
+    ): NextcloudApiRequest = buildDynamicApiRequest(
+        contract.descriptor, contract.binding(operation).action, path, path, queryValues = emptyMap(), bodyValues = body,
+    ).copy(maximumResponseBytes = NOTES_RESPONSE_BYTES, ifMatch = notesMutationHeaders(expectedEtag)["If-Match"])
 }
 
 private suspend fun NextcloudApiResponse.requireNote(message: String): NextcloudNote =
@@ -239,22 +274,23 @@ private fun NextcloudApiResponse.notesPayload(): JsonElement {
 /** Maps a note record by field roles. Records without a numeric identity are not notes here. */
 private fun JsonObject.toNote(responseEtag: String?): NextcloudNote? {
     val id = (this["id"] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.longOrNull?.takeIf { it >= 0L } ?: return null
-    fun text(field: NoteField): String? = NOTE_FIELD_NAMES.getValue(field).firstNotNullOfOrNull { name ->
-        entries.firstOrNull { it.key.lowercase() == name }?.value?.scalar()
+    // Field names normalize exactly as contract evidence does, so `last_modified` both selects
+    // the notes surface and supplies the modification time.
+    fun field(field: NoteField): JsonElement? = NOTE_FIELD_NAMES.getValue(field).firstNotNullOfOrNull { name ->
+        entries.firstOrNull { it.key.semanticRouteId() == name }?.value
     }
-    val contentPresent = NOTE_FIELD_NAMES.getValue(NoteField.Content).any { name -> keys.any { it.lowercase() == name } }
+    fun text(field: NoteField): String? = field(field)?.scalar()
+    val contentPresent = field(NoteField.Content) != null
     return NextcloudNote(
         id = id,
         title = text(NoteField.Title)?.takeIf(String::isNotBlank) ?: "Untitled note",
         modified = text(NoteField.Modified)?.toLongOrNull() ?: 0L,
         category = text(NoteField.Category).orEmpty(),
-        favorite = NOTE_FIELD_NAMES.getValue(NoteField.Favorite).firstNotNullOfOrNull { name ->
-            (entries.firstOrNull { it.key.lowercase() == name }?.value as? JsonPrimitive)?.let { value ->
-                value.booleanOrNull ?: (value.contentOrNull == "1")
-            }
+        favorite = (field(NoteField.Favorite) as? JsonPrimitive)?.let { value ->
+            value.booleanOrNull ?: (value.contentOrNull == "1")
         } ?: false,
-        readOnly = listOf("readonly", "readOnly", "isReadOnly").firstNotNullOfOrNull { name ->
-            (this[name] as? JsonPrimitive)?.booleanOrNull
+        readOnly = entries.firstNotNullOfOrNull { (name, value) ->
+            (value as? JsonPrimitive)?.booleanOrNull?.takeIf { name.semanticRouteId() in READ_ONLY_FIELDS }
         } ?: false,
         content = if (contentPresent) text(NoteField.Content).orEmpty() else null,
         etag = responseEtag?.takeIf(String::isNotBlank) ?: (this["etag"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank),
@@ -265,5 +301,6 @@ private fun JsonObject.toNote(responseEtag: String?): NextcloudNote? {
 
 private fun JsonElement.scalar(): String? = (this as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
 
+private val READ_ONLY_FIELDS = setOf("readonly", "isreadonly")
 private val notesJson = Json { ignoreUnknownKeys = true }
 private const val NOTES_RESPONSE_BYTES = 16L * 1024L * 1024L

@@ -225,7 +225,13 @@ data class NextcloudApiRequest(
     val multipartBody: NextcloudMultipartBody? = null,
     /** An entity-tag precondition sent as If-Match, so a stale write is rejected by the server. */
     val ifMatch: String? = null,
-)
+    /** A cached representation's validator sent as If-None-Match on a GET; 304 means it is current. */
+    val ifNoneMatch: String? = null,
+) {
+    /** The only headers a caller can influence: the bounded entity-tag preconditions above. */
+    val preconditionHeaders: Map<String, String>
+        get() = listOfNotNull(ifMatch?.let { "If-Match" to it }, ifNoneMatch?.let { "If-None-Match" to it }).toMap()
+}
 
 data class NextcloudApiResponse(
     val status: Int,
@@ -1507,54 +1513,6 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
-fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
-    require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {
-        "Dynamic API paths must be relative to the connected Nextcloud server."
-    }
-    require(relativePath.none { it == '\\' || it == '?' || it == '#' || it.isWhitespace() }) {
-        "Dynamic API paths cannot contain a query, fragment, backslash, or whitespace."
-    }
-    require(relativePath.split('/').none { segment ->
-        val decodedDots = segment.replace("%2e", ".", ignoreCase = true)
-        decodedDots == "." || decodedDots == ".."
-    }) { "Dynamic API paths cannot traverse directories." }
-    require(queryParameters.keys.all { key ->
-        key.isNotBlank() && key.none { it.isWhitespace() || it == '&' || it == '=' || it == '#' }
-    }) { "Dynamic API query parameter names are invalid." }
-    val maximumAllowedResponse = if (
-        relativePath.matches(Regex("^/index\\.php/apps/memories/api/image/decodable/[1-9][0-9]*$"))
-    ) {
-        MAX_IN_MEMORY_FILE_CONTENT_BYTES
-    } else {
-        MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES
-    }
-    require(maximumResponseBytes in 1..maximumAllowedResponse) {
-        "Dynamic API response limit is outside the allowed range."
-    }
-    require(contentType == null || contentType.length <= 160) { "Dynamic API content type is invalid." }
-    require(ifMatch == null || ifMatch.length <= 520 && ifMatch.none(Char::isISOControl)) { "The precondition is invalid." }
-    multipartBody?.let { multipart ->
-        require(method in setOf(NextcloudApiMethod.POST, NextcloudApiMethod.PUT, NextcloudApiMethod.PATCH)) {
-            "Multipart uploads require POST, PUT, or PATCH."
-        }
-        require(body == null && contentType == null) {
-            "A typed multipart body cannot be combined with a raw request body or content type."
-        }
-        multipart.requireSafe()
-    }
-    return this
-}
-
-fun buildNextcloudApiUrl(serverUrl: String, request: NextcloudApiRequest): String {
-    request.requireSafe()
-    val base = serverUrl.trimEnd('/') + request.relativePath
-    if (request.queryParameters.isEmpty()) return base
-    val query = request.queryParameters.toSortedMap().entries.joinToString("&") { (key, value) ->
-        "${encodeUrlComponent(key)}=${encodeUrlComponent(value)}"
-    }
-    return "$base?$query"
-}
-
 fun boundedActivityLimit(value: Int): Int = value.coerceIn(1, MAX_ACTIVITY_LIMIT)
 
 fun boundedPreviewDimension(value: Int): Int = value.coerceIn(MIN_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION)

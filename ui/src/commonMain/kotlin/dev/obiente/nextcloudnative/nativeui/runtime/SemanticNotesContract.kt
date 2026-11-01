@@ -5,6 +5,9 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.runtime.SemanticRouteShape.Token
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** Semantic roles of note fields, matched by name rather than by app identity. */
 internal enum class NoteField { Title, Content, Category, Favorite, Modified }
@@ -20,7 +23,10 @@ internal data class NoteOperationBinding(
     /** The single path placeholder that carries the note identity, when the route has one. */
     val identityParameter: String?,
     val bodyFields: Map<NoteField, String>,
-    /** Declared optional query inputs whose name says they omit note bodies from a list. */
+    /**
+     * A declared optional query input that omits note bodies from a list, sent only with a value
+     * its own schema enumerates or defaults to; the value is never assumed from the name.
+     */
     val excludeContentQuery: Pair<String, String>?,
 )
 
@@ -130,10 +136,16 @@ private fun classifyNoteRoute(
     }
     if (operation == NoteOperation.UpdateNote && NoteField.Content !in bodyFields) return null
     val exclude = action.binding.queryParameters.firstOrNull { parameter ->
-        parameter.name.semanticRouteId() == "exclude"
-    }?.let { it.name to "content" }.takeIf { operation == NoteOperation.ListNotes }
+        parameter.name.semanticRouteId() == "exclude" && (parameter.schema as? JsonObject)?.declaresValue(CONTENT_VALUE) == true
+    }?.let { it.name to CONTENT_VALUE }.takeIf { operation == NoteOperation.ListNotes }
     return NoteOperationBinding(operation, action, route.identity, bodyFields, exclude)
 }
+
+/** Whether the schema itself names [value]: an enum member, an array item enum member, or its default. */
+private fun JsonObject.declaresValue(value: String): Boolean =
+    value in declaredEnumValues() ||
+        (this["items"] as? JsonObject)?.declaredEnumValues()?.contains(value) == true ||
+        (this["default"] as? JsonPrimitive)?.contentOrNull == value
 
 private fun NoteOperation.describe(): String = name.replace(Regex("([a-z])([A-Z])"), "$1 $2").lowercase()
 
@@ -145,6 +157,7 @@ internal val NOTE_FIELD_NAMES: Map<NoteField, Set<String>> = mapOf(
     NoteField.Modified to setOf("modified", "updatedat", "lastmodified", "mtime"),
 )
 
+private const val CONTENT_VALUE = "content"
 private val NOTE_WORDS = setOf("notes", "note", "memos", "memo")
 private val NOTE_EXCLUDED_COLLECTIONS = setOf(
     "settings", "setting", "config", "configuration", "preferences", "capabilities", "status",

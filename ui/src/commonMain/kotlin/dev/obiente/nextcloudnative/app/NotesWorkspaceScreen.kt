@@ -83,7 +83,7 @@ internal fun NextcloudNotesScreen(
     onBack: () -> Unit,
     /** Opens a note on its own page. Null keeps every note in place, including on phones. */
     onOpenNote: ((NextcloudNote) -> Unit)? = null,
-    settings: SemanticSettings? = null,
+    settings: NotesSettingsAccess? = null,
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
     filesAccess: NotesFilesAccess? = null,
@@ -258,10 +258,10 @@ internal fun NextcloudNotesScreen(
         val cacheProducer = sharedNextcloudNotesCache.producer(session)
         error = null
         refreshing = true
+        // Revalidate only a list that is on screen; a 304 then keeps the cached list as current.
+        val cachedEtag = notes?.let { sharedNextcloudNotesCache.listEtag(session, noteStore.appId) }
         runCatching {
-            when (val result: NextcloudConditionalRead<List<NextcloudNote>> =
-                NextcloudConditionalRead.Modified(noteStore.listNotes(), null)
-            ) {
+            when (val result = noteStore.listNotesConditionally(cachedEtag)) {
                 is NextcloudConditionalRead.Modified -> {
                     notes = result.value
                     sharedNextcloudNotesCache.storeList(session, noteStore.appId, result.value, cacheProducer, result.responseEtag)
@@ -482,7 +482,7 @@ internal fun NextcloudNotesScreen(
         NotesSettingsSheet(
             services = services,
             session = session,
-            settings = settings,
+            access = settings,
             filesAccess = filesAccess,
             onSettingChanged = {
                 openNoteId = null

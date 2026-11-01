@@ -223,7 +223,9 @@ internal fun NextcloudNoteEditor(
         val cacheProducer = sharedNextcloudNotesCache.producer(session)
         loadError = null
         refreshing = true
-        runCatching<NextcloudConditionalRead<NextcloudNote>> { NextcloudConditionalRead.Modified(noteStore.loadNote(note.id), null) }
+        // Revalidate a cached body by its ETag; a list summary without content always reloads.
+        val expectedEtag = loaded.content?.let { loaded.etag }
+        runCatching { noteStore.loadNoteConditionally(note.id, expectedEtag) }
             .onSuccess { result ->
                 if (result is NextcloudConditionalRead.NotModified) return@onSuccess
                 val fullNote = (result as NextcloudConditionalRead.Modified).value
