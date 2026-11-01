@@ -165,7 +165,9 @@ Dynamic support is evidence-driven. Use this order:
    parent-scoped child records, column-defined grids, questionnaires,
    expenses, recipes, mailboxes, feeds) to the native UI that belongs to them.
    Writes come only from the installed app's own published contract for the
-   operation (items 2 to 4).
+   operation (items 2 to 4). A replacement (PUT) edit also needs the
+   same-route read that the descriptor compiler pairs with it only for items
+   3 and 4; an advertised OpenAPI document alone does not enable PUT edits.
 
 Rules:
 
@@ -175,7 +177,11 @@ Rules:
   upstream source tag. Any app whose contract and data match a pattern gets
   that pattern's UI, whatever its name or version. Presentation-only hints such
   as icons, accent colors, or one-line descriptions may use the app ID but
-  never gate behavior.
+  never gate behavior. Existing exceptions awaiting conversion (the Chores
+  0.1.0 and 0.2.0 gate, the Pantry 0.23.0 owner reorder authority, and the
+  Pantry 0.34.0 timestamp presentation; see
+  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)) are not precedent for new app- or
+  version-gated behavior.
 - Offer a write only when the installed app's own published contract declares
   the operation, its route, and its payload. A pattern may decide how a
   declared value is presented; it may not supply an encoding, a required

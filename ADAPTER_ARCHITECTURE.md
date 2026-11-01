@@ -141,10 +141,14 @@ entries and successful guesses do not prove that an operation is safe.
 - Treat response-shape inference as read-only evidence.
 - Require the installed app's own published contract for writes: an
   advertised OpenAPI document, or the verified package or exact source tag
-  acquired for that installation. Dynamic app behavior follows semantic
-  patterns over that contract and its data, never an app ID, an exact
-  version, a version range, or a pinned source tag; see
-  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes).
+  acquired for that installation. A replacement (PUT) edit additionally needs
+  the same-route read that the descriptor compiler pairs with it only for
+  verified package or exact source-tag provenance, so an advertised OpenAPI
+  document alone offers PATCH edits but not PUT edits. Dynamic app behavior
+  follows semantic patterns over that contract and its data, not an app ID,
+  an exact version, a version range, or a pinned source tag; see
+  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)
+  for the remaining app-specific exceptions awaiting conversion.
 - Keep dynamic endpoints relative and inside approved same-origin prefixes.
 - Omit behavior whose provenance or permission model is ambiguous.
 

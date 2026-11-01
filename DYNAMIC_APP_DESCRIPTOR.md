@@ -537,7 +537,7 @@ bodies, invalid text, and deeply nested JSON.
 
 ## Contract-driven record writes
 
-**Last reviewed: 2026-10-31.** This section describes source and deterministic
+**Last reviewed: 2026-11-01.** This section describes source and deterministic
 test behavior; the code may have changed since, and the linked sources are
 authoritative. None of these writes has been validated against a live server or
 shipped in a published release. See [COMPATIBILITY.md](COMPATIBILITY.md) for
@@ -548,7 +548,22 @@ app ID, an exact version, a version range, or a reviewed source tag, so any app
 whose published contract and data match a pattern gets its editor. Every
 operation comes from the installed app's own contract: a server-advertised
 OpenAPI document, or the verified package or exact source tag acquired for that
-installation. Observed reads never authorize a write.
+installation. Observed reads never authorize a write. A replacement (PUT) edit
+also needs the same-route read that the descriptor compiler pairs with it
+(`resultRecoveryActionId`), and the compiler records that pairing only for
+verified package or exact source-tag provenance. With only a server-advertised
+OpenAPI document, PATCH edits can be offered but PUT edits stay unavailable.
+
+These editors are not the whole dynamic path. A few app-specific rules outside
+them still test an app ID and exact version and are awaiting conversion to
+contract-shaped rules: the Chores 0.1.0 and 0.2.0 version gate in
+[`ChoresContractPolicy.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/ChoresContractPolicy.kt),
+used by its navigation, workspace, invitation, work completion, and create
+recovery rules,
+the Pantry 0.23.0 owner reorder authority in
+[`NativeRecordActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt),
+and the Pantry 0.34.0 timestamp presentation in
+[`NativePantryPresentation.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativePantryPresentation.kt).
 
 [`NativeContractActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeContractActions.kt)
 starts from the collection read that opened the screen, a route ending in
@@ -563,7 +578,7 @@ contract offers nothing.
 | Pattern | Recognized from | Editor |
 | --- | --- | --- |
 | Column-defined grid rows ([`NativeGridRowWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeGridRowWrites.kt)) | A grid view whose parent record has column records and rows that store `[{column, value}]` cells; one write body property declared as an open key-value map | New, edit, and delete rows; one input per column type word (`text`, `number`, `selection`, `datetime` and their variants) with the options, limits, and mandatory flag the column states |
-| Child records in a parent ([`NativeChildRecordWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeChildRecordWrites.kt)) | A parent-scoped collection whose write bodies declare typed properties | New, edit, and delete with inputs derived from the body schema: text, money, date, choice or enum, one person, several people, and yes or no; choices come from the parent record or a related resource that lists them, such as a project's members or categories |
+| Child records in a parent ([`NativeChildRecordWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeChildRecordWrites.kt)) | A parent-scoped collection whose write bodies declare typed properties | New, edit, and delete with inputs derived from the body schema: text, money, date, choice or enum, one person, several people, and yes or no; choices come from the parent record or a related resource that lists them, such as a project's members or categories, under the choice-source rule below |
 | Questionnaire responses ([`NativeQuestionnaireSubmission.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeQuestionnaireSubmission.kt)) | A record holding a `questions` list, and a POST below its item route whose body declares exactly one map of string arrays | Fill in and send answers keyed by question identity |
 
 Rules shared by the editors:
@@ -575,6 +590,13 @@ Rules shared by the editors:
   determine, for example several people packed into one string, makes that
   write unavailable with an explanation. Other optional fields without a
   recognized role are not shown and not sent.
+- A reference field takes its choices from a collection named after its own
+  stem: `categoryId` from `categories`, `member` from `members`. A person
+  field named otherwise, such as `payer` or `userId`, takes another people
+  collection (members, participants, users) only when at least one loaded
+  record's stored value for that field resolves to identities in it. Without
+  that evidence there is no picker, so the field is not editable, and a create
+  that needs it is unavailable, for example in an empty collection.
 - Identities come from authoritative records: the parent, the row, the child
   record, the questionnaire. A row ID never replaces a table or view ID, and a
   child ID never replaces a parent ID. Route values bind by position. A global
@@ -587,10 +609,20 @@ Rules shared by the editors:
   Questionnaires need a `canSubmit`-style flag, and a permission list or a
   closed or limit flag that refuses a response is explained.
 - PATCH sends only the changed values. PUT replaces the record, so it is
-  offered only when the contract declares the same-route read that can verify
-  the result, and it sends every value read back; a record that holds a value
-  the editor cannot encode is then not edited. No precondition is declared by
-  these contracts, so a concurrent change made elsewhere can be overwritten.
+  offered only when the contract declares the same-route read, and it sends a
+  complete copy. Values the person did not change travel exactly as read,
+  including grid cells the editor cannot show, such as a choice whose option
+  was removed or a date-time with seconds. A record that holds a value the
+  editor cannot encode, or a grid row holding a non-empty cell for a column
+  the grid does not list (as in a filtered view), is not replaced.
+- Immediately before a PUT, the executor re-reads the target through that
+  same-route read, bypassing caches
+  ([`DynamicReplacementWriteGuard.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReplacementWriteGuard.kt)).
+  When any stored body value differs from the copy the editor opened, nothing
+  is sent and the editor offers a refresh; when the read fails, nothing is
+  sent either. This narrows but does not close the window for a lost update:
+  these contracts declare no ETag or version precondition, so a change that
+  lands between the check and the write can still be overwritten.
 - Grid cells whose representation neither the contract nor the data fixes are
   never encoded: links, rich text, and people columns, and boolean or
   date-time columns until a stored cell shows their representation. The
@@ -603,9 +635,12 @@ Rules shared by the editors:
 - [`NativeEditorWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeEditorWriteSession.kt)
   sends each request once. A rejection keeps the draft. An unconfirmed create
   or response triggers an authoritative refresh and blocks sending again until
-  that refresh arrives, so the person can check for the change first.
-  Repeating an unconfirmed update or delete is allowed because it is
-  idempotent. Cancellation is rethrown and the result stays unconfirmed.
+  that refresh arrives, so the person can check for the change first. An
+  unconfirmed PUT edit also waits for that refresh, and sending it again
+  repeats the pre-write check, which refuses the stale copy if the first
+  attempt was applied. Repeating an unconfirmed PATCH edit or delete is
+  allowed because it is idempotent. Cancellation is rethrown and the result
+  stays unconfirmed.
 - Drafts are ordinary remembered UI state and are not kept across process
   death. Nothing is stored on the server until a request is confirmed.
 
@@ -615,18 +650,22 @@ needs:
 
 - Expense create and edit when the people a bill was for are sent as one plain
   string (the Cospend OpenAPI excerpt), and expense edit when the contract
-  offers only an unverifiable replacement.
+  offers only an unverifiable replacement, which includes every PUT edit known
+  only from a server-advertised OpenAPI document.
 - Any parent-scoped write in a container that states its access only as a
   numeric level.
 - Questionnaire answers to combined date and time questions, and a
-  questionnaire's closed state when it is stated only as a numeric code.
+  questionnaire's closed state when it is stated only as a numeric code that
+  the contract does not label. A `state` or `status` field whose contract enum
+  labels name the current value closed, expired, or archived is explained as
+  closed; otherwise the server remains the authority that refuses a response.
 - Grid link, rich text, and people cells.
 
 Not covered yet: grid table, column, and view management beyond the generic
 contract forms; member management, recurring entries, and settlement actions
 beyond the generic contract surfaces; questionnaire results for owners; and a
 new child record in an empty collection, because the empty list uses the
-generic empty state.
+generic empty state and no loaded record proves a person field's collection.
 
 ## Reviewed limits
 

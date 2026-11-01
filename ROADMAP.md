@@ -564,8 +564,14 @@ Adapters follow advertised capabilities, official DAV/OCS protocols, the install
 The native schema is a trust boundary, not a plugin permission bypass. Dynamic
 apps are supported by version-agnostic rules for the data structures and
 wording found across apps, linked to the native UI that belongs to them, so any
-app whose contract and data match a pattern gets it. There are no per-app
-adapters, app-ID conditionals, or version allowlists in this path.
+app whose contract and data match a pattern gets it. The record editors for
+grids, child records, and questionnaires contain no per-app adapters, app-ID
+conditionals, or version allowlists. Last reviewed: 2026-11-01 (may have
+changed; the source is authoritative): a few app- and version-gated rules
+remain elsewhere in the dynamic path and are awaiting conversion to
+contract-shaped rules, namely the Chores 0.1.0 and 0.2.0 gate, the Pantry
+0.23.0 owner reorder authority, and the Pantry 0.34.0 timestamp presentation.
+See [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes) for their sources.
 
 ### Discovery pipeline
 
@@ -603,8 +609,9 @@ typed read-only repository and adaptive native components
 - Unified-search providers are discovered at runtime. Mail and future apps join
   global search without mobile-client code changes when the server advertises
   the standard provider contract.
-- Semantic pattern rules are ordinary reviewed source code with deterministic tests over synthetic contracts. They never test an app ID or version, and they do not execute downloaded server code.
+- Semantic pattern rules are ordinary reviewed source code with deterministic tests over synthetic contracts. They never test an app ID or version, and they do not execute downloaded server code. The remaining app- and version-gated rules named above are exceptions to convert, not a model for new work.
 - Writes come only from the installed app's own published contract for the operation. A rule may decide presentation; it may not supply an encoding, required value, or permission the contract and data do not express. Such writes stay unavailable with an explanation.
+- A replacement (PUT) edit also needs the contract's same-route read, which the compiler pairs only for verified package or exact source-tag provenance. Immediately before the write the target is re-read through it and nothing is sent when the target changed.
 - A contributor inspector can view raw evidence, inferred resource/action mapping, warnings, and why an action is disabled.
 
 ### Acceptance criteria
