@@ -8,6 +8,8 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.Evidence
 import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
@@ -69,6 +71,18 @@ class NativeQuestionnaireSubmissionTest {
     }
 
     @Test
+    fun aNumericStateIsClosedOnlyWhenTheContractLabelsThatValueClosed() {
+        val labelled = surveys.copy(fields = listOf(FieldSpec("state", "State", FieldKind.integer, false, true,
+            enumValues = listOf("0", "1", "2"), enumLabels = mapOf("0" to "Active", "1" to "Closed", "2" to "Archived"))))
+        assertEquals("This form is closed.", plan(survey(extra = mapOf("state" to "1")), resource = labelled)?.unavailableReason)
+        assertEquals("This form is closed.", plan(survey(extra = mapOf("state" to "2")), resource = labelled)?.unavailableReason)
+        assertNull(plan(survey(extra = mapOf("state" to "0")), resource = labelled)?.unavailableReason)
+        val unlabelled = surveys.copy(fields = listOf(FieldSpec("state", "State", FieldKind.integer, false, true)))
+        assertNull(plan(survey(extra = mapOf("state" to "1")), resource = unlabelled)?.unavailableReason,
+            "Without contract labels no number is assumed to mean closed; the server still decides.")
+    }
+
+    @Test
     fun noPlanWithoutTheAnswerMapContractOrWithForeignOrMalformedQuestions() {
         assertNull(plan(evidence = EvidenceSource.networkObservation))
         assertNull(plan(answersSchema = """{"type":"string"}"""), "Without a declared answer map nothing is submitted.")
@@ -89,11 +103,12 @@ class NativeQuestionnaireSubmissionTest {
         evidence: EvidenceSource = EvidenceSource.verifiedAppPackage,
         answersSchema: String = """{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}}""",
         app: AppIdentity = AppIdentity("surveyor", "Surveyor", "3.0.0"),
+        resource: ResourceSpec = surveys,
     ): NativeQuestionnairePlan? {
         val item = "/apps/surveyor/api/surveys/{surveyId}"
         val body = Json.parseToJsonElement("""{"type":"object","properties":{"answers":$answersSchema,"shareHash":{"type":"string"}}}""")
         val schema = NativeAppSchema("0.1", app, Confidence.high,
-            resources = listOf(surveys),
+            resources = listOf(resource),
             actions = listOf(
                 ActionSpec("surveys.read", "Survey", "surveys", ApiBinding(HttpMethod.GET, item, "surveys.read",
                     listOf("surveyId"), listOf("surveyId")), ActionIntent.read, ActionRisk.readOnly, false, Confidence.high,
@@ -104,7 +119,7 @@ class NativeQuestionnaireSubmissionTest {
                     ActionIntent.create, ActionRisk.mutating, true, Confidence.high,
                     evidence = listOf(Evidence(evidence, "synthetic"))),
             ))
-        return nativeQuestionnairePlan(schema, surveys, record)
+        return nativeQuestionnairePlan(schema, resource, record)
     }
 
     private fun survey(

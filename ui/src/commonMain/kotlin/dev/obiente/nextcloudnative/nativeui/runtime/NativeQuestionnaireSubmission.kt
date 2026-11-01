@@ -84,7 +84,8 @@ internal fun nativeQuestionnairePlan(
     val reason = when {
         // A permission list that omits responding means the person may only read.
         record.permissionNames()?.none { it in RESPOND_PERMISSIONS } == true -> "You cannot respond to this form."
-        CLOSED_FLAGS.any { record.valueNamed(it)?.toBooleanStrictOrNull() == true } -> "This form is closed."
+        CLOSED_FLAGS.any { record.valueNamed(it)?.toBooleanStrictOrNull() == true } || record.inDeclaredClosedState(resource) ->
+            "This form is closed."
         LIMIT_FLAGS.any { record.valueNamed(it)?.toBooleanStrictOrNull() == true } -> "This form accepts no more responses."
         RESPOND_FLAGS.firstNotNullOfOrNull(record::valueNamed)?.toBooleanStrictOrNull() != true ->
             "This form does not accept a response from you right now."
@@ -102,6 +103,16 @@ internal fun nativeQuestionnairePlan(
         answersField = answersField,
         unavailableReason = reason,
     )
+}
+
+/**
+ * Whether a state field of [resource] holds a value the contract itself labels closed. A numeric
+ * state without such labels says nothing about which number means closed, so it is not guessed.
+ */
+private fun NativeRecord.inDeclaredClosedState(resource: ResourceSpec): Boolean = resource.fields.any { field ->
+    val labels = field.enumLabels ?: return@any false
+    field.id.contractKey() in STATE_FIELDS &&
+        values[field.id]?.trim()?.let(labels::get)?.contractKey() in CLOSED_STATE_LABELS
 }
 
 /**
@@ -269,5 +280,7 @@ private val TITLES = listOf("title", "name")
 private val RESPOND_PERMISSIONS = setOf("submit", "respond", "answer", "reply")
 private val RESPOND_FLAGS = listOf("cansubmit", "canrespond", "cananswer")
 private val CLOSED_FLAGS = listOf("isclosed", "closed", "isexpired", "expired", "isarchived", "archived")
+private val STATE_FIELDS = setOf("state", "status")
+private val CLOSED_STATE_LABELS = setOf("closed", "expired", "archived")
 private val LIMIT_FLAGS = listOf("ismaxsubmissionsreached", "maxsubmissionsreached", "limitreached")
 private const val MAX_QUESTIONS = 300
