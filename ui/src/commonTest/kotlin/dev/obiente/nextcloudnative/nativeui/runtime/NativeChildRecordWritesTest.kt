@@ -12,9 +12,11 @@ import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -110,6 +112,77 @@ class NativeChildRecordWritesTest {
     }
 
     @Test
+    fun replacementEditsAreGuardedByAFreshReadOfTheStoredBodyValues() {
+        val plan = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read")))
+        val expense = assertNotNull(plan.record(expenseRecord()))
+        val request = assertIs<NativeChildRecordRequestResult.Ready>(
+            plan.updateRequest(expense, expense.draft + ("amount" to "20")),
+        ).request
+        val precondition = assertNotNull(request.precondition, "A replacement is never sent from an unchecked copy.")
+        assertEquals(mapOf("projectId" to "p1", "expenseId" to "44"), precondition.readValues)
+        assertTrue(precondition.holds(listOf(expenseRecord())))
+        assertTrue(precondition.holds(listOf(expenseRecord().let { it.copy(values = it.values + ("lastChanged" to "999")) })),
+            "A value outside the write body does not block the edit.")
+        assertFalse(precondition.holds(listOf(expenseRecord().let { it.copy(values = it.values + ("amount" to "31.0")) })),
+            "A concurrent change to a field this edit did not touch is detected.")
+        assertFalse(precondition.holds(listOf(expenseRecord(payer = "2"))))
+        assertFalse(precondition.holds(emptyList()))
+        assertEquals(NativeEditorWriteRetry.AfterRefresh, plan.updateRetry)
+        val patch = assertNotNull(plan())
+        val patchExpense = assertNotNull(patch.record(expenseRecord()))
+        assertNull(assertIs<NativeChildRecordRequestResult.Ready>(
+            patch.updateRequest(patchExpense, patchExpense.draft + ("amount" to "20")),
+        ).request.precondition)
+        assertEquals(NativeEditorWriteRetry.Idempotent, patch.updateRetry)
+    }
+
+    @Test
+    fun anUnconfirmedReplacementWaitsForARefreshAndAChangedRecordOffersOne(): Unit = runBlocking {
+        val plan = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read")))
+        val editing = NativeChildRecordEditing()
+        editing.open(plan, NativeChildRecordTarget.Edit(assertNotNull(plan.record(expenseRecord()))), "2026-03-04")
+        editing.edit("amount", "20")
+        var sent = 0
+        editing.submit(plan, {
+            sent++
+            NativeActionExecutionResult.Failure("Timed out.", NativeActionFailureOutcome.Unknown)
+        }) {}
+        assertFalse(editing.session.canSubmit, "Stale values are not resent before a fresh read arrives.")
+        editing.session.acceptAuthoritativeRefresh()
+        assertTrue(editing.session.canSubmit)
+        editing.submit(plan, { nativeWritePreconditionFailure(NativeWritePreconditionFailure.Changed) }) {}
+        assertIs<NativeEditorWriteStatus.Changed>(editing.session.status)
+        assertFalse(editing.session.canSubmit, "A changed record is refreshed and edited again instead.")
+        assertEquals(1, sent)
+    }
+
+    @Test
+    fun aPersonFieldNotNamedAfterAPeopleCollectionNeedsLoadedValuesThatResolveInIt() {
+        val withUser = schema(extraProperties = ""","userId":{"type":"string"}""")
+        val unproven = assertNotNull(plan(schema = withUser))
+        assertNull(unproven.create?.fields?.single { it.name == "userId" }?.input,
+            "A members list is not a user picker just because both name people.")
+        val proven = assertNotNull(plan(schema = withUser,
+            records = listOf(expenseRecord().let { it.copy(values = it.values + ("userId" to "2")) })))
+        val user = assertIs<NativeRecordFieldInput.Choice>(proven.create?.fields?.single { it.name == "userId" }?.input)
+        assertEquals(listOf("1", "2", "3"), user.options.map(NativeFieldOption::id), "Loaded values resolve in members.")
+
+        assertIs<NativeRecordFieldInput.Choice>(plan()?.create?.fields?.single { it.name == "payer" }?.input,
+            "Stored payers resolve in members, so members are the payer choices.")
+        assertNull(plan(records = emptyList())?.create?.fields?.single { it.name == "payer" }?.input,
+            "Without a stored payer nothing proves which collection holds payers.")
+        assertNull(plan(records = listOf(expenseRecord(payer = "99")))?.create?.fields?.single { it.name == "payer" }?.input,
+            "A stored payer that is not a member disproves the binding.")
+        val own = assertNotNull(plan(records = emptyList(), context = { context ->
+            context.copy(relatedRecords = context.relatedRecords + ("payers" to listOf(
+                NativeRecord("8", mapOf("id" to "8", "name" to "Synthetic payer")),
+            )))
+        }))
+        val payer = assertIs<NativeRecordFieldInput.Choice>(own.create?.fields?.single { it.name == "payer" }?.input)
+        assertEquals(listOf("8"), payer.options.map(NativeFieldOption::id), "A collection named after the field needs no proof.")
+    }
+
+    @Test
     fun noPlanWithoutPermissionEvidenceTrustedContractsOrAScopedParent() {
         assertNull(plan(project = project(permissions = null)))
         assertNull(plan(schema = schema(evidence = EvidenceSource.networkObservation)))
@@ -136,6 +209,7 @@ class NativeChildRecordWritesTest {
     private fun plan(
         schema: NativeAppSchema = schema(),
         project: NativeRecord = project(),
+        records: List<NativeRecord> = listOf(expenseRecord()),
         context: (NativeDatasetContext) -> NativeDatasetContext = { it },
     ): NativeChildRecordWritePlan? = nativeChildRecordWritePlan(schema, "expenses.list", context(NativeDatasetContext(
         parentResourceId = "projects",
@@ -145,7 +219,7 @@ class NativeChildRecordWritesTest {
             NativeRecord("2", mapOf("id" to "2", "name" to "Lin", "activated" to "true")),
             NativeRecord("3", mapOf("id" to "3", "name" to "Sam", "activated" to "false")),
         )),
-    )))
+    )), records)
 
     private fun schema(
         evidence: EvidenceSource = EvidenceSource.openApi,
@@ -153,10 +227,11 @@ class NativeChildRecordWritesTest {
         payedFor: String = """{"type":"array","format":"$DYNAMIC_INTEGER_ARRAY_FORMAT","items":{"type":"integer"}}""",
         updateMethod: HttpMethod = HttpMethod.PATCH,
         recovery: String? = null,
+        extraProperties: String = "",
     ): NativeAppSchema {
         val properties = """"what":{"type":"string"},"amount":{"type":"number"},"date":{"type":"string","format":"date"},""" +
             """"payer":{"type":"integer"},"payedFor":$payedFor,"categoryId":{"type":"integer"},""" +
-            """"comment":{"type":"string"},"repeat":{"type":"string"}"""
+            """"comment":{"type":"string"},"repeat":{"type":"string"}""" + extraProperties
         val create = """{"type":"object","required":["what","amount","payer","payedFor"],"properties":{$properties}}"""
         val update = """{"type":"object","properties":{$properties}}"""
         val item = "$LIST/{expenseId}"

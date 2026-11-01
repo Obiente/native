@@ -84,18 +84,110 @@ class NativeGridRowWritesTest {
     }
 
     @Test
-    fun replacementUpdateNeedsADeclaredSameRouteReadAndSendsEveryCell() {
+    fun replacementUpdateNeedsADeclaredSameRouteReadAndSendsEveryStoredCell() {
         assertNull(assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT))).update,
             "A replacement without a contract read to verify it is not offered.")
-        val plan = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "rows.read")))
+        val plan = replacementPlan()
         val row = assertNotNull(plan.row(row()))
         val request = assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(row, mapOf("2" to "40"))).request
         val cells = Json.parseToJsonElement(request.values.getValue("cells")).jsonObject
-        assertEquals(plan.editableColumns.map { it.key }.toSet(), cells.keys, "A replacement carries every editable cell.")
+        assertEquals(row.cells.keys, cells.keys, "A replacement carries every stored cell, and invents none.")
+        assertEquals(JsonPrimitive(40.0), cells["2"])
         assertEquals(JsonPrimitive("Synthetic item"), cells["1"])
         val linked = assertNotNull(plan.row(row(ROW_DATA.dropLast(1) + """,{"columnId":7,"value":"{\"value\":\"https://x.example.test\"}"}]""")))
         assertIs<NativeGridRowRequestResult.Unavailable>(plan.updateRequest(linked, mapOf("2" to "40")),
             "A replacement would clear the link value it cannot encode.")
+    }
+
+    @Test
+    fun replacementCarriesAPreconditionThatRefusesAConcurrentChange() {
+        val plan = replacementPlan()
+        val row = assertNotNull(plan.row(row()))
+        val request = assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(row, mapOf("2" to "40"))).request
+        val precondition = assertNotNull(request.precondition, "Every replacement is checked against a fresh read first.")
+        assertEquals(mapOf("sheetId" to "5", "rowId" to "9"), precondition.readValues)
+        assertTrue(precondition.holds(listOf(row())))
+        val otherCellChanged = row(ROW_DATA.replace(""""value":"Synthetic item"""", """"value":"Edited elsewhere""""))
+        assertFalse(precondition.holds(listOf(otherCellChanged)), "A concurrent edit of another cell is never overwritten.")
+        assertFalse(precondition.holds(listOf(row(ROW_DATA.dropLast(1) + """,{"columnId":6,"value":"2026-01-01"}]"""))),
+            "A cell added elsewhere counts as a change.")
+        assertFalse(precondition.holds(emptyList()), "A read without the row cannot confirm it.")
+        assertFalse(precondition.holds(listOf(row().copy(id = "10"))))
+        val patch = assertNotNull(plan())
+        val patchRequest = assertIs<NativeGridRowRequestResult.Ready>(
+            patch.updateRequest(assertNotNull(patch.row(row())), mapOf("2" to "40")),
+        ).request
+        assertNull(patchRequest.precondition, "A PATCH names only the changed cell and needs no copy check.")
+    }
+
+    @Test
+    fun untouchedCellsTravelExactlyAsStoredEvenWhenTheEditorCannotShowThem() {
+        val dated = column("11", "Starts", "datetime", "")
+        val stored = """[{"columnId":1,"value":"Synthetic item"},{"columnId":2,"value":12},""" +
+            """{"columnId":3,"value":404},{"columnId":4,"value":[11,99]},{"columnId":5,"value":"false"},""" +
+            """{"columnId":11,"value":"2026-01-02T08:30:45.123+01:00"}]"""
+        val plan = replacementPlan(columns = columns() + dated, rows = listOf(row(stored)))
+        val row = assertNotNull(plan.row(row(stored)))
+        val opened = plan.editableColumns.associate { it.key to it.draftFrom(row.cells[it.key]) }
+        val request = assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(row, opened + ("2" to "40"))).request
+        val body = request.values.getValue("cells")
+        val cells = Json.parseToJsonElement(body).jsonObject
+        assertEquals(JsonPrimitive(404L), cells["3"], "A choice whose option was removed is not cleared.")
+        assertEquals(JsonArray(listOf(JsonPrimitive(11L), JsonPrimitive(99L))), cells["4"], "Unknown choices are kept.")
+        assertEquals(JsonPrimitive("2026-01-02T08:30:45.123+01:00"), cells["11"], "A stored date-time keeps its full precision.")
+        assertTrue(""""3":404""" in body && """"4":[11,99]""" in body && """"11":"2026-01-02T08:30:45.123+01:00"""" in body,
+            "Untouched cells are sent byte-for-byte as stored: $body")
+    }
+
+    @Test
+    fun aRowWithCellsOutsideTheListedColumnsIsNotReplaced() {
+        val outOfView = ROW_DATA.dropLast(1) + """,{"columnId":30,"value":"Hidden in this view"}]"""
+        val plan = replacementPlan(rows = listOf(row(outOfView)))
+        val row = assertNotNull(plan.row(row(outOfView)))
+        val refused = assertIs<NativeGridRowRequestResult.Unavailable>(plan.updateRequest(row, mapOf("2" to "40")))
+        assertTrue("cannot keep" in refused.reason, "A replacement would drop the out-of-view cell.")
+        val empty = assertNotNull(plan.row(row(ROW_DATA.dropLast(1) + """,{"columnId":30,"value":null}]""")))
+        assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(empty, mapOf("2" to "40")),
+            "An empty out-of-view cell holds nothing to lose.")
+        val patch = assertNotNull(plan(rows = listOf(row(outOfView))))
+        assertIs<NativeGridRowRequestResult.Ready>(patch.updateRequest(assertNotNull(patch.row(row(outOfView))), mapOf("2" to "40")),
+            "A PATCH changes only the named cell, so it is still offered.")
+    }
+
+    @Test
+    fun aChangedRowRefusalOffersRefreshAndBlocksSaving(): Unit = runBlocking {
+        val plan = replacementPlan()
+        val editing = NativeGridRowEditing()
+        editing.open(plan, NativeGridRowEditorTarget.Edit(assertNotNull(plan.row(row()))))
+        editing.update("2", "40")
+        var refreshes = 0
+        editing.submit(plan, { nativeWritePreconditionFailure(NativeWritePreconditionFailure.Changed) }) { refreshes++ }
+        val status = assertIs<NativeEditorWriteStatus.Changed>(editing.session.status)
+        assertTrue("changed since you opened it" in status.message)
+        assertFalse(editing.session.canSubmit, "The stale draft cannot be sent; the editor offers a refresh instead.")
+        assertEquals(0, refreshes, "Nothing was sent, so nothing needs reconciling yet.")
+        assertNotNull(editing.target)
+    }
+
+    @Test
+    fun anUnconfirmedReplacementNeedsAFreshReadBeforeItCanBeSentAgain(): Unit = runBlocking {
+        val plan = replacementPlan()
+        assertEquals(NativeEditorWriteRetry.AfterRefresh, plan.updateRetry)
+        assertEquals(NativeEditorWriteRetry.Idempotent, assertNotNull(plan()).updateRetry)
+        val editing = NativeGridRowEditing()
+        editing.open(plan, NativeGridRowEditorTarget.Edit(assertNotNull(plan.row(row()))))
+        editing.update("2", "40")
+        var sent = 0
+        val ambiguous = NativeActionExecutor {
+            sent++
+            NativeActionExecutionResult.Failure("Timed out.", NativeActionFailureOutcome.Unknown)
+        }
+        editing.submit(plan, ambiguous) {}
+        assertFalse(editing.session.canSubmit, "The stale copy is not resent before the list is read again.")
+        editing.submit(plan, ambiguous) {}
+        assertEquals(1, sent)
+        editing.session.acceptAuthoritativeRefresh()
+        assertTrue(editing.session.canSubmit, "After the fresh read the guarded copy may be checked and sent again.")
     }
 
     @Test
@@ -239,6 +331,9 @@ class NativeGridRowWritesTest {
             currentUserId = "synthetic-user", relatedRecords = mapOf("columns" to columns))
         return nativeGridRowWritePlan(schema, view, context, rows)
     }
+
+    private fun replacementPlan(columns: List<NativeRecord> = columns(), rows: List<NativeRecord> = listOf(row())) =
+        assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "rows.read"), columns = columns, rows = rows))
 
     private fun schema(
         evidence: EvidenceSource = EvidenceSource.verifiedAppPackage,

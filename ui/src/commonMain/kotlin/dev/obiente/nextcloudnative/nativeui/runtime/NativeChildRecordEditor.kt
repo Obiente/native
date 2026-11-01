@@ -68,7 +68,7 @@ internal class NativeChildRecordEditing {
     suspend fun submit(plan: NativeChildRecordWritePlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
         val (result, retry) = when (val current = target ?: return) {
             NativeChildRecordTarget.Create -> plan.createRequest(draft) to NativeEditorWriteRetry.NonIdempotent
-            is NativeChildRecordTarget.Edit -> plan.updateRequest(current.record, draft) to NativeEditorWriteRetry.Idempotent
+            is NativeChildRecordTarget.Edit -> plan.updateRequest(current.record, draft) to plan.updateRetry
             is NativeChildRecordTarget.Delete -> plan.deleteRequest(current.record) to NativeEditorWriteRetry.Idempotent
         }
         when (result) {
@@ -119,11 +119,8 @@ internal fun NativeChildRecordEditorDialog(
         is NativeChildRecordTarget.Edit -> plan.update?.write?.action
         is NativeChildRecordTarget.Delete -> plan.delete?.write?.action
     }
-    val submit: () -> Unit = {
-        scope.launch {
-            editing.submit(plan, executor) { refreshAction?.let { action -> onActionSucceeded?.invoke(action) } }
-        }
-    }
+    val refresh: () -> Unit = { refreshAction?.let { action -> onActionSucceeded?.invoke(action) } }
+    val submit: () -> Unit = { scope.launch { editing.submit(plan, executor, refresh) } }
     if (target is NativeChildRecordTarget.Delete) {
         NativeEditorDialog(
             title = "Delete $noun?",
@@ -148,6 +145,7 @@ internal fun NativeChildRecordEditorDialog(
         submitEnabled = operation.unavailableReason == null,
         onDismiss = editing::dismiss,
         onSubmit = submit,
+        onRefresh = { refresh(); editing.dismiss() },
     ) {
         operation.unavailableReason?.let { reason ->
             Text(reason, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)

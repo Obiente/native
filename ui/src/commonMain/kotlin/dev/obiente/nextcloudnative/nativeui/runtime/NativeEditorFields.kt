@@ -179,6 +179,7 @@ internal fun NativeEditorPreservedValue(label: String, explanation: String) {
 internal fun NativeEditorWriteStatusText(session: NativeEditorWriteSession) {
     val message = when (val status = session.status) {
         is NativeEditorWriteStatus.Rejected -> status.message
+        is NativeEditorWriteStatus.Changed -> status.message
         is NativeEditorWriteStatus.Unconfirmed -> status.message
         else -> null
     } ?: return
@@ -192,7 +193,8 @@ internal fun NativeEditorWriteStatusText(session: NativeEditorWriteSession) {
 
 /**
  * Shared dialog frame for record editors. It blocks dismissal while a request is in flight so
- * an unresolved write cannot be abandoned silently.
+ * an unresolved write cannot be abandoned silently. When the target changed after it was read,
+ * the primary action becomes [onRefresh], because the draft is based on stale values.
  */
 @Composable
 internal fun NativeEditorDialog(
@@ -203,8 +205,10 @@ internal fun NativeEditorDialog(
     onSubmit: () -> Unit,
     submitEnabled: Boolean = true,
     destructive: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val refresh = onRefresh?.takeIf { session.status is NativeEditorWriteStatus.Changed }
     AlertDialog(
         onDismissRequest = { if (!session.submitting) onDismiss() },
         title = { Text(title) },
@@ -221,22 +225,26 @@ internal fun NativeEditorDialog(
             TextButton(enabled = !session.submitting, onClick = onDismiss) { Text("Cancel") }
         },
         confirmButton = {
-            Button(
-                enabled = submitEnabled && session.canSubmit,
-                onClick = onSubmit,
-                colors = if (destructive) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                },
-            ) {
-                if (session.submitting) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(submitLabel)
+            if (refresh != null) {
+                Button(onClick = refresh) { Text("Refresh") }
+            } else {
+                Button(
+                    enabled = submitEnabled && session.canSubmit,
+                    onClick = onSubmit,
+                    colors = if (destructive) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                ) {
+                    if (session.submitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(submitLabel)
+                    }
                 }
             }
         },

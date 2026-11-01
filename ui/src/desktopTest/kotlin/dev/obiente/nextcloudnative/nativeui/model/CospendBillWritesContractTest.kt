@@ -23,7 +23,7 @@ class CospendBillWritesContractTest {
     @Test
     fun billListSelectsContractOperationsAndLeavesUndeclaredEncodingsUnavailable() {
         val schema = compile().toNativeAppSchema()
-        val plan = assertNotNull(nativeChildRecordWritePlan(schema, billList(schema), context()))
+        val plan = assertNotNull(nativeChildRecordWritePlan(schema, billList(schema), context(), bills()))
         assertEquals("api-create-bill", plan.create?.write?.action?.id)
         assertEquals("api-edit-bill", plan.update?.write?.action?.id)
         assertNull(plan.delete, "The excerpt has no delete operation, so none is offered.")
@@ -46,6 +46,9 @@ class CospendBillWritesContractTest {
 
     private fun billList(schema: NativeAppSchema): String =
         schema.actions.single { it.binding.method == HttpMethod.GET && it.binding.path.endsWith("/bills") }.id
+
+    /** A loaded bill whose stored payer resolves in the project members, binding them as payer choices. */
+    private fun bills() = listOf(NativeRecord("31", mapOf("id" to "31", "what" to "Synthetic bill", "payer_id" to "1")))
 
     private fun context() = NativeDatasetContext(
         parentResourceId = "projects",

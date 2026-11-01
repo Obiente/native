@@ -76,7 +76,7 @@ internal class NativeGridRowEditing {
         val current = target ?: return
         val (result, retry) = when (current) {
             NativeGridRowEditorTarget.Create -> plan.createRequest(drafts) to NativeEditorWriteRetry.NonIdempotent
-            is NativeGridRowEditorTarget.Edit -> plan.updateRequest(current.row, drafts) to NativeEditorWriteRetry.Idempotent
+            is NativeGridRowEditorTarget.Edit -> plan.updateRequest(current.row, drafts) to plan.updateRetry
             is NativeGridRowEditorTarget.Delete -> plan.deleteRequest(current.row) to NativeEditorWriteRetry.Idempotent
         }
         when (result) {
@@ -134,11 +134,8 @@ internal fun NativeGridRowEditorDialog(
         is NativeGridRowEditorTarget.Edit -> plan.update?.write?.action
         is NativeGridRowEditorTarget.Delete -> plan.delete?.write?.action
     }
-    val submit: () -> Unit = {
-        scope.launch {
-            editing.submit(plan, executor) { refreshAction?.let { action -> onActionSucceeded?.invoke(action) } }
-        }
-    }
+    val refresh: () -> Unit = { refreshAction?.let { action -> onActionSucceeded?.invoke(action) } }
+    val submit: () -> Unit = { scope.launch { editing.submit(plan, executor, refresh) } }
     if (target is NativeGridRowEditorTarget.Delete) {
         NativeEditorDialog(
             title = "Delete row?",
@@ -159,6 +156,7 @@ internal fun NativeGridRowEditorDialog(
         submitLabel = if (target == NativeGridRowEditorTarget.Create) "Add row" else "Save",
         onDismiss = editing::dismiss,
         onSubmit = submit,
+        onRefresh = { refresh(); editing.dismiss() },
     ) {
         plan.columns.forEach { column ->
             NativeGridCellInput(

@@ -55,10 +55,15 @@ internal data class NativeRecordField(
     val shown: Boolean get() = required || role != NativeRecordFieldRole.Other
 }
 
-/** Where reference choices can come from: the parent record and resources loaded beside it. */
+/**
+ * Where reference choices can come from: the parent record and resources loaded beside it.
+ * [records] are the records already loaded in the collection being edited; the references they
+ * store are the evidence that a collection not named after a field really is its target.
+ */
 internal data class NativeFieldChoiceSources(
     val parent: NativeRecord?,
     val related: Map<String, List<NativeRecord>>,
+    val records: List<NativeRecord> = emptyList(),
 )
 
 /** Body fields a person can edit, in contract order, or null when the action declares no schema. */
@@ -98,7 +103,7 @@ private fun nativeRecordField(
     val people = key in PEOPLE_WORDS || stem in PEOPLE_WORDS
     val person = key in PERSON_WORDS || stem in PERSON_WORDS
     if (type == "array") {
-        val options = sources.options(stem, people || person)
+        val options = sources.options(name, stem, people || person)
         val role = if (people || person) NativeRecordFieldRole.People else NativeRecordFieldRole.Reference
         return when {
             options == null -> field(if (people || person) role else NativeRecordFieldRole.Other, null)
@@ -109,7 +114,7 @@ private fun nativeRecordField(
     }
     if (people) return field(NativeRecordFieldRole.People, null)
     if (type in setOf("integer", "string") && (person || key != stem)) {
-        val options = sources.options(stem, person)
+        val options = sources.options(name, stem, person)
         val integer = type == "integer"
         if (options != null && (!integer || options.all { it.id.toLongOrNull() != null })) {
             return field(if (person) NativeRecordFieldRole.Person else NativeRecordFieldRole.Reference, NativeRecordFieldInput.Choice(options))
@@ -147,14 +152,51 @@ private fun nativeRecordField(
     }
 }
 
-/** Choices for a reference named [stem]: a related resource or a parent field holding its plural. */
-private fun NativeFieldChoiceSources.options(stem: String, person: Boolean): List<NativeFieldOption>? {
-    val names = buildSet {
+/**
+ * Choices for the reference [field] with [stem]: a related resource or a parent field named after
+ * the stem (`categoryId` takes `categories`, `member` takes `members`). A person reference named
+ * otherwise (`payer`, `userId`) takes another people collection only when at least one loaded
+ * record's stored value for that field resolves in it; a name alone never binds a collection.
+ */
+private fun NativeFieldChoiceSources.options(field: String, stem: String, person: Boolean): List<NativeFieldOption>? {
+    val own = buildSet {
+        if (stem.endsWith("s")) add(stem)
         add(stem + "s")
         add(stem + "es")
         if (stem.endsWith("y")) add(stem.dropLast(1) + "ies")
-        if (person) addAll(PEOPLE_COLLECTIONS)
     }
+    if (collectionNamed(own)) return collection(own)
+    if (!person) return null
+    return PEOPLE_COLLECTIONS.asSequence().filter { collectionNamed(setOf(it)) }.mapNotNull { collection(setOf(it)) }
+        .firstOrNull { options -> referencesResolve(field, options) }
+}
+
+private fun NativeFieldChoiceSources.collectionNamed(names: Set<String>): Boolean =
+    related.keys.any { it.contractKey() in names } || parent?.values?.keys?.any { it.contractKey() in names } == true
+
+/** Whether a loaded record stores a value for [field] made only of identities in [options]. */
+private fun NativeFieldChoiceSources.referencesResolve(field: String, options: List<NativeFieldOption>): Boolean {
+    val ids = options.mapTo(hashSetOf(), NativeFieldOption::id)
+    return records.any { record -> record.storedReferenceIds(field)?.let { it.isNotEmpty() && ids.containsAll(it) } == true }
+}
+
+private fun NativeRecord.storedReferenceIds(field: String): List<String>? {
+    val raw = storedFieldValue(field) ?: return null
+    return (raw.contractJsonOrNull() as? JsonArray)?.map { (it as? JsonPrimitive)?.contentOrNull?.trim() ?: return null }
+        ?: raw.split(',').map(String::trim).filter(String::isNotEmpty)
+}
+
+/** Names a record may store [field] under, in order: `payer`, then `payerId` or `payer_id`, then `payerIds`. */
+internal fun storedFieldNames(field: String): List<String> {
+    val key = field.contractKey()
+    val stem = key.referenceStem()
+    return listOf(key, stem + "id", stem + "ids").distinct()
+}
+
+/** The value a record stores for the write field [field], under any of [storedFieldNames]. */
+internal fun NativeRecord.storedFieldValue(field: String): String? = storedFieldNames(field).firstNotNullOfOrNull(::valueNamed)
+
+private fun NativeFieldChoiceSources.collection(names: Set<String>): List<NativeFieldOption>? {
     related.entries.firstOrNull { (resourceId, _) -> resourceId.contractKey() in names }?.let { (_, records) ->
         return records.mapNotNull { record -> record.toFieldOption() }.takeIf { it.size == records.size && it.isNotEmpty() }
     }

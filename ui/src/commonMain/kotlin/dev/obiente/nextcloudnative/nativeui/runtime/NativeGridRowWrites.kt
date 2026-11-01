@@ -397,25 +397,41 @@ internal fun NativeGridRowWritePlan.createRequest(drafts: Map<String, String>): 
 
 /**
  * PATCH sends only the changed cells. PUT replaces the row, so it is offered only when the
- * contract declares the same-route read that can verify the result, and it sends every cell; a
- * row holding a value this editor cannot encode is then not editable, so nothing is cleared.
+ * contract declares the same-route read, and it is guarded by that read: immediately before the
+ * write the row is read again and nothing is sent when any stored cell differs from the copy the
+ * editor opened. Cells the person did not change travel exactly as stored, never re-encoded. A
+ * row holding a value this editor cannot keep (a column type it cannot encode, or a cell of a
+ * column this grid does not list, as in a filtered view) is not replaced, so nothing is cleared.
  */
 internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Map<String, String>): NativeGridRowRequestResult {
     val update = update ?: return unavailable("This table's contract does not offer editing rows.")
     val values = itemValues(update, row) ?: return unavailable("This row cannot be matched to its table safely.")
     val changed = editableColumns.filter { column -> drafts[column.key]?.let { it != column.draftFrom(row.cells[column.key]) } == true }
     if (changed.isEmpty()) return NativeGridRowRequestResult.NoChanges
-    val replace = update.write.action.binding.method == HttpMethod.PUT
-    if (replace && columns.any { !it.editable && row.cells[it.key].hasContent() }) {
-        return unavailable("This row has a value this editor cannot keep, so it is not edited here.")
-    }
-    val sent = if (replace) editableColumns else changed
-    val merged = sent.associate { column -> column.key to (drafts[column.key] ?: column.draftFrom(row.cells[column.key])) }
-    val errors = validate(merged, sent)
+    val errors = validate(drafts, changed)
     if (errors.isNotEmpty()) return NativeGridRowRequestResult.Invalid(errors)
-    val data = buildJsonObject { sent.forEach { column -> put(column.key, column.encodeDraft(merged.getValue(column.key))) } }
-    return ready(update.write.action, values + (cellField to data.toString()))
+    val edited = changed.associate { column -> column.key to column.encodeDraft(drafts.getValue(column.key)) }
+    if (update.write.action.binding.method != HttpMethod.PUT) {
+        return ready(update.write.action, values + (cellField to JsonObject(edited).toString()))
+    }
+    val listed = columns.mapTo(hashSetOf(), NativeGridColumn::key)
+    val unkept = columns.any { !it.editable && row.cells[it.key].hasContent() } ||
+        row.cells.any { (key, value) -> key !in listed && value.hasContent() }
+    if (unkept) return unavailable("This row has a value this editor cannot keep, so it is not edited here.")
+    val data = buildJsonObject {
+        editableColumns.forEach { column -> (edited[column.key] ?: row.cells[column.key])?.let { put(column.key, it) } }
+    }
+    val snapshot = row.cells
+    val precondition = NativeWritePrecondition(
+        readValues = values.filterKeys { it in update.write.placeholders },
+        targetId = row.rowId,
+    ) { current -> nativeGridStoredCells(current, cellField) == snapshot }
+    return ready(update.write.action, values + (cellField to data.toString()), precondition)
 }
+
+/** How an unconfirmed edit may be repeated: a replacement only after a fresh read. */
+internal val NativeGridRowWritePlan.updateRetry: NativeEditorWriteRetry
+    get() = if (update?.write?.action?.binding?.method == HttpMethod.PUT) NativeEditorWriteRetry.AfterRefresh else NativeEditorWriteRetry.Idempotent
 
 internal fun NativeGridRowWritePlan.deleteRequest(row: NativeGridRow): NativeGridRowRequestResult {
     val delete = delete ?: return unavailable("This table's contract does not offer deleting rows.")
@@ -429,8 +445,8 @@ internal fun NativeGridRowWritePlan.itemValues(write: NativeItemWrite, row: Nati
 private fun validate(drafts: Map<String, String>, columns: List<NativeGridColumn>): Map<String, String> =
     columns.mapNotNull { column -> column.validateDraft(drafts[column.key].orEmpty())?.let { column.key to it } }.toMap()
 
-private fun ready(action: ActionSpec, values: Map<String, String>) =
-    NativeGridRowRequestResult.Ready(NativeActionRequest.Submit(action, values, confirmed = true))
+private fun ready(action: ActionSpec, values: Map<String, String>, precondition: NativeWritePrecondition? = null) =
+    NativeGridRowRequestResult.Ready(NativeActionRequest.Submit(action, values, confirmed = true, precondition = precondition))
 
 private fun unavailable(reason: String) = NativeGridRowRequestResult.Unavailable(reason)
 

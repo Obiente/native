@@ -52,12 +52,16 @@ internal data class NativeChildRecord(
     val namesParent: Boolean,
     /** Why this record cannot be edited, or null. */
     val editUnavailableReason: String?,
+    /** The stored values of every body field as read, which a replacement expects to be unchanged. */
+    val snapshot: Map<String, String?> = emptyMap(),
 )
 
+/** [records] are the loaded children; their stored references are evidence for choice sources. */
 internal fun nativeChildRecordWritePlan(
     schema: NativeAppSchema,
     listActionId: String,
     datasetContext: NativeDatasetContext,
+    records: List<NativeRecord> = emptyList(),
 ): NativeChildRecordWritePlan? {
     val parent = datasetContext.parentRecord?.takeIf { record ->
         record.actionSafeIdentity && record.actionBindingProvenanceValid && datasetContext.parentResourceId != null
@@ -65,7 +69,7 @@ internal fun nativeChildRecordWritePlan(
     val route = schema.action(listActionId)?.nativeCollectionRoute() ?: return null
     val listValues = route.listValues(parent, datasetContext) ?: return null
     val permissions = parent.nativeWritePermissions(datasetContext.currentUserId)?.takeIf { it.any } ?: return null
-    val sources = NativeFieldChoiceSources(parent, datasetContext.relatedRecords)
+    val sources = NativeFieldChoiceSources(parent, datasetContext.relatedRecords, records)
     fun operation(write: NativeContractAction): NativeChildRecordOperation? {
         val fields = write.action.nativeRecordFields(route.listPlaceholders.toSet() + write.placeholders, sources) ?: return null
         val shown = fields.filter(NativeRecordField::shown)
@@ -117,8 +121,19 @@ internal fun NativeChildRecordWritePlan.record(record: NativeRecord): NativeChil
         namesParent = record.valueNamed(route.parentReferenceKey) == parentId,
         editUnavailableReason = operation?.unavailableReason
             ?: "Editing here would send an incomplete copy of this record.".takeIf { incomplete },
+        snapshot = operation?.fields.orEmpty().storedSnapshot(record),
     )
 }
+
+/** Every value [record] stores under the names of these fields, keyed by normalized name. */
+private fun List<NativeRecordField>.storedSnapshot(record: NativeRecord): Map<String, String?> {
+    val names = flatMapTo(hashSetOf()) { storedFieldNames(it.name) }
+    return record.values.entries.filter { it.key.contractKey() in names }.associate { (key, value) -> key.contractKey() to value?.trim() }
+}
+
+/** How an unconfirmed edit may be repeated: a replacement only after a fresh read. */
+internal val NativeChildRecordWritePlan.updateRetry: NativeEditorWriteRetry
+    get() = if (updateRoute?.write?.action?.binding?.method == HttpMethod.PUT) NativeEditorWriteRetry.AfterRefresh else NativeEditorWriteRetry.Idempotent
 
 internal fun NativeChildRecordWritePlan.newDraft(today: String): Map<String, String> = buildMap {
     create?.shownFields?.forEach { field ->
@@ -151,7 +166,11 @@ internal fun NativeChildRecordWritePlan.createRequest(draft: Map<String, String>
     return ready(create.write, create.write.placeholders.zip(listValues).toMap() + values)
 }
 
-/** PATCH sends the changed fields; a verified PUT sends every field read back from the record. */
+/**
+ * PATCH sends the changed fields. A verified PUT sends every field read back from the record and
+ * is guarded by the contract's same-route read: immediately before the write the record is read
+ * again, and nothing is sent when any stored body value differs from the copy the editor opened.
+ */
 internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord, draft: Map<String, String>): NativeChildRecordRequestResult {
     val update = update ?: return NativeChildRecordRequestResult.Unavailable("Editing is not offered here.")
     val route = updateRoute ?: return NativeChildRecordRequestResult.Unavailable("Editing is not offered here.")
@@ -161,7 +180,8 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
     val editable = update.shownFields.filter { it.input != null && it.name !in record.unreadable }
     val changed = editable.filter { field -> draft[field.name]?.let { it != record.draft[field.name].orEmpty() } == true }
     if (changed.isEmpty()) return NativeChildRecordRequestResult.NoChanges
-    val sent = if (route.write.action.binding.method == HttpMethod.PUT) editable else changed
+    val replace = route.write.action.binding.method == HttpMethod.PUT
+    val sent = if (replace) editable else changed
     val merged = sent.associate { field -> field.name to (draft[field.name] ?: record.draft[field.name].orEmpty()) }
     validate(sent, merged, existing = record).takeIf(Map<*, *>::isNotEmpty)?.let { return NativeChildRecordRequestResult.Invalid(it) }
     val values = sent.mapNotNull { field ->
@@ -174,7 +194,12 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
             else -> return NativeChildRecordRequestResult.Invalid(mapOf(field.name to "This value cannot be cleared here."))
         }
     }.toMap()
-    return ready(route.write, identities + values)
+    val snapshot = record.snapshot
+    val precondition = if (!replace) null else NativeWritePrecondition(
+        readValues = identities.filterKeys { it in route.write.placeholders },
+        targetId = record.id,
+    ) { current -> update.fields.storedSnapshot(current) == snapshot }
+    return ready(route.write, identities + values, precondition)
 }
 
 internal fun NativeChildRecordWritePlan.deleteRequest(record: NativeChildRecord): NativeChildRecordRequestResult {
@@ -239,15 +264,7 @@ private fun NativeRecordField.encode(draft: String): String? {
 
 /** The current value of this field in [record], in draft form, or null when it cannot be read. */
 private fun NativeRecordField.currentValue(record: NativeRecord): String? {
-    val stem = name.contractKey().let { key ->
-        when {
-            key.length > 3 && key.endsWith("ids") -> key.dropLast(3)
-            key.length > 2 && key.endsWith("id") -> key.dropLast(2)
-            else -> key
-        }
-    }
-    val names = listOf(name, stem + "id", stem + "_id", stem + "ids")
-    val raw = names.firstNotNullOfOrNull(record::valueNamed)
+    val raw = record.storedFieldValue(name)
     return when (val input = input) {
         null -> null
         is NativeRecordFieldInput.MultiChoice -> {
@@ -278,5 +295,5 @@ private val NativeRecordFieldRole.order: Int
         NativeRecordFieldRole.Notes -> 7
     }
 
-private fun ready(write: NativeContractAction, values: Map<String, String>) =
-    NativeChildRecordRequestResult.Ready(NativeActionRequest.Submit(write.action, values, confirmed = true))
+private fun ready(write: NativeContractAction, values: Map<String, String>, precondition: NativeWritePrecondition? = null) =
+    NativeChildRecordRequestResult.Ready(NativeActionRequest.Submit(write.action, values, confirmed = true, precondition = precondition))

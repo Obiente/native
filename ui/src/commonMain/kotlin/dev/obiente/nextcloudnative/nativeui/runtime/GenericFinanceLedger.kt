@@ -57,8 +57,8 @@ internal fun GenericFinanceCollection(
     writes: NativeFinanceWriteContext? = null,
 ) {
     val contextualCurrency = LocalNativeFinanceCurrency.current
-    val recordPlan = remember(writes?.schema, writes?.listActionId, writes?.datasetContext) {
-        writes?.let { nativeChildRecordWritePlan(it.schema, it.listActionId, it.datasetContext) }
+    val recordPlan = remember(writes?.schema, writes?.listActionId, writes?.datasetContext, rows) {
+        writes?.let { nativeChildRecordWritePlan(it.schema, it.listActionId, it.datasetContext, rows.map { (record, _) -> record }) }
     }
     val recordEditing = remember(resource.id, recordPlan?.parentId) { NativeChildRecordEditing() }
     LaunchedEffect(recordEditing, writes?.recordsKey) { recordEditing.session.acceptAuthoritativeRefresh() }
