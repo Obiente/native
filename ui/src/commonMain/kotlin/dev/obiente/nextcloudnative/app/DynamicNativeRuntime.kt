@@ -403,7 +403,7 @@ class DynamicNextcloudActionExecutor(
  * OCS endpoints can report an application failure inside an HTTP 2xx response. A declared OCS
  * mutation therefore succeeds only when its bounded JSON metadata contains both an `ok` status
  * and a successful OCS status code. Missing, malformed, or contradictory metadata fails closed
- * without exposing the response body.
+ * without exposing the response body; [dynamicOcsFailure] separates a refusal from a server error.
  */
 internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
     action: DynamicAction,
@@ -436,14 +436,8 @@ internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
     if (statusIsSuccessful && codeIsSuccessful) {
         return NativeActionExecutionResult.Success("${action.label} completed.")
     }
-    val safeMessage = (metadata["message"] as? JsonPrimitive)
-        ?.contentOrNull
-        ?.toSafeDynamicMutationErrorMessage()
-    return NativeActionExecutionResult.Failure(
-        message = safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
-            ?: "The OCS endpoint rejected ${action.label}.",
-        outcome = NativeActionFailureOutcome.Rejected,
-    )
+    val safeMessage = (metadata["message"] as? JsonPrimitive)?.contentOrNull?.toSafeDynamicMutationErrorMessage()
+    return dynamicOcsFailure(action.label, statusCode, safeMessage)
 }
 
 private fun String.toSafeDynamicMutationErrorMessage(): String? {
