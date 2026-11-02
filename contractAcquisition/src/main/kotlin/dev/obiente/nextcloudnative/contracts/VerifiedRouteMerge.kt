@@ -23,6 +23,10 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
     val paths = document.getJSONObject("paths")
     val routeDocument = JSONObject(verifiedReadRoutes.document)
     val routePaths = routeDocument.getJSONObject("paths")
+    val annotatedOperations = copyStaticFacts(paths, routePaths)
+    val copiedDocumentFacts = STATIC_DOCUMENT_FACT_EXTENSIONS.count { key ->
+        routeDocument.has(key).also { present -> if (present) document.put(key, routeDocument.get(key)) }
+    }
     val preferredCollections = paths.keys().asSequence().sorted().mapNotNull { path ->
         val pathItem = paths.optJSONObject(path) ?: return@mapNotNull null
         val operation = pathItem.optJSONObject("get") ?: return@mapNotNull null
@@ -102,7 +106,10 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
         addedRoutes += 1
     }
 
-    if (addedRoutes == 0) return openApi
+    if (addedRoutes == 0) {
+        if (annotatedOperations == 0 && copiedDocumentFacts == 0) return openApi
+        return openApi.copy(document = document.toString())
+    }
     document.put("x-nextcloud-native-contract-kind", "openapi-with-verified-read-routes")
     document.put("x-nextcloud-native-verified-read-route-count", addedRoutes - importedStaticWrites)
     document.put("x-nextcloud-native-linked-read-fallback-count", linkedFallbacks)
@@ -112,6 +119,44 @@ internal fun mergeOpenApiWithVerifiedReadRoutes(
         contractKind = VerifiedContractKind.OpenApiWithVerifiedReadRoutes,
     )
 }
+
+/**
+ * Adds the package's static facts (route source, policy, merge hint) to advertised operations at
+ * the same path and method. Advertised OpenAPI states admin, password, and CORS rules only as
+ * prose, so these facts never replace a declared field; an operation that already carries a fact
+ * keeps it.
+ */
+private fun copyStaticFacts(paths: JSONObject, routePaths: JSONObject): Int {
+    var annotated = 0
+    routePaths.keys().asSequence().sorted().forEach { path ->
+        val routeItem = routePaths.optJSONObject(path) ?: return@forEach
+        val target = paths.optJSONObject(path) ?: return@forEach
+        HTTP_OPERATION_METHODS.forEach { method ->
+            val routeOperation = routeItem.optJSONObject(method) ?: return@forEach
+            val targetOperation = target.optJSONObject(method) ?: return@forEach
+            var changed = false
+            STATIC_OPERATION_FACT_EXTENSIONS.forEach { key ->
+                if (routeOperation.has(key) && !targetOperation.has(key)) {
+                    targetOperation.put(key, routeOperation.get(key))
+                    changed = true
+                }
+            }
+            if (changed) annotated += 1
+        }
+    }
+    return annotated
+}
+
+private val HTTP_OPERATION_METHODS = listOf("get", "post", "put", "patch", "delete")
+private val STATIC_OPERATION_FACT_EXTENSIONS = listOf(ROUTE_SOURCE_EXTENSION, POLICY_EXTENSION, MERGE_HINT_EXTENSION)
+private val STATIC_DOCUMENT_FACT_EXTENSIONS = listOf(
+    STATIC_EVIDENCE_FORMAT_EXTENSION,
+    STATIC_ROUTES_EXTENSION,
+    SKIPPED_ROUTES_EXTENSION,
+    ENTITY_SERIALIZATIONS_EXTENSION,
+    CAPABILITY_KEYS_EXTENSION,
+    SUPPLEMENTARY_TRUNCATED_EXTENSION,
+)
 
 private data class CollectionReadContract(
     val operationId: String,

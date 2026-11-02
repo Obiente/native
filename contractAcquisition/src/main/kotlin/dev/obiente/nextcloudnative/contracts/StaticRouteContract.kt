@@ -21,12 +21,21 @@ internal fun synthesizeReadOnlyRouteContract(
     appId: String,
     appVersion: String,
     files: Map<String, ByteArray>,
+    supplementaryTruncated: Boolean = false,
 ): VerifiedPackageContract? {
-    val routeFile = files.entries.singleOrNull { (path, _) -> path.endsWith("/appinfo/routes.php") }
-        ?: return null
-    val root = routeFile.key.substringBefore('/')
+    val routeFiles = files.entries.filter { (path, _) -> path.endsWith("/appinfo/routes.php") }
+    if (routeFiles.size > 1) return null
+    val routeFile = routeFiles.singleOrNull()
+    val root = (routeFile?.key ?: files.keys.firstOrNull { path -> "/lib/Controller/" in path })
+        ?.substringBefore('/') ?: return null
     if (root.isBlank()) return null
-    val routeGroups = parseRouteManifest(routeFile.value.decodeToString()) ?: return null
+    // An app may declare routes only as controller attributes; a present but unreadable routes.php
+    // still yields no contract because the route set could not be read completely.
+    val manifest = routeFile?.let { parseRouteManifestDetails(it.value.decodeToString()) ?: return null }
+        ?: StaticRouteManifest(emptyList())
+    val evidence = StaticPackageEvidence.read(root, files, supplementaryTruncated)
+    val (routeGroups, ambiguousRouteNames) = mergeStaticRouteSources(manifest.routes, evidence.attributeRoutes)
+    val staticRoutes = JSONArray()
     val controllerSources = files.entries
         .asSequence()
         .filter { (path, _) ->
@@ -79,6 +88,30 @@ internal fun synthesizeReadOnlyRouteContract(
         val prefix = if (route.ocs) "/ocs/v2.php/apps/$appId" else "/apps/$appId"
         val fullPath = (prefix + routePath).replaceDoubleSlashes()
         val fullPathPlaceholders = fullPath.pathPlaceholders() ?: return@forEach
+        val methodEvidence = evidence.method(route.controller, route.method)
+        val operationId = listOf(
+            if (route.ocs) "ocs" else "route",
+            route.controller,
+            route.method + route.postfix.orEmpty(),
+        ).joinToString(".") { it.normalizedPhpName() }
+        val declaredParameters = controller.parameters[route.method.normalizedPhpName()]
+        val bodyCandidates = declaredParameters?.filterNot { parameter ->
+            fullPathPlaceholders.any { it.equals(parameter.name, ignoreCase = true) }
+        }
+        val mergeHint = route.verb in MERGE_HINT_VERBS && bodyCandidates?.declaresNullMergeHint() == true
+        val routeEvidence = controller.let { readable ->
+            staticRouteEvidence(
+                operationId = operationId,
+                route = route,
+                fullPath = fullPath,
+                placeholders = fullPathPlaceholders,
+                parameters = declaredParameters,
+                signatureComplete = readable.completeParameters[route.method.normalizedPhpName()] != null,
+                requestInputs = readable.requestInputs[route.method.normalizedPhpName()],
+                evidence = methodEvidence,
+                mergeHint = mergeHint,
+            ).also { entry -> if (staticRoutes.length() < MAX_STATIC_ROUTE_COUNT) staticRoutes.put(entry) }
+        }
         val verifiedExactWrite = verifiedChoresWrite(
             appId = appId,
             appVersion = appVersion,
@@ -152,6 +185,8 @@ internal fun synthesizeReadOnlyRouteContract(
                     fullPathPlaceholders.any { placeholder -> placeholder.equals(parameter.name, ignoreCase = true) }
                 }
             } == true
+        // Resource writes are recorded as route evidence only; resources publish their reads.
+        if (route.resourceAction && route.verb != "GET") return@forEach
         val crudWrite = if (
             route.verb != "GET" &&
             !editableSettingsWrite &&
@@ -179,11 +214,13 @@ internal fun synthesizeReadOnlyRouteContract(
             val declaredParameter = routeParameters[route.method.normalizedPhpName()]
                 ?.firstOrNull { parameter -> parameter.name.equals(name, ignoreCase = true) }
             parameters.put(
-                JSONObject()
-                    .put("name", name)
-                    .put("in", "path")
-                    .put("required", true)
-                    .put("schema", declaredParameter?.toOpenApiSchema() ?: JSONObject().put("type", "string")),
+                staticPathParameter(
+                    name = name,
+                    route = route,
+                    declared = declaredParameter,
+                    evidence = methodEvidence,
+                    requestParameter = crudWrite?.requestPathParameters?.contains(name) == true,
+                ),
             )
         }
         if (route.verb == "GET" || operationalRefreshWrite) {
@@ -197,7 +234,11 @@ internal fun synthesizeReadOnlyRouteContract(
                             .put("name", parameter.name)
                             .put("in", "query")
                             .put("required", parameter.required)
-                            .put("schema", parameter.toOpenApiSchema()),
+                            .put(
+                                "schema",
+                                methodEvidence?.refinedSchema(parameter, parameter.toOpenApiSchema())
+                                    ?: parameter.toOpenApiSchema(),
+                            ),
                     )
                 }
         }
@@ -220,11 +261,6 @@ internal fun synthesizeReadOnlyRouteContract(
                 itemSchema
             }
         }
-        val operationId = listOf(
-            if (route.ocs) "ocs" else "route",
-            route.controller,
-            route.method,
-        ).joinToString(".") { it.normalizedPhpName() }
         val operation = JSONObject()
             .put("operationId", operationId)
             .put(
@@ -249,6 +285,9 @@ internal fun synthesizeReadOnlyRouteContract(
                         ),
                 ),
             )
+        val typedResponses = if (verifiedChoresResponseSchema == null) methodEvidence?.typedResponses() else null
+        typedResponses?.let { operation.put("responses", it) }
+        operation.putStaticOperationFacts(route, methodEvidence, mergeHint)
         verifiedRecordCursorField(
             appId = appId,
             appVersion = appVersion,
@@ -323,13 +362,16 @@ internal fun synthesizeReadOnlyRouteContract(
                         ),
                     ),
             )
+        } else if (crudWrite?.uploadedFileField != null) {
+            operation.put("requestBody", staticMultipartRequestBody(crudWrite, methodEvidence))
         } else if (crudWrite?.bodyParameters?.isNotEmpty() == true) {
             val properties = JSONObject()
             val required = JSONArray()
             crudWrite.bodyParameters.forEach { parameter ->
+                val base = parameter.toVerifiedCrudBodySchema(route)
                 properties.put(
                     parameter.name,
-                    parameter.toVerifiedCrudBodySchema(route),
+                    if (base.has("x-nextcloud-native-boolean-map")) base else staticBodyProperty(parameter, base, methodEvidence),
                 )
                 if (parameter.required) required.put(parameter.name)
             }
@@ -355,6 +397,7 @@ internal fun synthesizeReadOnlyRouteContract(
         if (pathItem.has(route.verb.lowercase())) return@forEach
         pathItem.put(route.verb.lowercase(), operation)
         paths.put(fullPath, pathItem)
+        routeEvidence?.put("published", true)
     }
     // Android's platform org.json.JSONObject does not expose the newer isEmpty() API.
     // length() is available on every supported Android version and on the JVM test library.
@@ -369,6 +412,15 @@ internal fun synthesizeReadOnlyRouteContract(
         )
         .put("x-nextcloud-native-contract-kind", "verified-read-only-routes")
         .put("paths", paths)
+        .put(STATIC_EVIDENCE_FORMAT_EXTENSION, STATIC_EVIDENCE_FORMAT)
+        .put(STATIC_ROUTES_EXTENSION, staticRoutes)
+    val skipped = JSONObject()
+    (manifest.skippedCustomRootRoutes + evidence.skippedCustomRootRoutes).takeIf { it > 0 }
+        ?.let { skipped.put("customRoot", it) }
+    evidence.unreadableAttributeRoutes.takeIf { it > 0 }?.let { skipped.put("unreadableAttribute", it) }
+    ambiguousRouteNames.takeIf { it > 0 }?.let { skipped.put("ambiguousName", it) }
+    if (skipped.length() > 0) contract.put(SKIPPED_ROUTES_EXTENSION, skipped)
+    evidence.putDocumentFacts(contract)
     return VerifiedPackageContract(
         appId = appId,
         appVersion = appVersion,
@@ -398,247 +450,11 @@ private fun verifiedRecordCursorField(
         operationId == "route.messages.index"
 }
 
-internal data class StaticApiController(
-    val name: String,
-    val methods: Set<String>,
-    val singleParameters: Map<String, StaticPhpParameter>,
-    val parameters: Map<String, List<StaticPhpParameter>>,
-    val completeParameters: Map<String, List<StaticPhpParameter>>,
-    val readParameters: Map<String, List<StaticPhpParameter>>,
-    val methodsWithRequestInput: Set<String>,
-) {
-    val normalizedName: String = name.removeSuffix("Controller").normalizedPhpName()
-}
-
 private data class StaticSettingsSetter(
     val resourceId: String,
     val fieldId: String,
     val parameter: StaticPhpParameter,
 )
-
-private data class StaticControllerHeader(
-    val name: String,
-    val baseName: String,
-)
-
-private fun parseControllerHeader(source: String): StaticControllerHeader? = runCatching {
-    val tokens = PhpLiteralLexer(source).tokens()
-    val classIndex = tokens.indexOfFirst { token -> token is PhpToken.Word && token.value == "class" }
-    val className = (tokens.getOrNull(classIndex + 1) as? PhpToken.Word)?.value ?: return null
-    val extendsIndex = (classIndex + 2 until tokens.size).firstOrNull { index ->
-        val token = tokens[index]
-        token is PhpToken.Word && token.value == "extends"
-    } ?: return null
-    val openingBrace = (extendsIndex + 1 until tokens.size).firstOrNull { index ->
-        val token = tokens[index]
-        token is PhpToken.Symbol && token.value == '{'
-    } ?: return null
-    val baseName = tokens.subList(extendsIndex + 1, openingBrace)
-        .filterIsInstance<PhpToken.Word>()
-        .lastOrNull()
-        ?.value
-        ?: return null
-    StaticControllerHeader(name = className, baseName = baseName)
-}.getOrNull()
-
-private fun resolveTrustedControllerBase(
-    header: StaticControllerHeader,
-    headers: Map<String, StaticControllerHeader>,
-): String? {
-    var current = header
-    val visited = mutableSetOf(header.name.normalizedPhpName())
-    repeat(MAX_STATIC_CONTROLLER_INHERITANCE_DEPTH) {
-        if (current.baseName in STATIC_READ_CONTROLLER_BASES) return current.baseName
-        val nextName = current.baseName.normalizedPhpName()
-        if (!visited.add(nextName)) return null
-        current = headers[nextName] ?: return null
-    }
-    return null
-}
-
-private fun parseApiController(
-    source: String,
-    trustedBase: String,
-): StaticApiController? = runCatching {
-    val tokens = PhpLiteralLexer(source).tokens()
-    val classIndex = tokens.indexOfFirst { token -> token is PhpToken.Word && token.value == "class" }
-    val className = (tokens.getOrNull(classIndex + 1) as? PhpToken.Word)?.value ?: return null
-    val methodEntries = tokens.indices.mapNotNull { index ->
-        val token = tokens[index]
-        if (token !is PhpToken.Word || token.value != "function") return@mapNotNull null
-        val nameIndex = (index + 1 until tokens.size).firstOrNull { candidate ->
-            tokens[candidate] is PhpToken.Word
-        } ?: return@mapNotNull null
-        val methodName = (tokens[nameIndex] as PhpToken.Word).value.normalizedPhpName()
-        val safe = trustedBase == "ApiController" || trustedBase == "OCSController" ||
-            hasSafeJsonReturnType(tokens, nameIndex) ||
-            hasOnlyDataResponseReturns(tokens, nameIndex)
-        if (!safe) return@mapNotNull null
-        ParsedStaticMethod(
-            name = methodName,
-            singleParameter = singleSerializableParameter(tokens, nameIndex),
-            parameters = serializableParameters(tokens, nameIndex),
-            readParameters = serializableParameters(tokens, nameIndex, allowScalarUnions = true),
-            completeParameters = serializableParameters(
-                tokens = tokens,
-                methodNameIndex = nameIndex,
-                allowUnsupportedOptional = false,
-            ),
-            readsRequestInput = methodBodyTokens(tokens, nameIndex)
-                ?.containsRequestInputAccess() == true,
-        )
-    }
-    StaticApiController(
-        name = className,
-        methods = methodEntries.mapTo(linkedSetOf(), ParsedStaticMethod::name),
-        singleParameters = methodEntries.mapNotNull { method ->
-            method.singleParameter?.let { method.name to it }
-        }.toMap(),
-        parameters = methodEntries.mapNotNull { method ->
-            method.parameters?.let { method.name to it }
-        }.toMap(),
-        completeParameters = methodEntries.mapNotNull { method ->
-            method.completeParameters?.let { method.name to it }
-        }.toMap(),
-        readParameters = methodEntries.mapNotNull { method ->
-            method.readParameters?.let { method.name to it }
-        }.toMap(),
-        methodsWithRequestInput = methodEntries
-            .filter(ParsedStaticMethod::readsRequestInput)
-            .mapTo(linkedSetOf(), ParsedStaticMethod::name),
-    )
-}.getOrNull()
-
-private data class ParsedStaticMethod(
-    val name: String,
-    val singleParameter: StaticPhpParameter?,
-    val parameters: List<StaticPhpParameter>?,
-    val completeParameters: List<StaticPhpParameter>?,
-    val readParameters: List<StaticPhpParameter>?,
-    val readsRequestInput: Boolean,
-)
-
-/**
- * Accepts legacy controllers which omit a return type only when every explicit return constructs
- * Nextcloud's JSON-only DataResponse family. This keeps page, redirect, download and stream
- * controllers outside the contract while supporting older apps whose API class extends the generic
- * Controller base.
- */
-private fun hasOnlyDataResponseReturns(tokens: List<PhpToken>, methodNameIndex: Int): Boolean {
-    val body = methodBodyTokens(tokens, methodNameIndex) ?: return false
-    val returns = body.indices.filter { index ->
-        (body[index] as? PhpToken.Word)?.value == "return"
-    }
-    if (returns.isEmpty()) return false
-    return returns.all { returnIndex ->
-        val end = (returnIndex + 1 until body.size).firstOrNull { index ->
-            (body[index] as? PhpToken.Symbol)?.value == ';'
-        } ?: return false
-        body.subList(returnIndex + 1, end).constructsOnlySafeDataResponse()
-    }
-}
-
-private fun List<PhpToken>.constructsOnlySafeDataResponse(): Boolean {
-    val constructedTypes = indices.mapNotNull { index ->
-        if ((get(index) as? PhpToken.Word)?.value != "new") return@mapNotNull null
-        val openingParenthesis = (index + 1 until size).firstOrNull { candidate ->
-            (get(candidate) as? PhpToken.Symbol)?.value == '('
-        } ?: return@mapNotNull null
-        subList(index + 1, openingParenthesis)
-            .filterIsInstance<PhpToken.Word>()
-            .lastOrNull()
-            ?.value
-    }
-    return constructedTypes.isNotEmpty() &&
-        constructedTypes.all { type -> type in STATIC_JSON_RESPONSE_TYPES }
-}
-
-private fun methodBodyTokens(tokens: List<PhpToken>, methodNameIndex: Int): List<PhpToken>? {
-    val openingParenthesis = (methodNameIndex + 1 until tokens.size).firstOrNull { index ->
-        (tokens[index] as? PhpToken.Symbol)?.value == '('
-    } ?: return null
-    var parenthesisDepth = 0
-    var signatureEnd = -1
-    for (index in openingParenthesis until tokens.size) {
-        val symbol = tokens[index] as? PhpToken.Symbol ?: continue
-        when (symbol.value) {
-            '(' -> parenthesisDepth += 1
-            ')' -> {
-                parenthesisDepth -= 1
-                if (parenthesisDepth == 0) {
-                    signatureEnd = index
-                    break
-                }
-            }
-        }
-    }
-    if (signatureEnd < 0) return null
-    val bodyStart = (signatureEnd + 1 until tokens.size).firstOrNull { index ->
-        (tokens[index] as? PhpToken.Symbol)?.value.let { symbol -> symbol == '{' || symbol == ';' }
-    } ?: return null
-    if ((tokens[bodyStart] as? PhpToken.Symbol)?.value != '{') return null
-    var bodyDepth = 0
-    for (index in bodyStart until tokens.size) {
-        val symbol = tokens[index] as? PhpToken.Symbol ?: continue
-        when (symbol.value) {
-            '{' -> bodyDepth += 1
-            '}' -> {
-                bodyDepth -= 1
-                if (bodyDepth == 0) return tokens.subList(bodyStart + 1, index)
-            }
-        }
-    }
-    return null
-}
-
-private fun List<PhpToken>.containsRequestInputAccess(): Boolean {
-    val words = filterIsInstance<PhpToken.Word>().map { token -> token.value.lowercase() }
-    if ("request" !in words) return false
-    return words.any { word -> word in STATIC_REQUEST_INPUT_ACCESSORS }
-}
-
-private fun hasSafeJsonReturnType(tokens: List<PhpToken>, methodNameIndex: Int): Boolean {
-    val open = (methodNameIndex + 1 until tokens.size).firstOrNull { index ->
-        val token = tokens[index]
-        token is PhpToken.Symbol && token.value == '('
-    } ?: return false
-    var depth = 0
-    var close = -1
-    for (index in open until tokens.size) {
-        val token = tokens[index]
-        if (token is PhpToken.Symbol) {
-            if (token.value == '(') depth += 1
-            if (token.value == ')') {
-                depth -= 1
-                if (depth == 0) {
-                    close = index
-                    break
-                }
-            }
-        }
-    }
-    if (close < 0) return false
-    val bodyStart = (close + 1 until tokens.size).firstOrNull { index ->
-        val token = tokens[index]
-        token is PhpToken.Symbol && (token.value == '{' || token.value == ';')
-    } ?: return false
-    val signature = tokens.subList(close + 1, bodyStart)
-    if (signature.none { token -> token is PhpToken.Symbol && token.value == ':' }) return false
-    val returnTypes = signature.filterIsInstance<PhpToken.Word>()
-        .map { token -> token.value }
-        .filterNot { value -> value == "null" }
-    return returnTypes.isNotEmpty() && returnTypes.all(String::isSafeStaticJsonReturnType)
-}
-
-private fun String.isSafeStaticJsonReturnType(): Boolean {
-    if (this in STATIC_JSON_RETURN_TYPES) return true
-    if (isEmpty() || length > 128 || !first().isUpperCase()) return false
-    if (!all { character -> character.isLetterOrDigit() || character == '_' }) return false
-    // Nextcloud page, redirect, download, stream, and other transport response objects are not
-    // native data contracts. App-domain entities such as Deck's Card are serialized by the
-    // framework and are useful safe GET results.
-    return !endsWith("Response") && this !in STATIC_NON_DATA_RETURN_TYPES
-}
 
 internal fun String.normalizedPhpName(): String = lowercase().filter(Char::isLetterOrDigit)
 
@@ -806,21 +622,14 @@ private fun StaticPhpParameter.toVerifiedCrudBodySchema(route: StaticRoute): JSO
         toOpenApiSchema()
     }
 
-private val STATIC_READ_CONTROLLER_BASES = setOf("ApiController", "OCSController", "Controller")
-private val STATIC_JSON_RETURN_TYPES = setOf("array", "DataResponse", "JSONResponse", "JsonResponse")
-private val STATIC_JSON_RESPONSE_TYPES = setOf("DataResponse", "JSONResponse", "JsonResponse")
-private val STATIC_NON_DATA_RETURN_TYPES = setOf("Response", "IResponse")
-private val STATIC_REQUEST_INPUT_ACCESSORS = setOf(
-    "post", "put", "patch", "delete", "getparam", "getparams", "getuploadedfile",
-)
 private val SETTINGS_METHOD_PREFIXES = setOf("enable", "save", "set", "update", "user")
 private val OPERATIONAL_REFRESH_METHODS = setOf("refresh", "sync")
 private val STATIC_ROUTE_VERBS = setOf("GET", "POST", "PUT", "PATCH", "DELETE")
 private val EDITABLE_SETTINGS_VERBS = setOf("POST", "PUT", "PATCH")
+private val MERGE_HINT_VERBS = setOf("PUT", "PATCH")
 private const val RESOURCE_ID_EXTENSION = "x-nextcloud-native-resource-id"
 private const val SETTINGS_WIRE_NAME_EXTENSION = "x-nextcloud-native-wire-name"
 private const val SETTINGS_STRING_LIST_FORMAT = "nextcloud-string-list"
 internal const val MAX_STATIC_ROUTE_COUNT = 256
-private const val MAX_STATIC_CONTROLLER_INHERITANCE_DEPTH = 8
 internal const val MAX_PHP_LITERAL_DEPTH = 16
 internal const val MAX_PHP_LITERAL_NODES = 20_000
