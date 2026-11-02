@@ -234,6 +234,8 @@ sealed interface NativeActionRequest {
         override val action: ActionSpec,
         val values: Map<String, String>,
         val confirmed: Boolean,
+        /** Checked against a fresh same-route read immediately before a replacement is sent. */
+        val precondition: NativeWritePrecondition? = null,
     ) : NativeActionRequest
 }
 

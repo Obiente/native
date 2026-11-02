@@ -818,7 +818,7 @@ private class KotlinCompilerState(
         readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
         resultRecoveryActionId: String?,
     ) {
-        val declaredBody = body(operation)
+        val declaredBody = body(operation, path, method)
         if ("requestBody" in operation && declaredBody == null) {
             return
         }
@@ -1340,7 +1340,7 @@ private class KotlinCompilerState(
                 parameter.string("name")?.equals("OCS-APIRequest", ignoreCase = true) == true
         }
 
-    private fun body(operation: JsonObject): HttpBody? {
+    private fun body(operation: JsonObject, path: String, method: HttpMethod): HttpBody? {
         val request = operation["requestBody"]?.let(::resolveLocal) as? JsonObject
         val content = request?.objectValue("content")
         inferredSignedDescriptionMultipartBody(operation, request, content)?.let { return it }
@@ -1362,10 +1362,15 @@ private class KotlinCompilerState(
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
         val normalizedObjectSchema = if (jsonBody) {
-            declaredSchema.flattenDynamicObjectComposition(
-                allowImplicitlyOpenFragments = cookbookRecipeWriteOperationId(operation) != null,
-            )
-                ?.withCookbookRecipeWriteCompatibility(operation)
+            val recipeWrite = schemaOrgRecipeWriteKind(path, method)
+            // Recipe documents commonly compose schema.org fragments without closing them; only
+            // that recognized vocabulary may be flattened from implicitly open fragments.
+            (
+                declaredSchema.flattenDynamicObjectComposition(allowImplicitlyOpenFragments = false)
+                    ?: declaredSchema.flattenDynamicObjectComposition(allowImplicitlyOpenFragments = true)
+                        ?.takeIf { recipeWrite != null && it.declaresSchemaOrgRecipe() }
+                )
+                ?.withSchemaOrgRecipeWriteVocabulary(recipeWrite)
                 ?: return null
         } else {
             null
@@ -1429,29 +1434,22 @@ private class KotlinCompilerState(
         )
     }
 
-    private fun JsonObject.withCookbookRecipeWriteCompatibility(operation: JsonObject): JsonObject {
-        val operationId = cookbookRecipeWriteOperationId(operation) ?: return this
+    /**
+     * Narrows a schema.org Recipe write body to the recipe's editable text vocabulary.
+     *
+     * Recipe contracts commonly reuse their stored schema.org Recipe model as the request body,
+     * so its required list and server-maintained properties (dates, images, nutrition) describe
+     * the stored document rather than what a person supplies. The rule is recognized from the
+     * vocabulary and the route shape, never from an app identity or version: a create (POST on a
+     * collection) omits the server-assigned `id`, and an update (PUT or PATCH on an item) keeps
+     * `id` read-only so it is bound from the selected recipe.
+     */
+    private fun JsonObject.withSchemaOrgRecipeWriteVocabulary(kind: SchemaOrgRecipeWriteKind?): JsonObject {
+        kind ?: return this
+        if (!declaresSchemaOrgRecipe()) return this
         val properties = objectValue("properties") ?: return this
-        if (!setOf("id", "name", "recipeIngredient", "recipeInstructions", "tool").all(properties::containsKey)) {
-            return this
-        }
-        val allowed = setOf(
-            "id",
-            "name",
-            "description",
-            "keywords",
-            "prepTime",
-            "cookTime",
-            "totalTime",
-            "recipeYield",
-            "recipeCategory",
-            "url",
-            "tool",
-            "recipeIngredient",
-            "recipeInstructions",
-        )
         val compatibleProperties = properties
-            .filterKeys(allowed::contains)
+            .filterKeys(SCHEMA_ORG_RECIPE_WRITE_PROPERTIES::contains)
             .mapValues { (id, value) ->
                 if (id != "id") value else {
                     val idSchema = resolveFieldSchema(value) as? JsonObject ?: return this
@@ -1459,27 +1457,18 @@ private class KotlinCompilerState(
                 }
             }
             .toMutableMap()
-        if (operationId == "newrecipe") compatibleProperties.remove("id")
+        if (kind == SchemaOrgRecipeWriteKind.Create) compatibleProperties.remove("id")
         return JsonObject(
             filterKeys { key -> key !in setOf("properties", "required", "additionalProperties") } +
                 ("properties" to JsonObject(compatibleProperties)) +
                 ("required" to JsonArray(
-                    listOfNotNull("id".takeIf { operationId == "updaterecipe" }, "name")
-                        .map(::JsonPrimitive),
+                    listOfNotNull(
+                        "id".takeIf { kind == SchemaOrgRecipeWriteKind.Update && "id" in compatibleProperties },
+                        "name",
+                    ).map(::JsonPrimitive),
                 )) +
                 ("additionalProperties" to JsonPrimitive(false)),
         )
-    }
-
-    private fun cookbookRecipeWriteOperationId(operation: JsonObject): String? {
-        if (
-            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
-            source.kind != ProvenanceKind.appStoreLinkedSourceTag
-        ) {
-            return null
-        }
-        return operation.string("operationId")?.stableId()
-            ?.takeIf { operationId -> operationId in setOf("newrecipe", "updaterecipe") }
     }
 
     private fun JsonElement.hasUnnormalizableReadOnlyRepeatableObjectProperty(): Boolean {

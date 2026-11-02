@@ -7,22 +7,30 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
 
 /**
- * Whether repeating the exact same request after an unconfirmed result could change server state
- * twice. A create or send is [NonIdempotent]; a full replacement of the same values or a delete of
- * one identity is [Idempotent].
+ * What may be sent again after an unconfirmed result. A create or send is [NonIdempotent]; a
+ * change of named fields or a delete of one identity is [Idempotent]. A replacement is
+ * [AfterRefresh]: it carries a complete copy taken from an earlier read, so it may only be sent
+ * again once a fresh authoritative read has arrived, and its precondition then checks that copy.
  */
-internal enum class NativeReviewedWriteRetry {
+internal enum class NativeEditorWriteRetry {
     Idempotent,
     NonIdempotent,
+    AfterRefresh,
 }
 
-internal sealed interface NativeReviewedWriteStatus {
-    data object Idle : NativeReviewedWriteStatus
+internal sealed interface NativeEditorWriteStatus {
+    data object Idle : NativeEditorWriteStatus
 
-    data object Submitting : NativeReviewedWriteStatus
+    data object Submitting : NativeEditorWriteStatus
 
     /** The server refused the request. The draft is unchanged and may be corrected and sent again. */
-    data class Rejected(val message: String) : NativeReviewedWriteStatus
+    data class Rejected(val message: String) : NativeEditorWriteStatus
+
+    /**
+     * Nothing was sent because the target changed after the editor read it. The draft is based
+     * on stale values, so it cannot be sent; the person refreshes and edits the current values.
+     */
+    data class Changed(val message: String) : NativeEditorWriteStatus
 
     /**
      * The request may or may not have reached the server. For a non-idempotent write, sending it
@@ -30,39 +38,39 @@ internal sealed interface NativeReviewedWriteStatus {
      */
     data class Unconfirmed(
         val message: String,
-        val retry: NativeReviewedWriteRetry,
+        val retry: NativeEditorWriteRetry,
         val awaitingRefresh: Boolean,
-    ) : NativeReviewedWriteStatus
+    ) : NativeEditorWriteStatus
 
-    data object Succeeded : NativeReviewedWriteStatus
+    data object Succeeded : NativeEditorWriteStatus
 }
 
 /**
- * Screen-local outcome tracking for one reviewed editor (a Tables row, a Cospend bill, a Forms
- * submission). It owns no draft values, never retries by itself, and keeps cancellation as
+ * Screen-local outcome tracking for one record editor (a grid row, a child record such as an
+ * expense, or a questionnaire response). It owns no draft values, never retries by itself, and keeps cancellation as
  * control flow. Durable recovery across process death is not provided; an unconfirmed create is
  * reconciled by the authoritative refresh the caller triggers through [onRefreshRequested].
  */
 @Stable
-internal class NativeReviewedWriteSession {
-    var status by mutableStateOf<NativeReviewedWriteStatus>(NativeReviewedWriteStatus.Idle)
+internal class NativeEditorWriteSession {
+    var status by mutableStateOf<NativeEditorWriteStatus>(NativeEditorWriteStatus.Idle)
         private set
 
-    val submitting: Boolean get() = status == NativeReviewedWriteStatus.Submitting
+    val submitting: Boolean get() = status == NativeEditorWriteStatus.Submitting
 
     /** False while an unconfirmed non-idempotent write still waits for a fresh authoritative read. */
     val canSubmit: Boolean
         get() = when (val current = status) {
-            NativeReviewedWriteStatus.Submitting -> false
-            is NativeReviewedWriteStatus.Unconfirmed ->
-                current.retry == NativeReviewedWriteRetry.Idempotent || !current.awaitingRefresh
+            NativeEditorWriteStatus.Submitting, is NativeEditorWriteStatus.Changed -> false
+            is NativeEditorWriteStatus.Unconfirmed ->
+                current.retry == NativeEditorWriteRetry.Idempotent || !current.awaitingRefresh
             else -> true
         }
 
     /** Called when a new authoritative load has replaced the records this editor was opened from. */
     fun acceptAuthoritativeRefresh() {
         val current = status
-        if (current is NativeReviewedWriteStatus.Unconfirmed && current.awaitingRefresh) {
+        if (current is NativeEditorWriteStatus.Unconfirmed && current.awaitingRefresh) {
             status = current.copy(
                 message = "The list was refreshed. Check it for your change before you send it again.",
                 awaitingRefresh = false,
@@ -71,7 +79,7 @@ internal class NativeReviewedWriteSession {
     }
 
     fun reset() {
-        if (!submitting) status = NativeReviewedWriteStatus.Idle
+        if (!submitting) status = NativeEditorWriteStatus.Idle
     }
 
     /**
@@ -83,11 +91,11 @@ internal class NativeReviewedWriteSession {
     suspend fun submit(
         executor: NativeActionExecutor,
         request: NativeActionRequest.Submit,
-        retry: NativeReviewedWriteRetry,
+        retry: NativeEditorWriteRetry,
         onRefreshRequested: () -> Unit,
     ): Boolean {
         if (!canSubmit) return false
-        status = NativeReviewedWriteStatus.Submitting
+        status = NativeEditorWriteStatus.Submitting
         val result = try {
             executor.execute(request)
         } catch (cancellation: CancellationException) {
@@ -102,14 +110,15 @@ internal class NativeReviewedWriteSession {
         }
         return when (result) {
             is NativeActionExecutionResult.Success -> {
-                status = NativeReviewedWriteStatus.Succeeded
+                status = NativeEditorWriteStatus.Succeeded
                 onRefreshRequested()
                 true
             }
             is NativeActionExecutionResult.Failure -> {
-                status = when (result.outcome) {
-                    NativeActionFailureOutcome.Rejected -> NativeReviewedWriteStatus.Rejected(result.message)
-                    NativeActionFailureOutcome.Unknown -> unconfirmed(retry)
+                status = when {
+                    result.precondition == NativeWritePreconditionFailure.Changed -> NativeEditorWriteStatus.Changed(result.message)
+                    result.outcome == NativeActionFailureOutcome.Rejected -> NativeEditorWriteStatus.Rejected(result.message)
+                    else -> unconfirmed(retry)
                 }
                 if (result.outcome == NativeActionFailureOutcome.Unknown) onRefreshRequested()
                 false
@@ -117,15 +126,18 @@ internal class NativeReviewedWriteSession {
         }
     }
 
-    private fun unconfirmed(retry: NativeReviewedWriteRetry) = NativeReviewedWriteStatus.Unconfirmed(
+    private fun unconfirmed(retry: NativeEditorWriteRetry) = NativeEditorWriteStatus.Unconfirmed(
         message = when (retry) {
-            NativeReviewedWriteRetry.NonIdempotent ->
+            NativeEditorWriteRetry.NonIdempotent ->
                 "The server did not confirm this change. Wait for the refreshed list and check it " +
                     "before you send it again, so it is not added twice."
-            NativeReviewedWriteRetry.Idempotent ->
+            NativeEditorWriteRetry.Idempotent ->
                 "The server did not confirm this change. Sending the same values again is safe."
+            NativeEditorWriteRetry.AfterRefresh ->
+                "The server did not confirm this change. Wait for the refreshed list before you save " +
+                    "again; saving then first checks that nothing else changed."
         },
         retry = retry,
-        awaitingRefresh = retry == NativeReviewedWriteRetry.NonIdempotent,
+        awaitingRefresh = retry != NativeEditorWriteRetry.Idempotent,
     )
 }

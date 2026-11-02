@@ -47,7 +47,8 @@ class NativeTablePresentationSceneTest {
         val resource = ResourceSpec("tables", "Tables", Confidence.verified,
             listOf("title", "rowsCount", "columnsCount", "owner", "archived", "favorite")
                 .map { FieldSpec(it, it, FieldKind.string, false, true) })
-        val schema = NativeAppSchema("1", AppIdentity("tables", "Tables", "1"), Confidence.verified)
+        val schema = NativeAppSchema("1", AppIdentity("sheetsy", "Sheetsy", "77.0.0"), Confidence.verified,
+            views = listOf(gridView("tables")))
         val records = listOf("Inventory", "Project work", "Empty table").mapIndexed { index, title ->
             NativeRecord("table-$index", mapOf("title" to title, "rowsCount" to listOf("12", "8", "0")[index],
                 "columnsCount" to "4", "owner" to "Synthetic owner $index", "archived" to "false", "favorite" to "false"))

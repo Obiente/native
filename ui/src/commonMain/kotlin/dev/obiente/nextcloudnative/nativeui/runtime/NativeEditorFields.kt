@@ -32,13 +32,13 @@ import dev.obiente.nextcloudnative.app.design.NextcloudChoiceField
 import dev.obiente.nextcloudnative.app.design.NextcloudChoiceOption
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 
-/** Display-only option for reviewed editors; the caller keeps the meaning of [id]. */
-internal data class NativeReviewedChoice(val id: String, val label: String)
+/** Display-only option for record editors; the caller keeps the meaning of [id]. */
+internal data class NativeEditorChoice(val id: String, val label: String)
 
 private fun requiredLabel(label: String, required: Boolean) = if (required) "$label *" else label
 
 @Composable
-internal fun NativeReviewedTextField(
+internal fun NativeEditorTextField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
@@ -68,9 +68,9 @@ internal fun NativeReviewedTextField(
 
 /** A single choice. Optional fields offer an explicit "None" entry with an empty ID. */
 @Composable
-internal fun NativeReviewedChoiceField(
+internal fun NativeEditorChoiceField(
     label: String,
-    options: List<NativeReviewedChoice>,
+    options: List<NativeEditorChoice>,
     selectedId: String?,
     onSelected: (String) -> Unit,
     enabled: Boolean,
@@ -88,16 +88,16 @@ internal fun NativeReviewedChoiceField(
         onSelected = { id -> onSelected(if (id == NONE_CHOICE_ID) "" else id) },
         enabled = enabled,
         error = error,
-        fieldKey = "reviewed:$label",
+        fieldKey = "editor:$label",
         contentDescription = label,
     )
 }
 
 /** A set of choices shown as labelled check boxes; touch targets stay at least 48 dp. */
 @Composable
-internal fun NativeReviewedMultiChoiceField(
+internal fun NativeEditorMultiChoiceField(
     label: String,
-    options: List<NativeReviewedChoice>,
+    options: List<NativeEditorChoice>,
     selectedIds: Set<String>,
     onSelectionChange: (Set<String>) -> Unit,
     enabled: Boolean,
@@ -135,7 +135,7 @@ internal fun NativeReviewedMultiChoiceField(
 }
 
 @Composable
-internal fun NativeReviewedToggleField(
+internal fun NativeEditorToggleField(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
@@ -163,7 +163,7 @@ internal fun NativeReviewedToggleField(
 
 /** A read-only note for values the editor keeps unchanged because it cannot edit them safely. */
 @Composable
-internal fun NativeReviewedPreservedValue(label: String, explanation: String) {
+internal fun NativeEditorPreservedValue(label: String, explanation: String) {
     Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
         Text(label, style = MaterialTheme.typography.titleSmall)
         Text(
@@ -174,12 +174,13 @@ internal fun NativeReviewedPreservedValue(label: String, explanation: String) {
     }
 }
 
-/** Status text for a reviewed write; it never offers a retry the session would refuse. */
+/** Status text for a record write; it never offers a retry the session would refuse. */
 @Composable
-internal fun NativeReviewedWriteStatusText(session: NativeReviewedWriteSession) {
+internal fun NativeEditorWriteStatusText(session: NativeEditorWriteSession) {
     val message = when (val status = session.status) {
-        is NativeReviewedWriteStatus.Rejected -> status.message
-        is NativeReviewedWriteStatus.Unconfirmed -> status.message
+        is NativeEditorWriteStatus.Rejected -> status.message
+        is NativeEditorWriteStatus.Changed -> status.message
+        is NativeEditorWriteStatus.Unconfirmed -> status.message
         else -> null
     } ?: return
     Text(
@@ -191,20 +192,23 @@ internal fun NativeReviewedWriteStatusText(session: NativeReviewedWriteSession) 
 }
 
 /**
- * Shared dialog frame for reviewed editors. It blocks dismissal while a request is in flight so
- * an unresolved write cannot be abandoned silently.
+ * Shared dialog frame for record editors. It blocks dismissal while a request is in flight so
+ * an unresolved write cannot be abandoned silently. When the target changed after it was read,
+ * the primary action becomes [onRefresh], because the draft is based on stale values.
  */
 @Composable
-internal fun NativeReviewedEditorDialog(
+internal fun NativeEditorDialog(
     title: String,
-    session: NativeReviewedWriteSession,
+    session: NativeEditorWriteSession,
     submitLabel: String,
     onDismiss: () -> Unit,
     onSubmit: () -> Unit,
     submitEnabled: Boolean = true,
     destructive: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val refresh = onRefresh?.takeIf { session.status is NativeEditorWriteStatus.Changed }
     AlertDialog(
         onDismissRequest = { if (!session.submitting) onDismiss() },
         title = { Text(title) },
@@ -214,29 +218,33 @@ internal fun NativeReviewedEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
                 content()
-                NativeReviewedWriteStatusText(session)
+                NativeEditorWriteStatusText(session)
             }
         },
         dismissButton = {
             TextButton(enabled = !session.submitting, onClick = onDismiss) { Text("Cancel") }
         },
         confirmButton = {
-            Button(
-                enabled = submitEnabled && session.canSubmit,
-                onClick = onSubmit,
-                colors = if (destructive) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                },
-            ) {
-                if (session.submitting) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(submitLabel)
+            if (refresh != null) {
+                Button(onClick = refresh) { Text("Refresh") }
+            } else {
+                Button(
+                    enabled = submitEnabled && session.canSubmit,
+                    onClick = onSubmit,
+                    colors = if (destructive) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                ) {
+                    if (session.submitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(submitLabel)
+                    }
                 }
             }
         },

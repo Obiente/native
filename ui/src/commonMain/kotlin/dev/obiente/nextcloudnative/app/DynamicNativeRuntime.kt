@@ -377,6 +377,10 @@ class DynamicNextcloudActionExecutor(
                 outcome = NativeActionFailureOutcome.Rejected,
             )
         }
+        (request as? NativeActionRequest.Submit)?.precondition?.let { precondition ->
+            checkDynamicWritePrecondition(services, session, descriptor, action, precondition, runtimeContext)
+                ?.let { refusal -> return refusal }
+        }
         return runCatching {
             val execution = executeDynamicAction(
                 services,
@@ -986,47 +990,6 @@ internal fun buildDynamicRefreshRecoveryRequest(
             }.getOrNull()
         }
         .firstOrNull()
-}
-
-/**
- * Builds the exact authoritative GET declared for an idempotent replacement mutation.
- *
- * The descriptor validator proves same-route PUT/GET pairing. This function repeats the critical
- * checks at the execution boundary so deserialized or independently constructed descriptors fail
- * closed instead of turning an arbitrary action reference into a recovery read.
- */
-internal fun buildDynamicResultRecoveryRequest(
-    descriptor: DynamicAppDescriptor,
-    mutation: DynamicAction,
-    values: Map<String, String>,
-    runtimeContext: Map<String, String> = values,
-): NextcloudApiRequest? {
-    if (mutation.binding.method != HttpMethod.PUT) return null
-    val recoveryId = mutation.resultRecoveryActionId ?: return null
-    val recovery = descriptor.actions.singleOrNull { action -> action.id == recoveryId } ?: return null
-    val safeKinds = setOf(
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.verifiedAppPackage,
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.appStoreLinkedSourceTag,
-    )
-    if (
-        recovery.binding.method != HttpMethod.GET ||
-        recovery.binding.path != mutation.binding.path ||
-        recovery.binding.body != null ||
-        recovery.binding.queryParameters.any(HttpParameter::required) ||
-        recovery.fallbackOnly ||
-        mutation.provenance.none { provenance -> provenance.kind in safeKinds } ||
-        recovery.provenance.none { provenance -> provenance.kind in safeKinds }
-    ) {
-        return null
-    }
-    return runCatching {
-        buildDynamicApiRequest(
-            descriptor = descriptor,
-            action = recovery,
-            values = values,
-            runtimeContext = runtimeContext,
-        )
-    }.getOrNull()
 }
 
 internal fun Throwable.isUnsynchronizedDynamicCollectionFailure(): Boolean =

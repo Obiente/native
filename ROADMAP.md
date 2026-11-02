@@ -115,7 +115,7 @@ planned. It is not evidence that any of these modules exists:
 | `sync-engine` | Reconciliation plan, journal, tombstones, retries, conflict generation | Platform UI |
 | `adapters-*` | Versioned protocol translation and capability gates | Platform APIs or presentation state |
 | `repositories` | Cached state, pagination, refresh, pending writes, cross-adapter identity | Raw JSON/XML |
-| `native-schema` | Semantic compiler, schema contract, verified adapter registry | Network execution or arbitrary code |
+| `native-schema` | Semantic compiler, schema contract, version-agnostic semantic pattern rules | Network execution or arbitrary code |
 | `ui` | Shared screens/components and accessibility semantics | Endpoint construction |
 | platform apps/extensions | Keychain, filesystem provider, workers, notifications, WebRTC, signing | Domain policy duplication |
 
@@ -192,7 +192,7 @@ Later milestones refer to these gates.
 | M7 | Photos/Memories/media excellence | M0-M4 |
 | M8 | Documents and Office | M1-M4, G3 |
 | M9 | Productivity and groupware | M0, M5 |
-| M10 | Automatic and verified adapters | G0-G2, stable schema contract |
+| M10 | Automatic semantic patterns | G0-G2, stable schema contract |
 | M11 | Safe administration | M0, M5, server auth research |
 | M12 | Five-platform product and stable release | Feature milestones, G8 |
 
@@ -538,7 +538,7 @@ Reimplementing OOXML/ODF is out of scope. Office app entries open a native docum
 
 ## 16. M9: productivity, groupware, and communication apps
 
-Adapters follow advertised capabilities, official DAV/OCS protocols, version-pinned app contracts, and the safety rules in [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md).
+Adapters follow advertised capabilities, official DAV/OCS protocols, the installed app's own published contracts, and the safety rules in [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md).
 
 ### Delivery order
 
@@ -559,9 +559,19 @@ Adapters follow advertised capabilities, official DAV/OCS protocols, version-pin
 - Platform contacts/calendar/media integration is opt-in, reversible, and account-scoped.
 - Deleting or disabling a bridge does not delete remote source data without a separate confirmation.
 
-## 17. M10: automatic and verified native adapters
+## 17. M10: automatic semantic patterns
 
-The native schema is a trust boundary, not a plugin permission bypass.
+The native schema is a trust boundary, not a plugin permission bypass. Dynamic
+apps are supported by version-agnostic rules for the data structures and
+wording found across apps, linked to the native UI that belongs to them, so any
+app whose contract and data match a pattern gets it. The record editors for
+grids, child records, and questionnaires contain no per-app adapters, app-ID
+conditionals, or version allowlists. Last reviewed: 2026-11-01 (may have
+changed; the source is authoritative): a few app- and version-gated rules
+remain elsewhere in the dynamic path and are awaiting conversion to
+contract-shaped rules, namely the Chores 0.1.0 and 0.2.0 gate, the Pantry
+0.23.0 owner reorder authority, and the Pantry 0.34.0 timestamp presentation.
+See [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes) for their sources.
 
 ### Discovery pipeline
 
@@ -574,7 +584,7 @@ deterministic runtime compiler
                      |
 low/medium/high-confidence NativeAppSchema
                      |
-optional reviewed adapter enhancement
+semantic pattern rules (grids, child records, questionnaires, recipes, ...)
                      |
 typed read-only repository and adaptive native components
 ```
@@ -599,14 +609,16 @@ typed read-only repository and adaptive native components
 - Unified-search providers are discovered at runtime. Mail and future apps join
   global search without mobile-client code changes when the server advertises
   the standard provider contract.
-- Verified adapters are ordinary reviewed source packages with tests, compatibility metadata, and reproducible signatures/hashes. They do not execute downloaded server code.
+- Semantic pattern rules are ordinary reviewed source code with deterministic tests over synthetic contracts. They never test an app ID or version, and they do not execute downloaded server code. The remaining app- and version-gated rules named above are exceptions to convert, not a model for new work.
+- Writes come only from the installed app's own published contract for the operation. A rule may decide presentation; it may not supply an encoding, required value, or permission the contract and data do not express. Such writes stay unavailable with an explanation.
+- A replacement (PUT) edit also needs the contract's same-route read, which the compiler pairs only for verified package or exact source-tag provenance. Immediately before the write the target is re-read through it and nothing is sent when the target changed.
 - A contributor inspector can view raw evidence, inferred resource/action mapping, warnings, and why an action is disabled.
 
 ### Acceptance criteria
 
 - Metadata-only, OCS-wrapped OpenAPI, plain JSON OpenAPI, malformed schema, recursive refs, unknown formats, and adversarial descriptions pass compiler fixtures.
 - A schema cannot cause cross-origin requests, arbitrary headers, unbounded downloads, credential exposure, or a write absent from discovery.
-- Every write-enabled generated adapter undergoes human review and compatibility tests before distribution.
+- Every write-enabling pattern rule undergoes human review and deterministic tests, including an unknown app ID and version, before distribution.
 - An unsupported app provides a useful, accessible native metadata screen and development diagnostics without rendering HTML.
 - Tables-like nested cells, Deck-like lanes, and finance-like datasets pass
   fixture suites using neutral resource names, proving the renderer is driven
@@ -830,7 +842,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 
 ### Post-1.0 excellence
 
-- Broader groupware/productivity adapters, verified third-party adapter registry, richer system integrations, supported native Office if feasible, delegated administration, and advanced enterprise policy.
+- Broader groupware/productivity semantic patterns, richer system integrations, supported native Office if feasible, delegated administration, and advanced enterprise policy.
 - Performance and accessibility budgets become release-blocking alongside correctness.
 - User-driven priorities are selected from real workflows, not app-count targets.
 
@@ -844,7 +856,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 | Concurrent edits/deletes | Data loss | Base generations, ETags, tombstones, durable conflict copies, no destructive blind retry |
 | Large uploads and process death | Duplicate/corrupt files | Persisted chunk sessions, source-generation checks, final verification |
 | Server/app API drift | Broken adapters | Version manifests, capability gates, fixtures, schema invalidation, specialized-to-generic fallback |
-| Arbitrary apps expose private/no API | Cannot provide full native behavior | Honest metadata fallback, official OpenAPI/DAV first, reviewed adapters, no HTML scraping |
+| Arbitrary apps expose private/no API | Cannot provide full native behavior | Honest metadata fallback, official OpenAPI/DAV first, semantic patterns over published contracts, no HTML scraping |
 | Talk signaling/WebRTC complexity | Unreliable calls/privacy bugs | Separate compatibility matrix, platform media drivers, soak/chaos/threat tests |
 | Office is a provider-specific web/WOPI integration | Broken servers or a false promise of native editing | Capability-driven editor choices, isolated Android web integration, external desktop handoff, native preview first, and an SDK feasibility gate |
 | Recognize API-key gate | Direct people DAV unavailable | Memories clusters, explicit unavailable state, wait for official external flow |

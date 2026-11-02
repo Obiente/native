@@ -4,4 +4,4 @@ pull: none
 platforms: android, desktop
 user-facing: yes
 
-Add, edit, and delete Tables rows and Cospend bills, and fill in Forms, inside the app when the installed version's verified contract offers the operation.
+Add, edit, and delete grid rows and records inside a parent, and fill in questionnaires, in the app when the installed app's own contract offers the operation and describes its values.

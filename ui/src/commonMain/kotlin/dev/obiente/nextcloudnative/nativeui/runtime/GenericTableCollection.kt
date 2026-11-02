@@ -72,14 +72,14 @@ internal fun GenericTableCollection(
     val projection = remember(resource, records, columnResource, columnRecords, composite) {
         nativeTableProjection(resource, records, columnResource, columnRecords, composite)
     }
-    val rowPlan = remember(schema, view, datasetContext) { nativeTablesRowWritePlan(schema, view, datasetContext) }
-    val rowEditing = remember(schema.app.id, view.id, rowPlan?.scope) { NativeTablesRowEditing() }
+    val rowPlan = remember(schema, view, datasetContext, records) { nativeGridRowWritePlan(schema, view, datasetContext, records) }
+    val rowEditing = remember(schema.app.id, view.id, rowPlan?.parentId) { NativeGridRowEditing() }
     LaunchedEffect(rowEditing, recordsGeneration) { rowEditing.session.acceptAuthoritativeRefresh() }
     val rowActions: (NativeRecord) -> List<NextcloudCardAction> = { record ->
-        nativeTablesRowActions(rowPlan, rowEditing, record, nativeRecordPresentation(projection.resource, record).title)
+        nativeGridRowActions(rowPlan, rowEditing, record, nativeRecordPresentation(projection.resource, record).title)
     }
     val openRowCreate: (() -> Unit)? = rowPlan?.takeIf { it.create != null }?.let { plan ->
-        { rowEditing.open(plan, NativeTablesRowEditorTarget.Create) }
+        { rowEditing.open(plan, NativeGridRowEditorTarget.Create) }
     }
     val facets = remember(projection) { inferNativeDatasetFacets(projection.resource, projection.records) }
     val browseStateKey = remember(schema, view, projection.resource, datasetContext) {
@@ -110,7 +110,7 @@ internal fun GenericTableCollection(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactRecordList = shouldUseCompactTableRecordList(maxWidth.value)
         Column(modifier = Modifier.fillMaxSize()) {
-            if (schema.app.id == "tables") {
+            if (projection.composite) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
                     verticalAlignment = Alignment.CenterVertically,
@@ -206,7 +206,7 @@ internal fun GenericTableCollection(
             }
         }
     }
-    rowPlan?.let { plan -> NativeTablesRowEditorDialog(plan, rowEditing, actionExecutor, onInlineActionSucceeded) }
+    rowPlan?.let { plan -> NativeGridRowEditorDialog(plan, rowEditing, actionExecutor, onInlineActionSucceeded) }
 }
 
 @Composable

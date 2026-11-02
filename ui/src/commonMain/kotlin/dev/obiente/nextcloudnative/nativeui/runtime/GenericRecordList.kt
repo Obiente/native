@@ -308,7 +308,7 @@ internal fun GenericEditableTableRecordList(
             val editPlans = fields.mapNotNull { field ->
                 nativeInlineCellEditPlan(schema, sourceResource, projection, record, field)
             }
-            val rowCardResource = nativeTableRowCardResource(schema, projection)
+            val rowCardResource = nativeTableRowCardResource(projection)
             GenericCollectionCard(
                 resource = rowCardResource ?: projection.resource,
                 record = displayRecord,

@@ -7,8 +7,9 @@ class NativeTableInventoryTest {
     private val resource = ResourceSpec("tables", "Tables", Confidence.verified,
         listOf("title", "rowsCount", "columnsCount", "owner", "archived", "favorite", "id")
             .map { FieldSpec(it, it, FieldKind.string, false, true) })
-    private val schema = NativeAppSchema("1", AppIdentity("tables", "Tables", "1"), Confidence.verified,
-        resources = listOf(resource))
+    // A container of a column-defined grid, served by an app the client has never seen.
+    private val schema = NativeAppSchema("1", AppIdentity("sheetsy", "Sheetsy", "77.0.0"), Confidence.verified,
+        resources = listOf(resource), views = listOf(gridView("tables")))
 
     @Test
     fun inventoryUsesDeclaredCountsAndKeepsSecondaryMetadataOutOfSummary() {
@@ -28,7 +29,7 @@ class NativeTableInventoryTest {
         assertNull(nativeTableInventoryPresentation(schema, resource, record)!!.counts)
         assertNull(nativeTableInventoryPresentation(schema, resource.copy(fields = resource.fields.filterNot { it.id == "rowsCount" }),
             record.copy(values = record.values + ("rowsCount" to "9")))!!.counts)
-        assertNull(nativeTableInventoryPresentation(schema.copy(app = schema.app.copy(id = "other")), resource, record))
+        assertNull(nativeTableInventoryPresentation(schema.copy(views = emptyList()), resource, record))
         assertNull(nativeTableInventoryPresentation(schema, resource.copy(id = "rows"), record))
     }
 
@@ -51,3 +52,7 @@ class NativeTableInventoryTest {
         assertEquals(2, ambiguous.detailFields.size)
     }
 }
+
+internal fun gridView(parentResourceId: String) = ViewSpec("$parentResourceId.table", "Table", "rows",
+    NativeComponent.dataTable, "rows.list", Confidence.verified, compositeDataGrid = CompositeDataGridSpec(
+        parentResourceId, "columns", "rows", "columns.list", "rows.list", "id", null, "title", "type", null, "data"))

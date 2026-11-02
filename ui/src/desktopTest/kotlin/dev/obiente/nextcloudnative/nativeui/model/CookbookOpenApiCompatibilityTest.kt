@@ -74,6 +74,26 @@ class CookbookOpenApiCompatibilityTest {
 
     @Test
     fun cookbookTaggedAllOfRecipeBodyBecomesAnActionableNativeForm() {
+        assertRecipeBodyBecomesAnActionableNativeForm(
+            AppIdentity("cookbook", "Cookbook", "0.11.10"),
+            "https://raw.githubusercontent.com/nextcloud/cookbook/v0.11.10/docs/dev/api/0.1.3/openapi-cookbook.yaml",
+            OpenApiTrust.appStoreLinkedExactGitHubTag,
+        )
+    }
+
+    @Test
+    fun aRecipeShapedContractOfAnotherAppAndVersionGetsTheSameRecipeFormAndSurface() {
+        // The schema.org Recipe vocabulary decides; the identity, version, and source kind do not.
+        assertRecipeBodyBecomesAnActionableNativeForm(
+            AppIdentity("kitchenbook", "Kitchenbook", "9.1.0"),
+            "https://cloud.example.test/apps/kitchenbook/openapi.json",
+            OpenApiTrust.sameOriginAdvertisement,
+        )
+        val record = parseDynamicRecords(recipeDetailAction(), fixtureResponse(), recipeFields().mapTo(linkedSetOf(), FieldSpec::id)).single()
+        assertNotNull(nativeRecipePresentation(ResourceSpec("dishes", "Dishes", Confidence.high, recipeFields()), record))
+    }
+
+    private fun assertRecipeBodyBecomesAnActionableNativeForm(app: AppIdentity, documentUrl: String, trust: OpenApiTrust) {
         val original = javaClass.getResourceAsStream(CONTRACT_FIXTURE_PATH).use { stream ->
             requireNotNull(stream) { "Missing Cookbook OpenAPI fixture" }
             Json.parseToJsonElement(stream.bufferedReader().readText()) as JsonObject
@@ -127,15 +147,15 @@ class CookbookOpenApiCompatibilityTest {
         )
         val descriptor = DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
-                app = AppIdentity("cookbook", "Cookbook", "0.11.10"),
+                app = app,
                 endpointPolicy = EndpointPolicy(
                     serverOrigin = "https://cloud.example.test",
                     approvedApiPrefixes = listOf("/apps/cookbook"),
                 ),
                 advertisedOpenApi = AdvertisedOpenApi(
-                    documentUrl = "https://raw.githubusercontent.com/nextcloud/cookbook/v0.11.10/docs/dev/api/0.1.3/openapi-cookbook.yaml",
+                    documentUrl = documentUrl,
                     document = document,
-                    trust = OpenApiTrust.appStoreLinkedExactGitHubTag,
+                    trust = trust,
                 ),
             ),
         )

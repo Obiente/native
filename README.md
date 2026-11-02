@@ -167,9 +167,12 @@ published API contracts. Only then does it use heuristics. It may guess field
 roles, relationships, labels and a good starting screen. It may never invent
 an endpoint, request body, permission, resource ID or retry guarantee.
 
-Small, verified adapters for a specific app are welcome when they add useful
-behavior that cannot be inferred safely. An adapter extends the same shared
-runtime; it does not become a separate app inside the app.
+Support for an app does not depend on its name or version. Rules for the data
+structures and wording found across apps link each one to the native UI that
+belongs to it, so any app whose contract and data match a pattern, such as a
+grid of rows, a ledger of expenses, a questionnaire, or a recipe collection,
+gets that interface. Writes are offered only when the installed app's own
+published contract describes them.
 
 The trust and execution rules are in
 [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
@@ -247,7 +250,7 @@ The project is strengthening the foundations a dependable daily client needs.
 | Photos and media | Truthful camera/media backup state, folder preview and destination picking, storage reclaim without hiding media unnecessarily, originals, RAW/video/Live Photos, people workflows, albums, and non-destructive editing |
 | DAV and groupware | CardDAV and CalDAV synchronization, native Contacts, Calendar, Tasks, recurrence, sync tokens, and optional operating-system account bridges |
 | Talk | Complete messages and attachments first, then push, notifications, system media integration, signaling, and separately gated WebRTC calling |
-| Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, semantic layouts, and small verified adapters where they genuinely improve the workflow |
+| Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, and version-agnostic semantic patterns that link data structures to the native UI that belongs to them |
 | Desktop product | Resizable multi-pane workspaces, keyboard and pointer UX, dense tables, persistent inspectors, desktop file integration, notifications, and update/packaging quality |
 | Administration | Native read-only inventory and diagnostics, safe preflight and lifecycle plans, settings generated from verified schemas, and explicit browser/authentication handoff for strict operations |
 
