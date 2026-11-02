@@ -29,6 +29,8 @@ internal sealed interface NativeMailSendPhase {
     data class Unknown(
         val attempt: NativeMailComposeDraft,
         val recovery: NativeMailSendRecovery,
+        /** The durable attempt record, shown as evidence of what may have been sent. */
+        val record: NativeSendAttempt? = null,
     ) : NativeMailSendPhase
 }
 
@@ -45,6 +47,8 @@ internal interface NativeMailDraftStore {
 internal data class NativeMailStoredComposer(
     val draft: NativeMailComposeDraft,
     val unknownAttempt: NativeMailComposeDraft? = null,
+    /** The exactly-once attempt record of [unknownAttempt]; absent in records saved before it existed. */
+    val attempt: NativeSendAttempt? = null,
 )
 
 /**
@@ -61,6 +65,7 @@ internal class NativeMailComposerState(
     private val scope: CoroutineScope? = null,
     private val store: NativeMailDraftStore? = null,
     private val saveDelayMillis: Long = DRAFT_SAVE_DELAY_MILLIS,
+    clock: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
 ) {
     var draft: NativeMailComposeDraft? by mutableStateOf(null)
         private set
@@ -76,6 +81,23 @@ internal class NativeMailComposerState(
     private val persistence = Mutex()
     private var pendingSave: Job? = null
     private var sendingAttempt: NativeMailComposeDraft? = null
+
+    /** The open exactly-once attempt; it is stored in the same encrypted record as the draft. */
+    private var attemptRecord: NativeSendAttempt? = null
+    private val attempts = object : NativeSendAttemptStore {
+        override suspend fun load(): NativeSendAttempt? = attemptRecord
+
+        override suspend fun save(attempt: NativeSendAttempt) {
+            attemptRecord = attempt
+            pendingSave?.cancel()
+            check(persistNow()) { "The attempt could not be recorded." }
+        }
+
+        override suspend fun clear() {
+            attemptRecord = null
+        }
+    }
+    private val exactlyOnce = NativeExactlyOnceSend(attempts, clock)
 
     val sending: Boolean get() = phase == NativeMailSendPhase.Sending
 
@@ -120,8 +142,9 @@ internal class NativeMailComposerState(
             }
             if (stored == null || draft?.hasContent == true || busy) return
             draft = stored.draft
+            attemptRecord = stored.attempt?.afterRestart()?.takeIf { stored.unknownAttempt != null }
             phase = stored.unknownAttempt
-                ?.let { NativeMailSendPhase.Unknown(it, NativeMailSendRecovery.NotChecked) }
+                ?.let { NativeMailSendPhase.Unknown(it, NativeMailSendRecovery.NotChecked, attemptRecord) }
                 ?: NativeMailSendPhase.Editing
         }
     }
@@ -145,6 +168,7 @@ internal class NativeMailComposerState(
     fun discard() {
         if (busy) return
         draft = null
+        attemptRecord = null
         phase = NativeMailSendPhase.Editing
         persistSoon(immediately = true)
     }
@@ -194,40 +218,43 @@ internal class NativeMailComposerState(
         }
         sendingAttempt = current
         phase = NativeMailSendPhase.Sending
-        // The attempt is durable before its request can leave the device.
-        pendingSave?.cancel()
-        if (!persistNow()) {
-            sendingAttempt = null
-            phase = unknown ?: NativeMailSendPhase.Rejected("This device could not keep a copy of the message, so it was not sent.")
-            return
-        }
-        val result = try {
-            executor.execute(request)
+        // The exactly-once send records the attempt, durable with the draft, before its request
+        // can leave the device, sends once, and never repeats it on its own.
+        val outcome = try {
+            exactlyOnce.send(
+                request = request,
+                executor = executor,
+                targetSummary = nativeMailTargetSummary(current),
+                confirmedResend = unknown != null && confirmedResend,
+                declaresIdempotencyKey = capability.action.idempotencyKeyHeader != null,
+            )
         } catch (cancelled: CancellationException) {
             // The request may already be on its way; the outcome is unknown, never unsent.
-            phase = NativeMailSendPhase.Unknown(current, NativeMailSendRecovery.NotChecked)
+            phase = NativeMailSendPhase.Unknown(current, NativeMailSendRecovery.NotChecked, attemptRecord?.afterRestart())
             sendingAttempt = null
             throw cancelled
-        } catch (_: Exception) {
-            // Transport fault boundary: a thrown request has an unknown outcome.
-            NativeActionExecutionResult.Failure(message = "", outcome = NativeActionFailureOutcome.Unknown)
         }
         sendingAttempt = null
-        when (result) {
-            is NativeActionExecutionResult.Success -> {
-                complete(result.message?.takeIf(String::isNotBlank) ?: "Message sent.")
+        when (outcome) {
+            is NativeExactlyOnceSendOutcome.Sent -> {
+                complete(outcome.message?.takeIf(String::isNotBlank) ?: "Message sent.")
                 onSent()
             }
-            is NativeActionExecutionResult.Failure -> when (result.outcome) {
-                NativeActionFailureOutcome.Rejected -> {
-                    phase = NativeMailSendPhase.Rejected(result.message.takeIf(String::isNotBlank) ?: "The server did not send this message.")
-                    persistSoon(immediately = true)
-                }
-                NativeActionFailureOutcome.Unknown -> {
-                    phase = NativeMailSendPhase.Unknown(current, NativeMailSendRecovery.NotChecked)
-                    checkOutcome(capability, executor, onSent)
-                }
+            is NativeExactlyOnceSendOutcome.Rejected -> {
+                phase = NativeMailSendPhase.Rejected(outcome.message)
+                persistSoon(immediately = true)
             }
+            is NativeExactlyOnceSendOutcome.MaybeSent -> {
+                phase = NativeMailSendPhase.Unknown(current, NativeMailSendRecovery.NotChecked, outcome.attempt)
+                persistSoon(immediately = true)
+                checkOutcome(capability, executor, onSent)
+            }
+            is NativeExactlyOnceSendOutcome.NotSent -> phase = unknown ?: NativeMailSendPhase.Rejected(
+                when (outcome.reason) {
+                    NativeSendRefusal.AttemptNotRecorded -> "This device could not keep a copy of the message, so it was not sent."
+                    NativeSendRefusal.ResendNeedsConfirmation -> "Confirm before sending this message again."
+                },
+            )
         }
     }
 
@@ -278,6 +305,7 @@ internal class NativeMailComposerState(
 
     private suspend fun complete(message: String) {
         draft = null
+        attemptRecord = null
         phase = NativeMailSendPhase.Editing
         notice = message
         pendingSave?.cancel()
@@ -321,7 +349,7 @@ internal class NativeMailComposerState(
             else -> null
         }
         if (unknownAttempt == null && !current.hasContent) return null
-        return NativeMailStoredComposer(current, unknownAttempt)
+        return NativeMailStoredComposer(current, unknownAttempt, attemptRecord?.takeIf { unknownAttempt != null })
     }
 }
 
@@ -350,3 +378,16 @@ class NativeMailComposerRetention internal constructor(
 }
 
 private const val DRAFT_SAVE_DELAY_MILLIS = 600L
+
+/** A content-free description of who a message goes to, kept in the attempt record. */
+internal fun nativeMailTargetSummary(draft: NativeMailComposeDraft): String {
+    val count = listOf(draft.to, draft.cc, draft.bcc).sumOf { parseNativeMailRecipients(it).first.size }
+    return if (count == 1) "1 recipient" else "$count recipients"
+}
+
+/** Evidence shown while an attempt may have been sent: which attempt, and why it is unknown. */
+internal fun NativeSendAttempt.evidence(): String = buildString {
+    append("Attempt ").append(attemptId.take(8)).append(" to ").append(targetSummary)
+    append(if (unknownReason == NativeSendUnknownReason.Interrupted) " was interrupted." else " was not confirmed by the server.")
+    if (idempotencyKey != null) append(" The app accepts a repeat of the same message as one delivery.")
+}

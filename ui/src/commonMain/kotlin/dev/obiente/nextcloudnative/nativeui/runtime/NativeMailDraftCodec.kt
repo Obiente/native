@@ -5,13 +5,14 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
- * Version-1 device encoding of a semantic composer. Strictly decoded and bounded: an unknown
+ * Version-2 device encoding of a semantic composer and its exactly-once attempt record. Strictly
+ * decoded and bounded (version 1 still restores, without an attempt record): an unknown
  * version, mode, or oversized value is unreadable rather than partially restored.
  */
 internal fun encodeNativeMailStoredComposer(value: NativeMailStoredComposer): String {
     val encoded = draftJson.encodeToString(
         StoredComposer.serializer(),
-        StoredComposer(VERSION, value.draft.toStored(), value.unknownAttempt?.toStored()),
+        StoredComposer(VERSION, value.draft.toStored(), value.unknownAttempt?.toStored(), value.attempt),
     )
     check(encoded.length <= MAX_STORED_CHARACTERS && encoded.encodeToByteArray().size <= MAX_STORED_BYTES) {
         "This draft is too large to keep on the device."
@@ -19,7 +20,7 @@ internal fun encodeNativeMailStoredComposer(value: NativeMailStoredComposer): St
     return encoded
 }
 
-/** Returns null for text that is not a valid version-1 composer record. */
+/** Returns null for text that is not a valid version-1 or version-2 composer record. */
 internal fun decodeNativeMailStoredComposer(text: String): NativeMailStoredComposer? {
     if (text.length > MAX_STORED_CHARACTERS) return null
     val stored = try {
@@ -29,10 +30,11 @@ internal fun decodeNativeMailStoredComposer(text: String): NativeMailStoredCompo
     } catch (_: IllegalArgumentException) {
         return null
     }
-    if (stored.version != VERSION) return null
+    // Version 1 predates the attempt record; it still restores as "may have been sent".
+    if (stored.version != VERSION && stored.version != 1) return null
     val draft = stored.draft.toDraft() ?: return null
     val attempt = stored.unknownAttempt?.let { it.toDraft() ?: return null }
-    return NativeMailStoredComposer(draft, attempt)
+    return NativeMailStoredComposer(draft, attempt, stored.attempt?.takeIf { attempt != null })
 }
 
 @Serializable
@@ -40,6 +42,7 @@ private data class StoredComposer(
     val version: Int,
     val draft: StoredDraft,
     val unknownAttempt: StoredDraft? = null,
+    val attempt: NativeSendAttempt? = null,
 )
 
 @Serializable
@@ -101,7 +104,7 @@ private val draftJson = Json {
     encodeDefaults = true
 }
 
-private const val VERSION = 1
+private const val VERSION = 2
 private const val MAX_STORED_BYTES = 2 * 1024 * 1024
 private const val MAX_STORED_CHARACTERS = MAX_STORED_BYTES
 private const val MAX_SHORT_FIELD = 4_096

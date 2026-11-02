@@ -228,7 +228,11 @@ class NativeMailComposerStateTest {
         val never = CompletableDeferred<NativeActionExecutionResult>()
         state.launchSend(capability(), RecordingExecutor { storedDuringRequest = store.value; never.await() }, false) {}
         repeat(5) { yield() }
-        assertEquals(NativeMailStoredComposer(readyDraft(), unknownAttempt = readyDraft()), storedDuringRequest)
+        assertEquals(readyDraft(), storedDuringRequest?.draft)
+        assertEquals(readyDraft(), storedDuringRequest?.unknownAttempt)
+        val attempt = assertNotNull(storedDuringRequest?.attempt, "The exactly-once attempt record is durable with the draft.")
+        assertEquals(NativeSendAttemptState.Prepared, attempt.state)
+        assertEquals("1 recipient", attempt.targetSummary)
         // The process dies while the request is open.
         owner.cancel()
 
@@ -237,9 +241,30 @@ class NativeMailComposerStateTest {
         restored.restore()
         val phase = assertIs<NativeMailSendPhase.Unknown>(restored.phase)
         assertEquals(NativeMailSendRecovery.NotChecked, phase.recovery)
+        assertEquals(NativeSendUnknownReason.Interrupted, phase.record?.unknownReason, "The evidence says the attempt was interrupted.")
         assertTrue(restored.statusCheckAvailable)
         assertTrue(restored.resendNeedsConfirmation)
         restartOwner.cancel()
+    }
+
+    @Test
+    fun `a confirmed resend of the same message reuses its declared idempotency key and shows the evidence`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val keys = mutableListOf<String?>()
+        val executor = NativeActionExecutor { request ->
+            keys += (request as NativeActionRequest.Submit).sendAttempt?.idempotencyKey
+            NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown)
+        }
+        val keyed = capability().let { it.copy(action = it.action.copy(idempotencyKeyHeader = "Idempotency-Key")) }
+        state.send(keyed, executor)
+        val record = assertNotNull(assertIs<NativeMailSendPhase.Unknown>(state.phase).record)
+        assertTrue("not confirmed" in record.evidence(), record.evidence())
+        state.send(keyed, executor)
+        assertEquals(1, keys.size, "Nothing is resent without confirmation.")
+        state.send(keyed, executor, confirmedResend = true)
+        assertEquals(2, keys.size)
+        assertNotNull(keys[0])
+        assertEquals(keys[0], keys[1])
     }
 
     @Test
@@ -288,7 +313,11 @@ class NativeMailComposerStateTest {
         )
         val encoded = encodeNativeMailStoredComposer(stored)
         assertEquals(stored, decodeNativeMailStoredComposer(encoded))
-        assertNull(decodeNativeMailStoredComposer(encoded.replace("\"version\":1", "\"version\":2")))
+        assertNull(decodeNativeMailStoredComposer(encoded.replace("\"version\":2", "\"version\":3")))
+        assertEquals(stored, decodeNativeMailStoredComposer(encoded.replace("\"version\":2", "\"version\":1")), "Version 1 still restores.")
+        val withAttempt = stored.copy(attempt = NativeSendAttempt("a".repeat(32), 5, "1 recipient", "f".repeat(64), "b".repeat(32)))
+        assertEquals(withAttempt, decodeNativeMailStoredComposer(encodeNativeMailStoredComposer(withAttempt)))
+        assertNull(decodeNativeMailStoredComposer(encodeNativeMailStoredComposer(withAttempt).replace("f".repeat(64), "not-a-fingerprint")))
         assertNull(decodeNativeMailStoredComposer(encoded.replace("\"Reply\"", "\"Unknown\"")))
         assertNull(decodeNativeMailStoredComposer("{"))
     }

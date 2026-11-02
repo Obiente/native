@@ -341,7 +341,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
 private fun NativeMailSendPhaseBanner(phase: NativeMailSendPhase, onCheckStatus: (() -> Unit)?) {
     val message = when (phase) {
         is NativeMailSendPhase.Rejected -> phase.message
-        is NativeMailSendPhase.Unknown -> phase.recovery.description()
+        is NativeMailSendPhase.Unknown -> listOfNotNull(phase.recovery.description(), phase.record?.evidence()).joinToString(" ")
         NativeMailSendPhase.Sending -> "Sending..."
         NativeMailSendPhase.Editing -> null
     } ?: return
