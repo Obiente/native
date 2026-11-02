@@ -314,6 +314,29 @@ class NativeChildRecordWritesTest {
         assertEquals(JsonPrimitive("Synthetic dinner"), readBack.untouched["what"], "Untouched fields are compared after the write.")
     }
 
+    @Test
+    fun aFormEncodedReplacementStaysReadOnlyInsteadOfFailingAtSubmit() {
+        fun withBody(contentType: String): NativeAppSchema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read").let { base ->
+            base.copy(actions = base.actions.map { action ->
+                if (action.id == "expenses.update") action.copy(binding = action.binding.copy(bodyContentType = contentType)) else action
+            })
+        }
+        val form = assertNotNull(plan(schema = withBody("application/x-www-form-urlencoded")))
+        val expense = assertNotNull(form.record(expenseRecord()))
+        assertTrue(expense.editUnavailableReason.orEmpty().contains("form body"), expense.editUnavailableReason)
+        assertIs<NativeChildRecordRequestResult.Unavailable>(form.updateRequest(expense, expense.draft + ("amount" to "20")))
+        val update = withBody("application/x-www-form-urlencoded").actions.single { it.id == "expenses.update" }
+        val stored = update.binding.bodyFieldNames.associateWith { name -> if (name == "payedFor") JsonArray(emptyList()) else JsonPrimitive(1) } +
+            listOf("what", "date", "comment", "repeat").associateWith { JsonPrimitive("synthetic") }
+        val planned = assertIs<NativeFullEchoUpdatePlan.ReadOnly>(nativeFullEchoUpdatePlan(update, stored, setOf("amount")))
+        assertEquals(NativeFullEchoRefusal.NonJsonBody, planned.reason)
+
+        val json = assertNotNull(plan(schema = withBody("application/json; charset=utf-8")))
+        val editable = assertNotNull(json.record(expenseRecord()))
+        assertNull(editable.editUnavailableReason)
+        assertIs<NativeChildRecordRequestResult.Ready>(json.updateRequest(editable, editable.draft + ("amount" to "20")))
+    }
+
     private fun expenseRecord(payer: String = "1") = NativeRecord(
         "44",
         mapOf(

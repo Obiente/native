@@ -34,6 +34,8 @@ internal sealed interface NativeFullEchoUpdatePlan {
                 "This app replaces the whole record, and \"$field\" was not part of what it returned, so editing here could clear it."
             NativeFullEchoRefusal.NotRoundTripExact ->
                 "This app replaces the whole record, and \"$field\" cannot be sent back exactly as stored, so it is not edited here."
+            NativeFullEchoRefusal.NonJsonBody ->
+                "This app replaces the whole record with a form body, which cannot carry \"$field\" back exactly as stored, so it is not edited here."
         }
     }
 }
@@ -44,6 +46,9 @@ internal enum class NativeFullEchoRefusal {
 
     /** A returned value does not fit the declared field type, so echoing it is not exact. */
     NotRoundTripExact,
+
+    /** Stored values must be echoed, but the body is not JSON, so they cannot travel verbatim. */
+    NonJsonBody,
 }
 
 /**
@@ -69,6 +74,11 @@ internal fun nativeFullEchoUpdatePlan(
             return NativeFullEchoUpdatePlan.ReadOnly(NativeFullEchoRefusal.NotRoundTripExact, name)
         }
         echo[name] = value
+    }
+    // Exact stored values travel only in a JSON body; a form body would re-encode them as text.
+    val nonJson = action.binding.bodyContentType?.let { it.substringBefore(';').trim().lowercase() != "application/json" } == true
+    echo.keys.firstOrNull()?.takeIf { nonJson }?.let { field ->
+        return NativeFullEchoUpdatePlan.ReadOnly(NativeFullEchoRefusal.NonJsonBody, field)
     }
     return NativeFullEchoUpdatePlan.Echo(echo, edited)
 }
