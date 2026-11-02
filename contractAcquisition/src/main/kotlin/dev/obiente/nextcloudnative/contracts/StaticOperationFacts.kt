@@ -161,7 +161,7 @@ internal fun mergeStaticRouteSources(fileRoutes: List<StaticRoute>, attributeRou
     }.values.filter { route ->
         fileNames[route.routeName()].orEmpty().none { it.url == route.url && it.verb == route.verb }
     }
-    fun StaticRoute.endpoint() = listOf(ocs.toString(), url.replace(PLACEHOLDER_PATTERN, "{}"), verb.uppercase())
+    fun StaticRoute.endpoint() = listOf(ocs.toString(), url.withAnonymousPlaceholders(), verb.uppercase())
     fun StaticRoute.action() = controller.normalizedPhpName() to method.normalizedPhpName()
     val crossSourceClashes = merged.groupBy { it.endpoint() }.filterValues { routes ->
         routes.any { it.source == StaticRouteSource.RouteFile } &&
@@ -189,5 +189,23 @@ internal const val STATIC_EVIDENCE_FORMAT_EXTENSION = "x-nextcloud-native-static
 internal const val STATIC_EVIDENCE_FORMAT = 2
 internal const val MERGE_HINT_KIND = "nullable-null-default-parameters"
 
-/** Any route placeholder; placeholder names do not change which requests a route matches. */
-private val PLACEHOLDER_PATTERN = Regex("""\{[^}]*\}""")
+/**
+ * Replaces each `{name}` with `{}`; placeholder names do not change which requests a route
+ * matches. A URL with unbalanced braces is returned unchanged so it never equals another route.
+ */
+private fun String.withAnonymousPlaceholders(): String {
+    if (count { it == '{' } != count { it == '}' }) return this
+    return buildString {
+        var inPlaceholder = false
+        for (char in this@withAnonymousPlaceholders) {
+            when {
+                inPlaceholder -> if (char == '}') {
+                    append("{}")
+                    inPlaceholder = false
+                }
+                char == '{' -> inPlaceholder = true
+                else -> append(char)
+            }
+        }
+    }
+}
