@@ -175,6 +175,7 @@ object NextcloudIcons {
     val ListView: ImageVector = Icons.AutoMirrored.Outlined.ViewList
     val Board: ImageVector = Icons.Outlined.ViewKanban
     val Mail: ImageVector = Icons.Outlined.Email
+    val Feed: ImageVector = Icons.Outlined.RssFeed
     val Phone: ImageVector = Icons.Outlined.Phone
     val Copy: ImageVector = Icons.Outlined.ContentCopy
     val Place: ImageVector = Icons.Outlined.LocationOn

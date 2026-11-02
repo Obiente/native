@@ -202,16 +202,22 @@ Windows, and an early macOS package) with:
   text, files, recordings, calls, system events and shared objects;
 - notes, with folders, ETag-aware saving and Markdown editing and preview,
   for Notes or any app whose own contract has the shape of a notes collection;
-- News, as a feed reader with unread and starred views, folders, feeds and an
-  article reader that does not load remote images;
+- feed readers for any app whose contract exposes feeds and articles,
+  including News: unread and starred filters over the loaded articles, feeds
+  beside the list, and an article reader that does not load remote images.
+  Read and star changes appear only when the app's own contract describes
+  them for one article, so News opens read-only;
 - Activity, global search, Dashboard, user status and app navigation;
 - native Settings for personal info, Talk privacy and conversation settings,
   and, for administrators, read-only views of apps, accounts, groups and server
   information;
-- Mail, with folders, reply, reply all and forward, a composer with address
-  suggestions, identities and attachments, undo and scheduled sending, drafts
-  kept on the device, message and folder organizing, and signature and alias
-  settings, for Mail 5.0 to 5.12 when the installed version can be confirmed;
+- mailboxes for any app whose contract exposes accounts, folders and
+  messages, including Mail: folders, paged messages, a reader, and read, flag,
+  archive and delete where the contract describes them. Compose, reply, reply
+  all and forward appear when the app's own contract describes a send whose
+  result can be checked, with unsent drafts kept on the device; Mail's
+  synchronous send cannot, so Mail has no composer yet. No app version is
+  allowlisted;
 - boards with lists and cards, sharing, archive and list reordering, for Deck
   or any app whose own contract has the shape of a board, offering each action
   only when that contract describes it;

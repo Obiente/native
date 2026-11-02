@@ -128,6 +128,7 @@ pub enum NativeComponent {
     DocumentEditor,
     ConversationList,
     ChatThread,
+    FeedReader,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

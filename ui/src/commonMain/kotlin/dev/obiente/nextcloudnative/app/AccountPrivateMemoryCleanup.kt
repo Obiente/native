@@ -17,6 +17,7 @@ object AccountPrivateMemoryCleanup {
         DeckWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)
         SupportSettingsDraftRegistry.purgeRetiredAccount(accountStorageKey)
+        NativeMailComposerRegistry.purgeRetiredAccount(accountStorageKey)
         sharedMediaTimelineDavCarryoverStore.purgeRetiredAccount(accountStorageKey)
         sharedMemoriesMainTimelineIndexCache.purgeRetiredAccount(accountStorageKey)
         sharedMediaViewerNavigationRepository.purgeRetiredAccount(accountStorageKey)

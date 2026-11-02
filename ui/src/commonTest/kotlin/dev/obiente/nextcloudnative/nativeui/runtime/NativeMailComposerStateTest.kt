@@ -1,0 +1,411 @@
+package dev.obiente.nextcloudnative.nativeui.runtime
+
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
+import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
+import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+class NativeMailComposerStateTest {
+    @Test
+    fun `a confirmed send closes the draft and reports it once`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
+        var sent = 0
+        state.send(capability(), executor) { sent += 1 }
+        assertNull(state.draft)
+        assertEquals("Message sent.", state.notice)
+        assertEquals(1, executor.calls)
+        assertEquals(1, sent)
+    }
+
+    @Test
+    fun `a rejected send keeps the draft and allows editing and sending again`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Failure("Quota exceeded", NativeActionFailureOutcome.Rejected) }
+        state.send(capability(), executor)
+        assertIs<NativeMailSendPhase.Rejected>(state.phase)
+        assertEquals("Quota exceeded", (state.phase as NativeMailSendPhase.Rejected).message)
+        state.update { it.copy(body = "Shorter") }
+        assertEquals(NativeMailSendPhase.Editing, state.phase)
+        state.send(capability(), executor)
+        assertEquals(2, executor.calls)
+    }
+
+    @Test
+    fun `an unknown result without a status read is never resent without confirmation`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) }
+        state.send(capability(), executor)
+        val phase = assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertEquals(NativeMailSendRecovery.Unavailable, phase.recovery)
+        assertTrue(state.resendNeedsConfirmation)
+        assertTrue(state.sendAvailable, "without a status read the user decides after checking sent messages")
+        state.send(capability(), executor)
+        assertEquals(1, executor.calls, "a second send without confirmation must not leave the device")
+        state.update { it.copy(subject = "Edited") }
+        assertIs<NativeMailSendPhase.Unknown>(state.phase, "editing does not clear the unknown outcome")
+        state.send(capability(), executor, confirmedResend = true)
+        assertEquals(2, executor.calls)
+    }
+
+    @Test
+    fun `an unknown result reads the declared status and closes the draft when it shows the message as sent`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecoveringExecutor(
+            send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+            read = { NativeResultRecoveryRead.Read(mapOf("status" to "sent")) },
+        )
+        var sent = 0
+        state.send(recoverableCapability(), executor) { sent += 1 }
+        assertEquals(1, executor.reads)
+        assertEquals("7", executor.readRequests.single().values["accountId"], "the status read binds the attempt's account")
+        assertNull(state.draft)
+        assertEquals(NativeMailSendPhase.Editing, state.phase)
+        assertEquals("The app reports this message as sent.", state.notice)
+        assertEquals(1, sent)
+        assertEquals(1, executor.sends)
+    }
+
+    @Test
+    fun `a status read holding exactly the attempted message counts as sent`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecoveringExecutor(
+            send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+            read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text")) },
+        )
+        state.send(recoverableCapability(), executor)
+        assertNull(state.draft)
+    }
+
+    @Test
+    fun `a status that does not show the message as sent allows a confirmed resend`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecoveringExecutor(
+            send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+            read = { NativeResultRecoveryRead.Read(mapOf("status" to "failed")) },
+        )
+        state.send(recoverableCapability(), executor)
+        val phase = assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertEquals(NativeMailSendRecovery.NotShownAsSent("failed"), phase.recovery)
+        assertTrue(state.sendAvailable)
+        state.send(recoverableCapability(), executor)
+        assertEquals(1, executor.sends, "still not without confirmation")
+        state.send(recoverableCapability(), executor, confirmedResend = true)
+        assertEquals(2, executor.sends)
+    }
+
+    @Test
+    fun `a queued or unreadable status keeps sending again unavailable`() = runBlocking<Unit> {
+        listOf(
+            NativeResultRecoveryRead.Read(mapOf("status" to "queued")) to NativeMailSendRecovery.InProgress("queued"),
+            NativeResultRecoveryRead.Failed("The status could not be read.") to
+                NativeMailSendRecovery.CheckFailed("The status could not be read."),
+        ).forEach { (read, expected) ->
+            val state = NativeMailComposerState().apply { open(readyDraft()) }
+            val executor = RecoveringExecutor(
+                send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+                read = { read },
+            )
+            state.send(recoverableCapability(), executor)
+            assertEquals(expected, assertIs<NativeMailSendPhase.Unknown>(state.phase).recovery)
+            assertFalse(state.sendAvailable)
+            assertTrue(state.statusCheckAvailable)
+            state.send(recoverableCapability(), executor, confirmedResend = true)
+            assertEquals(1, executor.sends, "an unverified attempt is never resent")
+        }
+    }
+
+    @Test
+    fun `a thrown status read is a failed check, not a sent message`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecoveringExecutor(
+            send = { error("connection reset") },
+            read = { error("connection reset") },
+        )
+        state.send(recoverableCapability(), executor)
+        assertIs<NativeMailSendRecovery.CheckFailed>(assertIs<NativeMailSendPhase.Unknown>(state.phase).recovery)
+        assertEquals(readyDraft(), state.draft)
+    }
+
+    @Test
+    fun `a thrown transport failure is treated as unknown`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        state.send(capability(), RecordingExecutor { error("connection reset") })
+        assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertEquals(readyDraft(), state.draft)
+    }
+
+    @Test
+    fun `cancellation is rethrown and leaves the outcome unknown`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        assertFailsWith<CancellationException> {
+            state.send(capability(), RecordingExecutor { throw CancellationException("left") })
+        }
+        val phase = assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertEquals(NativeMailSendRecovery.NotChecked, phase.recovery)
+        assertEquals(readyDraft(), phase.attempt)
+    }
+
+    @Test
+    fun `an invalid draft is rejected before any request`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft().copy(to = "not an address")) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
+        state.send(capability(), executor)
+        assertIs<NativeMailSendPhase.Rejected>(state.phase)
+        assertEquals(0, executor.calls)
+    }
+
+    @Test
+    fun `a send owned by the retained holder outlives the screen that started it`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val retention = NativeMailComposerRetention(owner) { null }
+        val state = retention.stateFor("synthetic_mail")
+        state.open(readyDraft())
+        val answer = CompletableDeferred<NativeActionExecutionResult>()
+        val executor = RecordingExecutor { answer.await() }
+        // A screen-local scope only asks; the send itself runs in the owner's scope.
+        val screen = CoroutineScope(coroutineContext + Job())
+        state.launchSend(capability(), executor, confirmedResend = false) {}
+        repeat(3) { yield() }
+        assertTrue(state.sending)
+        screen.cancel()
+        // The recreated screen gets the same state for the same app.
+        assertSame(state, retention.stateFor("synthetic_mail"))
+        answer.complete(NativeActionExecutionResult.Success())
+        owner.settle()
+        assertNull(state.draft)
+        assertEquals("Message sent.", state.notice)
+        assertEquals(1, executor.calls)
+        owner.cancel()
+    }
+
+    @Test
+    fun `drafts are saved on the device and restored after process death`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore()
+        val first = NativeMailComposerState(owner, store, saveDelayMillis = 0)
+        first.open(readyDraft())
+        first.update { it.copy(body = "Edited text") }
+        owner.settle()
+        assertEquals(NativeMailStoredComposer(readyDraft().copy(body = "Edited text")), store.value)
+
+        val restored = NativeMailComposerState(owner, store, saveDelayMillis = 0)
+        restored.restore()
+        assertEquals("Edited text", restored.draft?.body)
+        assertEquals(NativeMailSendPhase.Editing, restored.phase)
+
+        restored.discard()
+        owner.settle()
+        assertNull(store.value, "a discarded draft leaves no device copy")
+        owner.cancel()
+    }
+
+    @Test
+    fun `the attempt is stored before its request starts and comes back unconfirmed`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore()
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0).apply { open(readyDraft()) }
+        var storedDuringRequest: NativeMailStoredComposer? = null
+        val never = CompletableDeferred<NativeActionExecutionResult>()
+        state.launchSend(capability(), RecordingExecutor { storedDuringRequest = store.value; never.await() }, false) {}
+        repeat(5) { yield() }
+        assertEquals(NativeMailStoredComposer(readyDraft(), unknownAttempt = readyDraft()), storedDuringRequest)
+        // The process dies while the request is open.
+        owner.cancel()
+
+        val restartOwner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val restored = NativeMailComposerState(restartOwner, store, saveDelayMillis = 0)
+        restored.restore()
+        val phase = assertIs<NativeMailSendPhase.Unknown>(restored.phase)
+        assertEquals(NativeMailSendRecovery.NotChecked, phase.recovery)
+        assertTrue(restored.statusCheckAvailable)
+        assertTrue(restored.resendNeedsConfirmation)
+        restartOwner.cancel()
+    }
+
+    @Test
+    fun `a confirmed send clears the device copy`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore()
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0).apply { open(readyDraft()) }
+        owner.settle()
+        assertNotNull(store.value)
+        state.send(capability(), RecordingExecutor { NativeActionExecutionResult.Success() })
+        assertNull(store.value)
+        owner.cancel()
+    }
+
+    @Test
+    fun `a message is not sent when its attempt cannot be recorded`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore(failSaves = true)
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0).apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
+        state.send(capability(), executor)
+        assertEquals(0, executor.calls)
+        assertIs<NativeMailSendPhase.Rejected>(state.phase)
+        assertEquals("This draft could not be saved on this device.", state.storageProblem)
+        owner.cancel()
+    }
+
+    @Test
+    fun `a restored draft does not replace one the user already started`() = runBlocking<Unit> {
+        val store = MemoryDraftStore(NativeMailStoredComposer(readyDraft().copy(body = "Saved")))
+        val state = NativeMailComposerState(null, store).apply { open(readyDraft().copy(body = "Typed")) }
+        state.restore()
+        assertEquals("Typed", state.draft?.body)
+    }
+
+    @Test
+    fun `stored composers round-trip and reject unknown versions`() {
+        val stored = NativeMailStoredComposer(
+            readyDraft().copy(
+                mode = NativeMailComposeMode.Reply,
+                quote = NativeMailQuote("Grace wrote:", "Original", forward = false),
+                inReplyTo = "<a@example.test>",
+                references = "<root@example.test> <a@example.test>",
+            ),
+            unknownAttempt = readyDraft(),
+        )
+        val encoded = encodeNativeMailStoredComposer(stored)
+        assertEquals(stored, decodeNativeMailStoredComposer(encoded))
+        assertNull(decodeNativeMailStoredComposer(encoded.replace("\"version\":1", "\"version\":2")))
+        assertNull(decodeNativeMailStoredComposer(encoded.replace("\"Reply\"", "\"Unknown\"")))
+        assertNull(decodeNativeMailStoredComposer("{"))
+    }
+
+    @Test
+    fun `a single-address recipient field refuses several recipients`() {
+        val single = capability().copy(to = NativeMailRecipientField("to", NativeMailRecipientEncoding.SingleAddress))
+        val problems = single.problems(readyDraft().copy(to = "a@example.test, b@example.test"))
+        assertTrue("This app accepts one address per recipient field." in problems, "$problems")
+        assertEquals("grace@example.test", single.request(readyDraft()).values["to"])
+    }
+
+    @Test
+    fun `cc is refused when the contract declares no cc field`() {
+        val problems = capability().copy(cc = null).problems(readyDraft().copy(cc = "kai@example.test"))
+        assertTrue("This app does not accept Cc recipients." in problems, "$problems")
+    }
+
+    @Test
+    fun `in-reply-to and references each get their own value`() {
+        val threaded = capability().copy(inReplyToField = "inReplyTo", referencesField = "references")
+        val values = threaded.request(
+            readyDraft().copy(inReplyTo = "<b@example.test>", references = "<a@example.test> <b@example.test>"),
+        ).values
+        assertEquals("<b@example.test>", values["inReplyTo"])
+        assertEquals("<a@example.test> <b@example.test>", values["references"])
+    }
+
+    private class RecordingExecutor(private val result: suspend () -> NativeActionExecutionResult) : NativeActionExecutor {
+        var calls = 0
+
+        override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
+            calls += 1
+            return result()
+        }
+    }
+
+    private class RecoveringExecutor(
+        private val send: () -> NativeActionExecutionResult,
+        private val read: () -> NativeResultRecoveryRead,
+    ) : NativeActionExecutor, NativeResultRecoveryReader {
+        var sends = 0
+        val readRequests = mutableListOf<NativeActionRequest.Submit>()
+        val reads: Int get() = readRequests.size
+
+        override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
+            sends += 1
+            return send()
+        }
+
+        override suspend fun readResult(request: NativeActionRequest.Submit): NativeResultRecoveryRead {
+            readRequests += request
+            return read()
+        }
+    }
+
+    private class MemoryDraftStore(
+        var value: NativeMailStoredComposer? = null,
+        private val failSaves: Boolean = false,
+    ) : NativeMailDraftStore {
+        override suspend fun load(): NativeMailStoredComposer? = value
+
+        override suspend fun save(value: NativeMailStoredComposer) {
+            check(!failSaves) { "Synthetic storage is full." }
+            this.value = value
+        }
+
+        override suspend fun clear() {
+            value = null
+        }
+    }
+
+    private suspend fun CoroutineScope.settle() {
+        val job = checkNotNull(coroutineContext[Job])
+        while (true) {
+            val active = job.children.filter(Job::isActive).toList()
+            if (active.isEmpty()) return
+            active.forEach { it.join() }
+        }
+    }
+
+    private fun readyDraft() = NativeMailComposeDraft(
+        mode = NativeMailComposeMode.New,
+        senderId = "7",
+        to = "grace@example.test",
+        subject = "Hello",
+        body = "Text",
+    )
+
+    private fun recoverableCapability() = capability().let { base ->
+        base.copy(
+            action = base.action.copy(
+                binding = base.action.binding.copy(method = HttpMethod.PUT, path = "/apps/synthetic/accounts/{accountId}/send"),
+                resultRecoveryActionId = "send-status",
+            ),
+        )
+    }
+
+    private fun capability() = NativeMailSendCapability(
+        action = ActionSpec(
+            id = "send",
+            label = "Send",
+            resourceId = "message",
+            binding = ApiBinding(method = HttpMethod.POST, path = "/apps/synthetic/send", operationId = "send"),
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        senders = listOf(NativeMailSender(id = "7", email = "ada@example.test", label = "Ada")),
+        to = NativeMailRecipientField("to", NativeMailRecipientEncoding.ObjectList("email", "label")),
+        cc = NativeMailRecipientField("cc", NativeMailRecipientEncoding.StringList),
+        bcc = null,
+        subjectField = "subject",
+        bodyField = "body",
+        htmlFlagField = null,
+        senderIdentityFields = listOf("accountId"),
+        senderAddressField = null,
+    )
+}

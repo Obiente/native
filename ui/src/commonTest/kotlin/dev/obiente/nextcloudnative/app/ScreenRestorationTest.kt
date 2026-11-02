@@ -129,4 +129,16 @@ class ScreenRestorationTest {
         val encoded = Json.encodeToString(Screen.AppInfo(NextcloudAppEntry("jotter", "Jotter", null)).toSavedScreen())
         assertFalse(encoded.contains("noteId\":9"))
     }
+
+    @Test
+    fun `saved routes from the former Mail and News screens open the dynamic app workspace`() {
+        listOf("mail" to "Mail", "news" to "News").forEach { (kind, name) ->
+            val encoded = """{"kind":"$kind"}"""
+            val restored = assertIs<Screen.AppInfo>(screenSaver.restore(encoded))
+            assertEquals(kind, restored.app.id)
+            assertEquals(name, restored.app.name)
+            assertEquals(DynamicAppNavigationState(), restored.navigation)
+            assertEquals("app-info", restored.toSavedScreen().kind)
+        }
+    }
 }

@@ -1151,7 +1151,7 @@ private fun DynamicNavigationDestination.primaryRootScore(descriptor: DynamicApp
 
     val appWords = listOf(app.id, app.name).flatMap(String::semanticWords).toSet()
     val destinationWords = listOf(resourceId, label).flatMap(String::semanticWords).toSet()
-    score += appWords.intersect(destinationWords).size * 100
+    score += appWords.intersect(destinationWords).size * 100 + descriptor.feedReaderRootBonus(resourceId)
 
     val resourceActions = descriptor.actions.filter { action ->
         action.resourceId.sameResourceAs(resourceId)

@@ -673,8 +673,6 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
-    val newsController = rememberNewsWorkspaceController(services, session)
-    val mailSession = rememberMailWorkspaceSession(services, session)
     val notificationsInbox = rememberNotificationsInboxController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
@@ -953,8 +951,6 @@ private fun AuthenticatedApp(
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
             "tasks" -> Screen.Tasks
-            NEWS_APP_ID -> Screen.News
-            MAIL_APP_ID -> Screen.Mail
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -1366,8 +1362,6 @@ private fun AuthenticatedApp(
             Screen.Calendar,
             Screen.Contacts,
             Screen.Tasks,
-            Screen.News,
-            Screen.Mail,
             is Screen.AppInfo,
             -> {
                 leaveAppWorkspace()
@@ -1739,8 +1733,6 @@ private fun AuthenticatedApp(
             pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
-        Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
-        Screen.Mail -> MailWorkspaceScreen(services, session, serverInfo?.userId ?: session.loginName, mailSession, ::navigateBack)
         Screen.AdminApps -> AdminAppsScreen(
             access = administration, session = session,
             execute = { services.executeNextcloudApi(session, it) }, serverInfo = serverInfo,
@@ -2401,10 +2393,11 @@ private fun DynamicDiscoveredAppScreen(
     val selectedView = schema.views.firstOrNull { it.id == selectedViewId }
         ?: schema.views.firstOrNull()
     val formRelationValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
-    val formRelationRequests = remember(schema, selectedView, formRelationValues) {
-        selectedView?.let { view ->
-            dynamicFormRelationLoadRequests(schema, view, formRelationValues)
-        }.orEmpty()
+    val feedReaderSourceRequests = remember(schema, selectedView, formRelationValues) {
+        selectedView?.let { view -> dynamicFeedReaderSourceLoadRequests(schema, view, formRelationValues) }.orEmpty()
+    }
+    val formRelationRequests = remember(schema, selectedView, formRelationValues, feedReaderSourceRequests) {
+        selectedView?.let { view -> dynamicFormRelationLoadRequests(schema, view, formRelationValues) }.orEmpty() + feedReaderSourceRequests
     }
     val audioSourceCapability = remember(discovery) {
         descriptor.actions.firstNotNullOfOrNull { action ->
@@ -3089,7 +3082,11 @@ private fun DynamicDiscoveredAppScreen(
             )
         }.toMap()
     }
-    val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests)
+    LaunchedEffect(feedReaderSourceRequests) {
+        val outcomes = loadDynamicFeedReaderSources(services, session, descriptor, formRelationCache.pendingRequests(feedReaderSourceRequests), formRelationValues, dynamicReadCachePolicy)
+        formRelationCache = formRelationCache.withDynamicRelationOutcomes(outcomes)
+    }
+    val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests) - feedReaderSourceRequests.toSet()
     val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
         DynamicNextcloudActionExecutor(
             services = services,
@@ -4660,11 +4657,8 @@ private fun DynamicDiscoveredAppScreen(
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
-                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
-                        ::selectChoresDestination
-                    } else {
-                        null
-                    },
+                    onWorkspaceNavigate = ::selectChoresDestination.takeIf { choresWorkspaceActive && choresNavigationItems.size > 1 },
+                    mailComposerRetention = remember(services, session) { NativeMailComposerRegistry.retention(services, session) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -5732,6 +5726,7 @@ private fun ViewSpec.dynamicDestinationSupportingText(
 
         NativeComponent.board -> "Organize work across lanes"
         NativeComponent.mailbox -> "Read and manage messages"
+        NativeComponent.feedReader -> "Read articles from your feeds"
         NativeComponent.contactList -> "Browse people and contact details"
         NativeComponent.dataTable -> subject?.let { "Review and edit $it" }
             ?: "Review and edit records"
@@ -5920,6 +5915,7 @@ private fun ViewSpec.dynamicCollectionNavigationIcon(): ImageVector = when (comp
 
     NativeComponent.board -> NextcloudIcons.Board
     NativeComponent.mailbox -> NextcloudIcons.Mail
+    NativeComponent.feedReader -> NextcloudIcons.Feed
     NativeComponent.taskList -> NextcloudIcons.Task
     NativeComponent.dataTable -> NextcloudIcons.Table
     NativeComponent.recipeList -> NextcloudIcons.Recipe

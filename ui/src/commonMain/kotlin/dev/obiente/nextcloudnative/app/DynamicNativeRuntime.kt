@@ -36,6 +36,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryRead
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryReader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -345,10 +347,13 @@ class DynamicNextcloudActionExecutor(
     private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
     private val writeGate: DynamicContractWriteGate? = null,
     private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
-) : NativeActionExecutor {
+) : NativeActionExecutor, NativeResultRecoveryReader {
     init {
         descriptor.requireValid()
     }
+
+    override suspend fun readResult(request: NativeActionRequest.Submit): NativeResultRecoveryRead =
+        readDynamicResultRecovery(services, session, descriptor, request, runtimeContext)
 
     override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
         val action = descriptor.actions.firstOrNull { it.id == request.action.id }

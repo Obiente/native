@@ -34,10 +34,6 @@ internal sealed interface Screen {
     @Serializable
     data object Tasks : Screen
     @Serializable
-    data object News : Screen
-    @Serializable
-    data object Mail : Screen
-    @Serializable
     data object AdminApps : Screen
     @Serializable
     data object OfflineCenter : Screen
@@ -87,8 +83,6 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     Screen.Calendar,
     Screen.Contacts,
     Screen.Tasks,
-    Screen.News,
-    Screen.Mail,
     Screen.AdminApps,
     Screen.OfflineCenter,
     Screen.Transfers,
@@ -185,8 +179,6 @@ internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
     Screen.Calendar -> SavedScreen("calendar")
     Screen.Contacts -> SavedScreen("contacts")
     Screen.Tasks -> SavedScreen("tasks")
-    Screen.News -> SavedScreen("news")
-    Screen.Mail -> SavedScreen("mail")
     Screen.AdminApps -> SavedScreen("admin-apps")
     Screen.OfflineCenter -> SavedScreen("offline-center")
     Screen.Transfers -> SavedScreen("transfers")
@@ -236,8 +228,9 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
     "contacts" -> Screen.Contacts
     "tasks" -> Screen.Tasks
     "deck" -> legacySemanticAppScreen("deck", "Deck")
-    "news" -> Screen.News
-    "mail" -> Screen.Mail
+    // Mail and News once had dedicated routes. Their saved routes now open the app's dynamic
+    // workspace, which chooses the mailbox or feed reader from the installed app's contract.
+    "news", "mail" -> Screen.AppInfo(app = NextcloudAppEntry(id = kind, name = kind.replaceFirstChar(Char::uppercase), href = null))
     "admin-apps" -> Screen.AdminApps
     "offline-center" -> Screen.OfflineCenter
     "transfers" -> Screen.Transfers
