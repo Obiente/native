@@ -211,6 +211,14 @@ the app ID:
 Every class above R0 allows one in-flight write per target record, and at most
 one unconfirmed write per route while a rule is in probation.
 
+Implementation gap (Last reviewed: 2026-11-02; this may have changed, see
+[write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)):
+until pattern rules ship, R1 is admitted from the compiler's effect
+classification of the declared operation rather than from an E4 rule, and its
+read-back, rollback, and quarantine safeguards are not yet applied. R1 writes
+are listed there with the other surfaces that are not yet read back. New code
+must not rely on that gap.
+
 ### Rules
 
 - Deterministic contracts and typed models outrank naming heuristics. A

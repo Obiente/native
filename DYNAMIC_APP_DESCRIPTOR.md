@@ -897,13 +897,39 @@ At the transport boundary
 every dynamic write is admitted before anything is sent. This phase enforces
 the refusals no surface may override: administration and credentials, a send
 without a durable attempt record or a declared idempotency key, a send whose
-required body fields are not all supplied, sharing without a declared
-permission field, writes without a declared operation, and a quarantined
-route. The other safeguards in the matrix (full echo for every replacement,
-a verified collection read for every create, permanent labeling for every
-delete) are applied by the surfaces that opt in through the request's
-read-back and are recorded, not yet enforced, for the remaining surfaces
-listed below. One write per target record may be in flight at a time.
+required body fields are not all supplied, writes without a declared
+operation, and a quarantined route. A share is sent only when the contract
+declares a permission field and a fresh, bounded read of the target record
+returns that field as the JSON boolean `true`; `false` refuses it, and a
+missing, non-boolean, or unreadable value, or a read that does not identify
+exactly the target, refuses it as unverified. The other safeguards in the
+matrix (full echo for every replacement, a verified collection read for every
+create, permanent labeling for every delete) are applied by the surfaces that
+opt in through the request's read-back and are recorded, not yet enforced,
+for the remaining surfaces listed below. One write per target record may be
+in flight at a time.
+
+Until pattern rules ship, an idempotent state set (R1) is admitted from the
+compiler's effect classification of the declared operation (its declared
+effect and typed body), not from a reviewed E4 rule. Its matrix safeguards
+(read-back of the state field, rollback on mismatch, and quarantine on
+contradiction) are not yet applied: R1 writes are sent once without a
+read-back, like the other surfaces listed below as not yet read back.
+
+OCS failures reported inside an HTTP `2xx` response are classified by status
+code ([`DynamicOcsFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicOcsFailure.kt)).
+Client errors (`400` to `499`, the OCS v1 app failure codes `101` to `199`,
+`997` unauthorised, and `998` not found) are rejections. A server error
+(`996`, `500` and above), the unknown error `999`, any other code, or
+metadata that contradicts itself is an unknown result, so the exactly-once
+send keeps its attempt record and never resends without confirmation.
+
+Dynamic API requests other than `GET`, including multipart uploads and
+exactly-once sends, use an HTTP client with connection-failure retries
+disabled on desktop and Android
+([`JvmDynamicApiClients.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmDynamicApiClients.kt)),
+so a request whose body was already written is never sent a second time by
+the transport.
 
 [`NativeVerifiedWrite.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeVerifiedWrite.kt)
 is the one verified write path: an optional pre-read compare, one send, and a
@@ -912,7 +938,10 @@ outcomes Confirmed, Adjusted, NotApplied, and Unknown. A definite rejection is
 not read back. A successful response whose read-back shows the previous value,
 or an untouched field that drifted, contradicts the postcondition and
 quarantines the route. Server bookkeeping fields (modification time, ETag,
-revision) are not drift. Deck's verified board writes use the same path.
+revision) are not drift. Deck's board writes call the same verified write
+function, but they run through the reviewed Deck adapter's own transport
+rather than the descriptor executor, so the admission check, the in-flight
+gate, quarantine, and write diagnostics described here do not apply to them.
 
 Quarantine and probation state is stored per account identity digest, app ID,
 exact app version, route template, rule ID, and rule version
@@ -921,11 +950,22 @@ file-backed on desktop and Android by
 [`FileDynamicWriteQuarantineStore.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/FileDynamicWriteQuarantineStore.kt),
 written to a temporary file and moved into place). It survives restart, a
 version change drops it, account removal deletes it, and an unreadable file
-refuses writes until the person resets it. Writes whose encoding the contract
+refuses writes until the person resets it. An app ID, exact version, or route
+template that holds characters outside the key alphabet, or exceeds its length
+bound, is keyed by a SHA-256 digest of its exact string, so every write has a
+key and a quarantine is never dropped. Writes whose encoding the contract
 declares use the rule ID `contract-declared` version 1. The contract
 information dialog (**App compatibility details** in the app's header menu)
 shows paused and probationary routes and offers **Resume changes**, which
-clears that app's state. Diagnostics record the evidence tier, risk class,
+asks for a separate confirmation naming each route and why it was paused
+before it clears that app's state.
+
+After drift, the person may send the offered baseline restore: a full echo of
+every value from before the drifted write. It is the only write a quarantined
+route accepts, only as the exact request the executor offered and only once.
+It still runs the pre-read compare against the drifted state the person saw,
+and its read-back checks every baseline field; the route stays paused until
+the person resumes changes. Diagnostics record the evidence tier, risk class,
 rule ID, and rule version of each write without payload values, and use the
 codes `write-quarantined`, `write-postcondition-mismatch`,
 `identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
@@ -938,12 +978,16 @@ all six invariants) and the pattern rule interface and empty registry
 ([`PatternRule.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/rules/PatternRule.kt)).
 
 Writes that pass admission and the verified write path: grid row updates
-(full echo or cell-checked PATCH), child record updates (full echo or
-read-back PATCH), and Deck board writes. Writes that pass admission but are
-not yet read back: generic record, collection, and board actions, mailbox and
-feed state changes, notes, questionnaire responses, creates (which keep their
-durable pending records), deletes, and the mail composer's send (which uses
-the exactly-once path instead).
+(full echo or cell-checked PATCH) and child record updates (full echo or
+read-back PATCH). A replacement whose body is not JSON cannot carry stored
+values back exactly, so such a record stays read-only. Writes that pass
+admission but are not yet read back: idempotent state sets (R1, see above),
+generic record, collection, and board actions, mailbox and feed state
+changes, notes, questionnaire responses, creates (which keep their durable
+pending records), deletes, and the mail composer's send (which uses the
+exactly-once path instead and is refused when no durable draft storage can
+record its attempt). Deck board writes are read back through the verified
+write function but are not admitted by the generic write path.
 
 ## Reviewed limits
 

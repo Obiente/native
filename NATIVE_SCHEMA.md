@@ -84,6 +84,29 @@ they existed and mirrored by the Rust reference model:
 | `idempotencyKeyHeader` | The exact name of a declared `Idempotency-Key` request header. |
 | `sharePermissionFieldId` | The declared field of the route-family read that proves the actor may share. |
 
+The Kotlin classification in
+[`DynamicOperationRiskClass.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicOperationRiskClass.kt)
+is authoritative; the Rust `OperationRiskClass::classify` is a reference
+subset (Last reviewed: 2026-11-02; check both sources, this may have changed).
+Both read the method, the literal route words, the operation ID, the label,
+and whether a body is declared, and both apply the same credential,
+administration, sharing, and external-effect words, except that Kotlin also
+treats `app` with `password` as a credential. Rust does not consult the
+action's effect, its destructive `risk`, or the verified package's access
+rule, so the two can differ:
+
+- a toggle, archive, unarchive, assign, or restore keeps its method class in
+  Rust (`create` (R5) for a POST, R3 for a PATCH, R4 for a PUT with a body)
+  and is `idempotentStateSet` (R1) in Kotlin;
+- a reorder or move keeps its method class in Rust and is
+  `reversibleScalarEdit` (R2) in Kotlin;
+- a POST or PUT whose effect or risk is destructive, such as empty, leave, or
+  clear, keeps its method class in Rust and is `destructive` (R7) in Kotlin;
+- a write the package limits to administrators keeps its word-derived class
+  in Rust and is `administration` (R9) in Kotlin.
+
+Never admit a write from a Rust-produced `riskClass`.
+
 An adapter may improve labels, component choice, and field semantics. It may
 not add an operation that was absent from the discovery snapshot.
 

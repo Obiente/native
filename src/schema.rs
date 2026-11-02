@@ -193,6 +193,10 @@ impl OperationRiskClass {
 
     /// Classifies from the method and the operation's own words; never from an app identity.
     /// Route placeholders are ignored so `{token}` is not mistaken for a credential.
+    ///
+    /// This is a reference subset of the authoritative Kotlin `dynamicOperationRiskClass`: it does
+    /// not consult the action effect, the destructive risk, or the package access rule, so a POST
+    /// toggle is `Create` here and `IdempotentStateSet` in Kotlin. See NATIVE_SCHEMA.md.
     pub fn classify(
         method: HttpMethod,
         path: &str,
