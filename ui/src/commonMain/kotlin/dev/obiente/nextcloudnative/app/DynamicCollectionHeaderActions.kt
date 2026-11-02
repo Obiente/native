@@ -39,6 +39,8 @@ internal fun DynamicCollectionHeaderActions(
     onMenuExpandedChange: (Boolean) -> Unit,
     onActionSelected: (DynamicNavigationFormAction, ViewSpec) -> Unit,
     onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
+    /** Opens the contract information dialog, where paused changes can be reviewed and resumed. */
+    onCompatibilityDetails: (() -> Unit)? = null,
 ) {
     val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -51,7 +53,7 @@ internal fun DynamicCollectionHeaderActions(
                 Icon(NextcloudIcons.Add, contentDescription = label)
             }
         }
-        if (overflowActions.isNotEmpty() || secondaryDestinations.isNotEmpty()) {
+        if (overflowActions.isNotEmpty() || secondaryDestinations.isNotEmpty() || onCompatibilityDetails != null) {
             Box {
                 IconButton(onClick = { onMenuExpandedChange(true) }) {
                     Icon(NextcloudIcons.More, contentDescription = "More options")
@@ -90,6 +92,10 @@ internal fun DynamicCollectionHeaderActions(
                             },
                             onClick = { onDestinationSelected(destination, view) },
                         )
+                    }
+                    onCompatibilityDetails?.let { open ->
+                        if (overflowActions.isNotEmpty() || secondaryDestinations.isNotEmpty()) HorizontalDivider()
+                        DropdownMenuItem(text = { Text("App compatibility details") }, onClick = open)
                     }
                 }
             }

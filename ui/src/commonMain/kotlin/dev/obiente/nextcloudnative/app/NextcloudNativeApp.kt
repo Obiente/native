@@ -3776,6 +3776,7 @@ private fun DynamicDiscoveredAppScreen(
     }
     val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
+    var contractInfoOpen by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
     }
@@ -4444,10 +4445,6 @@ private fun DynamicDiscoveredAppScreen(
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
         val headerKeys = dev.obiente.nextcloudnative.nativeui.runtime.genericHeaderSharedKeys(selectedRecord?.id, selectedRecordResourceId, selectedContextLabel, activeContentTitle, activeContentSubtitle, showFallbackRecordDetail || selectedView.component == NativeComponent.detail)
-        val hasHeaderActions = collectionCreateControl.action != null ||
-            overflowActionViews.isNotEmpty() ||
-            secondaryNavigationDestinations.isNotEmpty()
-
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
             mode = if (musicWorkspaceIntent == null && !choresWorkspaceActive) {
@@ -4478,7 +4475,13 @@ private fun DynamicDiscoveredAppScreen(
                     ?.dynamicCollectionNavigationIcon()
             },
             headerActions = {
-                if (!showContextDestinationMenu && hasHeaderActions) {
+                if (contractInfoOpen) {
+                    DynamicContractInfoHost(
+                        remember(discovery) { discovery.toContractInfo(null) }, services.dynamicWriteQuarantineStore(),
+                        session.accountId.storageKey, descriptor.app.id, onDismiss = { contractInfoOpen = false },
+                    )
+                }
+                if (!showContextDestinationMenu) {
                     DynamicCollectionHeaderActions(
                         schema = schema,
                         appName = descriptor.app.name,
@@ -4489,6 +4492,7 @@ private fun DynamicDiscoveredAppScreen(
                         onMenuExpandedChange = { actionMenuExpanded = it },
                         onActionSelected = ::selectDynamicAction,
                         onDestinationSelected = ::selectCollectionDestination,
+                        onCompatibilityDetails = { actionMenuExpanded = false; contractInfoOpen = true },
                     )
                 }
             },
@@ -5241,61 +5245,6 @@ internal fun String?.isSupportedDynamicArtworkContentType(): Boolean {
 private const val MAX_DYNAMIC_ARTWORK_DECODED_BYTES = 32L * 1024L * 1024L
 private const val MAX_DYNAMIC_ARTWORK_DIMENSION = 1_024
 private const val ARGB_8888_BYTES_PER_PIXEL = 4L
-
-@Composable
-private fun DynamicContractInfoDialog(
-    info: DynamicContractInfo,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Contract info") },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                ContractInfoSection("Acquisition", info.acquisition)
-                ContractInfoSection("App version", info.appVersion)
-                ContractInfoSection("Source spec", info.sourceSpecFile)
-                ContractInfoSection("Descriptor", info.countSummary())
-                ContractInfoSection("Resources", info.resourceIds.safeContractList())
-                ContractInfoSection("Layouts", info.layoutIds.safeContractList())
-                ContractInfoSection("Links", info.linkIds.safeContractList())
-                ContractInfoSection("Actions", info.actionIds.safeContractList())
-                ContractInfoSection(
-                    "Diagnostics",
-                    info.diagnosticCodes.ifEmpty { listOf("none") }.joinToString(", "),
-                )
-                if (info.childCandidates.isNotEmpty()) {
-                    Text("Current record navigation", style = MaterialTheme.typography.titleSmall)
-                    info.childCandidates.forEach { child ->
-                        val missing = child.missingContextParameters.takeIf(List<String>::isNotEmpty)
-                            ?.joinToString(", ", prefix = " · needs ")
-                            .orEmpty()
-                        Text(
-                            "${child.resourceId} · ${child.reasonLabel()}$missing",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                } else {
-                    ContractInfoSection("Current record navigation", "No child collection candidates")
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
-}
-
-@Composable
-private fun ContractInfoSection(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Text(value, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
-private fun List<String>.safeContractList(): String = ifEmpty { listOf("none") }.joinToString(", ")
 
 internal data class DynamicCollectionDestinationSelectionPlan(
     val pathParameterValues: Map<String, String>,
