@@ -58,7 +58,9 @@ internal data class NativeMailStoredComposer(
  * so closing the dialog, leaving the workspace, or recreating the activity never cancels a request
  * that may have left the device. With a [store], the draft is saved shortly after each edit, and an
  * attempt is recorded before its request starts, so after process death the draft returns with its
- * unconfirmed outcome instead of looking unsent. Message content never enters saved instance state.
+ * unconfirmed outcome instead of looking unsent. Without a [store] the draft stays in memory and
+ * sending is refused, because an attempt that cannot be recorded durably is never sent. Message
+ * content never enters saved instance state.
  */
 @Stable
 internal class NativeMailComposerState(
@@ -88,6 +90,9 @@ internal class NativeMailComposerState(
         override suspend fun load(): NativeSendAttempt? = attemptRecord
 
         override suspend fun save(attempt: NativeSendAttempt) {
+            // Without a durable store the attempt would not survive process death, so the send is
+            // refused (AttemptNotRecorded) rather than sent with only an in-memory record.
+            checkNotNull(store) { "No durable draft storage is available for the attempt." }
             attemptRecord = attempt
             pendingSave?.cancel()
             check(persistNow()) { "The attempt could not be recorded." }

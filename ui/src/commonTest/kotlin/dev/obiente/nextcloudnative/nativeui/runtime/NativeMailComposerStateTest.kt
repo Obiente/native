@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
 class NativeMailComposerStateTest {
     @Test
     fun `a confirmed send closes the draft and reports it once`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
         var sent = 0
         state.send(capability(), executor) { sent += 1 }
@@ -39,7 +39,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a rejected send keeps the draft and allows editing and sending again`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecordingExecutor { NativeActionExecutionResult.Failure("Quota exceeded", NativeActionFailureOutcome.Rejected) }
         state.send(capability(), executor)
         assertIs<NativeMailSendPhase.Rejected>(state.phase)
@@ -52,7 +52,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `an unknown result without a status read is never resent without confirmation`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecordingExecutor { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) }
         state.send(capability(), executor)
         val phase = assertIs<NativeMailSendPhase.Unknown>(state.phase)
@@ -69,7 +69,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `an unknown result reads the declared status and closes the draft when it shows the message as sent`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
             read = { NativeResultRecoveryRead.Read(mapOf("status" to "sent")) },
@@ -87,7 +87,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a status read holding exactly the attempted message counts as sent`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
             read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text")) },
@@ -98,7 +98,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a status that does not show the message as sent allows a confirmed resend`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
             read = { NativeResultRecoveryRead.Read(mapOf("status" to "failed")) },
@@ -120,7 +120,7 @@ class NativeMailComposerStateTest {
             NativeResultRecoveryRead.Failed("The status could not be read.") to
                 NativeMailSendRecovery.CheckFailed("The status could not be read."),
         ).forEach { (read, expected) ->
-            val state = NativeMailComposerState().apply { open(readyDraft()) }
+            val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
             val executor = RecoveringExecutor(
                 send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
                 read = { read },
@@ -136,7 +136,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a thrown status read is a failed check, not a sent message`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { error("connection reset") },
             read = { error("connection reset") },
@@ -148,7 +148,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a thrown transport failure is treated as unknown`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         state.send(capability(), RecordingExecutor { error("connection reset") })
         assertIs<NativeMailSendPhase.Unknown>(state.phase)
         assertEquals(readyDraft(), state.draft)
@@ -156,7 +156,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `cancellation is rethrown and leaves the outcome unknown`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         assertFailsWith<CancellationException> {
             state.send(capability(), RecordingExecutor { throw CancellationException("left") })
         }
@@ -167,7 +167,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `an invalid draft is rejected before any request`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft().copy(to = "not an address")) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft().copy(to = "not an address")) }
         val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
         state.send(capability(), executor)
         assertIs<NativeMailSendPhase.Rejected>(state.phase)
@@ -177,7 +177,7 @@ class NativeMailComposerStateTest {
     @Test
     fun `a send owned by the retained holder outlives the screen that started it`() = runBlocking<Unit> {
         val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
-        val retention = NativeMailComposerRetention(owner) { null }
+        val retention = NativeMailComposerRetention(owner) { MemoryDraftStore() }
         val state = retention.stateFor("synthetic_mail")
         state.open(readyDraft())
         val answer = CompletableDeferred<NativeActionExecutionResult>()
@@ -249,7 +249,7 @@ class NativeMailComposerStateTest {
 
     @Test
     fun `a confirmed resend of the same message reuses its declared idempotency key and shows the evidence`() = runBlocking<Unit> {
-        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val keys = mutableListOf<String?>()
         val executor = NativeActionExecutor { request ->
             keys += (request as NativeActionRequest.Submit).sendAttempt?.idempotencyKey
@@ -372,6 +372,16 @@ class NativeMailComposerStateTest {
             readRequests += request
             return read()
         }
+    }
+
+    @Test
+    fun `without durable storage the draft stays in memory and nothing is sent`() = runBlocking<Unit> {
+        val state = NativeMailComposerState().apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
+        state.send(capability(), executor)
+        assertEquals(0, executor.calls, "An attempt that cannot be recorded durably is never sent.")
+        assertTrue("not sent" in assertIs<NativeMailSendPhase.Rejected>(state.phase).message)
+        assertNotNull(state.draft, "The draft is kept.")
     }
 
     private class MemoryDraftStore(

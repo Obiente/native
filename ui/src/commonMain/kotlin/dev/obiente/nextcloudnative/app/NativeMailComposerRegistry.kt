@@ -22,7 +22,8 @@ internal object NativeMailComposerRegistry {
     ) {
         val retention = NativeMailComposerRetention(CoroutineScope(SupervisorJob() + Dispatchers.Main)) { appId ->
             val path = "$DRAFT_PATH_PREFIX$appId"
-            // Without platform draft storage the composer still works, in memory only.
+            // Without platform draft storage the composer keeps drafts in memory only and refuses to
+            // send: an exactly-once attempt that cannot be recorded durably is never sent.
             services.textEditorDraftStore(session, path)?.let {
                 TextDraftBackedNativeMailDraftStore { services.textEditorDraftStore(session, path) }
             }
