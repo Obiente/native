@@ -81,4 +81,40 @@ class NativeEditorWriteSessionTest {
         assertIs<NativeEditorWriteStatus.Unconfirmed>(session.status)
         assertFalse(session.canSubmit)
     }
+
+    @Test
+    fun driftKeepsTheEditorOpenAndRestoresTheBaselineOnlyWhenChosen() = runBlocking<Unit> {
+        val session = NativeEditorWriteSession()
+        val restore = request.copy(values = mapOf("restore" to "baseline"))
+        val sent = mutableListOf<NativeActionRequest>()
+        var refreshes = 0
+        val drifted = NativeActionExecutionResult.Success(
+            "Saved, but other values changed.",
+            NativeWritePostcondition(adjusted = emptySet(), drifted = setOf("body"), restoreBaseline = restore),
+        )
+        val closed = session.submit({ sent += it; drifted }, request, NativeEditorWriteRetry.AfterRefresh) { refreshes++ }
+        assertFalse(closed, "The editor stays open so the person can decide.")
+        assertIs<NativeEditorWriteStatus.Drifted>(session.status)
+        assertFalse(session.canSubmit, "The change is saved; saving again is not offered.")
+        assertEquals(1, refreshes)
+        assertEquals(listOf<NativeActionRequest>(request), sent, "Nothing is restored automatically.")
+
+        assertTrue(session.restoreBaseline())
+        assertEquals(listOf<NativeActionRequest>(request, restore), sent)
+        assertEquals(NativeEditorWriteStatus.Succeeded, session.status)
+        assertEquals(2, refreshes)
+        assertFalse(session.restoreBaseline(), "A restore is sent at most once.")
+    }
+
+    @Test
+    fun aCancelledRestoreIsUnconfirmed() = runBlocking<Unit> {
+        val session = NativeEditorWriteSession()
+        val drifted = NativeActionExecutionResult.Success(
+            null, NativeWritePostcondition(emptySet(), setOf("body"), request.copy(values = mapOf("restore" to "baseline"))),
+        )
+        var first = true
+        session.submit({ if (first) { first = false; drifted } else throw CancellationException("left") }, request, NativeEditorWriteRetry.AfterRefresh) {}
+        assertFailsWith<CancellationException> { session.restoreBaseline() }
+        assertIs<NativeEditorWriteStatus.Unconfirmed>(session.status)
+    }
 }

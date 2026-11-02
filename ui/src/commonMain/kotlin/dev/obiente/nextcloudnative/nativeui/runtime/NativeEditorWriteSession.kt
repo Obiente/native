@@ -43,6 +43,13 @@ internal sealed interface NativeEditorWriteStatus {
     ) : NativeEditorWriteStatus
 
     data object Succeeded : NativeEditorWriteStatus
+
+    /**
+     * The change was saved, but the read-back shows other values of the record changed at the same
+     * time. Writes to this route are paused; [restore] writes the values from before the edit back
+     * when the person chooses to.
+     */
+    data class Drifted(val message: String, val restore: NativeActionRequest.Submit?) : NativeEditorWriteStatus
 }
 
 /**
@@ -61,7 +68,7 @@ internal class NativeEditorWriteSession {
     /** False while an unconfirmed non-idempotent write still waits for a fresh authoritative read. */
     val canSubmit: Boolean
         get() = when (val current = status) {
-            NativeEditorWriteStatus.Submitting, is NativeEditorWriteStatus.Changed -> false
+            NativeEditorWriteStatus.Submitting, is NativeEditorWriteStatus.Changed, is NativeEditorWriteStatus.Drifted -> false
             is NativeEditorWriteStatus.Unconfirmed ->
                 current.retry == NativeEditorWriteRetry.Idempotent || !current.awaitingRefresh
             else -> true
@@ -110,9 +117,15 @@ internal class NativeEditorWriteSession {
         }
         return when (result) {
             is NativeActionExecutionResult.Success -> {
-                status = NativeEditorWriteStatus.Succeeded
+                val drift = result.postcondition?.takeIf { it.drifted.isNotEmpty() }
+                if (drift != null) {
+                    restoreExecutor = executor
+                    restoreRefresh = onRefreshRequested
+                }
+                status = drift?.let { NativeEditorWriteStatus.Drifted(result.message ?: "Other values changed at the same time.", it.restoreBaseline) }
+                    ?: NativeEditorWriteStatus.Succeeded
                 onRefreshRequested()
-                true
+                drift == null
             }
             is NativeActionExecutionResult.Failure -> {
                 status = when {
@@ -124,6 +137,36 @@ internal class NativeEditorWriteSession {
                 false
             }
         }
+    }
+
+    private var restoreExecutor: NativeActionExecutor? = null
+    private var restoreRefresh: () -> Unit = {}
+
+    /**
+     * Sends the baseline restore offered after drift, once. It is a full-echo replacement of the
+     * values from before the edit; it never runs unless the person chose it.
+     */
+    suspend fun restoreBaseline(): Boolean {
+        val drifted = status as? NativeEditorWriteStatus.Drifted ?: return false
+        val restore = drifted.restore ?: return false
+        val executor = restoreExecutor ?: return false
+        status = NativeEditorWriteStatus.Submitting
+        val result = try {
+            executor.execute(restore)
+        } catch (cancellation: CancellationException) {
+            status = unconfirmed(NativeEditorWriteRetry.AfterRefresh)
+            throw cancellation
+        } catch (_: Exception) {
+            NativeActionExecutionResult.Failure("The restore could not be confirmed.", NativeActionFailureOutcome.Unknown)
+        }
+        status = when {
+            result is NativeActionExecutionResult.Success -> NativeEditorWriteStatus.Succeeded
+            (result as NativeActionExecutionResult.Failure).outcome == NativeActionFailureOutcome.Rejected ->
+                NativeEditorWriteStatus.Rejected(result.message)
+            else -> unconfirmed(NativeEditorWriteRetry.AfterRefresh)
+        }
+        restoreRefresh()
+        return result is NativeActionExecutionResult.Success
     }
 
     private fun unconfirmed(retry: NativeEditorWriteRetry) = NativeEditorWriteStatus.Unconfirmed(

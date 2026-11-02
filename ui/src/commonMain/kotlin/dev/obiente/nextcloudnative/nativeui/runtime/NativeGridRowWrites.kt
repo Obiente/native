@@ -93,6 +93,8 @@ internal data class NativeGridRow(
     val cells: Map<String, JsonElement>,
     /** The row names the grid parent itself, so a global item route cannot address a foreign row. */
     val namesParent: Boolean,
+    /** The exact stored JSON of the row's other fields, echoed by a replacement. */
+    val wire: Map<String, JsonElement> = emptyMap(),
 )
 
 internal fun nativeGridRowWritePlan(
@@ -273,7 +275,7 @@ internal fun NativeGridRowWritePlan.row(record: NativeRecord): NativeGridRow? {
     if (!record.actionSafeIdentity || !record.actionBindingProvenanceValid) return null
     val rowId = record.id.takeIf(String::isSafeContractPathValue) ?: return null
     val cells = if (cellField.isEmpty()) emptyMap() else nativeGridStoredCells(record, cellField) ?: return null
-    return NativeGridRow(rowId, cells, namesParent = record.valueNamed(route.parentReferenceKey) == parentId)
+    return NativeGridRow(rowId, cells, namesParent = record.valueNamed(route.parentReferenceKey) == parentId, wire = record.wireValues)
 }
 
 /** The draft text shown for a stored cell value. Unknown shapes produce an empty draft. */
@@ -397,11 +399,13 @@ internal fun NativeGridRowWritePlan.createRequest(drafts: Map<String, String>): 
 
 /**
  * PATCH sends only the changed cells. PUT replaces the row, so it is offered only when the
- * contract declares the same-route read, and it is guarded by that read: immediately before the
- * write the row is read again and nothing is sent when any stored cell differs from the copy the
- * editor opened. Cells the person did not change travel exactly as stored, never re-encoded. A
- * row holding a value this editor cannot keep (a column type it cannot encode, or a cell of a
- * column this grid does not list, as in a filtered view) is not replaced, so nothing is cleared.
+ * contract declares the same-route read, and it is a full echo: cells the person did not change
+ * travel exactly as stored, never re-encoded, and every other declared body field is echoed from
+ * the row as returned. Immediately before the write the row is read again and nothing is sent when
+ * any stored cell or echoed field differs from the copy the editor opened; after the write the row
+ * is read back and each cell compared with what was sent. A row holding a value this editor cannot
+ * keep (a column type it cannot encode, or a cell of a column this grid does not list, as in a
+ * filtered view) is not replaced, so nothing is cleared.
  */
 internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Map<String, String>): NativeGridRowRequestResult {
     val update = update ?: return unavailable("This table's contract does not offer editing rows.")
@@ -411,8 +415,10 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
     val errors = validate(drafts, changed)
     if (errors.isNotEmpty()) return NativeGridRowRequestResult.Invalid(errors)
     val edited = changed.associate { column -> column.key to column.encodeDraft(drafts.getValue(column.key)) }
+    val verifyCells: (NativeRecord) -> NativeWriteVerification = { current -> verifyCells(current, edited, row.cells) }
     if (update.write.action.binding.method != HttpMethod.PUT) {
-        return ready(update.write.action, values + (cellField to JsonObject(edited).toString()))
+        val readBack = NativeWriteReadBack(row.rowId, emptyMap(), emptyMap(), echoUntouched = false, verifyCells, setOf(cellField))
+        return ready(update.write.action, values + (cellField to JsonObject(edited).toString()), readBack = readBack)
     }
     val listed = columns.mapTo(hashSetOf(), NativeGridColumn::key)
     val unkept = columns.any { !it.editable && row.cells[it.key].hasContent() } ||
@@ -421,12 +427,48 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
     val data = buildJsonObject {
         editableColumns.forEach { column -> (edited[column.key] ?: row.cells[column.key])?.let { put(column.key, it) } }
     }
+    val echo = when (val plan = nativeFullEchoUpdatePlan(update.write.action, row.wire, setOf(cellField), update.contextInputs)) {
+        is NativeFullEchoUpdatePlan.Echo -> plan.echo
+        is NativeFullEchoUpdatePlan.ReadOnly -> return unavailable(plan.message)
+        is NativeFullEchoUpdatePlan.Sparse -> emptyMap()
+    }
     val snapshot = row.cells
     val precondition = NativeWritePrecondition(
         readValues = values.filterKeys { it in update.write.placeholders },
         targetId = row.rowId,
-    ) { current -> nativeGridStoredCells(current, cellField) == snapshot }
-    return ready(update.write.action, values + (cellField to data.toString()), precondition)
+    ) { current ->
+        nativeGridStoredCells(current, cellField) == snapshot &&
+            echo.all { (name, value) -> sameWireValue(current.wireValues.valueNamed(name), value) }
+    }
+    val readBack = NativeWriteReadBack(
+        targetId = row.rowId,
+        previous = mapOf(cellField to JsonObject(snapshot)),
+        untouched = echo,
+        echoUntouched = true,
+        verifyTarget = verifyCells,
+        customFields = setOf(cellField),
+    )
+    return ready(update.write.action, values + (cellField to data.toString()), precondition, readBack)
+}
+
+/**
+ * Compares the cells read back with the write: an edited cell must hold what was sent, and every
+ * other cell what the editor opened. All edits reverting to their stored values means not applied.
+ */
+private fun NativeGridRowWritePlan.verifyCells(
+    current: NativeRecord,
+    edited: Map<String, JsonElement>,
+    stored: Map<String, JsonElement>,
+): NativeWriteVerification {
+    val cells = nativeGridStoredCells(current, cellField) ?: return NativeWriteVerification.Unidentified
+    val adjusted = edited.filter { (key, value) -> !sameWireValue(cells[key], value) }.keys
+    val drifted = stored.filter { (key, value) -> key !in edited && !sameWireValue(cells[key], value) }.keys
+    val reverted = edited.isNotEmpty() && adjusted.size == edited.size && edited.keys.all { key -> sameWireValue(cells[key], stored[key]) }
+    return when {
+        reverted && drifted.isEmpty() -> NativeWriteVerification.NotApplied("The app accepted the change, but it was not applied.")
+        adjusted.isEmpty() && drifted.isEmpty() -> NativeWriteVerification.Confirmed
+        else -> NativeWriteVerification.Adjusted(adjusted.mapTo(linkedSetOf()) { "$cellField.$it" }, drifted.mapTo(linkedSetOf()) { "$cellField.$it" })
+    }
 }
 
 /** How an unconfirmed edit may be repeated: a replacement only after a fresh read. */
@@ -445,8 +487,12 @@ internal fun NativeGridRowWritePlan.itemValues(write: NativeItemWrite, row: Nati
 private fun validate(drafts: Map<String, String>, columns: List<NativeGridColumn>): Map<String, String> =
     columns.mapNotNull { column -> column.validateDraft(drafts[column.key].orEmpty())?.let { column.key to it } }.toMap()
 
-private fun ready(action: ActionSpec, values: Map<String, String>, precondition: NativeWritePrecondition? = null) =
-    NativeGridRowRequestResult.Ready(NativeActionRequest.Submit(action, values, confirmed = true, precondition = precondition))
+private fun ready(
+    action: ActionSpec,
+    values: Map<String, String>,
+    precondition: NativeWritePrecondition? = null,
+    readBack: NativeWriteReadBack? = null,
+) = NativeGridRowRequestResult.Ready(NativeActionRequest.Submit(action, values, confirmed = true, precondition = precondition, readBack = readBack))
 
 private fun unavailable(reason: String) = NativeGridRowRequestResult.Unavailable(reason)
 

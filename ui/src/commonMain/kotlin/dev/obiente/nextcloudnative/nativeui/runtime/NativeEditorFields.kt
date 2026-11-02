@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudChoiceField
 import dev.obiente.nextcloudnative.app.design.NextcloudChoiceOption
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import kotlinx.coroutines.launch
 
 /** Display-only option for record editors; the caller keeps the meaning of [id]. */
 internal data class NativeEditorChoice(val id: String, val label: String)
@@ -181,6 +183,7 @@ internal fun NativeEditorWriteStatusText(session: NativeEditorWriteSession) {
         is NativeEditorWriteStatus.Rejected -> status.message
         is NativeEditorWriteStatus.Changed -> status.message
         is NativeEditorWriteStatus.Unconfirmed -> status.message
+        is NativeEditorWriteStatus.Drifted -> status.message
         else -> null
     } ?: return
     Text(
@@ -209,6 +212,8 @@ internal fun NativeEditorDialog(
     content: @Composable () -> Unit,
 ) {
     val refresh = onRefresh?.takeIf { session.status is NativeEditorWriteStatus.Changed }
+    val restorable = (session.status as? NativeEditorWriteStatus.Drifted)?.restore != null
+    val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = { if (!session.submitting) onDismiss() },
         title = { Text(title) },
@@ -227,6 +232,9 @@ internal fun NativeEditorDialog(
         confirmButton = {
             if (refresh != null) {
                 Button(onClick = refresh) { Text("Refresh") }
+            } else if (restorable) {
+                // Event-triggered and screen-local: the session never sends it on its own.
+                Button(onClick = { scope.launch { session.restoreBaseline() } }) { Text("Restore previous values") }
             } else {
                 Button(
                     enabled = submitEnabled && session.canSubmit,

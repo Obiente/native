@@ -120,6 +120,9 @@ internal data class NativeItemWrite(
         if (global && parentInput == null && !itemNamesParent) return null
         return write.placeholders.zip(routeValues).toMap() + listOfNotNull(parentInput?.let { it to parentId })
     }
+
+    /** Body inputs bound from the route and navigation rather than from the stored representation. */
+    val contextInputs: Set<String> get() = write.placeholders.toSet() + setOfNotNull(parentInput)
 }
 
 /** The item write for [kind]: the scoped route under the list wins over the global route. */

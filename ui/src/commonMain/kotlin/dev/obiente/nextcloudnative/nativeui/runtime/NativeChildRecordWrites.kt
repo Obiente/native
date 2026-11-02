@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
@@ -54,6 +56,8 @@ internal data class NativeChildRecord(
     val editUnavailableReason: String?,
     /** The stored values of every body field as read, which a replacement expects to be unchanged. */
     val snapshot: Map<String, String?> = emptyMap(),
+    /** The exact stored JSON of the record, which a replacement echoes for every untouched field. */
+    val wire: Map<String, JsonElement> = emptyMap(),
 )
 
 /** [records] are the loaded children; their stored references are evidence for choice sources. */
@@ -110,19 +114,40 @@ internal fun NativeChildRecordWritePlan.record(record: NativeRecord): NativeChil
         if (current == null) unreadable += field.name else draft[field.name] = current
     }
     val replace = updateRoute?.write?.action?.binding?.method == HttpMethod.PUT
-    // A replacement must carry every value the record holds for its body, or it would clear one.
-    val incomplete = replace && (unreadable.isNotEmpty() || operation?.fields.orEmpty().any { field ->
-        !field.shown && record.valueNamed(field.name) != null
-    })
+    // A replacement carries the complete representation: every declared body field echoed exactly
+    // as stored. A field the read did not return, or cannot return exactly, keeps the record read-only.
+    val echo = updateRoute?.takeIf { replace }?.let { item ->
+        nativeFullEchoUpdatePlan(item.write.action, item.write.echoSource(record), edited = emptySet(), contextInputs = item.contextInputs)
+    }
     return NativeChildRecord(
         id = id,
         draft = draft,
         unreadable = unreadable,
         namesParent = record.valueNamed(route.parentReferenceKey) == parentId,
         editUnavailableReason = operation?.unavailableReason
-            ?: "Editing here would send an incomplete copy of this record.".takeIf { incomplete },
+            ?: (echo as? NativeFullEchoUpdatePlan.ReadOnly)?.message
+            ?: "Editing here would send an incomplete copy of this record.".takeIf { replace && unreadable.isNotEmpty() },
         snapshot = operation?.fields.orEmpty().storedSnapshot(record),
+        wire = updateRoute?.write?.echoSource(record) ?: record.wireValues,
     )
+}
+
+/**
+ * The exact stored JSON a replacement may echo: every declared body field the read returned under
+ * its own name, plus a field the editor reads under a reference alias (`payer` stored as
+ * `payer_id`) when exactly one alias holds a value that fits the field's declared type. The value
+ * travels verbatim; nothing is re-encoded.
+ */
+private fun NativeContractAction.echoSource(record: NativeRecord): Map<String, JsonElement> {
+    val properties = (action.binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject ?: return record.wireValues
+    val aliases = properties.mapNotNull { (name, schema) ->
+        if (record.wireValues.valueNamed(name) != null) return@mapNotNull null
+        val aliasKeys = storedFieldNames(name).toSet() - name.contractKey()
+        val value = record.wireValues.entries.filter { it.key.contractKey() in aliasKeys }.singleOrNull()?.value
+            ?.takeIf { it.fitsDeclaredSchema(schema) } ?: return@mapNotNull null
+        name to value
+    }
+    return record.wireValues + aliases
 }
 
 /** Every value [record] stores under the names of these fields, keyed by normalized name. */
@@ -167,9 +192,12 @@ internal fun NativeChildRecordWritePlan.createRequest(draft: Map<String, String>
 }
 
 /**
- * PATCH sends the changed fields. A verified PUT sends every field read back from the record and
- * is guarded by the contract's same-route read: immediately before the write the record is read
- * again, and nothing is sent when any stored body value differs from the copy the editor opened.
+ * PATCH sends the changed fields. A verified PUT is a full echo: changed fields are encoded from
+ * the draft and every other declared body field travels exactly as stored, never re-encoded (so a
+ * stored date-time is not shortened to the date the editor shows). Immediately before the write
+ * the record is read again through the contract's same-route read, and nothing is sent when any
+ * stored value differs from the copy the editor opened. After the write the record is read back
+ * and compared with what was sent.
  */
 internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord, draft: Map<String, String>): NativeChildRecordRequestResult {
     val update = update ?: return NativeChildRecordRequestResult.Unavailable("Editing is not offered here.")
@@ -181,7 +209,7 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
     val changed = editable.filter { field -> draft[field.name]?.let { it != record.draft[field.name].orEmpty() } == true }
     if (changed.isEmpty()) return NativeChildRecordRequestResult.NoChanges
     val replace = route.write.action.binding.method == HttpMethod.PUT
-    val sent = if (replace) editable else changed
+    val sent = changed
     val merged = sent.associate { field -> field.name to (draft[field.name] ?: record.draft[field.name].orEmpty()) }
     validate(sent, merged, existing = record).takeIf(Map<*, *>::isNotEmpty)?.let { return NativeChildRecordRequestResult.Invalid(it) }
     val values = sent.mapNotNull { field ->
@@ -194,12 +222,27 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
             else -> return NativeChildRecordRequestResult.Invalid(mapOf(field.name to "This value cannot be cleared here."))
         }
     }.toMap()
-    val snapshot = record.snapshot
-    val precondition = if (!replace) null else NativeWritePrecondition(
+    val editedNames = values.keys
+    val previous = editedNames.mapNotNull { name -> record.wire.valueNamed(name)?.let { name to it } }.toMap()
+    if (!replace) {
+        val untouched = update.fields.map(NativeRecordField::name).filter { it !in editedNames }
+            .mapNotNull { name -> record.wire.valueNamed(name)?.let { name to it } }.toMap()
+        return ready(route.write, identities + values, readBack = NativeWriteReadBack(record.id, previous, untouched, echoUntouched = false))
+    }
+    val echo = when (val plan = nativeFullEchoUpdatePlan(route.write.action, record.wire, editedNames, route.contextInputs)) {
+        is NativeFullEchoUpdatePlan.Echo -> plan.echo
+        is NativeFullEchoUpdatePlan.ReadOnly -> return NativeChildRecordRequestResult.Unavailable(plan.message)
+        is NativeFullEchoUpdatePlan.Sparse -> emptyMap()
+    }
+    val expected = echo + previous
+    val precondition = NativeWritePrecondition(
         readValues = identities.filterKeys { it in route.write.placeholders },
         targetId = record.id,
-    ) { current -> update.fields.storedSnapshot(current) == snapshot }
-    return ready(route.write, identities + values, precondition)
+    ) { current ->
+        val stored = route.write.echoSource(current)
+        expected.all { (name, value) -> sameWireValue(stored.valueNamed(name), value) }
+    }
+    return ready(route.write, identities + values, precondition, NativeWriteReadBack(record.id, previous, echo, echoUntouched = true))
 }
 
 internal fun NativeChildRecordWritePlan.deleteRequest(record: NativeChildRecord): NativeChildRecordRequestResult {
@@ -295,5 +338,11 @@ private val NativeRecordFieldRole.order: Int
         NativeRecordFieldRole.Notes -> 7
     }
 
-private fun ready(write: NativeContractAction, values: Map<String, String>, precondition: NativeWritePrecondition? = null) =
-    NativeChildRecordRequestResult.Ready(NativeActionRequest.Submit(write.action, values, confirmed = true, precondition = precondition))
+private fun ready(
+    write: NativeContractAction,
+    values: Map<String, String>,
+    precondition: NativeWritePrecondition? = null,
+    readBack: NativeWriteReadBack? = null,
+) = NativeChildRecordRequestResult.Ready(
+    NativeActionRequest.Submit(write.action, values, confirmed = true, precondition = precondition, readBack = readBack),
+)

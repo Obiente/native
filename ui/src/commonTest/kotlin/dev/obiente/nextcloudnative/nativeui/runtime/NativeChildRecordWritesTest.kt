@@ -14,6 +14,10 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -106,9 +110,16 @@ class NativeChildRecordWritesTest {
         val request = assertIs<NativeChildRecordRequestResult.Ready>(
             verified.updateRequest(complete, complete.draft + ("amount" to "20")),
         ).request
-        assertEquals("Synthetic dinner", request.values["what"], "A replacement carries every field read back.")
-        val holdsHiddenValue = assertNotNull(verified.record(expenseRecord().let { it.copy(values = it.values + ("repeat" to "n")) }))
-        assertNotNull(holdsHiddenValue.editUnavailableReason, "Replacing would clear a value the editor does not show.")
+        assertEquals("20", request.values["amount"])
+        assertTrue("what" !in request.values, "Untouched fields are not re-encoded from the draft.")
+        val readBack = assertNotNull(request.readBack, "A replacement is read back after it is sent.")
+        assertTrue(readBack.echoUntouched)
+        assertEquals(JsonPrimitive("Synthetic dinner"), readBack.untouched["what"], "A replacement echoes every field read back.")
+        assertEquals(JsonPrimitive("n"), readBack.untouched["repeat"], "A field the editor does not show travels unchanged.")
+        assertEquals(JsonPrimitive(1), readBack.untouched["payer"], "A stored reference alias travels verbatim.")
+        assertEquals(JsonPrimitive(30.0), readBack.previous["amount"])
+        val missingField = assertNotNull(verified.record(expenseRecord().let { it.copy(wireValues = it.wireValues - "repeat") }))
+        assertNotNull(missingField.editUnavailableReason, "Replacing would clear a declared value the read did not return.")
     }
 
     @Test
@@ -121,10 +132,12 @@ class NativeChildRecordWritesTest {
         val precondition = assertNotNull(request.precondition, "A replacement is never sent from an unchecked copy.")
         assertEquals(mapOf("projectId" to "p1", "expenseId" to "44"), precondition.readValues)
         assertTrue(precondition.holds(listOf(expenseRecord())))
-        assertTrue(precondition.holds(listOf(expenseRecord().let { it.copy(values = it.values + ("lastChanged" to "999")) })),
+        assertTrue(precondition.holds(listOf(expenseRecord().stored("lastChanged", JsonPrimitive(999)))),
             "A value outside the write body does not block the edit.")
-        assertFalse(precondition.holds(listOf(expenseRecord().let { it.copy(values = it.values + ("amount" to "31.0")) })),
+        assertFalse(precondition.holds(listOf(expenseRecord().stored("what", JsonPrimitive("Edited elsewhere")))),
             "A concurrent change to a field this edit did not touch is detected.")
+        assertFalse(precondition.holds(listOf(expenseRecord().stored("amount", JsonPrimitive(31.0)))),
+            "A concurrent change to the edited field is detected.")
         assertFalse(precondition.holds(listOf(expenseRecord(payer = "2"))))
         assertFalse(precondition.holds(emptyList()))
         assertEquals(NativeEditorWriteRetry.AfterRefresh, plan.updateRetry)
@@ -267,10 +280,59 @@ class NativeChildRecordWritesTest {
         put("categories", """{"7":{"id":7,"name":"Food"}}""")
     })
 
-    private fun expenseRecord(payer: String = "1") = NativeRecord("44", mapOf(
-        "id" to "44", "what" to "Synthetic dinner", "amount" to "30.0", "date" to "2026-01-05",
-        "payer_id" to payer, "payedFor" to "[1,3]", "categoryid" to "7", "comment" to "",
-    ))
+    @Test
+    fun aReplacementEchoesAStoredDateTimeInsteadOfTheDateTheEditorShows() {
+        val plan = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read")))
+        val stored = expenseRecord().stored("date", JsonPrimitive("2026-01-05T10:30:00+00:00"))
+        val expense = assertNotNull(plan.record(stored))
+        assertEquals("2026-01-05", expense.draft["date"], "The editor shows the calendar date.")
+        val request = assertIs<NativeChildRecordRequestResult.Ready>(plan.updateRequest(expense, expense.draft + ("amount" to "20"))).request
+        assertTrue("date" !in request.values)
+        assertEquals(JsonPrimitive("2026-01-05T10:30:00+00:00"), request.readBack?.untouched?.get("date"), "The stored value is never shortened.")
+    }
+
+    @Test
+    fun aNullableFieldStoredAsNullIsEchoedAsNullAndANonNullableNullKeepsTheRecordReadOnly() {
+        val nullable = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read", extraProperties = ",\"note\":{\"type\":\"string\",\"nullable\":true}")
+        val plan = assertNotNull(plan(schema = nullable))
+        val withNull = assertNotNull(plan.record(expenseRecord().stored("note", JsonNull)))
+        assertNull(withNull.editUnavailableReason)
+        val request = assertIs<NativeChildRecordRequestResult.Ready>(plan.updateRequest(withNull, withNull.draft + ("amount" to "20"))).request
+        assertEquals(JsonNull, request.readBack?.untouched?.get("note"))
+        val strict = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read")))
+        assertNotNull(assertNotNull(strict.record(expenseRecord().stored("comment", JsonNull))).editUnavailableReason,
+            "A null in a field declared non-nullable cannot be echoed exactly.")
+    }
+
+    @Test
+    fun aPartialUpdateIsReadBackWithoutEchoingUntouchedFields() {
+        val patch = assertNotNull(plan())
+        val expense = assertNotNull(patch.record(expenseRecord()))
+        val request = assertIs<NativeChildRecordRequestResult.Ready>(patch.updateRequest(expense, expense.draft + ("amount" to "20"))).request
+        val readBack = assertNotNull(request.readBack)
+        assertFalse(readBack.echoUntouched)
+        assertEquals(JsonPrimitive("Synthetic dinner"), readBack.untouched["what"], "Untouched fields are compared after the write.")
+    }
+
+    private fun expenseRecord(payer: String = "1") = NativeRecord(
+        "44",
+        mapOf(
+            "id" to "44", "what" to "Synthetic dinner", "amount" to "30.0", "date" to "2026-01-05",
+            "payer_id" to payer, "payedFor" to "[1,3]", "categoryid" to "7", "comment" to "", "repeat" to "n",
+        ),
+        wireValues = mapOf(
+            "id" to JsonPrimitive(44), "what" to JsonPrimitive("Synthetic dinner"), "amount" to JsonPrimitive(30.0),
+            "date" to JsonPrimitive("2026-01-05"), "payer_id" to JsonPrimitive(payer.toInt()),
+            "payedFor" to JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(3))), "categoryid" to JsonPrimitive(7),
+            "comment" to JsonPrimitive(""), "repeat" to JsonPrimitive("n"),
+        ),
+    )
+
+    /** The record as the server would return it with [name] stored as [value]. */
+    private fun NativeRecord.stored(name: String, value: JsonElement) = copy(
+        values = values + (name to (value as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content),
+        wireValues = wireValues + (name to value),
+    )
 
     private companion object {
         const val LIST = "/apps/splitter/api/projects/{projectId}/expenses"

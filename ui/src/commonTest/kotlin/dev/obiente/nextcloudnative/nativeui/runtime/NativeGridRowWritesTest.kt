@@ -391,6 +391,35 @@ class NativeGridRowWritesTest {
     ) = NativeRecord(id, mapOf("id" to id, "title" to title, "type" to type, "subtype" to subtype,
         "mandatory" to mandatory.toString(), "sheetId" to sheetId) + extra)
 
+    @Test
+    fun aReplacementIsReadBackCellByCell() {
+        val plan = replacementPlan()
+        val row = assertNotNull(plan.row(row()))
+        val request = assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(row, mapOf("2" to "40"))).request
+        val readBack = assertNotNull(request.readBack, "A replacement row is verified by reading it back.")
+        val verify = assertNotNull(readBack.verifyTarget)
+        assertEquals(setOf("cells"), readBack.customFields, "The cell list is compared cell by cell, not as one value.")
+        assertEquals(NativeWriteVerification.Confirmed, verify(row(ROW_DATA.replace(""""value":12""", """"value":40"""))))
+        assertIs<NativeWriteVerification.NotApplied>(verify(row()), "Every edited cell still holds its old value.")
+        val drift = assertIs<NativeWriteVerification.Adjusted>(
+            verify(row(ROW_DATA.replace(""""value":12""", """"value":40""").replace("Synthetic item", "Edited elsewhere"))),
+        )
+        assertEquals(setOf("cells.1"), drift.drifted, "An untouched cell that changed is drift.")
+        val expectation = NativeWriteExpectation("9", emptyMap(), readBack.untouched, readBack.previous, verify)
+        assertEquals(NativeWriteVerification.Unidentified, expectation.verify(emptyList()), "A read without the row confirms nothing.")
+    }
+
+    @Test
+    fun aReplacementDeclaringAFieldTheRowDoesNotReturnIsNotOffered() {
+        val plan = assertNotNull(plan(schema = schema(updateMethod = HttpMethod.PUT, recovery = "rows.read", updateBody = listOf("cells", "position"))))
+        val row = assertNotNull(plan.row(row()))
+        val refused = assertIs<NativeGridRowRequestResult.Unavailable>(plan.updateRequest(row, mapOf("2" to "40")))
+        assertTrue("position" in refused.reason, refused.reason)
+        val withPosition = assertNotNull(plan.row(row().copy(wireValues = mapOf("position" to JsonPrimitive(3)))))
+        val request = assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(withPosition, mapOf("2" to "40"))).request
+        assertEquals(JsonPrimitive(3), request.readBack?.untouched?.get("position"), "A returned field is echoed exactly.")
+    }
+
     private fun row(data: String = ROW_DATA) = NativeRecord("9", mapOf("id" to "9", "sheetId" to "5", "cells" to data))
 
     private companion object {
