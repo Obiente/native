@@ -151,49 +151,104 @@ Shared domain logic does not require identical layouts:
 
 ## 4. Dynamic app intelligence
 
-Dynamic support is evidence-driven. Use this order:
+Dynamic support is evidence-driven and app-agnostic. No app ID conditional,
+version allowlist, or hand-written adapter for one app decides behavior.
+Reusable rules about data structures, route families, field names, and
+declared permission fields do. An operation is offered only when its evidence
+reaches the tier its risk class requires.
 
-1. Authenticated capabilities, app navigation, and exact server/app version.
-2. An officially advertised OpenAPI, OCS, DAV, or other protocol contract.
-3. A contract from the exact signed Nextcloud App Store package after
-   certificate, signature, app ID, and version verification.
-4. An exact App Store-linked source tag only through the documented lower-trust
-   fallback and identity checks.
-5. Approved successful `2xx` read observations for read-only shape inference.
-6. Version-agnostic semantic patterns over that evidence: rules that map the
-   data structures and wording found across apps (record collections,
-   parent-scoped child records, column-defined grids, questionnaires,
-   expenses, recipes, mailboxes, feeds) to the native UI that belongs to them.
-   Writes come only from the installed app's own published contract for the
-   operation (items 2 to 4). A replacement (PUT) edit also needs the
-   same-route read that the descriptor compiler pairs with it only for items
-   3 and 4; an advertised OpenAPI document alone does not enable PUT edits.
+### Evidence tiers
 
-Rules:
+Tiers are assigned per action from its provenance, never per app.
 
-- Deterministic contracts and typed models outrank naming heuristics.
-- Reusable semantic inference outranks app-ID conditionals.
+| Tier | Source | Proves | Does not prove |
+| --- | --- | --- | --- |
+| E1 standard protocol | WebDAV, CalDAV, CardDAV, OCS core with RFC semantics | Method semantics, preconditions, idempotency | App-specific payload meaning |
+| E2 advertised OpenAPI | The installed app's OpenAPI document (same origin, or shipped in the verified package) | Route, method, parameter names and types, body schema, declared responses | Idempotency, merge semantics, encodings beyond the schema |
+| E3 signed-package static evidence | Routes, controller signatures, and types from the verified signed package, or the exact App Store-linked source tag at lower trust | Same as E2, plus scalar parameter types and defaults | Same as E2 |
+| E4 cross-app pattern rule | A versioned, reviewed rule matched against E2 or E3 shapes and field names | A semantic reading, such as "this POST pair is an idempotent boolean toggle" | That this app honors it; it needs E5 confirmation on first use |
+| E5 observed round trip | Device-local read, re-encode, compare; or write, read back, diff, per account, app version, and route | That the rule's encoding and postcondition held on this device | Anything about other routes, versions, or accounts |
+| E6 observed read | A successful approved `2xx` read | Identity values, field shapes, permission fields | Any operation, encoding, or write semantics |
+
+Authenticated capabilities, app navigation, and the exact server and app
+version select which contract applies; they are not operation evidence.
+
+### Risk classes
+
+Each operation has one class, derived from the HTTP method, the declared
+schema, the operation's own words, and declared permission fields, never from
+the app ID:
+
+- R0 read;
+- R1 idempotent state set (mark read, star, flag, assign a label, complete a
+  task);
+- R2 reversible scalar edit with known merge semantics (reorder, move);
+- R3 declared partial update (PATCH or a declared merge);
+- R4 whole replacement (PUT);
+- R5 create, verifiable by a later read;
+- R6 external effect (send mail, invite, notify, share by email, merge);
+- R7 destructive (delete, empty, purge, leave);
+- R8 sharing and permissions;
+- R9 administration and app lifecycle;
+- R10 credentials.
+
+### Admission
+
+| Class | Minimum evidence | Mandatory safeguards |
+| --- | --- | --- |
+| R0 | E2, E3, or E6 | Bounded bodies, same origin |
+| R1 | E2/E3 route, the operation's declared state semantics or an E4 rule, and identity binding | Optimistic apply, read-back of the state field, rollback on mismatch, quarantine on contradiction, repeat allowed after an unknown result, no confirmation dialog |
+| R2 | E2/E3 with PATCH, or an E4 merge rule confirmed by E5 | Pre-read compare, read-back diff of changed and untouched fields, baseline undo on drift |
+| R3 | E2/E3 declaring PATCH or a merge; E4 alone is not enough | Same as R2 |
+| R4 | E2/E3 PUT and a complete representation | Full echo of exact round-trip values, pre-read compare, read-back, baseline undo, repeat allowed after an unknown result; a field that is not round-trip exact makes the record read-only for that route |
+| R5 | E2/E3 and a verified read in the same route family | Durable pending record before the request, single attempt, an unknown result blocks resending until a read-back finds or does not find the record, no automatic retry |
+| R6 | E2/E3 declared operation with every body field natively representable, plus a declared Idempotency-Key, a discoverable outbox or queue (preferred), or exactly-once UI | Durable attempt record with payload fingerprint before the request, single attempt, a "may have been sent" state with the recorded evidence after an unknown result, resend only after explicit confirmation, no retry on 5xx or timeout, undo only when the server declares it |
+| R7 | E2/E3 DELETE, identity binding, and declared trash semantics or explicit permanent labeling | Separate confirmation naming the target, read-back confirms absence, repeat allowed after an unknown result, no background retry |
+| R8 | E2/E3 and a declared permission or capability field proving the actor may share | Confirmation naming grantee and scope, read-back of the share list, never from E4 alone |
+| R9 | Not offered dynamically; needs the authenticated handoff in section 7 | - |
+| R10 | Never | - |
+
+Every class above R0 allows one in-flight write per target record, and at most
+one unconfirmed write per route while a rule is in probation.
+
+### Rules
+
+- Deterministic contracts and typed models outrank naming heuristics. A
+  pattern rule may read names; it may not invent an endpoint, method, path
+  parameter, payload field, permission, target identity, or idempotency
+  guarantee. Neither may AI or heuristic analysis, which may only propose
+  labels, field roles, relationships, and component choices.
 - Do not choose behavior by app ID, exact version, version range, or a pinned
-  upstream source tag. Any app whose contract and data match a pattern gets
-  that pattern's UI, whatever its name or version. Presentation-only hints such
-  as icons, accent colors, or one-line descriptions may use the app ID but
-  never gate behavior. Existing exceptions awaiting conversion (the Chores
-  0.1.0 and 0.2.0 gate, the Pantry 0.23.0 owner reorder authority, and the
-  Pantry 0.34.0 timestamp presentation; see
-  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)) are not precedent for new app- or
-  version-gated behavior.
-- Offer a write only when the installed app's own published contract declares
-  the operation, its route, and its payload. A pattern may decide how a
-  declared value is presented; it may not supply an encoding, a required
-  value, or a permission that the contract and the data do not express. When
-  they do not, keep that write unavailable and explain why.
-- Prefer reusable concepts inside adapters: parent-child relationships,
-  record collections, money, dates, participants, status, attachments,
-  pagination, settings, and mutations.
-- AI or heuristic analysis may propose labels, field roles, relationships, and
-  component choices. It may never invent an endpoint, method, path parameter,
-  payload field, permission, target identity, or idempotency guarantee.
-- Observing a successful read does not authorize a write.
+  upstream source tag. Any app whose contract and data match a rule gets that
+  rule's UI, whatever its name or version. Presentation-only hints such as
+  icons, accent colors, or one-line descriptions may use the app ID but never
+  gate behavior. Existing exceptions awaiting conversion (the Chores 0.1.0
+  and 0.2.0 gate, the Pantry 0.23.0 owner reorder authority, and the Pantry
+  0.34.0 timestamp presentation; see
+  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes))
+  are not precedent for new app- or version-gated behavior.
+- Observed identity values bind a path placeholder only inside the same route
+  family, with a matching declared name and type, within their load
+  generation, with parents taken from navigation context, and with a round-trip
+  read or a read-back by that identity.
+- A learned encoding is used for a write only after every observed value of
+  the same field matches the rule's grammar and reproduces byte for byte; the
+  first write under the rule on the device is a probation write that is read
+  back and confirmed.
+- Merge semantics are never learned by writing. An undeclared PUT sends the
+  complete representation or is not offered.
+- No write is ever sent to learn behavior. OPTIONS, HEAD, capabilities,
+  permission fields, and declared dry-run reads are the only probes. Observing
+  a successful read does not authorize a write.
+- Every write above an idempotent state set is verified by an authoritative
+  read. A contradiction quarantines that route and rule for that account, app
+  version, and device, with a typed diagnostic, until the person clears it or
+  the app version changes.
+- Knowledge that used to live in a reviewed adapter becomes a pattern rule
+  with fixtures from at least two apps, or a documented single-app fixture the
+  rule must not special-case. Prefer reusable concepts: parent-child
+  relationships, record collections, money, dates, participants, status,
+  attachments, pagination, settings, and mutations.
 - When evidence is insufficient, provide an honest native read-only fallback
   with useful diagnostics. Do not fabricate a nearly-working action.
 
@@ -447,6 +502,14 @@ Additional rules:
 - Strict administrator operations use explicit authenticated handoff when an
   app password is insufficient. Never store or reinterpret the primary account
   password.
+- The generic write path records the evidence tier, risk class, rule ID, and
+  rule version of every write in local diagnostics, never its payload.
+- A write under a rule in probation is limited to one in-flight request per
+  route until its read-back confirms the rule.
+- Quarantine state is keyed by account identity digest, app ID, exact app
+  version, route, rule ID, and rule version. It is persisted, survives
+  restart, and is never cleared automatically except by an app version change.
+- Full echo is the only permitted shape for an undeclared replacement.
 
 ## 8. Cache, offline, transfer, and sync rules
 

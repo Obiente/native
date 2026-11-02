@@ -642,9 +642,10 @@ operation comes from the installed app's own contract: a server-advertised
 OpenAPI document, or the verified package or exact source tag acquired for that
 installation. Observed reads never authorize a write. A replacement (PUT) edit
 also needs the same-route read that the descriptor compiler pairs with it
-(`resultRecoveryActionId`), and the compiler records that pairing only for
-verified package or exact source-tag provenance. With only a server-advertised
-OpenAPI document, PATCH edits can be offered but PUT edits stay unavailable.
+(`resultRecoveryActionId`). The compiler records that pairing for a declared
+contract: the app's advertised OpenAPI document (E2) or its verified package or
+exact source tag (E3). Every editor write passes the admission and verified
+write path described in [Write admission and verification](#write-admission-and-verification).
 
 These editors are not the whole dynamic path. A few app-specific rules outside
 them still test an app ID and exact version and are awaiting conversion to
@@ -700,13 +701,23 @@ Rules shared by the editors:
   contract does not define, such as a numeric access level, offers no write.
   Questionnaires need a `canSubmit`-style flag, and a permission list or a
   closed or limit flag that refuses a response is explained.
-- PATCH sends only the changed values. PUT replaces the record, so it is
-  offered only when the contract declares the same-route read, and it sends a
-  complete copy. Values the person did not change travel exactly as read,
-  including grid cells the editor cannot show, such as a choice whose option
-  was removed or a date-time with seconds. A record that holds a value the
-  editor cannot encode, or a grid row holding a non-empty cell for a column
-  the grid does not list (as in a filtered view), is not replaced.
+- PATCH sends only the changed values; after the write the record is read
+  back and the untouched values are compared with what the editor opened. PUT
+  replaces the record, so it is offered only when the contract declares the
+  same-route read, and it is a full echo
+  ([`NativeFullEchoUpdatePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFullEchoUpdatePlan.kt)):
+  changed fields are encoded from the draft and every other declared body
+  field travels as the exact JSON the read returned, never re-encoded (a
+  stored date-time is not shortened to the date the editor shows, and a stored
+  `null` stays `null`). A body field the read did not return, or whose stored
+  value does not fit its declared type, makes the record read-only for that
+  route. A child-record field the editor reads under a reference alias
+  (`payer` stored as `payer_id`) is echoed only when exactly one alias holds a
+  value of the declared type. Grid cells the editor cannot show, such as a
+  choice whose option was removed or a date-time with seconds, also travel
+  exactly as read; a grid row holding a non-empty cell for a column the grid
+  does not list (as in a filtered view), or a value of a column type it cannot
+  encode, is not replaced.
 - Immediately before a PUT, the executor re-reads the target through that
   same-route read, bypassing caches
   ([`DynamicReplacementWriteGuard.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReplacementWriteGuard.kt)).
@@ -724,6 +735,14 @@ Rules shared by the editors:
 - Questionnaire questions of type file, grid, ranking, color, combined date and
   time, and date or time range are not answered natively. If such a question
   is required, the questionnaire explains that instead of offering a send.
+- After a grid or child-record update the executor reads the target back
+  and compares it with the request: an edited value that reads back as sent
+  confirms the write; one that reads back as the previous value after a
+  successful response means the app did not apply it, which pauses changes to
+  that route on this device; an untouched value that changed is drift, which
+  saves the edit, pauses the route, and offers **Restore previous values**, a
+  full-echo write of the baseline that is sent only when the person chooses
+  it. Grid rows compare cell by cell.
 - [`NativeEditorWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeEditorWriteSession.kt)
   sends each request once. A rejection keeps the draft. An unconfirmed create
   or response triggers an authoritative refresh and blocks sending again until
@@ -758,6 +777,88 @@ contract forms; member management, recurring entries, and settlement actions
 beyond the generic contract surfaces; questionnaire results for owners; and a
 new child record in an empty collection, because the empty list uses the
 generic empty state and no loaded record proves a person field's collection.
+
+## Write admission and verification
+
+**Last reviewed: 2026-11-02.** This section describes source and deterministic
+test behavior on the integration branch; it has not been validated against a
+live server or shipped in a published release, and the linked sources are
+authoritative. The rules are in [AGENTS.md section 4](AGENTS.md#4-dynamic-app-intelligence).
+
+Every compiled action carries its risk class (`riskClass`, R0 to R10, from
+[`DynamicOperationRiskClass.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicOperationRiskClass.kt)),
+the verified read of its route family (`readBackActionId`: the item read below
+a terminal command segment, or the collection the target is one placeholder
+below, from
+[`DynamicWriteRouteFamily.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicWriteRouteFamily.kt)),
+a declared `Idempotency-Key` header (`idempotencyKeyHeader`), and for sharing
+the declared field proving that the actor may share (`sharePermissionFieldId`,
+such as `canShare`). The evidence tier comes from provenance
+([`DynamicEvidenceTier.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicEvidenceTier.kt)):
+the advertised OpenAPI document is E2, the verified package or linked source
+tag (and a reviewed adapter contract until it becomes a rule) is E3, and a
+successful read is E6. The admission matrix is the pure function
+[`admitDynamicWrite`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicWriteAdmission.kt).
+
+The compiler no longer withholds send, share, and merge operations. It tags
+them: external effects (R6), administration (R9), credentials (R10), and
+sharing without a declared permission field (R8) are moved out of the schema's
+generic action list into `NativeAppSchema.dedicatedActions`, and no generic
+form is compiled for them. Credential-creating operations are still dropped
+with the `ignored-sensitive-credential-write` warning.
+
+At the transport boundary
+([`DynamicWriteExecution.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicWriteExecution.kt))
+every dynamic write is admitted before anything is sent. This phase enforces
+the refusals no surface may override: administration and credentials, a send
+without a durable attempt record or a declared idempotency key, a send whose
+required body fields are not all supplied, sharing without a declared
+permission field, writes without a declared operation, and a quarantined
+route. The other safeguards in the matrix (full echo for every replacement,
+a verified collection read for every create, permanent labeling for every
+delete) are applied by the surfaces that opt in through the request's
+read-back and are recorded, not yet enforced, for the remaining surfaces
+listed below. One write per target record may be in flight at a time.
+
+[`NativeVerifiedWrite.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeVerifiedWrite.kt)
+is the one verified write path: an optional pre-read compare, one send, and a
+read-back through the exact same-route read or the route-family read, with
+outcomes Confirmed, Adjusted, NotApplied, and Unknown. A definite rejection is
+not read back. A successful response whose read-back shows the previous value,
+or an untouched field that drifted, contradicts the postcondition and
+quarantines the route. Server bookkeeping fields (modification time, ETag,
+revision) are not drift. Deck's verified board writes use the same path.
+
+Quarantine and probation state is stored per account identity digest, app ID,
+exact app version, route template, rule ID, and rule version
+([`DynamicWriteQuarantine.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicWriteQuarantine.kt),
+file-backed on desktop and Android by
+[`FileDynamicWriteQuarantineStore.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/FileDynamicWriteQuarantineStore.kt),
+written to a temporary file and moved into place). It survives restart, a
+version change drops it, account removal deletes it, and an unreadable file
+refuses writes until the person resets it. Writes whose encoding the contract
+declares use the rule ID `contract-declared` version 1. The contract
+information dialog (**App compatibility details** in the app's header menu)
+shows paused and probationary routes and offers **Resume changes**, which
+clears that app's state. Diagnostics record the evidence tier, risk class,
+rule ID, and rule version of each write without payload values, and use the
+codes `write-quarantined`, `write-postcondition-mismatch`,
+`identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
+The last two belong to pattern rules, which this phase does not ship yet.
+
+Present in source with deterministic tests but not yet used by a shipped
+surface: observed identity binding
+([`NativeObservedIdentityBinding.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeObservedIdentityBinding.kt),
+all six invariants) and the pattern rule interface and empty registry
+([`PatternRule.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/rules/PatternRule.kt)).
+
+Writes that pass admission and the verified write path: grid row updates
+(full echo or cell-checked PATCH), child record updates (full echo or
+read-back PATCH), and Deck board writes. Writes that pass admission but are
+not yet read back: generic record, collection, and board actions, mailbox and
+feed state changes, notes, questionnaire responses, creates (which keep their
+durable pending records), deletes, and the mail composer's send (which uses
+the exactly-once path instead).
 
 ## Reviewed limits
 
@@ -959,14 +1060,17 @@ offers Compose, Reply, Reply all, and Forward only when the contract describes
 exactly one send operation that the composer can fill without inventing a
 value.
 
-- The descriptor compiler already withholds send, share, and merge writes
-  unless an unknown result can be checked: it keeps only an idempotent PUT from
-  a signed package with an exact same-route read. The planner accepts such a
-  PUT, or a POST if a contract policy ever retains one, with high or verified
-  confidence, a JSON body, and the word `send` in its ID, label, operation ID,
-  or route. Draft, test, preview, invitation, and share routes are excluded.
-  Mail's synchronous OCS `message/send` has no such read, so the compiler
-  withholds it and Mail opens without a composer.
+- The descriptor compiler retains a declared send as an external effect (risk
+  class R6) and keeps it out of every generic form and action list
+  (`NativeAppSchema.dedicatedActions`). The composer is the dedicated surface
+  that may offer it, because it sends through the exactly-once path below. The
+  planner accepts a POST, or an idempotent PUT with an exact recovery read,
+  with high or verified confidence, a JSON body, and the word `send` in its ID,
+  label, operation ID, or route. Draft, test, preview, invitation, and share
+  routes are excluded. A synchronous send with no recovery read, such as the
+  OCS `message/send` operation in Mail's signed package, is therefore offered
+  as a composer; this has deterministic test coverage only and has not been
+  validated against a live Mail server (Last reviewed: 2026-11-02).
 - Every required body, path, and query input maps to a mail role:
   recipients, Cc, Bcc, subject, body, an HTML flag (sent as false), the
   sending account's identity or address, or a threading header (In-Reply-To
@@ -988,9 +1092,17 @@ value.
   a declared References field takes the original's References chain followed
   by that Message-ID (at most 20 identifiers, keeping the thread root). Only
   identifiers of the `<...@...>` form are used.
-- A send is not idempotent. A rejected send keeps the draft for editing. An
+- A send is not idempotent, so it runs through
+  [`NativeExactlyOnceSend`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeExactlyOnceSend.kt):
+  an attempt record (attempt ID, time, a content-free target summary such as
+  "2 recipients", and a SHA-256 fingerprint of the exact request values) is
+  stored with the draft before the request can leave the device, and the
+  request is sent once and never retried automatically. When the operation
+  declares an `Idempotency-Key` request header, a key is generated once per
+  attempt and reused only on a confirmed resend of the same payload; an
+  undeclared key is never sent. A rejected send keeps the draft for editing. An
   unknown outcome, a transport failure, or cancellation after the request may
-  have left keeps the draft. The composer then runs the operation's declared
+  have left keeps the draft and shows the recorded attempt as evidence. The composer then runs the operation's declared
   recovery read with the same bindings: a status that names a sent state, or
   a record holding exactly the attempted body and subject, closes the draft as
   sent; a queued state or a failed read keeps sending again unavailable and
@@ -1005,7 +1117,7 @@ value.
 
 `NativeMailSemanticPatternTest`, `NativeMailComposerStateTest`, and
 `NativeMailComposeTest` cover the same contracts under several app IDs and
-versions, a withheld synchronous send, a missing send, an unknown required
+versions, a synchronous send reserved for the exactly-once composer, a missing send, an unknown required
 input, a missing account,
 a contract that only mentions mail in a field, sender identity roles,
 contacts that are not senders, threading and References chains, every send

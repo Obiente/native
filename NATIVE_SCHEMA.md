@@ -47,6 +47,7 @@ Rules for changing the contract:
 | `views` | Select reusable native components for resources and actions. |
 | `relationships` | Bind parent and child resources. Kotlin runtime only. |
 | `warnings` | Explain missing or ambiguous semantics. |
+| `dedicatedActions` | Operations no generic form, record action, or menu may offer: external effects, administration, credentials, and sharing without a declared permission field. Only a surface that applies their safeguards, such as the exactly-once mail composer, reads them. Kotlin runtime only; absent means empty. |
 
 ## Confidence
 
@@ -71,6 +72,17 @@ inference engine cannot invent these values.
 | `readOnly` | May run during discovery or normal browsing. |
 | `mutating` | Requires confirmation while inferred. |
 | `destructive` | Always requires confirmation and explicit visual treatment. |
+
+The `risk` field stays the wire field for confirmation and styling. Each action
+also carries optional write-policy fields, absent in schemas produced before
+they existed and mirrored by the Rust reference model:
+
+| Field | Meaning |
+| --- | --- |
+| `riskClass` | The operation's risk class, R0 (`read`) to R10 (`credential`); see [AGENTS.md section 4](AGENTS.md#4-dynamic-app-intelligence). |
+| `readBackActionId` | The verified read in the write's route family, used to bind identities and read the result back. |
+| `idempotencyKeyHeader` | The exact name of a declared `Idempotency-Key` request header. |
+| `sharePermissionFieldId` | The declared field of the route-family read that proves the actor may share. |
 
 An adapter may improve labels, component choice, and field semantics. It may
 not add an operation that was absent from the discovery snapshot.

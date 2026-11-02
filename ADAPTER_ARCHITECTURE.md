@@ -142,9 +142,13 @@ entries and successful guesses do not prove that an operation is safe.
 - Require the installed app's own published contract for writes: an
   advertised OpenAPI document, or the verified package or exact source tag
   acquired for that installation. A replacement (PUT) edit additionally needs
-  the same-route read that the descriptor compiler pairs with it only for
-  verified package or exact source-tag provenance, so an advertised OpenAPI
-  document alone offers PATCH edits but not PUT edits. Dynamic app behavior
+  the same-route read that the descriptor compiler pairs with it for that
+  declared contract, and it sends the complete representation (full echo).
+  Every write carries its evidence tier and risk class, passes the admission
+  matrix at the transport boundary, and, where its surface opts in, is read
+  back and verified; a contradiction quarantines the route on that device. See
+  [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification).
+  Dynamic app behavior
   follows semantic patterns over that contract and its data, not an app ID,
   an exact version, a version range, or a pinned source tag; see
   [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)
