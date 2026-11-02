@@ -98,6 +98,21 @@ enum class DynamicDiagnosticCode(val code: String) {
     LinkedSourceTagImported("linked-source-tag-imported"),
     ContractInvalid("contract-invalid"),
     MetadataOnly("metadata-only"),
+
+    /** A write was refused, or a route was paused, because of a recorded quarantine. */
+    WriteQuarantined("write-quarantined"),
+
+    /** A read-back contradicted the requested change: not applied after success, or drift. */
+    WritePostconditionMismatch("write-postcondition-mismatch"),
+
+    /** A pattern rule's first read-back on this device confirmed it. */
+    WriteRuleConfirmed("write-rule-confirmed"),
+
+    /** A write ran under a pattern rule that this device has not confirmed yet. */
+    WriteRuleProbation("write-rule-probation"),
+
+    /** An identity could not be proven for a write's path placeholder. */
+    IdentityBindingRefused("identity-binding-refused"),
 }
 
 /** The import a verified App Store contract records, derived from its typed acquisition kind. */

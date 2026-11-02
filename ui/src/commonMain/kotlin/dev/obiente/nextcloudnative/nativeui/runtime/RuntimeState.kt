@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.incrementAndFetch
@@ -26,6 +27,12 @@ data class NativeRecord(
     val bindingContext: Map<String, String> = emptyMap(),
     /** False when display data was retained after detecting ambiguous action provenance. */
     val actionBindingProvenanceValid: Boolean = true,
+    /**
+     * Exact JSON of declared top-level fields as the server returned them, bounded per value and
+     * per record. Full-echo replacements send these back unchanged and read-backs compare them;
+     * a field missing here cannot be echoed, so a replacement that needs it is not offered.
+     */
+    val wireValues: Map<String, JsonElement> = emptyMap(),
 )
 
 @Serializable
@@ -236,6 +243,10 @@ sealed interface NativeActionRequest {
         val confirmed: Boolean,
         /** Checked against a fresh same-route read immediately before a replacement is sent. */
         val precondition: NativeWritePrecondition? = null,
+        /** Verify this record write by reading the target back; untouched fields may travel verbatim. */
+        val readBack: NativeWriteReadBack? = null,
+        /** Present only when an exactly-once surface recorded a durable attempt for this send. */
+        val sendAttempt: NativeSendAttemptToken? = null,
     ) : NativeActionRequest
 }
 

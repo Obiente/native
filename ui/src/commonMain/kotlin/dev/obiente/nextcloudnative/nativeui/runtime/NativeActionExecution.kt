@@ -19,7 +19,11 @@ enum class NativeWritePreconditionFailure {
 }
 
 sealed interface NativeActionExecutionResult {
-    data class Success(val message: String? = null) : NativeActionExecutionResult
+    data class Success(
+        val message: String? = null,
+        /** Set when a read-back found the change applied with adjustments or drift. */
+        val postcondition: NativeWritePostcondition? = null,
+    ) : NativeActionExecutionResult
     data class Failure(
         val message: String,
         val outcome: NativeActionFailureOutcome = NativeActionFailureOutcome.Unknown,
@@ -61,4 +65,15 @@ internal fun nativeWritePreconditionFailure(
     },
     outcome = NativeActionFailureOutcome.Rejected,
     precondition = reason,
+)
+
+/**
+ * What a read-back found besides the requested change: fields the server stored differently, and
+ * untouched fields that drifted from the baseline. Drift quarantines the route; [restoreBaseline]
+ * is a full-echo write of the baseline that the person may choose to send.
+ */
+data class NativeWritePostcondition(
+    val adjusted: Set<String>,
+    val drifted: Set<String>,
+    val restoreBaseline: NativeActionRequest.Submit?,
 )

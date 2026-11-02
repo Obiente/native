@@ -347,6 +347,7 @@ class DynamicNextcloudActionExecutor(
     private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
     private val writeGate: DynamicContractWriteGate? = null,
     private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
+    private val clock: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
 ) : NativeActionExecutor, NativeResultRecoveryReader {
     init {
         descriptor.requireValid()
@@ -368,34 +369,21 @@ class DynamicNextcloudActionExecutor(
             )
         }
         val values = (request as? NativeActionRequest.Submit)?.values.orEmpty()
-        val observedInputSchema = (request as? NativeActionRequest.Submit)
-            ?.action
-            ?.takeIf { submitted ->
-                submitted.id == action.id &&
-                    submitted.binding.allowsObservedBodyFields &&
-                    action.binding.body?.schema.observesSettingsBody()
-            }
-            ?.inputSchema
+        val observedInputSchema = (request as? NativeActionRequest.Submit)?.action?.takeIf { submitted ->
+            submitted.id == action.id && submitted.binding.allowsObservedBodyFields && action.binding.body?.schema.observesSettingsBody()
+        }?.inputSchema
         if (request is NativeActionRequest.Submit && action.requiresConfirmation && !request.confirmed) {
             return NativeActionExecutionResult.Failure(
                 message = "Confirm this action before changing server data.",
                 outcome = NativeActionFailureOutcome.Rejected,
             )
         }
-        (request as? NativeActionRequest.Submit)?.precondition?.let { precondition ->
-            checkDynamicWritePrecondition(services, session, descriptor, action, precondition, runtimeContext)
-                ?.let { refusal -> return refusal }
+        (request as? NativeActionRequest.Submit)?.takeIf { action.binding.method != HttpMethod.GET }?.let { submit ->
+            val context = DynamicWriteContext(services, session, descriptor, action, runtimeContext, observedInputSchema, onMultipartUploadSucceeded, clock)
+            return executeDynamicWrite(context, submit)
         }
         return runCatching {
-            val execution = executeDynamicAction(
-                services,
-                session,
-                descriptor,
-                action,
-                values,
-                runtimeContext,
-                observedInputSchema,
-            )
+            val execution = executeDynamicAction(services, session, descriptor, action, values, runtimeContext, observedInputSchema)
             execution.response.toDynamicActionExecutionResult(action).also { result ->
                 releaseMultipartUploadAfterSuccess(
                     result = result,
@@ -918,6 +906,7 @@ internal fun buildDynamicApiRequest(
     queryValues: Map<String, String>? = null,
     bodyValues: Map<String, String>? = null,
     nullBodyFields: Set<String> = emptySet(),
+    exactBodyValues: Map<String, JsonElement> = emptyMap(),
 ): NextcloudApiRequest {
     descriptor.requireValid()
     require(action in descriptor.actions) { "The action is not part of the validated descriptor." }
@@ -947,7 +936,7 @@ internal fun buildDynamicApiRequest(
     val body = binding.body
         ?.takeUnless { normalizedBodyContentType == "multipart/form-data" }
         ?.let { declaredBody ->
-            buildDynamicBody(declaredBody.contentType, declaredBody.schema, bodyValues ?: values, observedInputSchema, nullBodyFields)
+            buildDynamicBody(declaredBody.contentType, declaredBody.schema, bodyValues ?: values, observedInputSchema, nullBodyFields, exactBodyValues)
         }
     return NextcloudApiRequest(
         method = binding.method.toTransportMethod(),
@@ -1351,6 +1340,7 @@ private fun buildDynamicBody(
     values: Map<String, String>,
     observedInputSchema: JsonElement? = null,
     nullFields: Set<String> = emptySet(),
+    exactValues: Map<String, JsonElement> = emptyMap(),
 ): ByteArray {
     val objectSchema = schema as? JsonObject
         ?: error("Only object-shaped dynamic request bodies are supported.")
@@ -1365,7 +1355,7 @@ private fun buildDynamicBody(
         .orEmpty()
     val nulls = nullFields.filterTo(mutableSetOf()) { (properties[it] as? JsonObject)?.acceptsDynamicNull() == true }
     requiredProperties.forEach { property ->
-        require(property in nulls || !values[property].isNullOrBlank()) { "$property is required." }
+        require(property in nulls || property in exactValues || !values[property].isNullOrBlank()) { "$property is required." }
     }
     val allowed = if (allowsObservedSettings) {
         values.entries.asSequence()
@@ -1376,8 +1366,10 @@ private fun buildDynamicBody(
             .take(MAX_EPHEMERAL_FIELDS_PER_RECORD)
             .associate(Map.Entry<String, String>::toPair)
     } else {
-        values.filterKeys { it in properties && it !in nulls }
+        values.filterKeys { it in properties && it !in nulls && it !in exactValues }
     }
+    // Full-echo values travel exactly as the server returned them; only declared fields qualify.
+    require(exactValues.keys.all { it in properties }) { "An echoed value does not match the declared request body." }
     val normalizedContentType = contentType.substringBefore(';').trim().lowercase()
     if (normalizedContentType == "application/x-www-form-urlencoded") {
         allowed.keys.forEach { name ->
@@ -1392,11 +1384,11 @@ private fun buildDynamicBody(
         "application/json" -> {
             buildJsonObject {
                 val wireNames = mutableSetOf<String>()
-                (allowed + nulls.associateWith { "" }).forEach { (name, value) ->
+                (allowed + nulls.associateWith { "" } + exactValues.mapValues { "" }).forEach { (name, value) ->
                     val property = properties[name] as? JsonObject
                     val propertyType = property?.dynamicPropertyType()
                     if (
-                        value.isBlank() && name !in nulls &&
+                        value.isBlank() && name !in nulls && name !in exactValues &&
                         name !in requiredProperties &&
                         (
                             property?.acceptsDynamicNull() == true ||
@@ -1413,6 +1405,7 @@ private fun buildDynamicBody(
                         ?.takeIf(String::isSafeDynamicBodyFieldName)
                         ?: name
                     require(wireNames.add(wireName)) { "The request maps more than one field to $wireName." }
+                    exactValues[name]?.let { exact -> put(wireName, exact); return@forEach }
                     put(
                         wireName,
                         if (name in nulls) JsonNull else property?.let(value::toTypedJsonValue)
@@ -1422,7 +1415,7 @@ private fun buildDynamicBody(
                 }
             }.toString().encodeToByteArray()
         }
-        "application/x-www-form-urlencoded" -> allowed.entries.joinToString("&") { (name, value) ->
+        "application/x-www-form-urlencoded" -> allowed.entries.also { require(exactValues.isEmpty()) { "Echoed values need a JSON body." } }.joinToString("&") { (name, value) ->
             "${name.encodeUrlComponent()}=${value.encodeUrlComponent()}"
         }.encodeToByteArray()
         else -> error("Dynamic request bodies of type $contentType are not supported yet.")
@@ -1777,6 +1770,7 @@ private fun JsonElement.toNativeRecord(
             .toList(),
         actionSafeIdentity = actionSafeIdentity,
         structuredValues = structuredValues,
+        wireValues = objectValue.boundedDynamicWireValues(declaredFieldIds) { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
     )
 }
 

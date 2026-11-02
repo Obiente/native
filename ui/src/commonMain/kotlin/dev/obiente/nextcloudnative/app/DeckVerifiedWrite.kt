@@ -1,6 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeVerifiedWriteOutcome
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteSendResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteVerification
+import dev.obiente.nextcloudnative.nativeui.runtime.runNativeVerifiedWrite
 
 /** Result of comparing a fresh server read with the change the user requested. */
 sealed interface DeckWriteVerification {
@@ -24,7 +28,8 @@ sealed interface DeckVerifiedWriteOutcome<out T> {
 }
 
 /**
- * Sends one Deck write and verifies its postcondition with an authoritative read.
+ * Sends one Deck write and verifies its postcondition with an authoritative read, through the
+ * shared verified write path ([runNativeVerifiedWrite]).
  *
  * A definite client rejection (4xx) is reported without a second request. Any other failure,
  * including a transport error or an unreadable success response, is treated as ambiguous: the
@@ -38,36 +43,40 @@ internal suspend fun <T> runVerifiedDeckWrite(
     verify: (T) -> DeckWriteVerification,
     actionLabel: String,
 ): DeckVerifiedWriteOutcome<T> {
-    var status: Int? = null
-    val writeFailure: Exception? = try {
-        val response = execute(request)
-        status = response.status
-        acceptResponse(response)
-        null
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (failure: Exception) {
-        failure
-    }
-    if (writeFailure != null && !isAmbiguousDeckMutationFailure(status)) {
-        return DeckVerifiedWriteOutcome.Rejected(null, writeFailure.deckWriteMessage(actionLabel))
-    }
-    val snapshot = try {
-        reread()
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (_: Exception) {
-        return DeckVerifiedWriteOutcome.Unknown(
-            "The app may have applied this change ($actionLabel). Refresh before making another change.",
-        )
-    }
-    return when (val verification = verify(snapshot)) {
-        DeckWriteVerification.Confirmed -> DeckVerifiedWriteOutcome.Confirmed(snapshot)
-        is DeckWriteVerification.Adjusted -> DeckVerifiedWriteOutcome.Confirmed(snapshot, verification.message)
-        is DeckWriteVerification.NotApplied -> DeckVerifiedWriteOutcome.Rejected(
-            snapshot,
-            writeFailure?.deckWriteMessage(actionLabel) ?: verification.message,
-        )
+    var adjustment: String? = null
+    val outcome = runNativeVerifiedWrite(
+        actionLabel = actionLabel,
+        send = {
+            var status: Int? = null
+            try {
+                val response = execute(request)
+                status = response.status
+                acceptResponse(response)
+                NativeWriteSendResult.Accepted
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = failure.deckWriteMessage(actionLabel)
+                if (isAmbiguousDeckMutationFailure(status)) NativeWriteSendResult.Ambiguous(message) else NativeWriteSendResult.Rejected(message)
+            }
+        },
+        readBack = reread,
+        verify = { snapshot ->
+            when (val verification = verify(snapshot)) {
+                DeckWriteVerification.Confirmed -> NativeWriteVerification.Confirmed
+                is DeckWriteVerification.Adjusted -> {
+                    adjustment = verification.message
+                    NativeWriteVerification.Adjusted(message = verification.message)
+                }
+                is DeckWriteVerification.NotApplied -> NativeWriteVerification.NotApplied(verification.message)
+            }
+        },
+    )
+    return when (outcome) {
+        is NativeVerifiedWriteOutcome.Confirmed -> DeckVerifiedWriteOutcome.Confirmed(outcome.snapshot)
+        is NativeVerifiedWriteOutcome.Adjusted -> DeckVerifiedWriteOutcome.Confirmed(outcome.snapshot, outcome.message ?: adjustment)
+        is NativeVerifiedWriteOutcome.NotApplied -> DeckVerifiedWriteOutcome.Rejected(outcome.snapshot, outcome.message)
+        is NativeVerifiedWriteOutcome.Unknown -> DeckVerifiedWriteOutcome.Unknown(outcome.message)
     }
 }
 
