@@ -19,10 +19,11 @@ const val DYNAMIC_CONTRACT_DECLARED_RULE_VERSION: Int = 1
 data class DynamicWriteRuleKey(
     /** The local account identity digest; never a server URL, user name, or password. */
     val accountDigest: String,
+    /** The app ID, or a digest of it when it holds characters outside the key alphabet ([of]). */
     val appId: String,
-    /** The exact installed app version the state was observed with. */
+    /** The exact installed app version the state was observed with, or its digest ([of]). */
     val appVersion: String,
-    /** Method and route template, for example `PUT /apps/x/api/items/{id}`. Never bound values. */
+    /** Method and route template, for example `PUT /apps/x/api/items/{id}`, or its digest. Never bound values. */
     val route: String,
     val ruleId: String,
     val ruleVersion: Int,
@@ -31,11 +32,34 @@ data class DynamicWriteRuleKey(
         require(accountDigest.length == 64 && accountDigest.all { it in '0'..'9' || it in 'a'..'f' }) {
             "The account digest must be a canonical SHA-256 digest."
         }
-        require(appId.isSafeKeyPart(MAX_APP_ID_LENGTH)) { "The app ID is not a safe key." }
-        require(appVersion.isSafeKeyPart(MAX_VERSION_LENGTH)) { "The app version is not a safe key." }
+        require(appId.isSafeKeyPart(MAX_APP_ID_LENGTH) || appId.isDigestKeyPart()) { "The app ID is not a safe key." }
+        require(appVersion.isSafeKeyPart(MAX_VERSION_LENGTH) || appVersion.isDigestKeyPart()) { "The app version is not a safe key." }
         require(ruleId.isSafeKeyPart(MAX_RULE_ID_LENGTH)) { "The rule ID is not a safe key." }
         require(ruleVersion in 1..MAX_RULE_VERSION) { "The rule version is out of range." }
-        require(route.length in 1..MAX_ROUTE_LENGTH && route.none(Char::isISOControl)) { "The route is not a safe key." }
+        require(route.isSafeRoute() || route.isDigestKeyPart()) { "The route is not a safe key." }
+    }
+
+    companion object {
+        /**
+         * The key of a write, formed for every app identity and route. A part holding characters
+         * outside the key alphabet, or longer than its bound, is keyed by a digest of its exact
+         * string, so such a write still has a key and its quarantine is never dropped.
+         */
+        fun of(
+            accountDigest: String,
+            appId: String,
+            appVersion: String,
+            route: String,
+            ruleId: String,
+            ruleVersion: Int,
+        ): DynamicWriteRuleKey = DynamicWriteRuleKey(
+            accountDigest = accountDigest,
+            appId = dynamicWriteAppKey(appId),
+            appVersion = dynamicWriteVersionKey(appVersion),
+            route = if (route.isSafeRoute()) route else route.digestKeyPart(),
+            ruleId = ruleId,
+            ruleVersion = ruleVersion,
+        )
     }
 
     /** The same route under another rule version is another key, so a bump restarts probation. */
@@ -152,10 +176,15 @@ internal class DynamicWriteRuleRecords(initial: List<DynamicWriteRuleRecord> = e
 
     fun clear(key: DynamicWriteRuleKey): Boolean = records.remove(key) != null
 
-    fun clearApp(appId: String): Boolean = records.keys.removeAll { it.appId == appId }
+    fun forApp(appId: String): List<DynamicWriteRuleRecord> = dynamicWriteAppKey(appId).let { app -> all.filter { it.key.appId == app } }
 
-    fun observeAppVersion(appId: String, appVersion: String): Boolean =
-        records.keys.removeAll { it.appId == appId && it.appVersion != appVersion }
+    fun clearApp(appId: String): Boolean = dynamicWriteAppKey(appId).let { app -> records.keys.removeAll { it.appId == app } }
+
+    fun observeAppVersion(appId: String, appVersion: String): Boolean {
+        val app = dynamicWriteAppKey(appId)
+        val version = dynamicWriteVersionKey(appVersion)
+        return records.keys.removeAll { it.appId == app && it.appVersion != version }
+    }
 
     private fun put(record: DynamicWriteRuleRecord): DynamicWriteRuleRecord {
         records.remove(record.key)
@@ -185,7 +214,7 @@ class MemoryDynamicWriteQuarantineStore : DynamicWriteQuarantineStore {
         lock.withLock { accounts.getOrPut(digest) { DynamicWriteRuleRecords() }.block() }
 
     override suspend fun record(key: DynamicWriteRuleKey) = account(key.accountDigest) { record(key) }
-    override suspend fun records(accountDigest: String, appId: String) = account(accountDigest) { all.filter { it.key.appId == appId } }
+    override suspend fun records(accountDigest: String, appId: String) = account(accountDigest) { forApp(appId) }
     override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long) = account(key.accountDigest) { beginProbation(key, nowEpochMillis) }
     override suspend fun confirm(key: DynamicWriteRuleKey, nowEpochMillis: Long) = account(key.accountDigest) { confirm(key, nowEpochMillis) }
     override suspend fun quarantine(key: DynamicWriteRuleKey, reason: DynamicWriteQuarantineReason, nowEpochMillis: Long) =
@@ -198,6 +227,12 @@ class MemoryDynamicWriteQuarantineStore : DynamicWriteQuarantineStore {
     override suspend fun removeAccount(accountDigest: String) { lock.withLock { accounts.remove(accountDigest) } }
 }
 
+/** The stored form of an app ID: itself when it fits the key alphabet, otherwise its digest. */
+fun dynamicWriteAppKey(appId: String): String = appId.stableKeyPart(MAX_APP_ID_LENGTH)
+
+/** The stored form of an exact app version: itself when it fits the key alphabet, otherwise its digest. */
+fun dynamicWriteVersionKey(appVersion: String): String = appVersion.stableKeyPart(MAX_VERSION_LENGTH)
+
 internal const val MAX_RECORDS_PER_ACCOUNT = 512
 private const val MAX_APP_ID_LENGTH = 64
 private const val MAX_VERSION_LENGTH = 48
@@ -207,3 +242,17 @@ private const val MAX_ROUTE_LENGTH = 512
 
 private fun String.isSafeKeyPart(maximum: Int): Boolean =
     length in 1..maximum && all { it.isLetterOrDigit() || it in ".-_+" }
+
+private fun String.isSafeRoute(): Boolean = length in 1..MAX_ROUTE_LENGTH && none(Char::isISOControl)
+
+/** Already a stored part when it is safe or a digest, so normalizing twice never digests a digest. */
+private fun String.stableKeyPart(maximum: Int): String = if (isSafeKeyPart(maximum) || isDigestKeyPart()) this else digestKeyPart()
+
+/** `#` is outside the key alphabet, so a digest part can never equal a plain part. */
+private fun String.digestKeyPart(): String = DIGEST_KEY_PREFIX + publicContentSha256(encodeToByteArray())
+
+private fun String.isDigestKeyPart(): Boolean =
+    length == DIGEST_KEY_PREFIX.length + 64 && startsWith(DIGEST_KEY_PREFIX) &&
+        drop(DIGEST_KEY_PREFIX.length).all { it in '0'..'9' || it in 'a'..'f' }
+
+private const val DIGEST_KEY_PREFIX = "#"

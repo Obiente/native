@@ -128,6 +128,32 @@ class DynamicWriteQuarantineStoreTest {
         assertTrue(ACCOUNT !in key().toString())
     }
 
+    @Test
+    fun `parts outside the key alphabet are keyed by a stable digest instead of dropping the quarantine`() = runBlocking<Unit> {
+        val version = "2.0.0 beta~1"
+        val key = DynamicWriteRuleKey.of(ACCOUNT, "note book", version, "PUT /apps/notebook/api/notes/{id}", "contract-declared", 1)
+        assertEquals(key, DynamicWriteRuleKey.of(ACCOUNT, "note book", version, "PUT /apps/notebook/api/notes/{id}", "contract-declared", 1))
+        assertTrue(key.appVersion.startsWith("#") && key.appVersion.length == 65, key.appVersion)
+        assertTrue(key.appId.startsWith("#"), key.appId)
+        assertEquals("PUT /apps/notebook/api/notes/{id}", key.route, "A safe part stays readable.")
+        assertTrue(DynamicWriteRuleKey.of(ACCOUNT, "notebook", "2.0.0 beta~2", key.route, "contract-declared", 1).appVersion != key.appVersion)
+        assertEquals("2.0.0", DynamicWriteRuleKey.of(ACCOUNT, "notebook", "2.0.0", key.route, "contract-declared", 1).appVersion)
+        val long = DynamicWriteRuleKey.of(ACCOUNT, "notebook", "1".repeat(200), "PUT /" + "x".repeat(600), "contract-declared", 1)
+        assertTrue(long.appVersion.startsWith("#") && long.route.startsWith("#"))
+
+        val store = FileDynamicWriteQuarantineStore(directory)
+        store.quarantine(key, DynamicWriteQuarantineReason.notAppliedAfterSuccess, 1)
+        assertEquals(DynamicWriteRuleStatus.quarantined, FileDynamicWriteQuarantineStore(directory).record(key)?.status, "It survives a restart.")
+        assertEquals(1, store.records(ACCOUNT, "note book").size, "Callers use the raw app ID.")
+        store.observeAppVersion(ACCOUNT, "note book", version)
+        assertEquals(DynamicWriteRuleStatus.quarantined, store.record(key)?.status, "The same exact version keeps it.")
+        store.observeAppVersion(ACCOUNT, "note book", "2.0.0 beta~2")
+        assertNull(store.record(key), "Another exact version drops it.")
+        store.quarantine(key, DynamicWriteQuarantineReason.notAppliedAfterSuccess, 2)
+        store.clearApp(ACCOUNT, "note book")
+        assertNull(store.record(key))
+    }
+
     private fun key(
         account: String = ACCOUNT,
         appId: String = "notebook",

@@ -27,7 +27,7 @@ class FileDynamicWriteQuarantineStore(private val directory: File) : DynamicWrit
     override suspend fun record(key: DynamicWriteRuleKey) = read(key.accountDigest) { record(key) }
 
     override suspend fun records(accountDigest: String, appId: String) =
-        read(accountDigest) { all.filter { it.key.appId == appId } }
+        read(accountDigest) { forApp(appId) }
 
     override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long) =
         change(key.accountDigest) { beginProbation(key, nowEpochMillis) }

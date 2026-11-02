@@ -17,15 +17,18 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeNotAppliedReason
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeVerifiedWriteOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteExpectation
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePrecondition
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreRead
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreconditionFailure
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteReadBack
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteSendResult
 import dev.obiente.nextcloudnative.nativeui.runtime.contradictsPostcondition
 import dev.obiente.nextcloudnative.nativeui.runtime.runNativeVerifiedWrite
+import dev.obiente.nextcloudnative.nativeui.runtime.sameWireValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -59,21 +62,19 @@ internal class DynamicWriteContext(
         }
     }
 
-    /** The quarantine key of this route for writes whose encoding the contract itself declares. */
-    val ruleKey: DynamicWriteRuleKey? by lazy {
-        try {
-            DynamicWriteRuleKey(
-                accountDigest = session.accountId.storageKey,
-                appId = descriptor.app.id,
-                appVersion = descriptor.app.version,
-                route = "${action.binding.method.name} ${action.binding.path}",
-                ruleId = DYNAMIC_CONTRACT_DECLARED_RULE_ID,
-                ruleVersion = DYNAMIC_CONTRACT_DECLARED_RULE_VERSION,
-            )
-        } catch (_: IllegalArgumentException) {
-            // An app identity or route that cannot form a safe key has no persisted state.
-            null
-        }
+    /**
+     * The quarantine key of this route for writes whose encoding the contract itself declares. It
+     * always forms: an app ID, version, or route outside the key alphabet is keyed by its digest.
+     */
+    val ruleKey: DynamicWriteRuleKey by lazy {
+        DynamicWriteRuleKey.of(
+            accountDigest = session.accountId.storageKey,
+            appId = descriptor.app.id,
+            appVersion = descriptor.app.version,
+            route = "${action.binding.method.name} ${action.binding.path}",
+            ruleId = DYNAMIC_CONTRACT_DECLARED_RULE_ID,
+            ruleVersion = DYNAMIC_CONTRACT_DECLARED_RULE_VERSION,
+        )
     }
 }
 
@@ -100,11 +101,9 @@ internal suspend fun executeDynamicWrite(
 ): NativeActionExecutionResult {
     val action = context.action
     val ruleState = try {
-        context.ruleKey?.let { key ->
-            context.store?.let { store ->
-                store.observeAppVersion(key.accountDigest, key.appId, key.appVersion)
-                store.ruleState(key, ruleApplies = false)
-            }
+        context.store?.let { store ->
+            store.observeAppVersion(context.ruleKey.accountDigest, context.descriptor.app.id, context.descriptor.app.version)
+            store.ruleState(context.ruleKey, ruleApplies = false)
         } ?: DynamicWriteRuleState.notRequired
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -112,7 +111,17 @@ internal suspend fun executeDynamicWrite(
         // Persistence fault boundary: an unreadable quarantine must not be forgotten silently.
         return refusal("This app's write safety state on this device could not be read, so nothing was changed.")
     }
-    val admission = admitDynamicWrite(context.admissionInput(request, ruleState))
+    if (request.baselineRestore && !DynamicBaselineRestores.isOffered(request)) {
+        return refusal(RESTORE_UNAVAILABLE)
+    }
+    // The offered baseline restore is the one write a quarantine lets through; every other
+    // admission rule still applies to it.
+    val admittedRule = if (request.baselineRestore && ruleState == DynamicWriteRuleState.quarantined) {
+        DynamicWriteRuleState.notRequired
+    } else {
+        ruleState
+    }
+    val admission = admitDynamicWrite(context.admissionInput(request, admittedRule))
     if (admission is DynamicWriteAdmission.Refused && admission.reason in ENFORCED_REFUSALS) {
         context.record(
             code = when (admission.reason) {
@@ -130,12 +139,20 @@ internal suspend fun executeDynamicWrite(
         return refusal("Another change to this item is still being saved. Wait for it to finish.")
     }
     try {
+        // A restore is consumed only once this write holds the target, so a busy target keeps it.
+        if (request.baselineRestore && !DynamicBaselineRestores.take(request)) return refusal(RESTORE_UNAVAILABLE)
+        if (action.operationRiskClass == DynamicOperationRiskClass.sharing) {
+            context.sharePermissionRefusal(request)?.let { refused ->
+                context.record(code = null, outcome = "refused", detail = "share-permission-${refused.name.lowercase()}")
+                return refusal(refused.message)
+            }
+        }
         val readBack = request.readBack
         val readAction = context.readBackAction()
-        return if (readBack != null && readAction != null) {
-            executeVerified(context, request, readBack, readAction)
-        } else {
-            executeUnverified(context, request)
+        return when {
+            readBack != null && readAction != null -> executeVerified(context, request, readBack, readAction)
+            request.baselineRestore -> refusal("This restore cannot be checked by reading it back, so nothing was changed.")
+            else -> executeUnverified(context, request)
         }
     } finally {
         DynamicWriteInFlightGate.release(target)
@@ -202,7 +219,9 @@ private suspend fun executeVerified(
         // Nothing was sent: the request could not be built from the contract and the values.
         return refusal(invalid.message ?: "This change could not be prepared.")
     }
-    val submitted = prepared.submittedBody.filterKeys { it !in readBack.untouched && it !in readBack.customFields }
+    // Only edited fields have a value from before the edit; a context input such as a parent
+    // reference travels in the body but is not part of the change being verified.
+    val submitted = prepared.submittedBody.filterKeys { it in readBack.previous && it !in readBack.customFields }
     val outcome = runNativeVerifiedWrite(
         actionLabel = context.action.label,
         preRead = request.precondition?.let { precondition ->
@@ -250,14 +269,12 @@ private suspend fun DynamicWriteContext.recordOutcome(outcome: NativeVerifiedWri
         } else {
             DynamicWriteQuarantineReason.notAppliedAfterSuccess
         }
-        ruleKey?.let { key ->
-            try {
-                store?.quarantine(key, reason, clock())
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // The diagnostic below still records the contradiction; the next read fails closed.
-            }
+        try {
+            store?.quarantine(ruleKey, reason, clock())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The diagnostic below still records the contradiction; the next read fails closed.
         }
         record(DynamicDiagnosticCode.WritePostconditionMismatch, "contradicted", reason.name)
         record(DynamicDiagnosticCode.WriteQuarantined, "quarantined", reason.name)
@@ -274,7 +291,7 @@ private suspend fun DynamicWriteContext.recordOutcome(outcome: NativeVerifiedWri
     )
 }
 
-private fun NativeVerifiedWriteOutcome<*>.toExecutionResult(
+private fun NativeVerifiedWriteOutcome<List<NativeRecord>>.toExecutionResult(
     request: NativeActionRequest.Submit,
     readBack: NativeWriteReadBack,
 ): NativeActionExecutionResult = when (this) {
@@ -288,7 +305,7 @@ private fun NativeVerifiedWriteOutcome<*>.toExecutionResult(
         postcondition = NativeWritePostcondition(
             adjusted = adjusted,
             drifted = drifted,
-            restoreBaseline = request.baselineRestore(readBack).takeIf { drifted.isNotEmpty() },
+            restoreBaseline = if (drifted.isEmpty()) null else request.baselineRestore(readBack, snapshot),
         ),
     )
     is NativeVerifiedWriteOutcome.NotApplied -> NativeActionExecutionResult.Failure(
@@ -309,19 +326,53 @@ private fun NativeVerifiedWriteOutcome<*>.toExecutionResult(
 
 /**
  * The full-echo write that restores the baseline: every field as it was before this write. It is
- * only offered, never sent automatically, and it carries no precondition of its own because the
- * person decides with the drifted state in front of them.
+ * only offered, never sent automatically, and never offered for a restore itself. Its pre-read
+ * compare expects the drifted state the person saw, so a further change stops it, and its
+ * read-back verifies every baseline field. The executor registers it so only this exact request
+ * passes the quarantine the drift caused.
  */
-private fun NativeActionRequest.Submit.baselineRestore(readBack: NativeWriteReadBack): NativeActionRequest.Submit? {
-    if (!readBack.echoUntouched) return null
+private fun NativeActionRequest.Submit.baselineRestore(
+    readBack: NativeWriteReadBack,
+    snapshot: List<NativeRecord>,
+): NativeActionRequest.Submit? {
+    if (!readBack.echoUntouched || baselineRestore) return null
+    val original = precondition ?: return null
+    val drifted = snapshot.filter { it.id == readBack.targetId }.singleOrNull()?.takeIf(NativeRecord::actionSafeIdentity) ?: return null
     val baseline = readBack.untouched + readBack.previous
     return copy(
         values = values.filterKeys { key -> key !in readBack.previous },
-        precondition = null,
+        precondition = NativeWritePrecondition(original.readValues, readBack.targetId) { current ->
+            current.values == drifted.values && sameWireValue(JsonObject(current.wireValues), JsonObject(drifted.wireValues))
+        },
         // Every field travels verbatim; a custom-shaped field is echoed but not compared by wire value.
         readBack = NativeWriteReadBack(readBack.targetId, emptyMap(), baseline, echoUntouched = true, customFields = readBack.customFields),
-    )
+        baselineRestore = true,
+    ).also(DynamicBaselineRestores::issue)
 }
+
+/**
+ * Baseline restores this process offered, each accepted once and only as the exact request that
+ * was offered, so a restore can never carry values other than the drifted write's baseline.
+ */
+internal object DynamicBaselineRestores {
+    private val lock = DynamicNativeMemoryCacheLock()
+    private val issued = ArrayDeque<NativeActionRequest.Submit>()
+
+    fun issue(request: NativeActionRequest.Submit) {
+        lock.withLock {
+            issued.addLast(request)
+            while (issued.size > MAX_OFFERED_RESTORES) issued.removeFirst()
+        }
+    }
+
+    fun isOffered(request: NativeActionRequest.Submit): Boolean = lock.withLock { request in issued }
+
+    fun take(request: NativeActionRequest.Submit): Boolean = lock.withLock { issued.remove(request) }
+}
+
+private const val MAX_OFFERED_RESTORES = 32
+
+private const val RESTORE_UNAVAILABLE = "This restore is no longer available. Refresh to see the current values."
 
 /** Builds the exact request; throws [IllegalArgumentException] before anything is sent. */
 private fun DynamicWriteContext.prepare(request: NativeActionRequest.Submit): DynamicPreparedWrite {

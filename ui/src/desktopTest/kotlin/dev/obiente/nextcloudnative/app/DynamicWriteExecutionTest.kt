@@ -27,6 +27,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeSendAttemptToken
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePrecondition
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreconditionFailure
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteReadBack
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -138,13 +140,17 @@ class DynamicWriteExecutionTest {
     fun `drift on an untouched field saves, quarantines, and offers a baseline restore`() = runBlocking<Unit> {
         val store = MemoryDynamicWriteQuarantineStore()
         val transport = Transport(readBody = stored(title = "New title", body = "Edited elsewhere"))
-        val result = assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(echoUpdate()))
+        val edit = echoUpdate().copy(precondition = unchangedPrecondition())
+        val result = assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(edit))
         val postcondition = assertNotNull(result.postcondition)
         assertEquals(setOf("body"), postcondition.drifted)
         val restore = assertNotNull(postcondition.restoreBaseline)
         assertEquals(JsonPrimitive("Old title"), restore.readBack?.untouched?.get("title"), "The restore writes the values from before the edit.")
         assertTrue("title" !in restore.values)
         assertEquals(DynamicWriteRuleStatus.quarantined, store.records(SESSION.accountId.storageKey, "notebook").single().status)
+        val unguarded = Transport(readBody = stored(title = "New title", body = "Edited elsewhere"))
+        val withoutPreRead = assertIs<NativeActionExecutionResult.Success>(executor(unguarded).execute(echoUpdate()))
+        assertNull(withoutPreRead.postcondition?.restoreBaseline, "A restore is offered only with a pre-read compare.")
     }
 
     @Test
@@ -180,6 +186,128 @@ class DynamicWriteExecutionTest {
         assertIs<NativeActionExecutionResult.Success>(executor(transport).execute(echoUpdate()), "The gate is released afterwards.")
     }
 
+    @Test
+    fun `the offered baseline restore runs while the route is quarantined and a normal edit stays refused`() = runBlocking<Unit> {
+        val store = MemoryDynamicWriteQuarantineStore()
+        val drifted = stored(title = "New title", body = "Edited elsewhere")
+        val transport = Transport(readBody = stored(title = "Old title"), afterWrites = ArrayDeque(listOf(drifted, stored(title = "Old title"))))
+        val edit = echoUpdate().copy(precondition = unchangedPrecondition())
+        val result = assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(edit))
+        val restore = assertNotNull(result.postcondition?.restoreBaseline)
+        assertTrue(restore.baselineRestore)
+        assertEquals(DynamicWriteRuleStatus.quarantined, store.records(SESSION.accountId.storageKey, "notebook").single().status)
+
+        val beforeRefusals = transport.requests.size
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(edit))
+        assertTrue("paused" in refused.message, refused.message)
+        val forged = assertIs<NativeActionExecutionResult.Failure>(
+            executor(transport, store = store).execute(restore.copy(values = restore.values + ("title" to "Something else"))),
+        )
+        assertEquals(NativeActionFailureOutcome.Rejected, forged.outcome)
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(edit.copy(baselineRestore = true)))
+        assertEquals(beforeRefusals, transport.requests.size, "A normal edit and a forged restore send nothing.")
+
+        val restored = assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(restore))
+        assertEquals("Saved.", restored.message)
+        val sent = transport.requests.drop(beforeRefusals)
+        assertEquals(listOf(NextcloudApiMethod.GET, NextcloudApiMethod.PUT, NextcloudApiMethod.GET), sent.map { it.method },
+            "Pre-read compare, one full-echo send, and a read-back.")
+        val body = Json.parseToJsonElement(sent[1].body!!.decodeToString()) as JsonObject
+        assertEquals(JsonPrimitive("Old title"), body["title"])
+        assertEquals(JsonPrimitive("Synthetic body"), body["body"], "The drifted field is restored to its baseline.")
+        assertEquals(JsonPrimitive("2026-01-05T10:30:00+00:00"), body["due"])
+
+        val afterRestore = transport.requests.size
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(restore), "A restore is accepted once.")
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(edit), "The route stays paused.")
+        assertEquals(afterRestore, transport.requests.size)
+        assertEquals(DynamicWriteRuleStatus.quarantined, store.records(SESSION.accountId.storageKey, "notebook").single().status)
+    }
+
+    @Test
+    fun `a baseline restore stops when the item changed again after the drift`() = runBlocking<Unit> {
+        val store = MemoryDynamicWriteQuarantineStore()
+        val transport = Transport(
+            readBody = stored(title = "Old title"),
+            afterWrites = ArrayDeque(listOf(stored(title = "New title", body = "Edited elsewhere"))),
+        )
+        val result = assertIs<NativeActionExecutionResult.Success>(
+            executor(transport, store = store).execute(echoUpdate().copy(precondition = unchangedPrecondition())),
+        )
+        val restore = assertNotNull(result.postcondition?.restoreBaseline)
+        transport.readBody = stored(title = "New title", body = "Edited a second time")
+        val before = transport.requests.size
+        val stopped = assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(restore))
+        assertEquals(NativeWritePreconditionFailure.Changed, stopped.precondition)
+        assertEquals(listOf(NextcloudApiMethod.GET), transport.requests.drop(before).map { it.method }, "Nothing is sent.")
+    }
+
+    @Test
+    fun `an app version outside the key alphabet still quarantines its route`() = runBlocking<Unit> {
+        val store = MemoryDynamicWriteQuarantineStore()
+        val odd = descriptor().let { it.copy(app = it.app.copy(version = "2.0.0 beta~1")) }
+        val transport = Transport(readBody = stored(title = "Old title"))
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, odd, store).execute(echoUpdate(odd)))
+        val record = store.records(SESSION.accountId.storageKey, "notebook").single()
+        assertEquals(DynamicWriteRuleStatus.quarantined, record.status)
+        assertTrue(record.key.appVersion.startsWith("#") && record.key.appVersion.length == 65, record.key.appVersion)
+
+        val before = transport.requests.size
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(transport, odd, store).execute(echoUpdate(odd)))
+        assertTrue("paused" in refused.message, refused.message)
+        assertEquals(before, transport.requests.size, "The digest-keyed quarantine holds.")
+    }
+
+    @Test
+    fun `a reverted edit is not applied even when a parent input reads back as another JSON type`() = runBlocking<Unit> {
+        val store = MemoryDynamicWriteQuarantineStore()
+        val scoped = descriptor().let { base ->
+            base.copy(actions = base.actions.map { action ->
+                if (action.id != "notes.update") return@map action
+                action.copy(binding = action.binding.copy(body = body(
+                    """"title":{"type":"string"},"body":{"type":"string"},"due":{"type":"string"},""" +
+                        """"archivedAt":{"type":"string","nullable":true},"notebookId":{"type":"string"}""",
+                )))
+            })
+        }
+        val transport = Transport(readBody = stored(title = "Old title", extra = ""","notebookId":3"""))
+        val request = echoUpdate(scoped).let { it.copy(values = it.values + ("notebookId" to "3")) }
+        val result = assertIs<NativeActionExecutionResult.Failure>(executor(transport, scoped, store).execute(request))
+        val sent = Json.parseToJsonElement(transport.requests.first().body!!.decodeToString()) as JsonObject
+        assertEquals(JsonPrimitive("3"), sent["notebookId"], "The parent input travels as the declared string.")
+        assertTrue("not applied" in result.message, result.message)
+        assertEquals(DynamicWriteQuarantineReason.notAppliedAfterSuccess, store.records(SESSION.accountId.storageKey, "notebook").single().reason)
+    }
+
+    @Test
+    fun `a share is sent only when the target states that the actor may share it`() = runBlocking<Unit> {
+        val allowed = Transport(readBody = stored(title = "Old title", extra = ""","canShare":true"""))
+        assertIs<NativeActionExecutionResult.Success>(executor(allowed).execute(share()))
+        assertEquals(listOf(NextcloudApiMethod.GET, NextcloudApiMethod.POST), allowed.requests.map { it.method })
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, allowed.requests.first().cachePolicy)
+
+        val denied = Transport(readBody = stored(title = "Old title", extra = ""","canShare":false"""))
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(denied).execute(share()))
+        assertEquals(NativeActionFailureOutcome.Rejected, refused.outcome)
+        assertTrue("may not share" in refused.message, refused.message)
+
+        listOf(
+            Transport(readBody = stored(title = "Old title", extra = ""","canShare":"true"""")),
+            Transport(readBody = stored(title = "Old title", extra = ""","canShare":1""")),
+            Transport(readBody = stored(title = "Old title")),
+            Transport(readBody = "{}", readStatus = 503),
+        ).forEach { transport ->
+            val unverified = assertIs<NativeActionExecutionResult.Failure>(executor(transport).execute(share()))
+            assertTrue("could not be checked" in unverified.message, unverified.message)
+            assertTrue(transport.requests.none { it.method != NextcloudApiMethod.GET }, "Nothing is shared.")
+        }
+        assertTrue(denied.requests.none { it.method != NextcloudApiMethod.GET })
+    }
+
+    private fun share() = submit("notes.share", mapOf("noteId" to "7", "shareWith" to "synthetic-friend"))
+
+    private fun unchangedPrecondition() = NativeWritePrecondition(mapOf("noteId" to "7"), "7") { true }
+
     private fun echoUpdate(descriptor: DynamicAppDescriptor = descriptor()): NativeActionRequest.Submit =
         submit("notes.update", mapOf("noteId" to "7", "title" to "New title"), descriptor).copy(
             readBack = NativeWriteReadBack(
@@ -201,13 +329,15 @@ class DynamicWriteExecutionTest {
             confirmed = true,
         )
 
-    private fun stored(title: String, body: String = "Synthetic body") =
-        """{"id":7,"title":"$title","body":"$body","due":"2026-01-05T10:30:00+00:00","archivedAt":null}"""
+    private fun stored(title: String, body: String = "Synthetic body", extra: String = "") =
+        """{"id":7,"title":"$title","body":"$body","due":"2026-01-05T10:30:00+00:00","archivedAt":null$extra}"""
 
     private class Transport(
-        val readBody: String = "{}",
+        var readBody: String = "{}",
         val readStatus: Int = 200,
         val holdWrite: CompletableDeferred<Unit>? = null,
+        /** What reads return after each successive write, so a write can change the stored state. */
+        val afterWrites: ArrayDeque<String> = ArrayDeque(),
     ) {
         val requests = mutableListOf<NextcloudApiRequest>()
         val events = mutableListOf<SupportDiagnosticEventDraft>()
@@ -231,6 +361,7 @@ class DynamicWriteExecutionTest {
                         return NextcloudApiResponse(readStatus, readBody.encodeToByteArray(), "application/json", etag = null)
                     }
                     holdWrite?.await()
+                    afterWrites.removeFirstOrNull()?.let { readBody = it }
                     return NextcloudApiResponse(200, "{}".encodeToByteArray(), "application/json", etag = null)
                 }
             }
@@ -250,7 +381,7 @@ class DynamicWriteExecutionTest {
             id = "notes.read", label = "Read note", resourceId = "notes", intent = ActionIntent.read,
             risk = ActionRisk.readOnly, requiresConfirmation = false,
             binding = DynamicHttpBinding(HttpMethod.GET, PATH, pathParameters = listOf(noteId)),
-            responseFieldIds = listOf("id", "title", "body", "due", "archivedAt"), confidence = Confidence.verified, provenance = provenance,
+            responseFieldIds = listOf("id", "title", "body", "due", "archivedAt", "canShare"), confidence = Confidence.verified, provenance = provenance,
         )
         val update = read.copy(
             id = "notes.update", label = "Edit note", intent = ActionIntent.update, risk = ActionRisk.mutating,
@@ -272,6 +403,12 @@ class DynamicWriteExecutionTest {
             binding = DynamicHttpBinding(HttpMethod.PUT, "/apps/notebook/api/admin/settings", body = body(""""mode":{"type":"string"}""")),
             riskClass = DynamicOperationRiskClass.administration,
         )
+        val share = read.copy(
+            id = "notes.share", label = "Share note", intent = ActionIntent.execute, risk = ActionRisk.mutating,
+            requiresConfirmation = true, responseFieldIds = emptyList(), riskClass = DynamicOperationRiskClass.sharing,
+            readBackActionId = read.id, sharePermissionFieldId = "canShare",
+            binding = DynamicHttpBinding(HttpMethod.POST, "$PATH/share", pathParameters = listOf(noteId), body = body(""""shareWith":{"type":"string"}""", "shareWith")),
+        )
         return DynamicAppDescriptor(
             descriptorVersion = DYNAMIC_APP_DESCRIPTOR_VERSION,
             app = AppIdentity("notebook", "Notebook", "2.0.0"),
@@ -279,13 +416,13 @@ class DynamicWriteExecutionTest {
             resources = listOf(
                 DynamicResource(
                     id = "notes", label = "Notes", collection = true, confidence = Confidence.verified,
-                    fields = listOf("id", "title", "body", "due", "archivedAt", "to").map { id ->
+                    fields = listOf("id", "title", "body", "due", "archivedAt", "to", "canShare", "notebookId", "shareWith").map { id ->
                         DynamicField(id, id, FieldKind.string, false, id == "id", id == "archivedAt", false, confidence = Confidence.verified)
                     },
                 ),
                 DynamicResource(id = "settings", label = "Settings", collection = false, confidence = Confidence.verified),
             ),
-            actions = listOf(read, update, send, admin),
+            actions = listOf(read, update, send, admin, share),
         )
     }
 

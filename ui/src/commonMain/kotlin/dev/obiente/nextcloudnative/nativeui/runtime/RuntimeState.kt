@@ -247,6 +247,12 @@ sealed interface NativeActionRequest {
         val readBack: NativeWriteReadBack? = null,
         /** Present only when an exactly-once surface recorded a durable attempt for this send. */
         val sendAttempt: NativeSendAttemptToken? = null,
+        /**
+         * True only on the baseline restore the executor itself offered after drift. The executor
+         * accepts it only as that exact request, once; it is the one write a quarantine lets
+         * through, and it still runs the pre-read compare, the full echo, and the read-back.
+         */
+        val baselineRestore: Boolean = false,
     ) : NativeActionRequest
 }
 
