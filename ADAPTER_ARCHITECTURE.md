@@ -153,6 +153,14 @@ entries and successful guesses do not prove that an operation is safe.
   an exact version, a version range, or a pinned source tag; see
   [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)
   for the remaining app-specific exceptions awaiting conversion.
+- Treat facts read from the verified package (route attributes, access and
+  policy attributes, psalm types, entity serialization, capability keys, and
+  the merge hint) as declaration evidence. They are read without running PHP,
+  they never invent an endpoint, parameter, or value, and they do not by
+  themselves publish a write; see
+  [package declaration evidence](DYNAMIC_APP_DESCRIPTOR.md#package-declaration-evidence).
+  The verified contract cache format version changes whenever this evidence
+  changes shape, so older cached contracts are derived again.
 - Keep dynamic endpoints relative and inside approved same-origin prefixes.
 - Omit behavior whose provenance or permission model is ambiguous.
 

@@ -8,6 +8,10 @@ internal data class StaticPhpParameter(
     val type: String,
     val required: Boolean = true,
     val readUnionTypes: List<String> = emptyList(),
+    /** True for `?T` and unions containing `null`. */
+    val nullable: Boolean = false,
+    /** The declared default when it is a single literal; null when absent or computed. */
+    val defaultValue: PhpValue? = null,
 )
 
 /**
@@ -97,13 +101,52 @@ internal fun parseSerializableParameter(
         remainder.size > 1 && (remainder.firstOrNull() as? PhpToken.Symbol)?.value == '=' -> false
         else -> return null
     }
+    val defaultValue = if (required) null else remainder.drop(1).literalDefault()
     val schemaTypes = when {
         union -> types
         nullable && allowScalarUnions && types.single() != "array" -> types + "null"
         else -> emptyList()
     }
-    return StaticPhpParameter(name, types.first(), required, schemaTypes)
+    return StaticPhpParameter(
+        name = name,
+        type = types.first(),
+        required = required,
+        readUnionTypes = schemaTypes,
+        nullable = nullable || "null" in types,
+        defaultValue = defaultValue,
+    )
 }
+
+private fun List<PhpToken>.literalDefault(): PhpValue? {
+    val first = firstOrNull()
+    return when {
+        size == 1 && first is PhpToken.Text -> if (first.literal) PhpValue.Text(first.value) else null
+        size == 1 && first is PhpToken.Word -> when {
+            first.value.lowercase() == "null" -> PhpValue.Null
+            first.value.lowercase() == "true" -> PhpValue.Bool(true)
+            first.value.lowercase() == "false" -> PhpValue.Bool(false)
+            first.value.all(Char::isDigit) -> first.value.toLongOrNull()?.let(PhpValue::Integer)
+            else -> null
+        }
+        size == 2 && (first as? PhpToken.Symbol)?.value == '-' ->
+            (get(1) as? PhpToken.Word)?.value?.toLongOrNull()?.let { PhpValue.Integer(-it) }
+        size == 2 && (first as? PhpToken.Symbol)?.value == '[' && (get(1) as? PhpToken.Symbol)?.value == ']' ->
+            PhpValue.Array(emptyList())
+        else -> null
+    }
+}
+
+/** The literal default as a JSON value for an OpenAPI `default`, or null when not representable. */
+internal fun StaticPhpParameter.jsonDefault(): Any? = when (val value = defaultValue) {
+    is PhpValue.Text -> value.value.takeIf { type == "string" }
+    is PhpValue.Integer -> value.value.takeIf { type == "int" || type == "float" }
+    is PhpValue.Bool -> value.value.takeIf { type == "bool" }
+    else -> null
+}
+
+/** All non-path inputs are nullable and default to null: a structural merge hint, not a guarantee. */
+internal fun List<StaticPhpParameter>.declaresNullMergeHint(): Boolean =
+    isNotEmpty() && all { parameter -> parameter.nullable && parameter.defaultValue == PhpValue.Null }
 
 private fun methodParameterTokens(
     tokens: List<PhpToken>,

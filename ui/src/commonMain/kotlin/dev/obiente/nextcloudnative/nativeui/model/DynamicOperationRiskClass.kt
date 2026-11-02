@@ -90,17 +90,42 @@ fun dynamicOperationRiskClass(
     }
 }
 
-/** The class the compiler recorded, or the same classification for a hand-built descriptor. */
+/**
+ * The class the compiler recorded, or the same classification for a hand-built descriptor. A
+ * package-stated access rule that limits the method to administrators always makes a write R9.
+ */
 val DynamicAction.operationRiskClass: DynamicOperationRiskClass
-    get() = riskClass ?: dynamicOperationRiskClass(
-        method = binding.method,
-        effect = effect,
-        risk = risk,
-        path = binding.path,
-        operationId = id,
-        label = label,
-        hasBody = binding.body != null,
+    get() = contractFacts.withAccessRule(
+        riskClass ?: dynamicOperationRiskClass(
+            method = binding.method,
+            effect = effect,
+            risk = risk,
+            path = binding.path,
+            operationId = id,
+            label = label,
+            hasBody = binding.body != null,
+        ),
     )
+
+/**
+ * Applies the verified package's access rule to [classified]. A write the server limits to
+ * administrators (`admin`, inferred from a missing NoAdminRequired) is administration (R9), and so
+ * are the other privileged rules acquisition already refuses. Missing facts, such as for a
+ * same-origin advertisement, are unknown, never administration. Reads keep their class.
+ */
+fun DynamicContractFacts?.withAccessRule(classified: DynamicOperationRiskClass): DynamicOperationRiskClass =
+    if (classified != DynamicOperationRiskClass.read && this?.access in PRIVILEGED_ACCESS) {
+        DynamicOperationRiskClass.administration
+    } else {
+        classified
+    }
+
+private val PRIVILEGED_ACCESS = setOf(
+    DynamicAccessLevel.admin,
+    DynamicAccessLevel.subAdmin,
+    DynamicAccessLevel.delegatedAdmin,
+    DynamicAccessLevel.externalApp,
+)
 
 /** The class the schema carries, or the same classification for a hand-built schema. */
 val ActionSpec.operationRiskClass: DynamicOperationRiskClass

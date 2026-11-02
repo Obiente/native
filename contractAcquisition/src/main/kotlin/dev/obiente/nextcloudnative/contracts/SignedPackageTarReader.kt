@@ -4,8 +4,24 @@ import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.util.zip.GZIPInputStream
 
-internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
+/**
+ * Contract files selected from a package. Supplementary evidence (psalm response definitions,
+ * entities in lib/Db, capability classes) has its own budget: when it is exhausted further
+ * supplementary files are skipped and [supplementaryTruncated] is set, instead of failing the
+ * package whose primary contract files remain within their limits.
+ */
+internal data class SelectedTarFiles(
+    val files: Map<String, ByteArray>,
+    val supplementaryTruncated: Boolean,
+)
+
+internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> = readSelectedTarFileSet(archive).files
+
+internal fun readSelectedTarFileSet(archive: ByteArray): SelectedTarFiles {
     val selected = linkedMapOf<String, ByteArray>()
+    var supplementaryCount = 0
+    var supplementaryBytes = 0L
+    var supplementaryTruncated = false
     GZIPInputStream(ByteArrayInputStream(archive)).use { input ->
         var totalUncompressed = 0L
         var pendingLongPath: String? = null
@@ -50,10 +66,24 @@ internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
                     fullName.substringAfterLast('/').matches(OPEN_API_FILE_PATTERN) ||
                     staticMetadata
                 )
-            if (keep) {
+            val supplementary = (type == '\u0000' || type == '0') && !keep && isSupplementaryEvidencePath(fullName)
+            if (supplementary) {
+                val fits = size <= MAX_STATIC_METADATA_FILE_BYTES &&
+                    supplementaryCount < MAX_SUPPLEMENTARY_FILES &&
+                    supplementaryBytes + size <= MAX_SUPPLEMENTARY_BYTES
+                if (fits) {
+                    supplementaryCount += 1
+                    supplementaryBytes += size
+                    selected[fullName] = input.readExactly(size.toInt())
+                } else {
+                    supplementaryTruncated = true
+                    input.skipExactly(size)
+                }
+            } else if (keep) {
                 val selectedFileLimit = if (staticMetadata) MAX_STATIC_METADATA_FILE_BYTES else MAX_SELECTED_FILE_BYTES
                 requireWithinLimit(size, selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
-                requireWithinLimit(selected.size + 1L, MAX_SELECTED_ARCHIVE_FILES.toLong()) {
+                // Supplementary files have their own budget and never use a primary slot.
+                requireWithinLimit(selected.size - supplementaryCount + 1L, MAX_SELECTED_ARCHIVE_FILES.toLong()) {
                     "The app package has too many contract metadata files."
                 }
                 selected[fullName] = input.readExactly(size.toInt())
@@ -65,7 +95,17 @@ internal fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
         }
         check(pendingLongPath == null) { "The app package ends with an incomplete path record." }
     }
-    return selected
+    return SelectedTarFiles(selected, supplementaryTruncated)
+}
+
+/** Psalm response definitions, PHP files directly in lib/Db, and capability classes. */
+private fun isSupplementaryEvidencePath(path: String): Boolean {
+    val relative = path.substringAfter('/', "")
+    if (!relative.endsWith(".php")) return false
+    return relative == "lib/ResponseDefinitions.php" ||
+        relative == "lib/Capabilities.php" ||
+        (relative.startsWith("lib/Db/") && '/' !in relative.removePrefix("lib/Db/")) ||
+        (relative.startsWith("lib/Capabilities/") && '/' !in relative.removePrefix("lib/Capabilities/"))
 }
 
 private inline fun requireWithinLimit(value: Long, limit: Long, message: () -> String) {
@@ -131,3 +171,5 @@ private const val MAX_STATIC_METADATA_FILE_BYTES = 1L * 1024L * 1024L
 private const val MAX_SELECTED_ARCHIVE_FILES = 320
 private val TAR_METADATA_TYPES = setOf('g', 'x', 'K')
 private const val MAX_TAR_PATH_BYTES = 4_096L
+private const val MAX_SUPPLEMENTARY_FILES = 192
+private const val MAX_SUPPLEMENTARY_BYTES = 8L * 1024L * 1024L

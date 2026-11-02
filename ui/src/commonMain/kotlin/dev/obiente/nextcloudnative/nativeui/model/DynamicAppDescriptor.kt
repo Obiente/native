@@ -224,6 +224,8 @@ data class DynamicAction(
     val idempotencyKeyHeader: String? = null,
     /** A declared field of the route-family read proving the actor may share (R8 only). */
     val sharePermissionFieldId: String? = null,
+    /** Facts the verified package states about this operation; evidence only, never admission. */
+    val contractFacts: DynamicContractFacts? = null,
 )
 
 @Serializable

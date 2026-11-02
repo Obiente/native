@@ -110,6 +110,84 @@ are not accepted. A `DELETE` route may carry only a removal relationship. Risk
 and confirmation still follow the HTTP method, so a `DELETE` relationship is
 destructive and confirmed.
 
+### Package declaration evidence
+
+The same signed package also yields declaration evidence that is read
+statically and never executed. Synthesis no longer needs `appinfo/routes.php`:
+
+- **Route attributes.** `#[ApiRoute]`, `#[FrontpageRoute]`, and
+  `#[Route(type: ...)]` on public controller methods directly in
+  `lib/Controller/` are read like the server router reads them, through
+  namespace imports and aliases such as `Http\Attribute\FrontpageRoute`.
+  OCS attribute routes mount under `/ocs/v2.php/apps/{app}`, others under
+  `/apps/{app}`. Only literal verbs, URLs, requirement and default maps, and
+  postfixes are accepted; a concatenated, interpolated, or constant URL, an
+  unknown argument, or a custom `root` drops the route and is counted in
+  `x-nextcloud-native-skipped-routes`. When `routes.php` and an attribute
+  claim the same route name with different URLs, both are dropped.
+- **Route file.** `resources` and `ocs-resources` expand to the router's
+  index, show, create, update, and destroy actions. Resource reads are
+  published as before; resource writes are recorded as route evidence only.
+  An omitted verb defaults to `GET`. A same-file route helper is unwrapped only
+  when its whole body is `return $route;` or `return array_merge($route, [...])`
+  with keys that cannot change the route name, URL, verb, root, or postfix.
+- **Policy facts.** Each operation carries `x-nextcloud-native-policy`: the
+  access level the server's security middleware enforces (no
+  `NoAdminRequired` means admin only), CSRF and CORS handling, password
+  confirmation and its strict flag, user and anonymous rate limits,
+  brute-force actions, request headers, the OpenAPI scope, and any
+  app-defined attribute as an opaque name with literal arguments. Legacy
+  docblock annotations are read the same way.
+- **Hidden inputs.** `$this->request->getParam('x')` where `x` is a route
+  placeholder binds that path parameter and is marked
+  `x-nextcloud-native-request-input`. One `getUploadedFile('f')` read on a
+  `POST` declares a multipart body with file field `f`. Any other request
+  access keeps the method unproven.
+- **Types.** Psalm `@param`, `@return`, `@psalm-type`, and
+  `@psalm-import-type` declarations, including `lib/ResponseDefinitions.php`,
+  map to OpenAPI schemas for the subset openapi-extractor supports. A psalm
+  parameter type narrows the native type only when compatible. Malformed,
+  recursive, or oversized types are dropped; the route keeps its weaker
+  evidence.
+- **Entities.** `jsonSerialize()` and `toAPI()` methods in `lib/Db` that
+  return one literal array record their field names, typed by `addType()`
+  where stated, in `x-nextcloud-native-entity-serializations`. A response
+  links to an entity only through a declared return type naming a
+  `JsonSerializable` entity.
+- **Merge hint.** A `PUT` or `PATCH` whose non-path parameters are all
+  nullable with `null` defaults records
+  `x-nextcloud-native-merge-hint`. It is a hint, never a merge guarantee.
+- **Capabilities.** Literal key paths in `lib/Capabilities.php`, including
+  `version` and API version keys, are recorded in
+  `x-nextcloud-native-capability-keys` for comparison with the live response.
+
+Every extracted route, published or not, is listed in
+`x-nextcloud-native-static-routes` with its signature and facts, so a later
+admission step can evaluate it without re-reading the package. Attribute
+routes and methods that read a route placeholder through
+`$this->request->getParam()` now pass the same scalar write rules as
+`appinfo/routes.php` routes, so some of their writes are published. A method
+the package marks as sub-administrator, delegated administrator, external-app,
+or password-confirmed access is never published as a write. Administrator
+access inferred from a missing `NoAdminRequired` is kept as the operation's
+`access` fact for the admission step rather than decided here, because an
+inherited or trait annotation the extractor cannot read would otherwise hide a
+user-level write. A method that reads an uploaded file stays route evidence
+until the write path can verify the stored file. A routes.php route and an
+attribute route that share a URL and verb but name different controller
+methods are both dropped, because the server dispatches to the attribute
+route. Inherited and trait methods are not read, so their routes are missing
+rather than wrong. Supplementary files (response definitions, entities,
+capabilities) have their own size budget; when it is exhausted the document
+states `x-nextcloud-native-supplementary-evidence-truncated`.
+
+The descriptor compiler copies these facts into
+`DynamicAction.contractFacts` only for verified package or exact source-tag
+provenance. A same-origin advertised document cannot assert its own access
+rules. Psalm-typed bodies, enums, nullability, defaults, and multipart bodies
+flow through the existing schema path. Entity serializations, capability
+keys, and the static route evidence list remain in the contract document.
+
 Acquisition may keep verified read routes while checking compatible releases
 for a richer contract. If an optional later package returns HTTP 404 or 410, an
 already verified route contract stays usable. This never bypasses certificate,
@@ -797,7 +875,14 @@ such as `canShare`). The evidence tier comes from provenance
 ([`DynamicEvidenceTier.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicEvidenceTier.kt)):
 the advertised OpenAPI document is E2, the verified package or linked source
 tag (and a reviewed adapter contract until it becomes a rule) is E3, and a
-successful read is E6. The admission matrix is the pure function
+successful read is E6. A write whose verified package facts (`contractFacts`)
+limit it to administrators, such as `access: admin` inferred from a missing
+`NoAdminRequired`, is classified as administration (R9) and never offered;
+missing facts, as for a same-origin advertisement, count as unknown rather than
+administrator-only. The package's merge hint
+(`nullable-null-default-parameters`) is recorded but does not unlock sparse
+updates, and upload methods are not published as writes. The admission matrix
+is the pure function
 [`admitDynamicWrite`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicWriteAdmission.kt).
 
 The compiler no longer withholds send, share, and merge operations. It tags

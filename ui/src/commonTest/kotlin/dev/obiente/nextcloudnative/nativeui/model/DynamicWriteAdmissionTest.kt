@@ -52,6 +52,23 @@ class DynamicWriteAdmissionTest {
     }
 
     @Test
+    fun `a package access rule limiting a write to administrators makes it administration`() {
+        val replacement = DynamicOperationRiskClass.replacement
+        DynamicAccessLevel.entries.forEach { access ->
+            val expected = if (access == DynamicAccessLevel.publicPage || access == DynamicAccessLevel.authenticatedUser) {
+                replacement
+            } else {
+                DynamicOperationRiskClass.administration
+            }
+            assertEquals(expected, DynamicContractFacts(access = access).withAccessRule(replacement), "$access")
+        }
+        assertEquals(replacement, null.withAccessRule(replacement), "Missing facts are unknown, not admin.")
+        assertEquals(replacement, DynamicContractFacts(access = null).withAccessRule(replacement))
+        assertEquals(DynamicOperationRiskClass.read, DynamicContractFacts(access = DynamicAccessLevel.admin).withAccessRule(DynamicOperationRiskClass.read),
+            "An admin-only read stays a read.")
+    }
+
+    @Test
     fun `administration and credentials are never admitted whatever the evidence`() {
         listOf(DynamicOperationRiskClass.administration, DynamicOperationRiskClass.credential).forEach { riskClass ->
             val admission = admitDynamicWrite(input(riskClass, facts = everyFact()))

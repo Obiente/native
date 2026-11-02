@@ -2,6 +2,10 @@ package dev.obiente.nextcloudnative.contracts
 
 internal data class StaticCrudWrite(
     val bodyParameters: List<StaticPhpParameter>,
+    /** Path placeholders the method reads with `$this->request->getParam()` instead of its signature. */
+    val requestPathParameters: List<String> = emptyList(),
+    /** The multipart file field read with `$this->request->getUploadedFile()`, if any. */
+    val uploadedFileField: String? = null,
 )
 
 /**
@@ -15,6 +19,11 @@ internal data class StaticCrudWrite(
  * identity the signature itself requires) and restore verbs (`restore`, `undoDelete`). Neither
  * extends to sending, sharing, membership, permissions, or merging, and the method name alone
  * never authorizes a write: the scalar signature must prove every input.
+ *
+ * Two exact request reads are accepted as declared inputs: `$this->request->getParam('x')` where
+ * `x` is a route placeholder (the router merges placeholders into request parameters), and one
+ * `$this->request->getUploadedFile('f')` on a POST, which makes the body multipart with file
+ * field `f` and scalar text fields. Any other request access keeps the method unproven.
  */
 internal fun verifiedStaticCrudWrite(
     route: StaticRoute,
@@ -22,7 +31,14 @@ internal fun verifiedStaticCrudWrite(
     pathPlaceholders: List<String>,
 ): StaticCrudWrite? {
     val method = route.method.normalizedPhpName()
-    if (method in controller.methodsWithRequestInput) return null
+    val requestInputs = controller.requestInputs[method]
+    if (method in controller.methodsWithRequestInput) {
+        if (requestInputs == null || requestInputs.unclassified) return null
+        if (requestInputs.parameters.any { name -> name !in pathPlaceholders }) return null
+        if (requestInputs.uploadedFiles.size > 1) return null
+        if (requestInputs.uploadedFiles.isNotEmpty() && route.verb != "POST") return null
+    }
+    val uploadedFileField = requestInputs?.uploadedFiles?.singleOrNull()
     val parameters = controller.parameters[method] ?: return null
     if (parameters.size > MAX_STATIC_CRUD_PARAMETERS) return null
     val relationship = method.relationshipVerb(parameters)
@@ -59,12 +75,24 @@ internal fun verifiedStaticCrudWrite(
         pathPlaceholders.any { placeholder -> placeholder.equals(parameter.name, ignoreCase = true) }
     }
     if (bodyParameters.any { parameter -> parameter.name.isSensitiveWriteField() }) return null
+    if (uploadedFileField != null) {
+        // Multipart text fields carry scalars only, and the file field must not shadow one.
+        if (bodyParameters.any { it.type == "array" || it.name == uploadedFileField }) return null
+        return StaticCrudWrite(
+            bodyParameters = bodyParameters,
+            requestPathParameters = requestInputs?.parameters.orEmpty(),
+            uploadedFileField = uploadedFileField,
+        )
+    }
+    val requestPathParameters = requestInputs?.parameters.orEmpty()
     // A relationship whose related identity is a path segment, or a restore, needs no body.
     val bodyFree = method in BODY_FREE_SCALAR_WORKFLOW_METHODS || restore ||
         relationship != null && bodyParameters.none { it.required }
     return when (route.verb) {
-        "DELETE" -> StaticCrudWrite(bodyParameters = emptyList()).takeIf { bodyParameters.isEmpty() }
-        "POST", "PUT", "PATCH" -> StaticCrudWrite(bodyParameters).takeIf { bodyParameters.isNotEmpty() || bodyFree }
+        "DELETE" -> StaticCrudWrite(bodyParameters = emptyList(), requestPathParameters = requestPathParameters)
+            .takeIf { bodyParameters.isEmpty() }
+        "POST", "PUT", "PATCH" -> StaticCrudWrite(bodyParameters, requestPathParameters)
+            .takeIf { bodyParameters.isNotEmpty() || bodyFree }
         else -> null
     }
 }

@@ -6,7 +6,10 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_APP_DESCRIPTOR_VERSION
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAccessLevel
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DynamicContractFacts
+import dev.obiente.nextcloudnative.nativeui.model.operationRiskClass
 import dev.obiente.nextcloudnative.nativeui.model.DynamicField
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
@@ -55,6 +58,28 @@ class DynamicWriteExecutionTest {
         assertEquals(NativeActionFailureOutcome.Rejected, assertIs<NativeActionExecutionResult.Failure>(send).outcome)
         assertTrue(transport.requests.isEmpty())
         assertEquals(DynamicOperationRiskClass.administration, descriptor().actions.single { it.id == "settings.admin" }.riskClass)
+    }
+
+    @Test
+    fun `a write the package limits to administrators is refused as administration`() = runBlocking<Unit> {
+        val adminOnly = descriptor().let { base ->
+            base.copy(actions = base.actions.map { action ->
+                if (action.id == "notes.update") action.copy(riskClass = null, contractFacts = DynamicContractFacts(access = DynamicAccessLevel.admin)) else action
+            })
+        }
+        assertEquals(DynamicOperationRiskClass.administration, adminOnly.actions.single { it.id == "notes.update" }.operationRiskClass)
+        assertTrue(adminOnly.toNativeAppSchema().dedicatedActions.any { it.id == "notes.update" }, "No generic form offers it.")
+        val transport = Transport(readBody = stored(title = "New title"))
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(transport, adminOnly).execute(echoUpdate(adminOnly)))
+        assertEquals(NativeActionFailureOutcome.Rejected, refused.outcome)
+        assertTrue(transport.requests.isEmpty())
+
+        val userLevel = descriptor().let { base ->
+            base.copy(actions = base.actions.map { action ->
+                if (action.id == "notes.update") action.copy(contractFacts = DynamicContractFacts(access = DynamicAccessLevel.authenticatedUser)) else action
+            })
+        }
+        assertIs<NativeActionExecutionResult.Success>(executor(Transport(readBody = stored(title = "New title")), userLevel).execute(echoUpdate(userLevel)))
     }
 
     @Test
