@@ -212,6 +212,8 @@ data class DynamicAction(
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
     val effect: ActionEffect = ActionEffect.unspecified,
+    /** Facts the verified package states about this operation; evidence only, never admission. */
+    val contractFacts: DynamicContractFacts? = null,
 )
 
 @Serializable
