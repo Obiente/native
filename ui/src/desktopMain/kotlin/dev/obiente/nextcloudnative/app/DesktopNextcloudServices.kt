@@ -717,10 +717,9 @@ class DesktopNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
-    private val dynamicDiscoveryCache = DesktopDynamicDiscoveryCacheCoordinator.get(
-        desktopContractCacheDirectory("discoveries-v1"),
-    )
+    private val dynamicDiscoveryCache = DesktopDynamicDiscoveryCacheCoordinator.get(desktopContractCacheDirectory("discoveries-v1"))
     private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
+    private val writeQuarantine = FileDynamicWriteQuarantineStore(File(pendingDynamicMutationDirectory.parentFile, "write-safety-v1"))
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
@@ -748,9 +747,8 @@ class DesktopNextcloudServices(
     private var windowsCloudFilesIdentity: String? = null
     @Volatile
     private var windowsCloudFilesFailure: String? = null
-    private val dynamicApiReadCache = DynamicApiResponseCache(
-        desktopContractCacheDirectory("responses"),
-    )
+    private val dynamicApiReadCache = DynamicApiResponseCache(desktopContractCacheDirectory("responses"))
+    override fun dynamicWriteQuarantineStore(): DynamicWriteQuarantineStore = writeQuarantine
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
@@ -3822,6 +3820,7 @@ class DesktopNextcloudServices(
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let(textEditorDrafts::removeAccount)
+        cleanup.accountStorageKey?.let { writeQuarantine.removeAccount(it) }
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
         cleanup.accountStorageKey?.let(sharedJvmAuthenticatedAppReadSessions::retireAccount)
         cleanup.accountStorageKey?.let { accountStorageKey ->

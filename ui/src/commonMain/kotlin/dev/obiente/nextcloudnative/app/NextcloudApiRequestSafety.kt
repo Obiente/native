@@ -28,6 +28,9 @@ fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
         listOfNotNull(ifMatch, ifNoneMatch).all { it.length <= 520 && it.none(Char::isISOControl) } &&
             (ifNoneMatch == null || method == NextcloudApiMethod.GET),
     ) { "The precondition is invalid; only a read can carry If-None-Match." }
+    require(idempotencyKey == null || (method != NextcloudApiMethod.GET && idempotencyKey.length in 16..128 && idempotencyKey.all { it.isLetterOrDigit() || it == '-' })) {
+        "The idempotency key is invalid."
+    }
     multipartBody?.let { multipart ->
         require(method in setOf(NextcloudApiMethod.POST, NextcloudApiMethod.PUT, NextcloudApiMethod.PATCH)) {
             "Multipart uploads require POST, PUT, or PATCH."

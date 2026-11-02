@@ -373,10 +373,9 @@ internal class AndroidNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
-    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
-        File(appContext.filesDir, "contracts/discoveries-v1"),
-    )
+    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(File(appContext.filesDir, "contracts/discoveries-v1"))
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
+    private val writeQuarantine = dev.obiente.nextcloudnative.app.FileDynamicWriteQuarantineStore(File(appContext.filesDir, ANDROID_WRITE_SAFETY_DIRECTORY))
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
@@ -902,6 +901,7 @@ internal class AndroidNextcloudServices(
     override suspend fun selectAccount(accountId: NextcloudAccountId) = accountCredentials.selectAccount(accountId)
 
     override suspend fun removeAccount(accountId: NextcloudAccountId) = accountCredentials.removeAccount(accountId)
+    override fun dynamicWriteQuarantineStore(): dev.obiente.nextcloudnative.app.DynamicWriteQuarantineStore = writeQuarantine
 
     override fun textEditorDraftStore(session: NextcloudSession, path: String): TextEditorDraftStore =
         textEditorDrafts.bind(session, path, accountCredentials)

@@ -227,10 +227,12 @@ data class NextcloudApiRequest(
     val ifMatch: String? = null,
     /** A cached representation's validator sent as If-None-Match on a GET; 304 means it is current. */
     val ifNoneMatch: String? = null,
+    /** A contract-declared Idempotency-Key, created once per send attempt and reused only on a confirmed resend. */
+    val idempotencyKey: String? = null,
 ) {
-    /** The only headers a caller can influence: the bounded entity-tag preconditions above. */
+    /** The only headers a caller can influence: the bounded preconditions and a declared idempotency key. */
     val preconditionHeaders: Map<String, String>
-        get() = listOfNotNull(ifMatch?.let { "If-Match" to it }, ifNoneMatch?.let { "If-None-Match" to it }).toMap()
+        get() = listOfNotNull(ifMatch?.let { "If-Match" to it }, ifNoneMatch?.let { "If-None-Match" to it }, idempotencyKey?.let { "Idempotency-Key" to it }).toMap()
 }
 
 data class NextcloudApiResponse(
@@ -424,7 +426,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices {
+interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices, DynamicWriteSafetyPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -658,9 +660,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         actionId: String,
         targetRecordId: String,
         values: Map<String, String>,
-    ): Unit = throw UnsupportedOperationException(
-        "Crash-safe dynamic mutation staging is not supported on this platform.",
-    )
+    ): Unit = throw UnsupportedOperationException("Crash-safe dynamic mutation staging is not supported on this platform.")
 
     /** Clears a staged mutation only after success or an authoritative rejected outcome. */
     suspend fun clearPendingDynamicMutation(
