@@ -76,7 +76,8 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                 ),
             )
         }
-        forms.forEach { form ->
+        val dedicatedActionIds = actions.filter(DynamicAction::requiresDedicatedWriteSurface).mapTo(hashSetOf(), DynamicAction::id)
+        forms.filterNot { form -> form.actionId in dedicatedActionIds }.forEach { form ->
             add(
                 ViewSpec(
                     id = form.id,
@@ -124,6 +125,10 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             evidence = action.provenance.map(Provenance::toEvidence),
             effect = action.effect,
             resultRecoveryActionId = action.resultRecoveryActionId,
+            riskClass = action.operationRiskClass,
+            readBackActionId = action.readBackActionId,
+            idempotencyKeyHeader = action.idempotencyKeyHeader,
+            sharePermissionFieldId = action.sharePermissionFieldId,
         )
     }
     val linkedRelationships = links.mapNotNull { link ->
@@ -192,7 +197,8 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
         confidence = resources.minOfOrNull(DynamicResource::confidence) ?: Confidence.low,
         resources = nativeResources,
         views = nativeViews,
-        actions = nativeActions,
+        actions = nativeActions.filterNot(ActionSpec::requiresDedicatedWriteSurface),
+        dedicatedActions = nativeActions.filter(ActionSpec::requiresDedicatedWriteSurface),
         relationships = nativeRelationships,
         warnings = buildList {
             addAll(warnings.map { CompilerWarning(it.code, it.message) })

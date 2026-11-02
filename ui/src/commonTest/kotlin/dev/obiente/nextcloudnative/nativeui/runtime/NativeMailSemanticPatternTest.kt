@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptorCompiler
 import dev.obiente.nextcloudnative.nativeui.model.DynamicDiscoveryInput
+import dev.obiente.nextcloudnative.nativeui.model.DynamicOperationRiskClass
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
@@ -28,17 +29,21 @@ import kotlin.test.assertTrue
  */
 class NativeMailSemanticPatternTest {
     @Test
-    fun `a synchronous send without verified recovery is withheld under every app id and version`() {
+    fun `a synchronous send is reserved for the exactly-once composer under every app id and version`() {
         val identities = listOf("mail" to "5.12.6", "acme_mail" to "99.1.0", "postbox" to "0.0.1")
         val outcomes = identities.map { (appId, version) ->
             val descriptor = compileDescriptor(appId, version, mailOpenApi(appId, SendShape.SynchronousPost), signed = true)
             val schema = descriptor.toNativeAppSchema()
             assertTrue(schema.hasNativeMailWorkspaceSemantics(), "$appId is not a mailbox workspace")
             assertTrue(schema.views.any { it.resourceId == "messages" && it.component == NativeComponent.mailbox }, appId)
-            assertTrue(descriptor.warnings.any { it.code == "ignored-ambiguous-result-write" }, "$appId ${descriptor.warnings}")
-            nativeMailSendCapability(schema, accountContext(schema))
+            // An external effect is never a generic form or record action.
+            assertTrue(schema.actions.none { "send" in it.id } && schema.views.none { "send" in it.sourceActionId }, appId)
+            val capability = assertNotNull(nativeMailSendCapability(schema, accountContext(schema)), appId)
+            assertEquals(DynamicOperationRiskClass.externalEffect, capability.action.riskClass)
+            assertNull(capability.action.resultRecoveryActionId, "A POST send has no recovery read; Unknown stays may-have-been-sent.")
+            capability.action.binding.path.substringAfter("/apps/$appId")
         }
-        assertEquals(listOf(null, null, null), outcomes)
+        assertEquals(1, outcomes.distinct().size, "$outcomes")
     }
 
     @Test
@@ -98,7 +103,7 @@ class NativeMailSemanticPatternTest {
             "1.0.0",
             mailOpenApi("acme_mail", SendShape.RecoverablePut, extraRequiredSendField = "signingKeyId"),
         )
-        assertTrue(schema.actions.any { "send" in it.id && it.binding.method.name == "PUT" }, schema.describeSendActions())
+        assertTrue(schema.dedicatedActions.any { "send" in it.id && it.binding.method.name == "PUT" }, schema.describeSendActions())
         assertNull(nativeMailSendCapability(schema, accountContext(schema)))
     }
 

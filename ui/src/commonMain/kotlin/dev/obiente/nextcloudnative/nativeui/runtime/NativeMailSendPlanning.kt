@@ -142,7 +142,10 @@ internal fun nativeMailSendCapability(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): NativeMailSendCapability? {
-    val candidates = schema.actions.mapNotNull { action -> action.toSendCandidate(schema, context) }
+    // A send is an external effect (R6): generic surfaces never see it, so it is found among the
+    // operations reserved for dedicated surfaces. The composer is that surface: it records a
+    // durable attempt before the request and never resends without explicit confirmation.
+    val candidates = (schema.actions + schema.dedicatedActions).mapNotNull { action -> action.toSendCandidate(schema, context) }
     return candidates.singleOrNull()
 }
 
@@ -150,9 +153,8 @@ private fun ActionSpec.toSendCandidate(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): NativeMailSendCapability? {
-    // The descriptor compiler withholds a send whose unknown result cannot be checked. A retained
-    // send is either an idempotent replacement with an exact recovery read, or a POST that a
-    // future contract policy admits; both are still never resent without confirmation.
+    // A declared send is a POST, or an idempotent replacement with an exact recovery read. Either
+    // way it is sent once through the exactly-once attempt record and never resent unconfirmed.
     val recoverableReplacement = binding.method == HttpMethod.PUT && resultRecoveryActionId != null
     if (binding.method != HttpMethod.POST && !recoverableReplacement) return null
     if (risk != ActionRisk.mutating || intent !in SEND_INTENTS) return null

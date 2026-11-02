@@ -230,18 +230,6 @@ class DynamicAppDescriptorCompiler {
                     )
                     return@operationLoop
                 }
-                if (
-                    method != HttpMethod.GET &&
-                    operation.requiresAmbiguousResultRecoveryPolicy(path, operationId)
-                ) {
-                    if (state.exactIdempotentResultRecoveryActionId(path, method) == null) {
-                        state.warnings += DynamicWarning(
-                            code = "ignored-ambiguous-result-write",
-                            message = "Ignored documented $methodName $path because generic send, share, and merge mutations require an exact verified read recovery surface.",
-                        )
-                        return@operationLoop
-                    }
-                }
                 state.addOperation(
                     path = path,
                     method = method,
@@ -738,41 +726,14 @@ private class KotlinCompilerState(
     val warnings = mutableListOf<DynamicWarning>()
 
     /**
-     * An ambiguous semantic write is recoverable only when PUT makes the operation idempotent and a
-     * trusted, already-compiled GET reads the exact same route without additional required query
-     * input. The returned action ID is retained as executable recovery evidence.
+     * A replacement (PUT) is recoverable when a declared (E2 or E3), already-compiled GET reads the
+     * exact same route without additional required query input. The returned action ID is
+     * retained as executable recovery and pre-read evidence.
      */
-    fun exactIdempotentResultRecoveryActionId(
-        path: String,
-        method: HttpMethod,
-    ): String? {
-        if (
-            method != HttpMethod.PUT ||
-            source.kind !in setOf(
-                ProvenanceKind.verifiedAppPackage,
-                ProvenanceKind.appStoreLinkedSourceTag,
-            )
-        ) {
-            return null
-        }
-        return readActionIdsByExactContractPath[path]
-            .orEmpty()
-            .mapNotNull(actions::get)
-            .singleOrNull { candidate ->
-                candidate.binding.method == HttpMethod.GET &&
-                candidate.binding.body == null &&
-                candidate.binding.queryParameters.none(HttpParameter::required) &&
-                candidate.intent in setOf(ActionIntent.read, ActionIntent.list) &&
-                candidate.risk == ActionRisk.readOnly &&
-                !candidate.fallbackOnly &&
-                candidate.provenance.any { provenance ->
-                    provenance.kind in setOf(
-                        ProvenanceKind.verifiedAppPackage,
-                        ProvenanceKind.appStoreLinkedSourceTag,
-                    )
-                }
-            }
-            ?.id
+    fun exactIdempotentResultRecoveryActionId(path: String, method: HttpMethod): String? {
+        if (method != HttpMethod.PUT || source.kind.evidenceTier()?.declaresOperation != true) return null
+        return readActionIdsByExactContractPath[path].orEmpty().mapNotNull(actions::get)
+            .singleOrNull(DynamicAction::isVerifiedFamilyRead)?.id
     }
 
     /**
@@ -995,6 +956,8 @@ private class KotlinCompilerState(
             provenance = listOf(source),
             effect = effect,
             resultRecoveryActionId = resultRecoveryActionId,
+            riskClass = dynamicOperationRiskClass(method, effect, risk, boundPath, operationId, label, body != null),
+            idempotencyKeyHeader = idempotencyKeyHeader(inheritedParameters, operation["parameters"] as? JsonArray),
         )
         actions[actionId] = action
         if (
@@ -1078,15 +1041,19 @@ private class KotlinCompilerState(
     }
 
     fun finish(): DynamicAppDescriptor {
-        val completedActions = actions.mapValues { (actionId, action) ->
-            action.copy(
-                fallbackActionIds = fallbackOperationIds[actionId]
-                    .orEmpty()
-                    .mapNotNull(operationActionIds::get)
-                    .filter { fallbackId -> fallbackId != actionId }
-                    .distinct(),
-            )
-        }
+        val completedActions = completeDynamicWritePolicies(
+            actions.mapValues { (actionId, action) ->
+                action.copy(
+                    fallbackActionIds = fallbackOperationIds[actionId]
+                        .orEmpty()
+                        .mapNotNull(operationActionIds::get)
+                        .filter { fallbackId -> fallbackId != actionId }
+                        .distinct(),
+                )
+            },
+        )
+        val dedicatedActionIds = completedActions.values.filter(DynamicAction::requiresDedicatedWriteSurface).map(DynamicAction::id)
+        forms.values.removeAll { form -> form.actionId in dedicatedActionIds }
         val completedResources = resources.values.map(KotlinResourceBuilder::finish).map { resource ->
             val preview = recordImagePreviewCandidates[resource.id]
                 .orEmpty()
@@ -1332,6 +1299,11 @@ private class KotlinCompilerState(
         }
         return path.values.sortedBy(HttpParameter::name) to query.values.sortedBy(HttpParameter::name)
     }
+
+    private fun idempotencyKeyHeader(inherited: JsonArray?, operation: JsonArray?): String? =
+        inherited.orEmpty().plus(operation.orEmpty()).mapNotNull { element ->
+            (resolveLocal(element) as? JsonObject)?.takeIf { it.string("in") == "header" }?.string("name")
+        }.firstOrNull(String::isIdempotencyKeyHeader)
 
     private fun hasApiRequestHeader(inherited: JsonArray?, operation: JsonArray?): Boolean =
         inherited.orEmpty().plus(operation.orEmpty()).any { element ->
@@ -2105,31 +2077,6 @@ private val SENSITIVE_CREDENTIAL_MUTATION_CONCEPTS = setOf(
     "issue",
     "reset",
     "rotate",
-)
-
-/**
- * Some mutations produce externally visible or non-repeatable effects whose result cannot be
- * recovered safely by the generic request pipeline after a timeout or disconnect. Keep those
- * operations out of generic discovery until the operation declares a dedicated ambiguous-result
- * policy. Exact semantic words avoid withholding unrelated concepts such as senders, shared
- * preferences, or mergeable records.
- */
-private fun JsonObject.requiresAmbiguousResultRecoveryPolicy(
-    path: String,
-    operationId: String,
-): Boolean {
-    val words = actionSemanticWords(
-        path = path,
-        operationId = operationId,
-        label = string("summary").orEmpty(),
-    )
-    return words.any(AMBIGUOUS_RESULT_MUTATION_WORDS::contains)
-}
-
-private val AMBIGUOUS_RESULT_MUTATION_WORDS = setOf(
-    "merge",
-    "send",
-    "share",
 )
 
 /**

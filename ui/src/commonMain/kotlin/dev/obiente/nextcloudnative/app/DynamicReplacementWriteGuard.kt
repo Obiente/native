@@ -14,8 +14,8 @@ import kotlinx.coroutines.CancellationException
 /*
  * The same-route read that belongs to a replacement (PUT) write.
  *
- * The descriptor compiler pairs a PUT with a GET on exactly the same route only for verified
- * package or exact source-tag provenance. That read serves two purposes: recovering the result
+ * The descriptor compiler pairs a PUT with a GET on exactly the same route only for a declared
+ * contract: the app's advertised OpenAPI (E2) or its verified package or source tag (E3). That read serves two purposes: recovering the result
  * after an unconfirmed write, and re-reading the target immediately before a replacement so a
  * stale copy never overwrites a concurrent change.
  */
@@ -48,7 +48,7 @@ private fun DynamicAppDescriptor.replacementReadFor(mutation: DynamicAction): Dy
     if (mutation.binding.method != HttpMethod.PUT) return null
     val recoveryId = mutation.resultRecoveryActionId ?: return null
     val recovery = actions.singleOrNull { action -> action.id == recoveryId } ?: return null
-    val safeKinds = setOf(ProvenanceKind.verifiedAppPackage, ProvenanceKind.appStoreLinkedSourceTag)
+    val safeKinds = setOf(ProvenanceKind.advertisedOpenApi, ProvenanceKind.verifiedAppPackage, ProvenanceKind.appStoreLinkedSourceTag)
     if (
         recovery.binding.method != HttpMethod.GET ||
         recovery.binding.path != mutation.binding.path ||

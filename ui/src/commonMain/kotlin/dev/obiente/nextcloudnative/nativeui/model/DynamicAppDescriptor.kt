@@ -212,6 +212,18 @@ data class DynamicAction(
     val confidence: Confidence,
     val provenance: List<Provenance> = emptyList(),
     val effect: ActionEffect = ActionEffect.unspecified,
+    /** Risk class R0-R10. Null only in hand-built descriptors; see [operationRiskClass]. */
+    val riskClass: DynamicOperationRiskClass? = null,
+    /**
+     * A verified read in this write's route family: the item read of the target (the write path
+     * without a terminal command segment), or the collection read the target is one placeholder
+     * below. Used to bind identities and to read the result back after a write.
+     */
+    val readBackActionId: String? = null,
+    /** Exact name of a declared Idempotency-Key request header, when the contract declares one. */
+    val idempotencyKeyHeader: String? = null,
+    /** A declared field of the route-family read proving the actor may share (R8 only). */
+    val sharePermissionFieldId: String? = null,
 )
 
 @Serializable

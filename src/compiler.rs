@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     ActionIntent, ActionRisk, ActionSpec, ApiBinding, CompilerWarning, Confidence,
     DiscoverySnapshot, Evidence, EvidenceSource, FieldKind, FieldSpec, HttpMethod, NativeAppSchema,
-    NativeComponent, ResourceSpec, ViewSpec,
+    NativeComponent, OperationRiskClass, ResourceSpec, ViewSpec,
 };
 
 pub trait NativeSchemaCompiler {
@@ -62,6 +62,7 @@ impl NativeSchemaCompiler for OpenApiCompiler {
                 let response_schema = response_schema(operation, &snapshot.openapi)?;
                 let item_schema = collection_item_schema(response_schema.as_ref());
                 let request_schema = request_schema(operation, &snapshot.openapi)?;
+                let has_request_body = request_schema.is_some();
 
                 let builder = resources
                     .entry(resource_id.clone())
@@ -79,13 +80,14 @@ impl NativeSchemaCompiler for OpenApiCompiler {
                 let intent = infer_intent(method, path, operation);
                 let risk = risk_for(method);
                 let action_id = stable_id(&operation_id);
+                let label = operation
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| humanize(&operation_id));
                 let action = ActionSpec {
                     id: action_id.clone(),
-                    label: operation
-                        .get("summary")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| humanize(&operation_id)),
+                    label: label.clone(),
                     resource_id: resource_id.clone(),
                     binding: ApiBinding {
                         method,
@@ -101,6 +103,16 @@ impl NativeSchemaCompiler for OpenApiCompiler {
                         source: EvidenceSource::OpenApi,
                         detail: format!("Discovered operation {operation_id}"),
                     }],
+                    risk_class: Some(OperationRiskClass::classify(
+                        method,
+                        path,
+                        &operation_id,
+                        &label,
+                        has_request_body,
+                    )),
+                    read_back_action_id: None,
+                    idempotency_key_header: None,
+                    share_permission_field_id: None,
                 };
 
                 if method == HttpMethod::Get {
