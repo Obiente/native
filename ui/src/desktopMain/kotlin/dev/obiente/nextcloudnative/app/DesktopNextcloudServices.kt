@@ -706,10 +706,8 @@ class DesktopNextcloudServices(
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
-    private val noRedirectHttpClient = httpClient.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val noRedirectHttpClient = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val dynamicApiClients = JvmDynamicApiClients(noRedirectHttpClient)
     private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
     private val talkReadHttpClient = httpClient.forTalkReads()
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
@@ -4693,7 +4691,7 @@ class DesktopNextcloudServices(
                     ocsRequest = safeRequest.ocsApiRequest,
                     headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, dynamicApiClients.forMethod(safeRequest.method)) {
                         recordDesktopRequestDiagnostic(session, it)
                     },
                     onFailurePhase = { phase ->
@@ -4767,7 +4765,7 @@ class DesktopNextcloudServices(
                 ocsRequest = safeRequest.ocsApiRequest,
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
+                client = dynamicApiClients.write,
             )
             NextcloudApiResponse(
                 response.status,

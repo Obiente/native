@@ -148,6 +148,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions
+import dev.obiente.nextcloudnative.app.JvmDynamicApiClients
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkFailurePhase
@@ -345,10 +346,8 @@ internal class AndroidNextcloudServices(
         .build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
-    private val noRedirectHttpClient = httpClient.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val noRedirectHttpClient = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val dynamicApiClients = JvmDynamicApiClients(noRedirectHttpClient)
     private val talkReadHttpClient = httpClient.forTalkReads()
     private val documentEditingTransport = AndroidDocumentEditingTransport { session, specification ->
         val response = request(
@@ -2756,7 +2755,7 @@ internal class AndroidNextcloudServices(
                     ocsRequest = safeRequest.ocsApiRequest,
                     headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, dynamicApiClients.forMethod(safeRequest.method)) {
                         recordRequestDiagnostic(session, it)
                     },
                     onFailurePhase = { phase ->
@@ -2835,7 +2834,7 @@ internal class AndroidNextcloudServices(
                 ocsRequest = safeRequest.ocsApiRequest,
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
+                client = dynamicApiClients.write,
                 accountMutationSerialized = accountMutationLeaseHeld,
             )
             NextcloudApiResponse(
