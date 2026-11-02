@@ -125,6 +125,18 @@ internal fun DynamicContractInfoDialog(
         is DynamicWriteSafetyView.Ready -> writeSafety.entries.isNotEmpty()
         DynamicWriteSafetyView.Loading -> false
     }
+    // Ephemeral: the confirmation is asked again after recreation rather than resumed.
+    var confirmingResume by remember(writeSafety) { mutableStateOf(false) }
+    if (confirmingResume && clearable) {
+        ResumeWritesConfirmation(
+            writeSafety = writeSafety,
+            onConfirm = {
+                confirmingResume = false
+                onResumeWrites?.invoke()
+            },
+            onDismiss = { confirmingResume = false },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Contract info") },
@@ -157,11 +169,52 @@ internal fun DynamicContractInfoDialog(
             }
         },
         dismissButton = if (clearable) {
-            { TextButton(onClick = { onResumeWrites?.invoke() }) { Text("Resume changes") } }
+            { TextButton(onClick = { confirmingResume = true }) { Text("Resume changes") } }
         } else {
             null
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/**
+ * Names every route that resuming clears and why it was paused, so one tap never silently
+ * re-enables a route whose last change the app contradicted.
+ */
+@Composable
+private fun ResumeWritesConfirmation(
+    writeSafety: DynamicWriteSafetyView,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val entries = (writeSafety as? DynamicWriteSafetyView.Ready)?.entries.orEmpty()
+    val paused = entries.filter { it.status == DynamicWriteRuleStatus.quarantined }
+    val summary = when {
+        writeSafety == DynamicWriteSafetyView.Unreadable ->
+            "This device's write safety record for this app could not be read. Resuming resets it, " +
+                "which also ends any pause it held, so check this app's recently changed items first."
+        paused.isNotEmpty() ->
+            "Changes through these routes were paused because the app did not do what it reported. " +
+                "Check the affected items before resuming; the next change is checked by reading it back again."
+        else -> "Resuming clears this device's record for these routes; their next change is checked by reading it back again."
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Resume changes for this app?") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Text(summary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { contentDescription = summary })
+                (paused + (entries - paused.toSet())).forEach { entry ->
+                    val line = "${entry.route}: ${entry.label}"
+                    Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.semantics { contentDescription = line })
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Resume") } },
     )
 }
 

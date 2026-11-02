@@ -31,6 +31,16 @@ class DynamicContractInfoDialogUiTest {
             assertTrue(texts.any { "paused on this device" in it }, "$texts")
             assertTrue(texts.any { "reported success but did not apply" in it && "{id}" in it }, "$texts")
             clickText("Resume changes")
+            assertEquals(0, resumed, "One tap only asks.")
+            val confirmation = texts()
+            assertTrue(confirmation.any { it == "Resume changes for this app?" }, "$confirmation")
+            assertTrue(confirmation.any { it == "PUT /apps/notebook/api/notes/{id}: Paused: the app reported success but did not apply a change" },
+                "The confirmation names the paused route and why: $confirmation")
+            clickText("Cancel")
+            assertEquals(0, resumed)
+            assertTrue(texts().none { it == "Resume changes for this app?" })
+            clickText("Resume changes")
+            clickText("Resume")
             assertEquals(1, resumed)
         }
     }
@@ -52,6 +62,9 @@ class DynamicContractInfoDialogUiTest {
         scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Unreadable, { resumed++ }, {}) }) {
             assertTrue(texts().any { "could not be read" in it })
             clickText("Resume changes")
+            assertTrue(texts().any { "Resuming resets it" in it }, "${texts()}")
+            assertEquals(0, resumed)
+            clickText("Resume")
             assertEquals(1, resumed)
         }
     }
@@ -69,6 +82,8 @@ class DynamicContractInfoDialogUiTest {
             assertTrue(texts.any { "other values changed" in it }, "$texts")
             assertTrue(texts.any { "In probation" in it && "item-state-pair v1" in it }, "$texts")
             clickText("Resume changes")
+            assertEquals(1, store.records(account, "notebook").count { it.status == DynamicWriteRuleStatus.quarantined }, "Nothing clears before confirming.")
+            clickText("Resume")
             settle()
             assertTrue(texts().any { "No paused or probationary changes" in it }, "${texts()}")
         }
