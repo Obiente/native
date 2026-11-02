@@ -216,8 +216,10 @@ one unconfirmed write per route while a rule is in probation.
 - Deterministic contracts and typed models outrank naming heuristics. A
   pattern rule may read names; it may not invent an endpoint, method, path
   parameter, payload field, permission, target identity, or idempotency
-  guarantee. Neither may AI or heuristic analysis, which may only propose
-  labels, field roles, relationships, and component choices.
+  guarantee.
+- AI or heuristic analysis may propose labels, field roles, relationships, and
+  component choices. It may never invent an endpoint, method, path parameter,
+  payload field, permission, target identity, or idempotency guarantee.
 - Do not choose behavior by app ID, exact version, version range, or a pinned
   upstream source tag. Any app whose contract and data match a rule gets that
   rule's UI, whatever its name or version. Presentation-only hints such as
