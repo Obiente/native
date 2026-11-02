@@ -593,7 +593,7 @@ private fun String.semanticCollectionResource(): String? {
     return candidates.lastOrNull()?.semanticSingular()
 }
 
-private fun String.normalizedSemanticWord(): String = lowercase().filter(Char::isLetterOrDigit)
+internal fun String.normalizedSemanticWord(): String = lowercase().filter(Char::isLetterOrDigit)
 
 private fun String.semanticSingular(): String = when {
     endsWith("ies") && length > 3 -> dropLast(3) + "y"
@@ -652,10 +652,6 @@ private data class StaticSettingsSetter(
     val resourceId: String,
     val fieldId: String,
     val parameter: StaticPhpParameter,
-)
-
-private data class StaticCrudWrite(
-    val bodyParameters: List<StaticPhpParameter>,
 )
 
 private fun isVerifiedChoresController(
@@ -928,84 +924,6 @@ private fun choresRepeatScheduleSchema(): JSONObject {
     return stringSchema(title = "Repeat")
         .put("enum", JSONArray(choices.keys))
         .put("x-nextcloud-native-enum-labels", JSONObject(choices))
-}
-
-/**
- * Proves only conventional scalar CRUD signatures. Every route placeholder and every required
- * controller argument must have one serializable declaration. Unsupported optional arguments are
- * omitted because the request never needs to send them and PHP will use their declared defaults.
- * Every remaining supported argument becomes a closed JSON body field.
- */
-private fun verifiedStaticCrudWrite(
-    route: StaticRoute,
-    controller: StaticApiController,
-    pathPlaceholders: List<String>,
-): StaticCrudWrite? {
-    val method = route.method.normalizedPhpName()
-    if (method in controller.methodsWithRequestInput) return null
-    val conventional = when (route.verb) {
-        "POST" -> CRUD_CREATE_METHOD_PREFIXES.any(method::startsWith) || method in SCALAR_WORKFLOW_METHODS
-        "PUT" -> CRUD_UPDATE_METHOD_PREFIXES.any(method::startsWith) || method in SCALAR_WORKFLOW_METHODS
-        "PATCH" -> CRUD_PATCH_METHOD_PREFIXES.any(method::startsWith) || method in SCALAR_WORKFLOW_METHODS
-        "DELETE" -> CRUD_DELETE_METHOD_PREFIXES.any(method::startsWith)
-        else -> false
-    }
-    if (!conventional) return null
-
-    val parameters = controller.parameters[method] ?: return null
-    if (parameters.size > MAX_STATIC_CRUD_PARAMETERS) return null
-    val pathParameters = pathPlaceholders.mapNotNull { placeholder ->
-        parameters.singleOrNull { parameter -> parameter.name.equals(placeholder, ignoreCase = true) }
-    }
-    val unmatchedPathParameters = pathPlaceholders.filter { placeholder ->
-        pathParameters.none { parameter -> parameter.name.equals(placeholder, ignoreCase = true) }
-    }
-    if (
-        unmatchedPathParameters.isNotEmpty() &&
-        (method !in SCALAR_WORKFLOW_METHODS || unmatchedPathParameters.any { !it.isSafeIdentityPlaceholder() })
-    ) {
-        return null
-    }
-    if (pathParameters.distinctBy { parameter -> parameter.name.lowercase() }.size != pathParameters.size) {
-        return null
-    }
-    val bodyParameters = parameters.filterNot { parameter ->
-        pathPlaceholders.any { placeholder -> placeholder.equals(parameter.name, ignoreCase = true) }
-    }
-    if (bodyParameters.any { parameter -> parameter.name.isSensitiveWriteField() }) return null
-    return when (route.verb) {
-        "DELETE" -> StaticCrudWrite(bodyParameters = emptyList()).takeIf { bodyParameters.isEmpty() }
-        "POST", "PUT", "PATCH" -> StaticCrudWrite(bodyParameters).takeIf {
-            bodyParameters.isNotEmpty() || method in BODY_FREE_SCALAR_WORKFLOW_METHODS
-        }
-        else -> null
-    }
-}
-
-private fun String.isSafeIdentityPlaceholder(): Boolean {
-    val normalized = normalizedPhpName()
-    return normalized == "id" || normalized.endsWith("id")
-}
-
-/**
- * A scalar workflow route commonly appends its action after the target identity, for example
- * `/cards/{cardId}/reorder`. Without an explicit resource hint an OpenAPI consumer would infer
- * `reorder` as the resource and disconnect the action from the card records it mutates.
- *
- * This derives the target from route shape only. It is deliberately limited to the same small
- * allow-list accepted by [verifiedStaticCrudWrite], and never consults an app identifier.
- */
-private fun StaticRoute.scalarWorkflowResourceId(fullPath: String): String? {
-    val methodId = method.normalizedPhpName()
-    if (methodId !in SCALAR_WORKFLOW_METHODS) return null
-    val segments = fullPath.split('/').filter(String::isNotBlank)
-    val actionIndex = segments.indexOfLast { segment -> segment.normalizedPhpName() == methodId }
-    if (actionIndex <= 0) return null
-    return segments.subList(0, actionIndex).asReversed().firstOrNull { segment ->
-        !segment.startsWith('{') &&
-            !segment.endsWith('}') &&
-            !segment.matches(Regex("v?[0-9]+(?:\\.[0-9]+)*"))
-    }?.normalizedSemanticWord()?.takeIf(String::isNotBlank)
 }
 
 private sealed interface PhpLiteral {
@@ -1646,20 +1564,6 @@ private fun String.isSensitiveSettingField(): Boolean {
         normalized.contains("privatekey")
 }
 
-private fun String.isSensitiveWriteField(): Boolean {
-    val normalized = lowercase().filter(Char::isLetterOrDigit)
-    return normalized.contains("password") ||
-        normalized.contains("passphrase") ||
-        normalized.contains("secret") ||
-        normalized.contains("credential") ||
-        normalized.contains("privatekey") ||
-        normalized.contains("apikey") ||
-        normalized.contains("accesstoken") ||
-        normalized.contains("refreshtoken") ||
-        normalized.contains("recoverykey") ||
-        normalized.contains("signature")
-}
-
 /**
  * A `setFlags(array $flags)` controller accepts a JSON object whose keys are flag names and whose
  * values are booleans. Treating that associative PHP array as a list makes verified Mail-style
@@ -1692,27 +1596,10 @@ private val OPERATIONAL_REFRESH_METHODS = setOf("refresh", "sync")
 private val STATIC_ROUTE_VERBS = setOf("GET", "POST", "PUT", "PATCH", "DELETE")
 private val VERIFIED_STATIC_WRITE_METHODS = setOf("post", "put", "patch", "delete")
 private val EDITABLE_SETTINGS_VERBS = setOf("POST", "PUT", "PATCH")
-private val CRUD_CREATE_METHOD_PREFIXES = setOf("create", "store")
-private val CRUD_UPDATE_METHOD_PREFIXES = setOf("update")
-private val CRUD_PATCH_METHOD_PREFIXES = setOf("patch")
-private val CRUD_DELETE_METHOD_PREFIXES = setOf("delete", "destroy")
-private val SCALAR_WORKFLOW_METHODS = setOf(
-    "move",
-    "relocate",
-    "rename",
-    "reorder",
-    "archive",
-    "unarchive",
-    "done",
-    "undone",
-    "setflags",
-)
-private val BODY_FREE_SCALAR_WORKFLOW_METHODS = setOf("archive", "unarchive", "done", "undone")
 private const val RESOURCE_ID_EXTENSION = "x-nextcloud-native-resource-id"
 private const val SETTINGS_WIRE_NAME_EXTENSION = "x-nextcloud-native-wire-name"
 private const val SETTINGS_STRING_LIST_FORMAT = "nextcloud-string-list"
 private const val MAX_STATIC_ROUTE_COUNT = 256
-private const val MAX_STATIC_CRUD_PARAMETERS = 32
 private const val MAX_STATIC_CONTROLLER_INHERITANCE_DEPTH = 8
 private const val MAX_PHP_LITERAL_DEPTH = 16
 private const val MAX_PHP_LITERAL_NODES = 20_000

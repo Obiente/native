@@ -58,7 +58,7 @@ internal suspend fun <T> runVerifiedDeckWrite(
         throw cancelled
     } catch (_: Exception) {
         return DeckVerifiedWriteOutcome.Unknown(
-            "Deck may have applied this change ($actionLabel). Refresh before making another change.",
+            "The app may have applied this change ($actionLabel). Refresh before making another change.",
         )
     }
     return when (val verification = verify(snapshot)) {
@@ -72,4 +72,4 @@ internal suspend fun <T> runVerifiedDeckWrite(
 }
 
 private fun Exception.deckWriteMessage(actionLabel: String): String =
-    message?.takeIf(String::isNotBlank) ?: "Deck could not complete this change ($actionLabel)."
+    message?.takeIf(String::isNotBlank) ?: "The app could not complete this change ($actionLabel)."

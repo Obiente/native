@@ -1,5 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.runtime.boardRoutes
+import dev.obiente.nextcloudnative.nativeui.runtime.forApp
+import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
+import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -11,33 +15,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeckBoardToolsTest {
-    private val readPlan = DeckReadRoutePlan(DeckApiVersion("1.1"))
-    private val writePlan = DeckWriteRoutePlan(DeckApiVersion("1.1"))
-
-    @Test
-    fun `setting writes use documented keys and need edit permission`() {
-        val board = board()
-        val due = deckSettingWriteRequest(board, DeckSettingChange.BoardDueNotification(7, DeckDueNotification.Off))
-        assertEquals("/ocs/v2.php/apps/deck/api/v1.0/config/board:7:notify-due", due.relativePath)
-        assertEquals("""{"value":"off"}""", due.body?.decodeToString())
-        val global = deckSettingWriteRequest(null, DeckSettingChange.GlobalCalendar(false))
-        assertEquals("/ocs/v2.php/apps/deck/api/v1.0/config/calendar", global.relativePath)
-        assertFailsWith<IllegalArgumentException> {
-            deckSettingWriteRequest(board(edit = false), DeckSettingChange.BoardCalendar(7, true))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            deckSettingWriteRequest(board, DeckSettingChange.BoardCalendar(8, true))
-        }
-    }
-
-    @Test
-    fun `user settings parse php string booleans and reject unknown values`() {
-        assertEquals(true, parseDeckUserSettings(deckToolResponse(ocs("""{"calendar":"1"}"""))).showBoardsInCalendar)
-        assertEquals(false, parseDeckUserSettings(deckToolResponse(ocs("""{"calendar":""}"""))).showBoardsInCalendar)
-        assertNull(parseDeckUserSettings(deckToolResponse(ocs("""{"calendar":"maybe"}"""))).showBoardsInCalendar)
-        assertFailsWith<IllegalArgumentException> { parseDeckUserSettings(deckToolResponse("{}", 500)) }
-        assertFailsWith<IllegalStateException> { parseDeckSettingWrite(deckToolResponse("{}", 404)) }
-    }
+    private val routes = SemanticBoardRoutes(
+        requireNotNull(
+            resolveSemanticBoardContract(
+                semanticDescriptor("planner", "9.0.0", boardRoutes(lane = "stacks", laneId = "stackId").forApp("planner")),
+                writesAuthorized = true,
+            ),
+        ),
+    )
 
     @Test
     fun `archived cards are grouped by list`() {
@@ -51,7 +36,7 @@ class DeckBoardToolsTest {
         )
         assertEquals(1, groups.size)
         assertEquals(listOf(10L), groups.single().cards.map(DeckCard::id))
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks/archived", readPlan.archivedStacks(7).relativePath)
+        assertEquals("/apps/planner/api/v2/boards/7/stacks/archived", routes.archivedStacks(7).relativePath)
         assertFailsWith<IllegalArgumentException> {
             parseDeckArchivedCards(7, deckToolResponse("""[{"id":1,"boardId":9,"title":"X","cards":[]}]"""))
         }
@@ -83,7 +68,7 @@ class DeckBoardToolsTest {
                 sent += request.relativePath
                 if (sent.size == 1) deckToolResponse("""{"id":2}""") else deckToolResponse("{}", 403)
             },
-            plan = writePlan,
+            plan = routes,
             board = board(),
             updates = planDeckStackMove(listOf(stack(1, 0), stack(2, 5)), 2, DeckStackMoveDirection.Earlier),
         )
@@ -93,7 +78,7 @@ class DeckBoardToolsTest {
 
     @Test
     fun `verified write distinguishes rejection, confirmation, and unknown outcomes`() = runBlocking<Unit> {
-        val request = deckUserSettingsRequest()
+        val request = NextcloudApiRequest(NextcloudApiMethod.PUT, "/apps/planner/api/v2/boards/7")
         val rejected = runVerifiedDeckWrite(
             execute = { deckToolResponse("{}", 403) },
             request = request,
@@ -206,35 +191,13 @@ class DeckBoardToolsTest {
         assertEquals("Old is back on the board", state.notice)
     }
 
-    @Test
-    fun `settings controller reports a setting the server did not keep`() = runBlocking<Unit> {
-        val controller = DeckBoardSettingsController(
-            context(
-                execute = { request ->
-                    when {
-                        request.method == NextcloudApiMethod.POST -> deckToolResponse(ocs("\"off\""))
-                        request.relativePath.endsWith("/config") -> deckToolResponse(ocs("""{"calendar":"1"}"""))
-                        else -> deckToolResponse(boardJson(acl = ""))
-                    }
-                },
-            ),
-        )
-        controller.open(board())
-        controller.load()
-        controller.change(DeckSettingChange.BoardDueNotification(7, DeckDueNotification.Off))
-        val state = checkNotNull(controller.state)
-        assertEquals("Deck did not save this setting.", state.errorMessage)
-        assertEquals(DeckDueNotification.Assigned, state.board.settings?.dueNotification)
-    }
-
     private fun context(
         execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
         onBoardRefreshed: (DeckBoard) -> Unit = {},
         onBoardContentChanged: () -> Unit = {},
     ) = DeckBoardToolContext(
         execute = execute,
-        readPlan = { readPlan },
-        writePlan = { writePlan },
+        routes = routes,
         currentUserId = "owner",
         onBoardRefreshed = onBoardRefreshed,
         onBoardContentChanged = onBoardContentChanged,
@@ -258,7 +221,7 @@ class DeckBoardToolsTest {
         shared = false,
         lastModified = 1L,
         etag = null,
-        settings = DeckBoardSettings(DeckDueNotification.Assigned, true),
+        settings = mapOf("notify-due" to "assigned"),
     )
 
     private fun stack(id: Long, order: Long) = DeckStack(

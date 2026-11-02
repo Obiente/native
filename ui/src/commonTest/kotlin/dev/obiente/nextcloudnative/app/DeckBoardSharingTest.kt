@@ -1,6 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.runtime.boardRoutes
+import dev.obiente.nextcloudnative.nativeui.runtime.forApp
+import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
+import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import kotlinx.serialization.json.Json
+import dev.obiente.nextcloudnative.nativeui.runtime.boardRoutes
+import dev.obiente.nextcloudnative.nativeui.runtime.forApp
+import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
+import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
@@ -13,7 +21,14 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class DeckBoardSharingTest {
-    private val routes = DeckWriteRoutePlan(DeckApiVersion("1.1"))
+    private val routes = SemanticBoardRoutes(
+        requireNotNull(
+            resolveSemanticBoardContract(
+                semanticDescriptor("planner", "9.0.0", boardRoutes(lane = "stacks", laneId = "stackId").forApp("planner")),
+                writesAuthorized = true,
+            ),
+        ),
+    )
     private val alice = DeckAcl(
         id = 31,
         boardId = 7,
@@ -44,8 +59,8 @@ class DeckBoardSharingTest {
         assertEquals(listOf(DeckAclType.User, DeckAclType.Group, DeckAclType.Circle), board.acl.map(DeckAcl::type))
         assertEquals("Alice Example", board.acl.first().participant.displayName)
         assertTrue(board.acl[2].canEdit && board.acl[2].canManage)
-        assertEquals(DeckDueNotification.All, board.settings?.dueNotification)
-        assertEquals(false, board.settings?.showInCalendar)
+        assertEquals("all", board.settings["notify-due"])
+        assertEquals("", board.settings["calendar"])
     }
 
     @Test
@@ -65,11 +80,11 @@ class DeckBoardSharingTest {
 
     @Test
     fun `adding a share posts the participant with no extra permissions`() {
-        val request = routes.addBoardAcl(board(), DeckSharee("staff", "Staff", DeckAclType.Group))
+        val request = routes.addShare(board(), DeckSharee("staff", "Staff", DeckAclType.Group))
         val body = request.jsonBody()
 
         assertEquals(NextcloudApiMethod.POST, request.method)
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/acl", request.relativePath)
+        assertEquals("/apps/planner/api/v2/boards/7/acl", request.relativePath)
         assertEquals(1, body.getValue("type").jsonPrimitive.int)
         assertEquals("staff", body.getValue("participant").jsonPrimitive.content)
         assertFalse(body.getValue("permissionEdit").jsonPrimitive.boolean)
@@ -80,41 +95,41 @@ class DeckBoardSharingTest {
     fun `adding needs share permission and rejects duplicates and the owner`() {
         val noShare = board(permissions = permissions(share = false))
         assertFailsWith<IllegalArgumentException> {
-            routes.addBoardAcl(noShare, DeckSharee("bob", "Bob", DeckAclType.User))
+            routes.addShare(noShare, DeckSharee("bob", "Bob", DeckAclType.User))
         }
         assertFailsWith<IllegalArgumentException> {
-            routes.addBoardAcl(board(), DeckSharee("alice", "Alice", DeckAclType.User))
+            routes.addShare(board(), DeckSharee("alice", "Alice", DeckAclType.User))
         }
         assertFailsWith<IllegalArgumentException> {
-            routes.addBoardAcl(board(), DeckSharee("owner", "Owner", DeckAclType.User))
+            routes.addShare(board(), DeckSharee("owner", "Owner", DeckAclType.User))
         }
         assertFailsWith<IllegalArgumentException> {
-            routes.addBoardAcl(board(archived = true), DeckSharee("bob", "Bob", DeckAclType.User))
+            routes.addShare(board(archived = true), DeckSharee("bob", "Bob", DeckAclType.User))
         }
         assertFailsWith<IllegalArgumentException> { DeckSharee("remote@x", "Remote", DeckAclType.Remote) }
     }
 
     @Test
     fun `updating binds the acl to its board and respects permission caps`() {
-        val request = routes.updateBoardAcl(
+        val request = routes.updateShare(
             board(),
             alice,
             currentUserId = "owner",
             requested = DeckAclPermissions(canEdit = false, canShare = true, canManage = false),
         )
         assertEquals(NextcloudApiMethod.PUT, request.method)
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/acl/31", request.relativePath)
+        assertEquals("/apps/planner/api/v2/boards/7/acl/31", request.relativePath)
         assertTrue(request.jsonBody().getValue("permissionShare").jsonPrimitive.boolean)
 
         val sharer = board(permissions = permissions(manage = false))
         assertFailsWith<IllegalArgumentException> {
-            routes.updateBoardAcl(sharer, alice, "owner", DeckAclPermissions(true, false, true))
+            routes.updateShare(sharer, alice, "owner", DeckAclPermissions(true, false, true))
         }
         assertFailsWith<IllegalStateException> {
-            routes.updateBoardAcl(board(), alice.copy(id = 99), "owner", alice.permissions())
+            routes.updateShare(board(), alice.copy(id = 99), "owner", alice.permissions())
         }
         assertFailsWith<IllegalArgumentException> {
-            routes.updateBoardAcl(board(), alice.copy(boardId = 8), "owner", alice.permissions())
+            routes.updateShare(board(), alice.copy(boardId = 8), "owner", alice.permissions())
         }
     }
 
@@ -126,23 +141,23 @@ class DeckBoardSharingTest {
         assertTrue(sharer.canChangeEdit && sharer.canChangeShare)
         assertFalse(sharer.canChangeManage || sharer.canRemove)
         assertFailsWith<IllegalArgumentException> {
-            routes.deleteBoardAcl(board(permissions = permissions(manage = false)), alice, "bob")
+            routes.deleteShare(board(permissions = permissions(manage = false)), alice, "bob")
         }
-        val delete = routes.deleteBoardAcl(board(), alice, "owner")
+        val delete = routes.deleteShare(board(), alice, "owner")
         assertEquals(NextcloudApiMethod.DELETE, delete.method)
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/acl/31", delete.relativePath)
+        assertEquals("/apps/planner/api/v2/boards/7/acl/31", delete.relativePath)
     }
 
     @Test
     fun `sharee search uses core autocomplete without remote shares`() {
-        val request = deckShareeSearchRequest(7, "  ali ")
+        val request = deckShareeSearchRequest("planner", 7, "  ali ")
         assertEquals("/ocs/v2.php/core/autocomplete/get", request.relativePath)
         assertEquals("ali", request.queryParameters["search"])
-        assertEquals("deck", request.queryParameters["itemType"])
+        assertEquals("planner", request.queryParameters["itemType"])
         assertEquals(setOf("0", "1", "7"), request.queryParameters.filterKeys { it.startsWith("shareTypes") }.values.toSet())
         assertTrue(request.ocsApiRequest)
-        assertFailsWith<IllegalArgumentException> { deckShareeSearchRequest(7, "a\u0000b") }
-        assertFailsWith<IllegalArgumentException> { deckShareeSearchRequest(0, "a") }
+        assertFailsWith<IllegalArgumentException> { deckShareeSearchRequest("planner", 7, "a\u0000b") }
+        assertFailsWith<IllegalArgumentException> { deckShareeSearchRequest("planner", 0, "a") }
     }
 
     @Test

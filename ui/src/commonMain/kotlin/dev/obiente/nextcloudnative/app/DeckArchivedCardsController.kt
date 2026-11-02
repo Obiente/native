@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperation
 import kotlinx.coroutines.CancellationException
 
 data class DeckUiArchivedCardsState(
@@ -14,6 +15,8 @@ data class DeckUiArchivedCardsState(
     val notice: String? = null,
     val outcomeUnknown: Boolean = false,
     val pendingDeletion: DeckCard? = null,
+    val canRestore: Boolean = true,
+    val canDelete: Boolean = true,
 ) {
     val canChangeCards: Boolean
         get() = board.permissions.canEdit && !board.archived && busyCardId == null && !outcomeUnknown && !loading
@@ -28,7 +31,11 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
         private set
 
     fun open(board: DeckBoard) {
-        state = DeckUiArchivedCardsState(board = board)
+        state = DeckUiArchivedCardsState(
+            board = board,
+            canRestore = context.routes.supports(BoardOperation.UnarchiveCard),
+            canDelete = context.routes.supports(BoardOperation.DeleteCard),
+        )
     }
 
     fun close() {
@@ -54,7 +61,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
     suspend fun unarchive(card: DeckCard) = write(
         card = card,
         actionLabel = "restore card",
-        request = { access, target -> context.writePlan().unarchiveCard(access, target) },
+        request = { access -> context.routes.unarchiveCard(access, card) },
         successNotice = "${card.title} is back on the board",
     )
 
@@ -73,7 +80,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
         write(
             card = card,
             actionLabel = "delete card",
-            request = { access, target -> context.writePlan().deleteCard(access, target) },
+            request = { access -> context.routes.deleteCard(access, card) },
             successNotice = "${card.title} was deleted",
         )
     }
@@ -81,7 +88,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
     private suspend fun write(
         card: DeckCard,
         actionLabel: String,
-        request: (DeckBoardAccess, DeckCardContext) -> NextcloudApiRequest,
+        request: (DeckBoardAccess) -> NextcloudApiRequest,
         successNotice: String,
     ) {
         val current = state ?: return
@@ -91,10 +98,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
             require(current.groups.any { group -> group.cards.any { it.id == card.id } }) {
                 "The card is no longer archived."
             }
-            request(
-                DeckBoardAccess.from(current.board),
-                DeckCardContext(DeckStackContext(DeckBoardId(card.boardId), card.stackId), card.id),
-            )
+            request(DeckBoardAccess.from(current.board))
         } catch (invalid: IllegalArgumentException) {
             state = current.copy(errorMessage = invalid.message, pendingDeletion = null)
             return
@@ -111,7 +115,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
                 if (groups.none { group -> group.cards.any { it.id == card.id } }) {
                     DeckWriteVerification.Confirmed
                 } else {
-                    DeckWriteVerification.NotApplied("Deck did not change ${card.title}.")
+                    DeckWriteVerification.NotApplied("The app did not change ${card.title}.")
                 }
             },
             actionLabel = actionLabel,
@@ -143,7 +147,7 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
     }
 
     private suspend fun fetchGroups(boardId: Long): List<DeckArchivedCardGroup> {
-        val response = context.execute(context.readPlan().archivedStacks(boardId))
-        return parseDeckResponseOffUi { parseDeckArchivedCards(boardId, response) }
+        val stacks = fetchBoardStacks(context.execute, context.routes, boardId, authoritative = true, archived = true)
+        return deckArchivedCardGroups(stacks)
     }
 }

@@ -22,6 +22,7 @@ exchanging models.
 | Mapping to the native schema | `DynamicDescriptorMapper.kt` (`toNativeAppSchema()`) |
 | Signed App Store acquisition | [`SignedAppStoreContractAcquirer.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt) in the `contractAcquisition` module |
 | Runtime orchestration | `DynamicNativeRuntime.kt` in `ui/src/commonMain/.../app` |
+| Board and notes surface selection | `SemanticBoardContract.kt`, `SemanticNotesContract.kt`, and `SemanticSettingsContract.kt` in `ui/src/commonMain/.../nativeui/runtime` |
 | Rust reference model and compiler | [`src/dynamic.rs`](src/dynamic.rs) and [`src/dynamic_compiler.rs`](src/dynamic_compiler.rs) |
 
 Both the Kotlin and Rust models serialize camel-case JSON with
@@ -96,7 +97,18 @@ parses `appinfo/routes.php` with a bounded literal-array parser and never runs
 PHP. It keeps a route only when its controller statically extends a supported
 Nextcloud controller, declares the referenced method, and either uses an API
 base or declares a JSON-serializable response type. Read the source comment for
-the narrow write shapes it can retain.
+the narrow write shapes it can retain; the scalar write rules live in
+[`StaticScalarWriteContract.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/StaticScalarWriteContract.kt).
+Besides create, update, patch, delete, and a short workflow list, they accept
+two verb families for every app: relationship verbs (`assign`, `unassign`,
+`add`, or `remove` followed by a related resource whose identity the scalar
+signature requires, such as `assignLabel($cardId, $labelId)`) and restore verbs
+(`restore`, `undoDelete`, `deleteUndo`, `undelete`) on a route that names its
+target. Relationships that name sharing, access control, membership,
+permissions, ownership, groups, or teams are excluded, and send and merge verbs
+are not accepted. A `DELETE` route may carry only a removal relationship. Risk
+and confirmation still follow the HTTP method, so a `DELETE` relationship is
+destructive and confirmed.
 
 Acquisition may keep verified read routes while checking compatible releases
 for a richer contract. If an optional later package returns HTTP 404 or 410, an
@@ -534,6 +546,86 @@ content, throttling, server failure, or rejected request.
 [`DynamicReadFailureTest`](ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/DynamicReadFailureTest.kt)
 covers message privacy, status classification, malformed and oversized error
 bodies, invalid text, and deeply nested JSON.
+
+## Semantic surfaces: boards and notes
+
+**Last reviewed: 2026-10-31.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. No board or notes write chosen this way has been validated
+against a live server or shipped in a published release.
+
+After discovery, the app screen asks whether the discovered contract has the
+shape of a board or of a notes collection
+([`SemanticAppWorkspace.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticAppWorkspace.kt)).
+The answer never depends on the app ID or its version; anything else stays
+with the generic renderer.
+
+- Route shape: mount prefixes (`/index.php`, `/ocs/v2.php`, `/apps/{app}`),
+  `api`, and version segments are removed. Each placeholder is bound to the
+  entity its name states (`stackId` is a list, `cardId` a card) or, for a
+  generic `{id}`, to the collection word before it
+  ([`SemanticRouteShape.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticRouteShape.kt)).
+- Board: a board collection read, a list collection read inside a board, and a
+  card read, create, or list. Each operation (board, list, and card edits,
+  card move, archive, labels, assignees, comments, attachments, sharing) is
+  resolved separately
+  ([`SemanticBoardContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticBoardContract.kt)).
+  A move needs a declared list field in its body, so a contract without one
+  offers no move or drag. A label or user addressed inside a card
+  (`/cards/{cardId}/label/{labelId}`) relates it to that card: `POST` or `PUT`
+  assigns and `DELETE` removes; it is never treated as deleting the label.
+- Notes: a collection read and an item read whose records carry a title and a
+  text body, and that the contract words as notes or whose records also carry
+  two of folder, favorite, and modification fields
+  ([`SemanticNotesContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticNotesContract.kt)).
+- Settings: a parameter-free settings read plus either one document write that
+  declares each setting or a `{key}` write with a single `value` field. A keyed
+  write uses only keys the server returned
+  ([`SemanticSettingsContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticSettingsContract.kt)).
+- Writes: only actions with trusted contract provenance (advertised OpenAPI,
+  verified package, or linked source tag), only while the contract is verified
+  for the installed version, and each request waits for the contract write
+  gate. Every request is built by the shared dynamic request builder from the
+  chosen action, so paths stay inside the approved API prefixes.
+- Inputs: request fields are matched to roles by name (title, description,
+  order, due date, list, label, user, and so on). A required field the client
+  cannot name makes a create unavailable. A full-replacement `PUT` fills
+  undeclared fields from the server's current record, and a field with a
+  single contract-declared value (a one-member enum or `const`) is sent with
+  that value. Nothing else is invented. Path, query, and body inputs are kept
+  in separate maps, so a move addresses the card in its current list in the
+  path while the same-named body field names the destination list. Clearing an
+  optional value on an update sends JSON `null` when the contract declares the
+  field nullable, and an empty string for a non-nullable text field.
+- Permissions: only an observed permission object on the board record grants
+  edit, manage, or share actions. A record without one stays readable but
+  offers none of them.
+- A list query value is sent only when the contract enumerates it or declares
+  it as the default; for example, a notes list omits note bodies only when its
+  `exclude` parameter declares `content`.
+- Duplicates: app API routes win over web routes, then the newest version
+  segment, then the route with fewer path inputs.
+
+Requests: [`SemanticBoardRoutes.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticBoardRoutes.kt)
+and [`NotesRepository.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesRepository.kt).
+Note saves and deletes send the last known ETag as `If-Match`; list and note
+refreshes send the cached ETag as `If-None-Match` and keep the cached copy on
+`304`. Notes settings writes use the same contract write gate as note writes.
+Tests:
+`SemanticBoardContractTest`, `SemanticNotesContractTest`,
+`SemanticBoardRoutesTest`, `SemanticNotesRepositoryTest`, and
+`SemanticSettingsTest`, including a board-shaped app `kanban_x` at `42.0.0`, a
+nested board shape with card relationship and restore routes, and a
+notes-shaped app `jotter` at `0.0.1`. The relationship and restore rules are
+covered by `StaticRelationshipWriteContractTest` with synthetic package
+sources.
+
+Not derivable from a contract, so not offered: board-scoped settings whose keys
+need an app-specific key format (shown read-only from the board record), an
+attachment type value that the contract does not fix, and writes the static
+route rules do not retain (for example a controller method that reads its
+inputs from the request object instead of its signature, as the signed Deck
+package's API label routes do; its web label routes are retained).
 
 ## Reviewed write adapters
 

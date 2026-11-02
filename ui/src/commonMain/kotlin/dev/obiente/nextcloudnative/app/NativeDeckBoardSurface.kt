@@ -128,7 +128,7 @@ fun NativeDeckBoardSurface(
     var boardMenuExpanded by remember(activeBoard?.id) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxSize()) {
         ScreenHeader(
-            title = activeBoard?.title ?: "Deck",
+            title = activeBoard?.title ?: "Boards",
             subtitle = (visibleState as? DeckWorkspaceState.Board)?.let { boardState ->
                 "${boardState.stacks.size} lists - " +
                     "${boardState.stacks.sumOf { it.cards.size }} cards"
@@ -167,7 +167,7 @@ fun NativeDeckBoardSurface(
         }
         statusMessage?.let { message ->
             DeckCachedErrorBanner(
-                DeckWorkspaceState.Error("Deck did not finish that action", message),
+                DeckWorkspaceState.Error("The app did not finish that action", message),
                 onRetry = onDismissStatus,
                 retryLabel = "Dismiss",
             )
@@ -395,7 +395,7 @@ private fun DeckLanes(
         NativeDeckCenteredState(modifier) {
             Text("No lists", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "Add a list in Deck to start organizing cards.",
+                "Add a list to start organizing cards.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -596,7 +596,7 @@ private fun DeckLanes(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stack.title, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${stack.cards.size} cards",
+                            if (stack.cardsLoaded) "${stack.cards.size} cards" else "Cards not loaded",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -694,7 +694,7 @@ private fun DeckLanes(
                     if (stack.cards.isEmpty()) {
                         item {
                             Text(
-                                "No cards",
+                                if (stack.cardsLoaded) "No cards" else DECK_UNLOADED_LIST_MESSAGE,
                                 modifier = Modifier.padding(NextcloudSpacing.Medium),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

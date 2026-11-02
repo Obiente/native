@@ -13,6 +13,8 @@ suspend fun executeJvmDynamicApiRequest(
     storeCached: (String, NextcloudApiResponse) -> Unit,
     executeNetworkRequest: suspend () -> NextcloudApiResponse,
 ): NextcloudApiResponse {
+    // A conditional read answers for the caller's own cached copy; it never joins or fills the shared cache.
+    if (safeRequest.ifNoneMatch != null) return executeNetworkRequest()
     val cacheIdentity = safeRequest.dynamicReadCacheIdentity()
     if (safeRequest.method != NextcloudApiMethod.GET) {
         dynamicApiRequestCoalescer.invalidateAccount(accountId) {

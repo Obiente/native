@@ -89,7 +89,7 @@ its own HTTP request code, protocol adapters, XML parsers, and sync executor.
 
 | Priority | Area | Android | Desktop | Shared owner to aim for |
 | --- | --- | --- | --- | --- |
-| High | Protocol adapters and HTTP request code. About 57 functions are at least 90% similar; desktop has notes and template functions Android lacks | `AndroidNextcloudServices.kt` | `DesktopNextcloudServices.kt` | One `jvmMain` HTTP gateway plus typed per-domain adapters in `commonMain` |
+| High | Protocol adapters and HTTP request code. About 57 functions are at least 90% similar; desktop has template functions Android lacks | `AndroidNextcloudServices.kt` | `DesktopNextcloudServices.kt` | One `jvmMain` HTTP gateway plus typed per-domain adapters in `commonMain` |
 | High | WebDAV and XML parsing, written four ways with different hardening | `SafeXmlParser.kt`, `NextcloudDocumentWebDav.kt` | `DocumentBuilderFactory` setups in `DesktopNextcloudServices.kt` and `DesktopFileVersionDav.kt`, `DesktopFileSyncDavParser.kt` | One hardened parser and typed multistatus parsers in `jvmMain`, with Android runtime tests |
 | High | Same-origin redirect rule, written three times | `AndroidNextcloudRedirect.kt` | `DesktopNextcloudServices.kt` | `NextcloudAuthenticatedRequestPolicy` in `jvmMain` |
 | High | Folder sync execution and owned-upload reconciliation. Behavior differs: when a folder replaces a remote file, desktop keeps a backup and Android does not; desktop records the uploaded ETag and Android rescans | `AndroidFileSyncEngine.kt`, `AndroidFileSyncRemoteTree.kt`, `NextcloudChunkUploadWebDav.kt` | `DesktopFileSyncEngine.kt`, `DesktopFileSyncRemoteTree.kt`, `DesktopFileSyncChunkUploadRemote.kt` | Step by step: a `jvmMain` owned-stage reconciler, then one WebDAV file client, then a `commonMain` orchestrator. Each step needs restart, conflict, cancellation, and ambiguous-result tests |
@@ -429,11 +429,13 @@ interaction validation is still required.
   News), these apps show the selected item beside the list on Android and
   desktop. Narrower phone layouts keep their single list.
 - Notes opens the editor beside the folder and note list on wide layouts and
-  in every desktop window. Narrow desktop windows show the editor alone with
-  Back to the list. Phones keep the full-page editor. A note opened beside the
-  list stays open when the window narrows, so its draft is kept, and the open
-  note is saved selection that reopens after recreation. A note first opened
-  as a full page on Android stays a full page if the window widens.
+  in every desktop window. Narrow windows and phones show the editor alone
+  with Back to the list, inside the notes app's own screen. A note opened
+  beside the list stays open when the window narrows, so its draft is kept,
+  and the open note is saved selection that reopens after recreation. The
+  open note is also the notes app's saved location, so it reopens after a
+  relaunch, and a note editor saved by an earlier version reopens that note
+  when it still exists.
 - The in-place note editor registers with the shell's edit guard
   (`NativeInlineEditorNavigation`): choosing another note, creating a note,
   renaming or deleting a folder, switching apps, following a link, and Back
@@ -464,8 +466,9 @@ interaction validation is still required.
 - The Notes list has All notes and Favorites filters. Favorites lists favorite
   notes from every folder. Each note card has a menu, also reachable by long
   press, to add or remove a favorite and to share the note's file. The header
-  opens Notes settings, which picks the notes folder with the native remote
-  folder browser and the file type for new notes.
+  opens the app's settings when its contract describes them; a folder-valued
+  setting uses the native remote folder browser. Actions the app's contract
+  does not describe are not shown.
 - `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
   `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
   recreation, and the dirty-draft guard against synthetic servers. They do not

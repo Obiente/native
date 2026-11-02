@@ -241,9 +241,14 @@ may be queued when their base revision and payload are durable. Deletes,
 administrator actions, Talk messages, and hard-to-reverse recognition changes
 are not queued by default.
 
-Notes mutation validators keep valid quoted opaque ETags verbatim, including
+Note mutation validators keep valid quoted opaque ETags verbatim, including
 backslashes and HTTP `obs-text` bytes, without quoted-string unescaping. Bare
-Notes API validators are quoted once. Malformed and oversized validators are
+validators are quoted once. The shared request type carries the validator as an
+`If-Match` precondition, which both platform transports send unchanged. A
+read may carry a cached validator as `If-None-Match`; the shared request type
+accepts it only on `GET`, and a conditional read bypasses the shared dynamic
+read cache and request coalescing so a `304` answers only for the caller's own
+cached copy. Malformed and oversized validators are
 rejected before a request. The grammar follows
 [HTTP entity-tags](https://httpwg.org/specs/rfc9110.html#field.etag).
 

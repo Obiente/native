@@ -828,7 +828,6 @@ private fun AuthenticatedApp(
             ?.takeIf { it.sequence > handledNavigationRequestSequence }
             ?: return@LaunchedEffect
         if (
-            screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
             screen is Screen.Calendar ||
@@ -946,7 +945,6 @@ private fun AuthenticatedApp(
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
             "spreed", "talk" -> Screen.Talk
-            "notes" -> Screen.Notes
             "dashboard" -> {
                 destination = NextcloudDestination.Home
                 Screen.Root
@@ -955,7 +953,6 @@ private fun AuthenticatedApp(
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
             "tasks" -> Screen.Tasks
-            "deck" -> Screen.Deck
             NEWS_APP_ID -> Screen.News
             MAIL_APP_ID -> Screen.Mail
             "activity" -> {
@@ -1364,13 +1361,11 @@ private fun AuthenticatedApp(
             Screen.Search,
             Screen.Media,
             Screen.Talk,
-            Screen.Notes,
             Screen.Dashboard,
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
             Screen.Tasks,
-            Screen.Deck,
             Screen.News,
             Screen.Mail,
             is Screen.AppInfo,
@@ -1398,7 +1393,6 @@ private fun AuthenticatedApp(
             is Screen.ProjectNewsArticleView -> screen = Screen.ProjectNews
             is Screen.PersonMedia -> screen = Screen.Media
             is Screen.Chat -> screen = Screen.Talk
-            is Screen.NoteEditor -> screen = Screen.Notes
             is Screen.MediaViewer -> {
                 mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                 screen = current.returnTo
@@ -1411,7 +1405,7 @@ private fun AuthenticatedApp(
 
     PlatformBackHandler(
         enabled = !groupwareMutationInProgress && when (screen) {
-            is Screen.NoteEditor, is Screen.TextEditor -> false
+            is Screen.TextEditor -> false
             Screen.Root -> destination != NextcloudDestination.Home
             else -> true
         },
@@ -1747,13 +1741,6 @@ private fun AuthenticatedApp(
         ) { groupwareMutationInProgress = it }
         Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
         Screen.Mail -> MailWorkspaceScreen(services, session, serverInfo?.userId ?: session.loginName, mailSession, ::navigateBack)
-        Screen.Deck -> NativeDeckScreen(
-            services = services,
-            session = session,
-            currentUserId = serverInfo?.userId ?: session.loginName,
-            onBack = ::navigateBack,
-            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-        )
         Screen.AdminApps -> AdminAppsScreen(
             access = administration, session = session,
             execute = { services.executeNextcloudApi(session, it) }, serverInfo = serverInfo,
@@ -1812,25 +1799,6 @@ private fun AuthenticatedApp(
             },
             onOpenAttachment = { file -> openMediaViewer(listOf(file), file, current) },
         )
-        Screen.Notes -> NextcloudNotesScreen(
-            services = services,
-            session = session,
-            onBack = ::navigateBack,
-            onOpenNote = { screen = Screen.NoteEditor(it) },
-            navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it }, filesAccess = serverInfo?.notesFilesAccess(),
-        )
-        is Screen.NoteEditor -> NextcloudNoteEditor(
-            services = services,
-            session = session,
-            note = current.note,
-            onBack = ::navigateBack,
-            navigationRequest = pendingEditorNavigationRequest,
-            onNavigationConfirmed = ::applyPendingNavigationRequest,
-            onNavigationCancelled = ::cancelPendingNavigationRequest,
-            navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it }, filesAccess = serverInfo?.notesFilesAccess(),
-        )
         is Screen.AppInfo -> {
             val resumePlan = planDynamicContractResume(
                 liveServerVersion = serverInfo?.version,
@@ -1876,6 +1844,8 @@ private fun AuthenticatedApp(
                 },
                 onOpenAccountSettings = ::openAccountSettings,
                 onBack = ::navigateBack,
+                notesFilesAccess = serverInfo?.notesFilesAccess(),
+                onMutationInProgressChanged = { groupwareMutationInProgress = it },
             )
         }
         is Screen.MediaViewer -> {
@@ -2090,6 +2060,8 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onOpenAccountSettings: () -> Unit,
     onBack: () -> Unit,
+    notesFilesAccess: NotesFilesAccess?,
+    onMutationInProgressChanged: (Boolean) -> Unit,
 ) {
     if (isOfficeWorkspaceAppId(app.id)) {
         OfficeWorkspaceScreen(
@@ -2139,6 +2111,7 @@ private fun AppInfoScreen(
     }
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         val resolved = discovery
+        val semanticWorkspace = remember(resolved) { resolved?.let(::selectSemanticAppWorkspace) }
         // The discovered screen owns its own contextual header. Keeping the
         // discovery header around would stack two toolbars on every native app
         // (and makes the back action ambiguous). The outer header is only needed
@@ -2159,6 +2132,11 @@ private fun AppInfoScreen(
             } else {
                 Spacer(modifier = Modifier.weight(1f))
             }
+        } else if (semanticWorkspace != null) {
+            SemanticAppWorkspaceScreen(
+                semanticWorkspace, services, session, currentUserId, writeGate, notesFilesAccess,
+                onMutationInProgressChanged, onBack, Modifier.weight(1f), navigation, onNavigationChanged,
+            )
         } else {
             DynamicDiscoveredAppScreen(
                 services = services,

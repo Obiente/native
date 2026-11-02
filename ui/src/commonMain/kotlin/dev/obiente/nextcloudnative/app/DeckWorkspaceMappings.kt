@@ -77,7 +77,7 @@ internal fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? =
 }
 
 internal fun Throwable.deckMessage(): String =
-    message?.takeIf(String::isNotBlank) ?: "Deck could not complete the action."
+    message?.takeIf(String::isNotBlank) ?: "The app could not complete the action."
 
 internal const val DECK_COMMENT_PAGE_SIZE = 20
 internal const val DECK_STACK_ORDER_STEP = 1_000L

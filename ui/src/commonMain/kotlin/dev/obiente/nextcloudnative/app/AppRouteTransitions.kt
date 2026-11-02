@@ -72,7 +72,6 @@ internal fun Screen.routeTransitionKey(): Any = when (this) {
     is Screen.PersonMedia -> RouteKey("person-media", person.id.toString())
     is Screen.ProjectNewsArticleView -> RouteKey("project-news-article", article.id)
     is Screen.Chat -> RouteKey("chat", room.token)
-    is Screen.NoteEditor -> RouteKey("note-editor", note.id.toString())
     is Screen.AppInfo -> RouteKey("app-info", app.id)
     is Screen.MediaViewer -> RouteKey("media-viewer", navigationKey)
     is Screen.FileInfo -> RouteKey("file-info", file.path)

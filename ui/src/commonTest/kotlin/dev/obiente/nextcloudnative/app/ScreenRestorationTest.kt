@@ -11,9 +11,10 @@ import kotlin.test.assertTrue
 
 class ScreenRestorationTest {
     @Test
-    fun `pending navigation waits for mutation recovery on top-level notes`() {
-        assertTrue(Screen.Notes.requiresPendingNavigationGuard(groupwareMutationInProgress = true))
-        assertFalse(Screen.Notes.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
+    fun `pending navigation waits for mutation recovery inside a discovered app`() {
+        val notesApp = Screen.AppInfo(NextcloudAppEntry("jotter", "Jotter", null))
+        assertTrue(notesApp.requiresPendingNavigationGuard(groupwareMutationInProgress = true))
+        assertFalse(notesApp.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
         assertTrue(Screen.Calendar.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
         assertTrue(Screen.Tasks.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
         assertFalse(Screen.Root.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
@@ -109,31 +110,23 @@ class ScreenRestorationTest {
     }
 
     @Test
-    fun `note restoration keeps its route without serializing the note payload`() {
-        val saved = Screen.NoteEditor(
-            NextcloudNote(
-                id = 91L,
-                title = "Private planning title",
-                modified = 1_725_000_000L,
-                category = "Confidential",
-                favorite = true,
-                readOnly = false,
-                content = "Private note body must not enter saved state",
-                etag = "secret-etag",
-                internalPath = "Notes/Private.md",
-                isShared = true,
-            ),
-        ).toSavedScreen()
-        val encoded = Json.encodeToString(saved)
-        val restored = assertIs<Screen.NoteEditor>(saved.toScreen()).note
-
-        assertFalse(encoded.contains("Private planning title"))
-        assertFalse(encoded.contains("Private note body"))
-        assertFalse(encoded.contains("secret-etag"))
-        assertFalse(encoded.contains("Confidential"))
-        assertEquals(91L, restored.id)
-        assertNull(restored.content)
-        assertNull(restored.etag)
-        assertTrue(restored.readOnly)
+    fun `board and notes screens saved before contract selection reopen through discovery`() {
+        for ((kind, appId) in listOf("deck" to "deck", "notes" to "notes")) {
+            val restored = assertIs<Screen.AppInfo>(SavedScreen(kind, noteId = 91L).toScreen())
+            assertEquals(appId, restored.app.id)
+            assertEquals(DynamicAppNavigationState(), restored.navigation)
+        }
+        val editor = assertIs<Screen.AppInfo>(SavedScreen("note-editor", noteId = 91L).toScreen())
+        assertEquals("notes", editor.app.id)
+        assertEquals(91L, editor.navigation.openNoteId())
+        val roundTrip = assertIs<Screen.AppInfo>(editor.toSavedScreen().toScreen())
+        assertEquals(91L, roundTrip.navigation.openNoteId())
+        for (unsafe in listOf(-1L, null)) {
+            val root = assertIs<Screen.AppInfo>(SavedScreen("note-editor", noteId = unsafe).toScreen())
+            assertEquals(DynamicAppNavigationState(), root.navigation)
+            assertNull(root.navigation.openNoteId())
+        }
+        val encoded = Json.encodeToString(Screen.AppInfo(NextcloudAppEntry("jotter", "Jotter", null)).toSavedScreen())
+        assertFalse(encoded.contains("noteId\":9"))
     }
 }

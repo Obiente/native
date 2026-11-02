@@ -2,17 +2,36 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Board-level tools that open from a board's overflow menu. */
-internal class DeckBoardTools(context: DeckBoardToolContext) {
+/** Board-level tools that open from a board's overflow menu, each offered only when described. */
+internal class DeckBoardTools(
+    private val context: DeckBoardToolContext,
+    private val appSettings: SemanticSettings?,
+) {
     val sharing = DeckBoardSharingController(context)
-    val settings = DeckBoardSettingsController(context)
     val archive = DeckArchivedCardsController(context)
+
+    /** The board whose settings sheet is open, or null. */
+    var settingsBoard: DeckBoard? by mutableStateOf(null)
+        private set
+    val settingsController: SemanticSettingsController? = appSettings?.let { settings ->
+        SemanticSettingsController(context.execute, settings)
+    }
+
+    fun closeSettings() {
+        settingsBoard = null
+    }
+
+    private val routes get() = context.routes
 
     /**
      * Sharing, settings, and archived cards for [board]. Archiving the board itself stays with the
@@ -23,16 +42,22 @@ internal class DeckBoardTools(context: DeckBoardToolContext) {
         boardOpen: Boolean,
         onToggleArchived: ((DeckBoard) -> Unit)?,
     ): List<NextcloudCardAction> = buildList {
-        if (board.canOpenSharing()) {
-            add(NextcloudCardAction(if (board.canAddShares()) "Share board" else "Board access") { sharing.open(board) })
+        val shareWrites = routes.supports(BoardOperation.AddShare) || routes.supports(BoardOperation.UpdateShare) ||
+            routes.supports(BoardOperation.DeleteShare)
+        if (board.canOpenSharing() && (shareWrites || board.acl.isNotEmpty())) {
+            val canAdd = board.canAddShares() && routes.supports(BoardOperation.AddShare)
+            add(NextcloudCardAction(if (canAdd) "Share board" else "Board access") { sharing.open(board) })
         }
-        if (board.permissions.canRead) {
-            add(NextcloudCardAction("Board settings") { settings.open(board) })
+        if (board.permissions.canRead && (appSettings != null || board.settings.isNotEmpty())) {
+            add(NextcloudCardAction("Board settings") { settingsBoard = board })
         }
-        if (boardOpen && board.permissions.canRead) {
+        if (boardOpen && board.permissions.canRead && routes.supports(BoardOperation.ListArchivedLanes)) {
             add(NextcloudCardAction("Archived cards") { archive.open(board) })
         }
-        if (onToggleArchived != null && board.canChangeArchiveState() && board.color != null) {
+        if (
+            onToggleArchived != null && board.canChangeArchiveState() && board.color != null &&
+            routes.declares(BoardOperation.UpdateBoard, dev.obiente.nextcloudnative.nativeui.runtime.BoardField.Archived)
+        ) {
             add(
                 NextcloudCardAction(if (board.archived) "Unarchive board" else "Archive board") {
                     onToggleArchived(board)
@@ -70,7 +95,7 @@ internal fun DeckBoardToolsHost(tools: DeckBoardTools, currentUserId: String) {
             DeckUiDestructiveConfirmationDialog(
                 title = "Remove access for ${acl.participant.displayName}?",
                 message = "They will no longer see ${state.board.title}. " +
-                    "Deck also removes their card assignments on this board.",
+                    "The app may also remove their card assignments on this board.",
                 busy = state.busy,
                 errorMessage = null,
                 onDismiss = tools.sharing::cancelRemoval,
@@ -78,13 +103,13 @@ internal fun DeckBoardToolsHost(tools: DeckBoardTools, currentUserId: String) {
             )
         }
     }
-    tools.settings.state?.let { state ->
-        LaunchedEffect(tools.settings, state.board.id) { tools.settings.load() }
-        DeckBoardSettingsDialog(
-            state = state,
-            onChange = { change -> scope.launch { tools.settings.change(change) } },
-            onRetry = { scope.launch { tools.settings.load() } },
-            onDismiss = tools.settings::close,
+    tools.settingsBoard?.let { board ->
+        SemanticSettingsDialog(
+            title = "Board settings",
+            controller = tools.settingsController,
+            onDismiss = tools::closeSettings,
+            readOnlyTitle = board.title,
+            readOnlyEntries = board.settings.entries.map { (key, value) -> key.boardSettingLabel() to value },
         )
     }
     tools.archive.state?.let { state ->
@@ -116,7 +141,7 @@ internal fun DeckBoardToolsHost(tools: DeckBoardTools, currentUserId: String) {
  */
 internal suspend fun runDeckStackMove(
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
-    plan: DeckWriteRoutePlan,
+    plan: SemanticBoardRoutes,
     board: DeckBoard,
     updates: List<DeckStackOrderUpdate>,
 ): String? {
@@ -130,6 +155,7 @@ internal suspend fun runDeckStackMove(
                     access,
                     DeckStackContext(DeckBoardId(update.stack.boardId), update.stack.id),
                     DeckStackDraft(update.stack.title, update.order),
+                    record = update.stack.rawFields,
                 ),
             )
             parseDeckMutationReceipt(response, expectedId = update.stack.id)
@@ -137,11 +163,17 @@ internal suspend fun runDeckStackMove(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            val reason = failure.message?.takeIf(String::isNotBlank) ?: "Deck could not move the list."
+            val reason = failure.message?.takeIf(String::isNotBlank) ?: "The list could not be moved."
             return if (applied == 0) reason else "Some lists moved before an error. $reason The board was refreshed."
         }
     }
     return null
 }
+
+private fun String.boardSettingLabel(): String = replace(Regex("[_:.-]+"), " ")
+    .replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
+    .trim()
+    .lowercase()
+    .replaceFirstChar(Char::uppercase)
 
 private const val DECK_SHARE_SEARCH_DEBOUNCE_MILLIS = 300L

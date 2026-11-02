@@ -105,6 +105,10 @@ component library.
 
 - Boards share lane navigation and action state, with widths adapted to the
   window.
+- A board-shaped or notes-shaped contract opens the full board or notes
+  workspace instead of the generic component. The choice comes from route
+  shape and field roles, never from the app ID or version; see
+  [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#semantic-surfaces-boards-and-notes).
 - Compact Mail exposes the same loaded accounts and mailboxes as the desktop
   rail. Message actions stay limited to verified available contracts.
 

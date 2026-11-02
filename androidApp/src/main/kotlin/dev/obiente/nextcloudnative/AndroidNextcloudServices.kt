@@ -121,11 +121,6 @@ import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
 import dev.obiente.nextcloudnative.app.NativeMediaCollectionTransportRequest
-import dev.obiente.nextcloudnative.app.NextcloudNote
-import dev.obiente.nextcloudnative.app.NextcloudNotePresence
-import dev.obiente.nextcloudnative.app.createNoteRequest
-import dev.obiente.nextcloudnative.app.deleteNoteRequest
-import dev.obiente.nextcloudnative.app.notesMutationHeaders
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.loginPollPendingDiagnostic
 import dev.obiente.nextcloudnative.app.shouldRecordHttpStatusDiagnostic
@@ -2759,6 +2754,7 @@ internal class AndroidNextcloudServices(
                     contentType = safeRequest.contentType,
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
+                    headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
                     client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
                         recordRequestDiagnostic(session, it)
@@ -3003,118 +2999,6 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         request: NextcloudDocumentEditSessionRequest,
     ): NextcloudDocumentEditSession = documentEditingTransport.beginSession(session, request)
-
-    override suspend fun listNotes(session: NextcloudSession): List<NextcloudNote> =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                method = "GET",
-                url = session.serverUrl + "/index.php/apps/notes/api/v1/notes?exclude=content",
-                session = session,
-            )
-            check(response.status in 200..299) { "Loading Notes failed (HTTP ${response.status})." }
-            val data = JSONArray(response.text)
-            buildList {
-                for (index in 0 until data.length()) {
-                    data.optJSONObject(index)?.toNextcloudNote()?.let(::add)
-                }
-            }.sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
-        }
-
-    override suspend fun inspectNotePresence(
-        session: NextcloudSession,
-        noteId: Long,
-    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
-            require(noteId >= 0L) { "The note ID is invalid." }
-            val response = request(
-                method = "GET",
-                url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
-                session = session,
-            )
-            if (response.status == 404 || response.status == 410) {
-                return@withContext NextcloudNotePresence.Absent
-            }
-            check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-            val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-                "The note response is invalid."
-            }
-            NextcloudNotePresence.Present(note)
-        }
-
-    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val presence = inspectNotePresence(session, noteId)) {
-            NextcloudNotePresence.Absent -> error("The note no longer exists.")
-            is NextcloudNotePresence.Present -> presence.note
-        }
-
-    override suspend fun updateNote(
-        session: NextcloudSession,
-        noteId: Long,
-        content: String,
-        category: String,
-        favorite: Boolean,
-        expectedEtag: String?,
-        title: String?,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        require(content.encodeToByteArray().size.toLong() <= MAX_NOTE_BYTES) {
-            "Notes larger than ${MAX_NOTE_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        val body = JSONObject()
-            .put("content", content)
-            .put("category", category)
-            .put("favorite", favorite)
-            .apply { title?.let { put("title", it) } }
-            .toString()
-        val response = request(
-            method = "PUT",
-            url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
-            session = session,
-            body = body,
-            contentType = "application/json; charset=utf-8",
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Saving the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) { "The saved note response is invalid." }
-    }
-
-    override suspend fun createNote(
-        session: NextcloudSession,
-        title: String,
-        content: String,
-        category: String,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        val plan = createNoteRequest(title, content, category)
-        val response = request(
-            method = plan.method.name,
-            url = session.serverUrl + plan.relativePath,
-            session = session,
-            body = requireNotNull(plan.body).decodeToString(),
-            contentType = plan.contentType,
-        )
-        check(response.status in 200..299) { "Creating the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-            "The created note response is invalid."
-        }
-    }
-
-    override suspend fun deleteNote(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String?,
-    ) = withContext(Dispatchers.IO) {
-        val plan = deleteNoteRequest(noteId)
-        val response = request(
-            method = plan.method.name,
-            url = session.serverUrl + plan.relativePath,
-            session = session,
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 404) { "The note no longer exists." }
-        check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Deleting the note failed (HTTP ${response.status})." }
-    }
 
     override suspend fun listPeople(session: NextcloudSession, backend: String): List<NextcloudPerson> =
         withContext(Dispatchers.IO) {
@@ -3657,22 +3541,6 @@ internal class AndroidNextcloudServices(
         .replace('_', ' ')
         .split(' ')
         .joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }
-
-    private fun JSONObject.toNextcloudNote(responseEtag: String? = null): NextcloudNote? {
-        val id = optLong("id", -1L).takeIf { it >= 0L } ?: return null
-        return NextcloudNote(
-            id = id,
-            title = optString("title").ifBlank { "Untitled note" },
-            modified = optLong("modified", 0L),
-            category = optString("category"),
-            favorite = optBoolean("favorite", false),
-            readOnly = optBoolean("readonly", false),
-            content = if (has("content")) optString("content") else null,
-            etag = optString("etag").takeIf(String::isNotBlank) ?: responseEtag,
-            internalPath = optString("internalPath").takeIf(String::isNotBlank),
-            isShared = optBoolean("isShared", false),
-        )
-    }
 
     private fun JSONArray.appendMemoryFiles(person: NextcloudPerson, target: MutableMap<Long, NextcloudFile>) {
         for (index in 0 until length()) {

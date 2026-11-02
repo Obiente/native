@@ -138,7 +138,7 @@ class NotesWorkspaceLayoutTest {
 
     @Composable
     private fun Notes(fixture: Fixture, onOpenNote: (NextcloudNote) -> Unit = {}) {
-        NextcloudNotesScreen(fixture.services, fixture.session, onBack = {}, onOpenNote = onOpenNote)
+        NextcloudNotesScreen(fixture.services, fixture.session, fixture.store, onBack = {}, onOpenNote = onOpenNote)
     }
 
     @Composable
@@ -175,22 +175,6 @@ class NotesWorkspaceLayoutTest {
                     val operation: suspend () -> Any? = {
                         when (method.name) {
                             "loadDurableMutationRecovery" -> null
-                            "listNotesConditionally" -> NextcloudConditionalRead.Modified(
-                                notes.map { it.copy(content = null) },
-                                responseEtag = null,
-                            )
-                            "loadNoteConditionally" -> NextcloudConditionalRead.Modified(
-                                notes.first { it.id == args!![1] as Long },
-                                responseEtag = null,
-                            )
-                            "createNote" -> {
-                                created += (args!![1] as String) to (args[3] as String)
-                                note(NewNoteId, args[1] as String, args[2] as String).also(notes::add)
-                            }
-                            "updateNote" -> {
-                                updates++
-                                error("Synthetic notes are read-only in layout tests.")
-                            }
                             else -> error("Unexpected synthetic notes operation: ${method.name}")
                         }
                     }
@@ -199,6 +183,30 @@ class NotesWorkspaceLayoutTest {
                 }
             }
         } as NextcloudPlatformServices
+
+        val store: NotesRepository = object : NotesRepository {
+            override val appId = "jotter"
+            override val capabilities = NotesCapabilities(true, true, true, true, true, true)
+            override suspend fun listNotes() = notes.map { it.copy(content = null) }
+            override suspend fun loadNote(noteId: Long) = notes.first { it.id == noteId }
+            override suspend fun inspectNotePresence(noteId: Long) = NextcloudNotePresence.Present(loadNote(noteId))
+            override suspend fun updateNote(
+                noteId: Long,
+                content: String,
+                category: String,
+                favorite: Boolean,
+                expectedEtag: String?,
+                title: String?,
+            ): NextcloudNote {
+                updates++
+                error("Synthetic notes are read-only in layout tests.")
+            }
+            override suspend fun createNote(title: String, content: String, category: String): NextcloudNote {
+                created += title to category
+                return note(NewNoteId, title, content).also(notes::add)
+            }
+            override suspend fun deleteNote(noteId: Long, expectedEtag: String?) = error("unexpected delete")
+        }
 
         private fun note(id: Long, title: String, content: String) = NextcloudNote(
             id = id, title = title, modified = 0L, category = "", favorite = false, readOnly = false,

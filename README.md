@@ -197,7 +197,8 @@ Windows, and an early macOS package) with:
 - Talk conversations with live updates, replies, reactions, and editing or
   deleting your own messages where the server allows it, and message cards for
   text, files, recordings, calls, system events and shared objects;
-- Notes, with folders, ETag-aware saving and Markdown editing and preview;
+- notes, with folders, ETag-aware saving and Markdown editing and preview,
+  for Notes or any app whose own contract has the shape of a notes collection;
 - News, as a feed reader with unread and starred views, folders, feeds and an
   article reader that does not load remote images;
 - Activity, global search, Dashboard, user status and app navigation;
@@ -208,8 +209,11 @@ Windows, and an early macOS package) with:
   suggestions, identities and attachments, undo and scheduled sending, drafts
   kept on the device, message and folder organizing, and signature and alias
   settings, for Mail 5.0 to 5.12 when the installed version can be confirmed;
+- boards with lists and cards, sharing, archive and list reordering, for Deck
+  or any app whose own contract has the shape of a board, offering each action
+  only when that contract describes it;
 - native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
-  Deck, Cospend, Budget and administration inventory, at different levels of
+  Cospend, Budget and administration inventory, at different levels of
   completeness;
 - an Office document browser with editor choices based on server
   capabilities. Android embeds only the chosen document's editing session;

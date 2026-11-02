@@ -1,32 +1,36 @@
 package dev.obiente.nextcloudnative.app
 
-/** Small process-local cache used for stale-while-revalidate Notes screens. */
+/** One notes app on one account; two notes apps never share cached records. */
+private data class NotesCacheScope(val account: NextcloudAccountId, val appId: String)
+
+/** Small process-local cache used for stale-while-revalidate notes screens. */
 internal class NextcloudNotesCache(
     private val gate: AccountPrivateMemoryGate = AccountPrivateMemoryGate(),
 ) {
-    private val noteLists = mutableMapOf<NextcloudAccountId, List<NextcloudNote>>()
-    private val noteListEtags = mutableMapOf<NextcloudAccountId, String>()
-    private val noteDetails = mutableMapOf<Pair<NextcloudAccountId, Long>, NextcloudNote>()
+    private val noteLists = mutableMapOf<NotesCacheScope, List<NextcloudNote>>()
+    private val noteListEtags = mutableMapOf<NotesCacheScope, String>()
+    private val noteDetails = mutableMapOf<Pair<NotesCacheScope, Long>, NextcloudNote>()
 
     fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? = gate.producer(session.accountId.storageKey)
 
-    fun list(session: NextcloudSession): List<NextcloudNote>? =
-        gate.read(session.accountId.storageKey, null) { noteLists[session.accountId] }
+    fun list(session: NextcloudSession, appId: String): List<NextcloudNote>? =
+        gate.read(session.accountId.storageKey, null) { noteLists[NotesCacheScope(session.accountId, appId)] }
 
-    fun listEtag(session: NextcloudSession): String? =
-        gate.read(session.accountId.storageKey, null) { noteListEtags[session.accountId] }
+    fun listEtag(session: NextcloudSession, appId: String): String? =
+        gate.read(session.accountId.storageKey, null) { noteListEtags[NotesCacheScope(session.accountId, appId)] }
 
-    fun detail(session: NextcloudSession, noteId: Long): NextcloudNote? =
-        gate.read(session.accountId.storageKey, null) { noteDetails[session.accountId to noteId] }
+    fun detail(session: NextcloudSession, appId: String, noteId: Long): NextcloudNote? =
+        gate.read(session.accountId.storageKey, null) { noteDetails[NotesCacheScope(session.accountId, appId) to noteId] }
 
     fun storeList(
         session: NextcloudSession,
+        appId: String,
         notes: List<NextcloudNote>,
         producer: AccountPrivateMemoryProducer?,
         etag: String? = null,
     ) {
-        val account = session.accountId
-        gate.mutate(account.storageKey, producer) {
+        val account = NotesCacheScope(session.accountId, appId)
+        gate.mutate(account.account.storageKey, producer) {
             noteLists[account] = notes
             etag?.takeIf(String::isNotBlank)?.let { noteListEtags[account] = it }
                 ?: noteListEtags.remove(account)
@@ -36,11 +40,12 @@ internal class NextcloudNotesCache(
 
     fun storeDetail(
         session: NextcloudSession,
+        appId: String,
         note: NextcloudNote,
         producer: AccountPrivateMemoryProducer?,
     ) {
-        val account = session.accountId
-        gate.mutate(account.storageKey, producer) {
+        val account = NotesCacheScope(session.accountId, appId)
+        gate.mutate(account.account.storageKey, producer) {
             noteDetails[account to note.id] = note
             noteLists[account]?.let { listedNotes ->
                 noteLists[account] = listedNotes.map { listed ->
@@ -52,11 +57,12 @@ internal class NextcloudNotesCache(
 
     fun remove(
         session: NextcloudSession,
+        appId: String,
         noteId: Long,
         producer: AccountPrivateMemoryProducer?,
     ) {
-        val account = session.accountId
-        gate.mutate(account.storageKey, producer) {
+        val account = NotesCacheScope(session.accountId, appId)
+        gate.mutate(account.account.storageKey, producer) {
             noteDetails.remove(account to noteId)
             noteLists[account]?.let { listedNotes ->
                 noteLists[account] = listedNotes.filterNot { note -> note.id == noteId }
@@ -72,9 +78,9 @@ internal class NextcloudNotesCache(
     fun activateAccount(accountStorageKey: String) = gate.activateAccount(accountStorageKey)
 
     internal fun purgeRetiredAccount(accountStorageKey: String) {
-        noteLists.keys.removeAll { account -> account.storageKey == accountStorageKey }
-        noteListEtags.keys.removeAll { account -> account.storageKey == accountStorageKey }
-        noteDetails.keys.removeAll { (account, _) -> account.storageKey == accountStorageKey }
+        noteLists.keys.removeAll { scope -> scope.account.storageKey == accountStorageKey }
+        noteListEtags.keys.removeAll { scope -> scope.account.storageKey == accountStorageKey }
+        noteDetails.keys.removeAll { (scope, _) -> scope.account.storageKey == accountStorageKey }
     }
 
 }
