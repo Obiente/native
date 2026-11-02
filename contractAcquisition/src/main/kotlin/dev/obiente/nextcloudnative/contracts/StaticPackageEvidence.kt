@@ -203,7 +203,8 @@ internal fun StaticMethodEvidence.typedResponses(): JSONObject? {
     if (declared != null) {
         val responses = JSONObject()
         declared.forEach { response ->
-            val schema = schemas.schema(response.data) ?: return@forEach
+            // An unresolved data type says nothing about the body; that status stays untyped.
+            val schema = schemas.schema(response.data)?.takeIf { !it.has(UNRESOLVED_TYPE_EXTENSION) } ?: return@forEach
             response.statuses.forEach { status -> responses.put(status.toString(), jsonResponse(schema, status)) }
         }
         return responses.takeIf { it.keySet().any { status -> status.startsWith('2') } }

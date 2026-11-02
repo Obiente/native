@@ -42,9 +42,14 @@ internal fun PhpToken.DocComment.parameterTypes(): Map<String, PsalmType> {
     val declared = linkedMapOf<String, PsalmType?>()
     listOf("param", "psalm-param").forEach { tagName ->
         tags.filter { it.name == tagName }.forEach tag@ { tag ->
-            val (typeText, rest) = splitLeadingPsalmType(tag.content) ?: return@tag
-            val name = PARAM_NAME.find(rest)?.groupValues?.get(1) ?: return@tag
-            declared[name] = parsePsalmType(typeText)
+            val split = splitLeadingPsalmType(tag.content)
+            if (split == null) {
+                // An unbalanced type still names its parameter; the declaration is dropped.
+                ANY_PARAM_NAME.find(tag.content)?.groupValues?.get(1)?.let { declared[it] = null }
+                return@tag
+            }
+            val name = PARAM_NAME.find(split.second)?.groupValues?.get(1) ?: return@tag
+            declared[name] = parsePsalmType(split.first)
         }
     }
     return declared.mapNotNull { (name, type) -> type?.let { name to it } }.toMap()
@@ -84,6 +89,7 @@ internal fun PhpToken.DocComment.typeImports(): List<PsalmTypeImport> =
 
 private val DOC_TAG = Regex("""@([A-Za-z][A-Za-z0-9_-]{0,63})(.*)""")
 private val PARAM_NAME = Regex("""^(?:&|\.\.\.)?\$([A-Za-z_][A-Za-z0-9_]{0,63})""")
+private val ANY_PARAM_NAME = Regex("""\$([A-Za-z_][A-Za-z0-9_]{0,63})""")
 private val ALIAS_DECLARATION = Regex("""([A-Za-z_][A-Za-z0-9_]{0,127})\s*=?\s*(.+)""", RegexOption.DOT_MATCHES_ALL)
 private val IMPORT_DECLARATION = Regex(
     """([A-Za-z_][A-Za-z0-9_]{0,127})\s+from\s+(\\?[A-Za-z_][A-Za-z0-9_\\]{0,255})(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]{0,127}))?\s*""",

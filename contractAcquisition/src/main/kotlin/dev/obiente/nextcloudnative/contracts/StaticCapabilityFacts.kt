@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /**
  * Capability key names an app publishes, read from a `getCapabilities()` method whose only
- * top-level `return` is a literal array. Keys are dotted paths; a literal scalar or list of
+ * `return` is a literal array. Keys are dotted paths; a literal scalar or list of
  * literal scalars is recorded as stated, anything computed is recorded as present but dynamic.
  * These are facts to confirm against the live capabilities response, never a substitute for it.
  */
@@ -41,14 +41,8 @@ internal fun readCapabilityFacts(declarations: List<PhpClassDeclaration>): Stati
         val method = declaration.methods.firstOrNull { it.public && it.name.equals("getCapabilities", ignoreCase = true) }
             ?: return@flatMap emptyList()
         val body = methodBodyTokens(declaration.tokens, method.nameIndex) ?: return@flatMap emptyList()
-        var depth = 0
-        val returns = body.indices.filter { index ->
-            when ((body[index] as? PhpToken.Symbol)?.value) {
-                '{' -> depth += 1
-                '}' -> depth -= 1
-            }
-            depth == 0 && (body[index] as? PhpToken.Word)?.value == "return"
-        }
+        // Exactly one return anywhere, so a conditional branch cannot publish other keys.
+        val returns = body.indices.filter { index -> (body[index] as? PhpToken.Word)?.value == "return" }
         val returnIndex = returns.singleOrNull() ?: return@flatMap emptyList()
         val value = readPhpValueExpression(body, returnIndex + 1) as? PhpValue.Array ?: return@flatMap emptyList()
         buildList { collectCapabilityKeys(value, prefix = "", depth = 0) }

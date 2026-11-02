@@ -135,7 +135,8 @@ private class PhpDeclarationReader(private val tokens: List<PhpToken>) {
         (tokens.getOrNull(position - 1) as? PhpToken.Symbol)?.value == ':' &&
             (tokens.getOrNull(position - 2) as? PhpToken.Symbol)?.value == ':'
 
-    private fun readQualifiedName(): String? {
+    /** Reads `A\B\C`; a leading backslash is kept only for class references that need it. */
+    private fun readQualifiedName(keepLeadingSlash: Boolean = false): String? {
         val name = StringBuilder()
         var expectWord = true
         while (index < tokens.size) {
@@ -149,7 +150,8 @@ private class PhpDeclarationReader(private val tokens: List<PhpToken>) {
             index += 1
             check(name.length <= MAX_PHP_QUALIFIED_NAME_CHARS) { "A PHP name is too long." }
         }
-        return name.toString().removePrefix("\\").takeIf(String::isNotEmpty)
+        val text = name.toString()
+        return (if (keepLeadingSlash) text else text.removePrefix("\\")).takeIf { it.isNotEmpty() && it != "\\" }
     }
 
     private fun readImport() {
@@ -206,12 +208,12 @@ private class PhpDeclarationReader(private val tokens: List<PhpToken>) {
             when ((tokens[index] as? PhpToken.Word)?.value) {
                 "extends" -> {
                     index += 1
-                    baseName = readQualifiedName()
+                    baseName = readQualifiedName(keepLeadingSlash = true)
                 }
                 "implements" -> {
                     index += 1
                     while (true) {
-                        interfaces += readQualifiedName() ?: break
+                        interfaces += readQualifiedName(keepLeadingSlash = true) ?: break
                         if ((tokens.getOrNull(index) as? PhpToken.Symbol)?.value == ',') index += 1 else break
                     }
                 }

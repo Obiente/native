@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /**
  * Field names an entity in lib/Db serializes, read from a `jsonSerialize()` or `toAPI()` method
- * whose only top-level `return` is a literal array with literal string keys. Every key is present
+ * whose only `return` is a literal array with literal string keys. Every key is present
  * in every serialization, so all keys are required. A value is typed only from what the package
  * states: an entity getter or property typed by `addType()` in a constructor (including inherited
  * entity constructors in the package and the framework's integer `id`), a scalar cast, a comparison,
@@ -106,16 +106,9 @@ private fun PhpClassDeclaration.serializationSchema(
     types: Map<String, String>,
 ): JSONObject? {
     val body = methodBodyTokens(tokens, method.nameIndex) ?: return null
-    val returns = mutableListOf<Int>()
-    var depth = 0
-    body.forEachIndexed { index, token ->
-        when ((token as? PhpToken.Symbol)?.value) {
-            '{' -> depth += 1
-            '}' -> depth -= 1
-        }
-        if (depth == 0 && (token as? PhpToken.Word)?.value == "return") returns += index
-    }
-    val returnIndex = returns.singleOrNull() ?: return null
+    // Exactly one return anywhere: a conditional or closure return could serialize another shape.
+    val returnIndex = body.indices.filter { index -> (body[index] as? PhpToken.Word)?.value == "return" }
+        .singleOrNull() ?: return null
     val open = returnIndex + 1
     val close = when {
         (body.getOrNull(open) as? PhpToken.Symbol)?.value == '[' -> body.matchingClose(open, '[', ']')

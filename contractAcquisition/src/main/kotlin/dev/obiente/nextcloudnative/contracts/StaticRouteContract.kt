@@ -424,7 +424,7 @@ internal fun synthesizeReadOnlyRouteContract(
     return VerifiedPackageContract(
         appId = appId,
         appVersion = appVersion,
-        specFile = "appinfo/routes.php",
+        specFile = if (routeFile != null) "appinfo/routes.php" else "lib/Controller",
         document = contract.toString(),
         contractKind = VerifiedContractKind.VerifiedReadRoutes,
     )
