@@ -72,9 +72,14 @@ internal data class StaticOperationPolicy(
 internal fun staticOperationPolicy(method: PhpMethodDeclaration): StaticOperationPolicy {
     val framework = method.attributes.filter { it.name.startsWith(FRAMEWORK_ATTRIBUTE_NAMESPACE) }
     val known = framework.filter { it.shortName in KNOWN_FRAMEWORK_ATTRIBUTES }
-    val annotations = method.docComment?.tags().orEmpty().associateBy { it.name.lowercase() }
+    // Legacy annotations count only in the form the server's reflector reads them: an indented
+    // `*` line with a tag that starts with an uppercase letter, matched case-sensitively.
+    val serverAnnotations = method.docComment?.serverAnnotationNames().orEmpty()
+    val annotations = method.docComment?.tags().orEmpty()
+        .filter { tag -> tag.name in serverAnnotations }
+        .associateBy { it.name.lowercase() }
     fun has(attribute: String, annotation: String? = attribute): Boolean =
-        known.any { it.shortName == attribute } || (annotation != null && annotation.lowercase() in annotations)
+        known.any { it.shortName == attribute } || (annotation != null && annotation in serverAnnotations)
 
     val publicPage = has("PublicPage")
     val access = when {
@@ -185,3 +190,32 @@ private val OPEN_API_SCOPE_CONSTANTS = mapOf(
 private val ANNOTATION_ARGUMENT = Regex("""([A-Za-z_][A-Za-z0-9_]{0,63})\s*=\s*("[^"]*"|'[^']*'|[^,\s]+)""")
 private const val MAX_POLICY_LIST_ENTRIES = 16
 private const val MAX_FACT_VALUE_CHARS = 256
+
+/**
+ * Methods that explicitly demand sub-administrator, delegated administrator, or external-app
+ * access, or password confirmation, need an authenticated handoff, so they are never published
+ * as dynamic writes. Administrator access inferred from a missing `NoAdminRequired` stays a
+ * recorded fact on the operation for the descriptor's admission step: an inherited or trait
+ * annotation this extractor cannot see would otherwise hide a user-level write. A method whose
+ * declaration could not be read keeps the earlier behavior and is judged by its signature.
+ */
+internal fun StaticMethodEvidence?.allowsDynamicWrite(): Boolean {
+    val policy = this?.policy ?: return true
+    return policy.access !in HANDOFF_ACCESS && policy.passwordConfirmationStrict == null
+}
+
+private val HANDOFF_ACCESS = setOf(
+    StaticAccessLevel.SubAdmin,
+    StaticAccessLevel.DelegatedAdmin,
+    StaticAccessLevel.ExternalApp,
+)
+
+/** Server rule (ControllerMethodReflector): `^\h+\*\h+@(?P<annotation>[A-Z]\w+)`. */
+private val SERVER_ANNOTATION_LINE = Regex("""^[ \t]+\*[ \t]+@([A-Z]\w+)""")
+
+private fun PhpToken.DocComment.serverAnnotationNames(): Set<String> =
+    if (!complete) {
+        emptySet()
+    } else {
+        text.lineSequence().mapNotNull { line -> SERVER_ANNOTATION_LINE.find(line)?.groupValues?.get(1) }.toSet()
+    }

@@ -194,6 +194,8 @@ internal fun synthesizeReadOnlyRouteContract(
             !operationalRefreshWrite
         ) {
             verifiedStaticCrudWrite(route, controller, fullPathPlaceholders)
+                // Uploads stay route evidence until the write path can verify a stored file.
+                ?.takeIf { write -> write.uploadedFileField == null && methodEvidence.allowsDynamicWrite() }
         } else {
             null
         }

@@ -163,6 +163,9 @@ class StaticPolicyAndInputContractTest {
                     <?php
                     class CardApiController extends ApiController {
                         public function get(): DataResponse { return new DataResponse([]); }
+                        /**
+                         * @NoAdminRequired
+                         */
                         public function assignLabel(int ${D}labelId): DataResponse {
                             ${D}this->cardService->assignLabel(${D}this->request->getParam('cardId'), ${D}labelId);
                             return new DataResponse([]);
@@ -192,13 +195,14 @@ class StaticPolicyAndInputContractTest {
     }
 
     @Test
-    fun `an uploaded file read declares a multipart body on POST only`() {
+    fun `an uploaded file read stays route evidence and is never published as a write`() {
         val paths = paths(
             contract(
                 "files_x",
                 "1.0.0",
                 "appinfo/routes.php" to """
                     <?php return ['routes' => [
+                        ['name' => 'attachment#index', 'url' => '/cards/{cardId}/attachments', 'verb' => 'GET'],
                         ['name' => 'attachment#create', 'url' => '/cards/{cardId}/attachments', 'verb' => 'POST'],
                         ['name' => 'attachment#update', 'url' => '/cards/{cardId}/attachments/{attachmentId}', 'verb' => 'PUT'],
                         ['name' => 'attachment#createMany', 'url' => '/cards/{cardId}/attachments/many', 'verb' => 'POST'],
@@ -207,6 +211,7 @@ class StaticPolicyAndInputContractTest {
                 "lib/Controller/AttachmentController.php" to """
                     <?php
                     class AttachmentController extends ApiController {
+                        public function index(int ${D}cardId): array { return []; }
                         public function create(int ${D}cardId, string ${D}type, ?string ${D}data = null): DataResponse {
                             ${D}file = ${D}this->request->getUploadedFile('file');
                             return new DataResponse([]);
@@ -224,13 +229,9 @@ class StaticPolicyAndInputContractTest {
                 """,
             ),
         )
-        val create = paths.operation("/apps/files_x/cards/{cardId}/attachments", "post")
-        val schema = create.getJSONObject("requestBody").getJSONObject("content")
-            .getJSONObject("multipart/form-data").getJSONObject("schema")
-        assertEquals(setOf("type", "data", "file"), schema.getJSONObject("properties").keySet())
-        assertEquals("binary", schema.getJSONObject("properties").getJSONObject("file").getString("format"))
-        assertTrue(schema.getJSONObject("properties").getJSONObject("data").getBoolean("nullable"))
-        assertEquals(setOf("type", "file"), schema.getJSONArray("required").map(Any::toString).toSet())
+        // The write path cannot verify a stored upload yet, so no upload is published.
+        assertTrue(paths.getJSONObject("/apps/files_x/cards/{cardId}/attachments").has("get"))
+        assertFalse(paths.getJSONObject("/apps/files_x/cards/{cardId}/attachments").has("post"))
         assertFalse(paths.has("/apps/files_x/cards/{cardId}/attachments/{attachmentId}"))
         assertFalse(paths.has("/apps/files_x/cards/{cardId}/attachments/many"))
     }
@@ -309,6 +310,73 @@ class StaticPolicyAndInputContractTest {
         assertTrue(inputs("${D}x = ${D}_POST['x'];").unclassified)
         assertTrue(inputs("${D}this->request?->getParam('cardId');").unclassified)
         assertNull(inputs("${D}this->service->find(1);").takeIf { !it.empty })
+    }
+
+    @Test
+    fun `handoff and password confirmed methods are never published as writes`() {
+        val paths = paths(
+            contract(
+                "admin_x",
+                "1.0.0",
+                "appinfo/routes.php" to """
+                    <?php return ['routes' => [
+                        ['name' => 'item#index', 'url' => '/items', 'verb' => 'GET'],
+                        ['name' => 'item#create', 'url' => '/items', 'verb' => 'POST'],
+                        ['name' => 'item#update', 'url' => '/items/{id}', 'verb' => 'PUT'],
+                        ['name' => 'item#destroy', 'url' => '/items/{id}', 'verb' => 'DELETE'],
+                    ]];
+                """,
+                "lib/Controller/ItemController.php" to """
+                    <?php
+                    use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+                    use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
+                    use OCP\AppFramework\Http\Attribute\SubAdminRequired;
+                    class ItemController extends ApiController {
+                        #[NoAdminRequired]
+                        public function index(): array { return []; }
+                        #[SubAdminRequired]
+                        public function create(string ${D}title): DataResponse { return new DataResponse([]); }
+                        #[NoAdminRequired]
+                        #[PasswordConfirmationRequired]
+                        public function update(int ${D}id, string ${D}title): DataResponse { return new DataResponse([]); }
+                        #[NoAdminRequired]
+                        public function destroy(int ${D}id): DataResponse { return new DataResponse([]); }
+                    }
+                """,
+            ),
+        )
+        assertFalse(paths.getJSONObject("/apps/admin_x/items").has("post"))
+        assertFalse(paths.optJSONObject("/apps/admin_x/items/{id}")?.has("put") == true)
+        assertTrue(paths.getJSONObject("/apps/admin_x/items/{id}").has("delete"))
+    }
+
+    @Test
+    fun `annotations count only in the indented line form the server reads`() {
+        val paths = paths(
+            contract(
+                "strict_x",
+                "1.0.0",
+                "appinfo/routes.php" to """
+                    <?php return ['routes' => [
+                        ['name' => 'item#one', 'url' => '/one', 'verb' => 'GET'],
+                        ['name' => 'item#lower', 'url' => '/lower', 'verb' => 'GET'],
+                    ]];
+                """,
+                "lib/Controller/ItemController.php" to """
+                    <?php
+                    class ItemController extends ApiController {
+                        /** @NoAdminRequired */
+                        public function one(): array { return []; }
+                        /**
+                         * @noAdminRequired
+                         */
+                        public function lower(): array { return []; }
+                    }
+                """,
+            ),
+        )
+        assertEquals("admin", paths.policy("/apps/strict_x/one").getString("access"))
+        assertEquals("admin", paths.policy("/apps/strict_x/lower").getString("access"))
     }
 
     private fun JSONObject.policy(path: String): JSONObject = operation(path, "get").getJSONObject(POLICY_EXTENSION)

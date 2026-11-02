@@ -140,7 +140,10 @@ internal fun staticRouteEvidence(
  * `{controller}#{method}{postfix}` per group and a later route with the same name replaces an
  * earlier one, so repeated attribute names keep the last declaration. When routes.php and an
  * attribute claim the same name with a different URL or verb, the registration order is not
- * stated by the package, so both are dropped and counted.
+ * stated by the package, so both are dropped and counted. Routes from both sources that share
+ * the same URL and verb but name different controller methods are dropped as well: the server
+ * registers attribute routes first and dispatches to them, so publishing the file route's
+ * signature would send its body to another action.
  */
 internal fun mergeStaticRouteSources(fileRoutes: List<StaticRoute>, attributeRoutes: List<StaticRoute>): Pair<List<StaticRoute>, Int> {
     fun StaticRoute.routeName() = listOf(ocs.toString(), controller.normalizedPhpName(), method.normalizedPhpName(), postfix.orEmpty())
@@ -158,7 +161,17 @@ internal fun mergeStaticRouteSources(fileRoutes: List<StaticRoute>, attributeRou
     }.values.filter { route ->
         fileNames[route.routeName()].orEmpty().none { it.url == route.url && it.verb == route.verb }
     }
-    return merged to ambiguous
+    fun StaticRoute.endpoint() = listOf(ocs.toString(), url.replace(PLACEHOLDER_PATTERN, "{}"), verb.uppercase())
+    fun StaticRoute.action() = controller.normalizedPhpName() to method.normalizedPhpName()
+    val crossSourceClashes = merged.groupBy { it.endpoint() }.filterValues { routes ->
+        routes.any { it.source == StaticRouteSource.RouteFile } &&
+            routes.any { it.source != StaticRouteSource.RouteFile } &&
+            routes.map { it.action() }.distinct().size > 1
+    }.keys
+    val unambiguous = merged.filter { route ->
+        (route.endpoint() !in crossSourceClashes).also { kept -> if (!kept) ambiguous += 1 }
+    }
+    return unambiguous to ambiguous
 }
 
 internal const val ROUTE_SOURCE_EXTENSION = "x-nextcloud-native-route-source"
@@ -175,3 +188,6 @@ internal const val STATIC_EVIDENCE_FORMAT_EXTENSION = "x-nextcloud-native-static
 /** Bumped whenever the static evidence fields change shape. */
 internal const val STATIC_EVIDENCE_FORMAT = 2
 internal const val MERGE_HINT_KIND = "nullable-null-default-parameters"
+
+/** Any route placeholder; placeholder names do not change which requests a route matches. */
+private val PLACEHOLDER_PATTERN = Regex("""\{[^}]*\}""")

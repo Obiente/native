@@ -67,7 +67,7 @@ private fun PhpAttribute.routeOrNull(controller: String, method: String): Attrib
                 else -> return AttributeRouteResult.Unreadable
             }
             is PhpValue.Constant -> when {
-                !type.className.endsWith("\\Route") && type.className != "self" && type.className != "static" ->
+                type.className != FRAMEWORK_ROUTE_CLASS && type.className != "self" && type.className != "static" ->
                     return AttributeRouteResult.Unreadable
                 type.constant == "TYPE_API" -> true
                 type.constant == "TYPE_FRONTPAGE" -> false
@@ -119,3 +119,5 @@ private fun PhpValue?.literalMapOrNull(): Map<String, String>? = when (this) {
     }
     else -> null
 }
+
+private const val FRAMEWORK_ROUTE_CLASS = "OCP\\AppFramework\\Http\\Attribute\\Route"

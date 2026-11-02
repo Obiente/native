@@ -378,6 +378,79 @@ class StaticAttributeRouteContractTest {
         assertNull(contract)
     }
 
+    @Test
+    fun `a routes file and an attribute serving one endpoint from different methods are both dropped`() {
+        // The server registers attribute routes first, so it would dispatch to the attribute method.
+        val document = document(
+            contract(
+                "endpoint_x",
+                "1.0.0",
+                "appinfo/routes.php" to """
+                    <?php return ['routes' => [
+                        ['name' => 'legacy#update', 'url' => '/api/items/{id}', 'verb' => 'PUT'],
+                        ['name' => 'item#index', 'url' => '/api/items', 'verb' => 'GET'],
+                    ]];
+                """,
+                "lib/Controller/LegacyController.php" to """
+                    <?php
+                    use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+                    class LegacyController extends ApiController {
+                        #[NoAdminRequired]
+                        public function update(int ${D}id, string ${D}title): DataResponse { return new DataResponse([]); }
+                    }
+                """,
+                "lib/Controller/ItemController.php" to """
+                    <?php
+                    use OCP\AppFramework\Http\Attribute\FrontpageRoute;
+                    use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+                    class ItemController extends ApiController {
+                        #[NoAdminRequired]
+                        public function index(): array { return []; }
+                        #[NoAdminRequired]
+                        #[FrontpageRoute(verb: 'PUT', url: '/api/items/{itemId}')]
+                        public function update(int ${D}itemId, string ${D}name, bool ${D}done): DataResponse { return new DataResponse([]); }
+                    }
+                """,
+            ),
+        )
+        val paths = document.getJSONObject("paths")
+        assertFalse(paths.has("/apps/endpoint_x/api/items/{id}"))
+        assertFalse(paths.has("/apps/endpoint_x/api/items/{itemId}"))
+        assertEquals(2, document.getJSONObject(SKIPPED_ROUTES_EXTENSION).getInt("ambiguousName"))
+    }
+
+    @Test
+    fun `a closure inside a controller never supplies a method signature`() {
+        val paths = paths(
+            contract(
+                "closure_x",
+                "1.0.0",
+                "appinfo/routes.php" to """
+                    <?php return ['routes' => [
+                        ['name' => 'item#index', 'url' => '/items', 'verb' => 'GET'],
+                        ['name' => 'item#update', 'url' => '/items/{id}', 'verb' => 'PUT'],
+                    ]];
+                """,
+                "lib/Controller/ItemController.php" to """
+                    <?php
+                    use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+                    class ItemController extends ApiController {
+                        #[NoAdminRequired]
+                        public function index(): array {
+                            ${D}update = function (int ${D}id, string ${D}secretTitle) { return ${D}id; };
+                            return [];
+                        }
+                        #[NoAdminRequired]
+                        public function update(int ${D}id, string ${D}title): DataResponse { return new DataResponse([]); }
+                    }
+                """,
+            ),
+        )
+        val body = paths.operation("/apps/closure_x/items/{id}", "put").getJSONObject("requestBody")
+            .getJSONObject("content").getJSONObject("application/json").getJSONObject("schema")
+        assertEquals(setOf("title"), body.getJSONObject("properties").keySet())
+    }
+
     private companion object {
         const val D = "$"
     }

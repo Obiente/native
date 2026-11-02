@@ -82,7 +82,8 @@ internal fun readSelectedTarFileSet(archive: ByteArray): SelectedTarFiles {
             } else if (keep) {
                 val selectedFileLimit = if (staticMetadata) MAX_STATIC_METADATA_FILE_BYTES else MAX_SELECTED_FILE_BYTES
                 requireWithinLimit(size, selectedFileLimit) { "A contract metadata file exceeds the safety limit." }
-                requireWithinLimit(selected.size + 1L, MAX_SELECTED_ARCHIVE_FILES.toLong()) {
+                // Supplementary files have their own budget and never use a primary slot.
+                requireWithinLimit(selected.size - supplementaryCount + 1L, MAX_SELECTED_ARCHIVE_FILES.toLong()) {
                     "The app package has too many contract metadata files."
                 }
                 selected[fullName] = input.readExactly(size.toInt())

@@ -163,9 +163,21 @@ statically and never executed. Synthesis no longer needs `appinfo/routes.php`:
 
 Every extracted route, published or not, is listed in
 `x-nextcloud-native-static-routes` with its signature and facts, so a later
-admission step can evaluate it without re-reading the package. This evidence
-does not change which writes are published: writes still pass the scalar
-write rules above. Supplementary files (response definitions, entities,
+admission step can evaluate it without re-reading the package. Attribute
+routes and methods that read a route placeholder through
+`$this->request->getParam()` now pass the same scalar write rules as
+`appinfo/routes.php` routes, so some of their writes are published. A method
+the package marks as sub-administrator, delegated administrator, external-app,
+or password-confirmed access is never published as a write. Administrator
+access inferred from a missing `NoAdminRequired` is kept as the operation's
+`access` fact for the admission step rather than decided here, because an
+inherited or trait annotation the extractor cannot read would otherwise hide a
+user-level write. A method that reads an uploaded file stays route evidence
+until the write path can verify the stored file. A routes.php route and an
+attribute route that share a URL and verb but name different controller
+methods are both dropped, because the server dispatches to the attribute
+route. Inherited and trait methods are not read, so their routes are missing
+rather than wrong. Supplementary files (response definitions, entities,
 capabilities) have their own size budget; when it is exhausted the document
 states `x-nextcloud-native-supplementary-evidence-truncated`.
 

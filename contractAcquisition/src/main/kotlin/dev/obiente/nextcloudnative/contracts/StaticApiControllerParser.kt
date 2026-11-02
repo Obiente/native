@@ -50,12 +50,13 @@ internal fun parseApiController(
 ): StaticApiController? = runCatching {
     val tokens = PhpLiteralLexer(source, declarations = true).tokens()
     val className = parseControllerHeader(source)?.name ?: return null
-    val methodEntries = tokens.indices.mapNotNull { index ->
+    val scannedMethods = tokens.indices.mapNotNull { index ->
         val token = tokens[index]
         if (token !is PhpToken.Word || token.value != "function") return@mapNotNull null
-        val nameIndex = (index + 1 until tokens.size).firstOrNull { candidate ->
-            tokens[candidate] is PhpToken.Word
-        } ?: return@mapNotNull null
+        // A method name follows `function` directly. A closure is followed by `(`, so it never
+        // names a method; by-reference methods are rare in controllers and stay unproven.
+        val nameIndex = (index + 1).takeIf { candidate -> tokens.getOrNull(candidate) is PhpToken.Word }
+            ?: return@mapNotNull null
         val methodName = (tokens[nameIndex] as PhpToken.Word).value.normalizedPhpName()
         val safe = trustedBase == "ApiController" || trustedBase == "OCSController" ||
             hasSafeJsonReturnType(tokens, nameIndex) ||
@@ -74,6 +75,10 @@ internal fun parseApiController(
             requestInputs = methodBodyTokens(tokens, nameIndex)?.staticRequestInputs(),
         )
     }
+    // PHP forbids two methods with one name in a class, so a repeat means the scan misread the
+    // source; no signature is trusted for that name.
+    val repeatedNames = scannedMethods.groupingBy(ParsedStaticMethod::name).eachCount().filterValues { it > 1 }.keys
+    val methodEntries = scannedMethods.filterNot { method -> method.name in repeatedNames }
     StaticApiController(
         name = className,
         methods = methodEntries.mapTo(linkedSetOf(), ParsedStaticMethod::name),
