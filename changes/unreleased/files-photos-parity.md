@@ -1,7 +1,7 @@
 category: feature
-issue: none
+issue: 118
 pull: none
 platforms: android, desktop
 user-facing: yes
 
-Files adds a Deleted files view with restore, permanent delete, and empty, a multi-select list with favorite, move, copy, and delete that reports the result for each item, and tags and comments in file details. Photos albums can be renamed, deleted, or left when shared, and the viewer can set a favorite.
+Files adds trash and restore, permanent deletion, batch actions with per-item results, tags and comments. Photos adds album rename, delete and leave actions, plus favorites in the viewer.

@@ -1,7 +1,7 @@
 category: feature
-issue: none
+issue: 42
 pull: none
 platforms: android, desktop
 user-facing: yes
 
-Apps that declare their API with controller attributes now get native surfaces from their signed package, with user-level writes that pass the scalar write rules, and package-stated types, access rules, and limits are kept with each operation.
+Signed-package discovery reads controller route attributes, parameter and response types, access rules and limits, allowing compatible apps to offer native surfaces from their declared contracts.
