@@ -207,7 +207,7 @@ internal fun StaticMethodEvidence.typedResponses(): JSONObject? {
             val schema = schemas.schema(response.data)?.takeIf { !it.has(UNRESOLVED_TYPE_EXTENSION) } ?: return@forEach
             response.statuses.forEach { status -> responses.put(status.toString(), jsonResponse(schema, status)) }
         }
-        return responses.takeIf { it.keySet().any { status -> status.startsWith('2') } }
+        return responses.takeIf { it.keys().asSequence().any { status -> status.startsWith('2') } }
     }
     val direct = returnType?.let(schemas::schema)?.takeIf { it.length() > 0 && !it.has(UNRESOLVED_TYPE_EXTENSION) }
         ?: nativeReturnClass?.let { schemas.schema(PsalmType.Named("\\" + it)) }?.takeIf { !it.has(UNRESOLVED_TYPE_EXTENSION) }
