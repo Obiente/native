@@ -858,7 +858,7 @@ generic empty state and no loaded record proves a person field's collection.
 
 ## Write admission and verification
 
-**Last reviewed: 2026-11-02.** This section describes source and deterministic
+**Last reviewed: 2026-11-06.** This section describes source and deterministic
 test behavior on the integration branch; it has not been validated against a
 live server or shipped in a published release, and the linked sources are
 authoritative. The rules are in [AGENTS.md section 4](AGENTS.md#4-dynamic-app-intelligence).
@@ -928,8 +928,10 @@ Dynamic API requests other than `GET`, including multipart uploads and
 exactly-once sends, use an HTTP client with connection-failure retries
 disabled on desktop and Android
 ([`JvmDynamicApiClients.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmDynamicApiClients.kt)),
-so a request whose body was already written is never sent a second time by
-the transport.
+and a per-call network attempt guard. The guard also blocks automatic HTTP
+follow-ups such as `503` with `Retry-After: 0` before a second request reaches
+the server, including body-free writes. A blocked repeat surfaces as an
+unknown result; only a new explicit call can make another attempt.
 
 [`NativeVerifiedWrite.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeVerifiedWrite.kt)
 is the one verified write path: an optional pre-read compare, one send, and a
@@ -962,10 +964,23 @@ before it clears that app's state.
 
 After drift, the person may send the offered baseline restore: a full echo of
 every value from before the drifted write. It is the only write a quarantined
-route accepts, only as the exact request the executor offered and only once.
+route accepts, only as the exact request the executor offered for that account,
+app version, and route, and only once a transport attempt starts. A failed
+pre-read leaves the restore action available for another explicit attempt.
 It still runs the pre-read compare against the drifted state the person saw,
-and its read-back checks every baseline field; the route stays paused until
-the person resumes changes. Diagnostics record the evidence tier, risk class,
+and its read-back checks every baseline field, including the complete cell map
+for grid rows. An ignored or partial restore is a failure, not an adjusted
+success. A restore is not offered when an original field was absent or a
+custom-shaped field has no baseline verifier. Offers live only in process
+memory, with at most 32 retained across accounts; closing the editor, eviction,
+or restarting the app can lose the offer. Quarantine persists independently,
+and the route stays paused until the person resumes changes.
+
+Edited fields are tracked separately from request-context inputs. A field
+absent from the original read is distinct from an explicit JSON null and is
+still verified after a partial update.
+
+Diagnostics record the evidence tier, risk class,
 rule ID, and rule version of each write without payload values, and use the
 codes `write-quarantined`, `write-postcondition-mismatch`,
 `identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
@@ -1018,6 +1033,10 @@ write function but are not admitted by the generic write path.
   `ContractModuleInitializationTest` loads every facade and fails when one is
   missing from the instrumented list. JVM loading does not prove ART or ICU
   compatibility.
+- `ContractModuleAndroidJsonApiTest` checks the contract module's compiled
+  `org.json` references against the Android SDK API. Package response extraction
+  uses Android-compatible key iteration; JVM JSON-java tests alone cannot catch
+  methods absent from Android's framework implementation.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are rejected,
   not ignored. An absent override inherits the base; an explicit empty array

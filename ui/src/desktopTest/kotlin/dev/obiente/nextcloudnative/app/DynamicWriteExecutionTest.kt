@@ -30,6 +30,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeSendAttemptToken
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePrecondition
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreconditionFailure
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteReadBack
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteVerification
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -304,6 +305,101 @@ class DynamicWriteExecutionTest {
         assertTrue(denied.requests.none { it.method != NextcloudApiMethod.GET })
     }
 
+    @Test
+    fun `an ignored or partial baseline restore never reports success`() = runBlocking<Unit> {
+        for (restoredTitle in listOf("New title", "Old title")) {
+            val store = MemoryDynamicWriteQuarantineStore()
+            val drifted = stored(title = "New title", body = "Edited elsewhere")
+            val transport = Transport(
+                readBody = stored(title = "Old title"),
+                afterWrites = ArrayDeque(listOf(drifted, stored(title = restoredTitle, body = "Edited elsewhere"))),
+            )
+            val saved = assertIs<NativeActionExecutionResult.Success>(
+                executor(transport, store = store).execute(echoUpdate().copy(precondition = unchangedPrecondition())),
+            )
+            val restore = assertNotNull(saved.postcondition?.restoreBaseline)
+            val failed = assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(restore))
+            assertEquals("The previous values were not fully restored.", failed.message)
+            assertEquals(DynamicWriteQuarantineReason.notAppliedAfterSuccess,
+                store.records(SESSION.accountId.storageKey, "notebook").single().reason)
+        }
+    }
+
+    @Test
+    fun `restore verifies custom-shaped fields against their baseline`() = runBlocking<Unit> {
+        val transport = Transport(
+            readBody = stored(title = "Old title"),
+            afterWrites = ArrayDeque(listOf(
+                stored(title = "New title", body = "Edited elsewhere"),
+                stored(title = "Old title", body = "Edited elsewhere"),
+            )),
+        )
+        val edit = echoUpdate().let { original -> original.copy(
+            precondition = unchangedPrecondition(),
+            readBack = NativeWriteReadBack("7", original.readBack!!.previous, original.readBack.untouched, true,
+                customFields = setOf("body"),
+                verifyTarget = { NativeWriteVerification.Adjusted(drifted = setOf("body")) },
+                verifyRestoreTarget = { current ->
+                    if (current.wireValues["body"] == JsonPrimitive("Synthetic body")) NativeWriteVerification.Confirmed
+                    else NativeWriteVerification.NotApplied("The original body was not restored.")
+                },
+            ),
+        ) }
+        val store = MemoryDynamicWriteQuarantineStore()
+        val result = assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(edit))
+        val restore = assertNotNull(result.postcondition?.restoreBaseline)
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(restore))
+    }
+
+    @Test
+    fun `a failed restore pre-read preserves the exact offer for a later explicit attempt`() = runBlocking<Unit> {
+        val transport = Transport(readBody = stored(title = "Old title"), afterWrites = ArrayDeque(listOf(
+            stored(title = "New title", body = "Edited elsewhere"), stored(title = "Old title"),
+        )))
+        val store = MemoryDynamicWriteQuarantineStore()
+        val saved = assertIs<NativeActionExecutionResult.Success>(
+            executor(transport, store = store).execute(echoUpdate().copy(precondition = unchangedPrecondition())),
+        )
+        val restore = assertNotNull(saved.postcondition?.restoreBaseline)
+        transport.readStatus = 503
+        val failed = assertIs<NativeActionExecutionResult.Failure>(executor(transport, store = store).execute(restore))
+        assertEquals(NativeWritePreconditionFailure.Unverified, failed.precondition)
+        assertEquals(1, transport.requests.count { it.method != NextcloudApiMethod.GET })
+        transport.readStatus = 200
+        assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(restore))
+        assertEquals(2, transport.requests.count { it.method != NextcloudApiMethod.GET })
+    }
+
+    @Test
+    fun `restore offers cannot cross accounts or app versions`() = runBlocking<Unit> {
+        val transport = Transport(readBody = stored(title = "Old title"), afterWrites = ArrayDeque(listOf(
+            stored(title = "New title", body = "Edited elsewhere"), stored(title = "Old title"),
+        )))
+        val store = MemoryDynamicWriteQuarantineStore()
+        val saved = assertIs<NativeActionExecutionResult.Success>(
+            executor(transport, store = store).execute(echoUpdate().copy(precondition = unchangedPrecondition())),
+        )
+        val restore = assertNotNull(saved.postcondition?.restoreBaseline)
+        val before = transport.requests.size
+        val other = NextcloudSession("https://cloud.example.test", "other-user", "synthetic-app-password")
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, session = other).execute(restore))
+        val newer = descriptor().let { it.copy(app = it.app.copy(version = "99.0.0")) }
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, descriptor = newer).execute(restore))
+        assertEquals(before, transport.requests.size)
+        assertIs<NativeActionExecutionResult.Success>(executor(transport, store = store).execute(restore))
+    }
+
+    @Test
+    fun `an edited field absent from the original read is still verified`() = runBlocking<Unit> {
+        val omitted = JsonObject((Json.parseToJsonElement(stored(title = "Old title")) as JsonObject) - "title").toString()
+        val request = echoUpdate().copy(readBack = NativeWriteReadBack(
+            "7", emptyMap(), emptyMap(), false, editedFields = setOf("title"), absentPrevious = setOf("title"),
+        ))
+        val result = assertIs<NativeActionExecutionResult.Failure>(executor(Transport(readBody = omitted)).execute(request))
+        assertTrue("not applied" in result.message)
+        assertIs<NativeActionExecutionResult.Success>(executor(Transport(readBody = stored(title = "New title"))).execute(request))
+    }
+
     private fun share() = submit("notes.share", mapOf("noteId" to "7", "shareWith" to "synthetic-friend"))
 
     private fun unchangedPrecondition() = NativeWritePrecondition(mapOf("noteId" to "7"), "7") { true }
@@ -334,7 +430,7 @@ class DynamicWriteExecutionTest {
 
     private class Transport(
         var readBody: String = "{}",
-        val readStatus: Int = 200,
+        var readStatus: Int = 200,
         val holdWrite: CompletableDeferred<Unit>? = null,
         /** What reads return after each successive write, so a write can change the stored state. */
         val afterWrites: ArrayDeque<String> = ArrayDeque(),
@@ -372,7 +468,8 @@ class DynamicWriteExecutionTest {
         transport: Transport,
         descriptor: DynamicAppDescriptor = descriptor(),
         store: DynamicWriteQuarantineStore? = null,
-    ) = DynamicNextcloudActionExecutor(transport.services(store), SESSION, descriptor, clock = { 1_000L })
+        session: NextcloudSession = SESSION,
+    ) = DynamicNextcloudActionExecutor(transport.services(store), session, descriptor, clock = { 1_000L })
 
     private fun descriptor(idempotencyHeader: String? = "Idempotency-Key"): DynamicAppDescriptor {
         val provenance = listOf(Provenance(ProvenanceKind.verifiedAppPackage, "signed package", "Verified signed contract"))

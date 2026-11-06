@@ -180,6 +180,7 @@ class NativeWriteExpectation(
     val untouchedBaseline: Map<String, JsonElement>,
     val previous: Map<String, JsonElement>,
     private val verifyTarget: ((NativeRecord) -> NativeWriteVerification)? = null,
+    private val absentPrevious: Set<String> = emptySet(),
 ) {
     /**
      * Verifies [records] read back after the write. Exactly one record must carry [targetId]. A
@@ -201,7 +202,8 @@ class NativeWriteExpectation(
                 !sameWireValue(target.wireValue(field), untouchedBaseline.getValue(field))
         }
         val reverted = changed.isNotEmpty() && changed.keys.all { field ->
-            previous[field]?.let { before -> sameWireValue(target.wireValue(field), before) } == true
+            if (field in absentPrevious) target.wireValue(field) == null
+            else previous[field]?.let { before -> sameWireValue(target.wireValue(field), before) } == true
         }
         return when {
             reverted && changed.size == submitted.size && drifted.isEmpty() ->
@@ -254,7 +256,8 @@ internal fun sameWireValue(left: JsonElement?, right: JsonElement?): Boolean = w
 
 /**
  * Asks the executor to verify a record write by reading [targetId] back through the contract's
- * route-family read. [previous] holds the edited fields' values before the edit; [untouched] holds
+ * route-family read. [previous] holds present edited values before the edit, [absentPrevious]
+ * records edited fields omitted by the read, and [untouched] holds
  * every other field exactly as read. With [echoUntouched] those values travel verbatim in the body
  * (a full-echo replacement); otherwise they are only compared after the write.
  */
@@ -267,4 +270,10 @@ class NativeWriteReadBack(
     val verifyTarget: ((NativeRecord) -> NativeWriteVerification)? = null,
     /** Body fields compared by [verifyTarget] instead of by their wire value. */
     val customFields: Set<String> = emptySet(),
+    /** Edited body fields, including ones absent from the original read; never request context. */
+    val editedFields: Set<String> = previous.keys,
+    /** Absence is distinct from an explicit JSON null. */
+    val absentPrevious: Set<String> = emptySet(),
+    /** Compares custom-shaped fields with their complete baseline when restoring, not the edit. */
+    val verifyRestoreTarget: ((NativeRecord) -> NativeWriteVerification)? = null,
 )

@@ -227,7 +227,10 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
     if (!replace) {
         val untouched = update.fields.map(NativeRecordField::name).filter { it !in editedNames }
             .mapNotNull { name -> record.wire.valueNamed(name)?.let { name to it } }.toMap()
-        return ready(route.write, identities + values, readBack = NativeWriteReadBack(record.id, previous, untouched, echoUntouched = false))
+        return ready(route.write, identities + values, readBack = NativeWriteReadBack(
+            record.id, previous, untouched, echoUntouched = false,
+            editedFields = editedNames, absentPrevious = editedNames - previous.keys,
+        ))
     }
     val echo = when (val plan = nativeFullEchoUpdatePlan(route.write.action, record.wire, editedNames, route.contextInputs)) {
         is NativeFullEchoUpdatePlan.Echo -> plan.echo
@@ -242,7 +245,10 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
         val stored = route.write.echoSource(current)
         expected.all { (name, value) -> sameWireValue(stored.valueNamed(name), value) }
     }
-    return ready(route.write, identities + values, precondition, NativeWriteReadBack(record.id, previous, echo, echoUntouched = true))
+    return ready(route.write, identities + values, precondition, NativeWriteReadBack(
+        record.id, previous, echo, echoUntouched = true,
+        editedFields = editedNames, absentPrevious = editedNames - previous.keys,
+    ))
 }
 
 internal fun NativeChildRecordWritePlan.deleteRequest(record: NativeChildRecord): NativeChildRecordRequestResult {

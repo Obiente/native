@@ -117,4 +117,28 @@ class NativeEditorWriteSessionTest {
         assertFailsWith<CancellationException> { session.restoreBaseline() }
         assertIs<NativeEditorWriteStatus.Unconfirmed>(session.status)
     }
+
+    @Test
+    fun anUnverifiedRestorePreReadKeepsTheRestoreActionWithoutSendingItAutomatically() = runBlocking<Unit> {
+        val session = NativeEditorWriteSession()
+        val restore = request.copy(values = mapOf("restore" to "baseline"))
+        val replies = ArrayDeque(listOf(
+            NativeActionExecutionResult.Success(null, NativeWritePostcondition(emptySet(), setOf("body"), restore)),
+            NativeActionExecutionResult.Failure(
+                "The current values could not be checked.", NativeActionFailureOutcome.Rejected,
+                precondition = NativeWritePreconditionFailure.Unverified,
+            ),
+            NativeActionExecutionResult.Success("Saved."),
+        ))
+        val sent = mutableListOf<NativeActionRequest>()
+        session.submit({ sent += it; replies.removeFirst() }, request, NativeEditorWriteRetry.AfterRefresh) {}
+        assertFalse(session.restoreBaseline())
+        val retryable = assertIs<NativeEditorWriteStatus.Drifted>(session.status)
+        assertEquals(restore, retryable.restore)
+        assertEquals("The current values could not be checked.", retryable.message)
+        assertEquals(listOf<NativeActionRequest>(request, restore), sent)
+        assertTrue(session.restoreBaseline())
+        assertEquals(listOf<NativeActionRequest>(request, restore, restore), sent)
+        assertEquals(NativeEditorWriteStatus.Succeeded, session.status)
+    }
 }

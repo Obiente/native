@@ -26,6 +26,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreRead
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreconditionFailure
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteReadBack
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteSendResult
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteVerification
 import dev.obiente.nextcloudnative.nativeui.runtime.contradictsPostcondition
 import dev.obiente.nextcloudnative.nativeui.runtime.runNativeVerifiedWrite
 import dev.obiente.nextcloudnative.nativeui.runtime.sameWireValue
@@ -111,7 +112,7 @@ internal suspend fun executeDynamicWrite(
         // Persistence fault boundary: an unreadable quarantine must not be forgotten silently.
         return refusal("This app's write safety state on this device could not be read, so nothing was changed.")
     }
-    if (request.baselineRestore && !DynamicBaselineRestores.isOffered(request)) {
+    if (request.baselineRestore && !DynamicBaselineRestores.isOffered(context.ruleKey, request)) {
         return refusal(RESTORE_UNAVAILABLE)
     }
     // The offered baseline restore is the one write a quarantine lets through; every other
@@ -139,8 +140,6 @@ internal suspend fun executeDynamicWrite(
         return refusal("Another change to this item is still being saved. Wait for it to finish.")
     }
     try {
-        // A restore is consumed only once this write holds the target, so a busy target keeps it.
-        if (request.baselineRestore && !DynamicBaselineRestores.take(request)) return refusal(RESTORE_UNAVAILABLE)
         if (action.operationRiskClass == DynamicOperationRiskClass.sharing) {
             context.sharePermissionRefusal(request)?.let { refused ->
                 context.record(code = null, outcome = "refused", detail = "share-permission-${refused.name.lowercase()}")
@@ -219,9 +218,9 @@ private suspend fun executeVerified(
         // Nothing was sent: the request could not be built from the contract and the values.
         return refusal(invalid.message ?: "This change could not be prepared.")
     }
-    // Only edited fields have a value from before the edit; a context input such as a parent
-    // reference travels in the body but is not part of the change being verified.
-    val submitted = prepared.submittedBody.filterKeys { it in readBack.previous && it !in readBack.customFields }
+    // Context inputs travel in the body but are not edits. An edited field can be absent from
+    // the original read, so membership cannot be inferred from the previous-value map.
+    val submitted = prepared.submittedBody.filterKeys { it in readBack.editedFields && it !in readBack.customFields }
     val outcome = runNativeVerifiedWrite(
         actionLabel = context.action.label,
         preRead = request.precondition?.let { precondition ->
@@ -238,14 +237,20 @@ private suspend fun executeVerified(
             }
         },
         send = {
-            val execution = context.send(prepared)
-            val result = execution.response.toDynamicActionExecutionResult(context.action)
-            releaseMultipartUploadAfterSuccess(result, execution.multipartFile, context.onMultipartUploadSucceeded)
-            when {
-                result is NativeActionExecutionResult.Success -> NativeWriteSendResult.Accepted
-                (result as NativeActionExecutionResult.Failure).outcome == NativeActionFailureOutcome.Rejected ->
-                    NativeWriteSendResult.Rejected(result.message)
-                else -> NativeWriteSendResult.Ambiguous(result.message)
+            // Preparation and pre-read failures preserve the offer. Consume it immediately before
+            // the transport attempt, while the target gate is held, including ambiguous attempts.
+            if (request.baselineRestore && !DynamicBaselineRestores.take(context.ruleKey, request)) {
+                NativeWriteSendResult.Rejected(RESTORE_UNAVAILABLE)
+            } else {
+                val execution = context.send(prepared)
+                val result = execution.response.toDynamicActionExecutionResult(context.action)
+                releaseMultipartUploadAfterSuccess(result, execution.multipartFile, context.onMultipartUploadSucceeded)
+                when {
+                    result is NativeActionExecutionResult.Success -> NativeWriteSendResult.Accepted
+                    (result as NativeActionExecutionResult.Failure).outcome == NativeActionFailureOutcome.Rejected ->
+                        NativeWriteSendResult.Rejected(result.message)
+                    else -> NativeWriteSendResult.Ambiguous(result.message)
+                }
             }
         },
         readBack = {
@@ -255,11 +260,16 @@ private suspend fun executeVerified(
         },
         verify = { records ->
             val untouched = readBack.untouched.filterKeys { it !in readBack.customFields }
-            NativeWriteExpectation(readBack.targetId, submitted, untouched, readBack.previous, readBack.verifyTarget).verify(records)
+            val verification = NativeWriteExpectation(
+                readBack.targetId, submitted, untouched, readBack.previous, readBack.verifyTarget, readBack.absentPrevious,
+            ).verify(records)
+            if (request.baselineRestore && verification is NativeWriteVerification.Adjusted) {
+                NativeWriteVerification.NotApplied("The previous values were not fully restored.")
+            } else verification
         },
     )
     context.recordOutcome(outcome)
-    return outcome.toExecutionResult(request, readBack)
+    return outcome.toExecutionResult(request, readBack, context.ruleKey)
 }
 
 private suspend fun DynamicWriteContext.recordOutcome(outcome: NativeVerifiedWriteOutcome<*>) {
@@ -294,6 +304,7 @@ private suspend fun DynamicWriteContext.recordOutcome(outcome: NativeVerifiedWri
 private fun NativeVerifiedWriteOutcome<List<NativeRecord>>.toExecutionResult(
     request: NativeActionRequest.Submit,
     readBack: NativeWriteReadBack,
+    ruleKey: DynamicWriteRuleKey,
 ): NativeActionExecutionResult = when (this) {
     is NativeVerifiedWriteOutcome.Confirmed -> NativeActionExecutionResult.Success("Saved.")
     is NativeVerifiedWriteOutcome.Adjusted -> NativeActionExecutionResult.Success(
@@ -305,12 +316,13 @@ private fun NativeVerifiedWriteOutcome<List<NativeRecord>>.toExecutionResult(
         postcondition = NativeWritePostcondition(
             adjusted = adjusted,
             drifted = drifted,
-            restoreBaseline = if (drifted.isEmpty()) null else request.baselineRestore(readBack, snapshot),
+            restoreBaseline = if (drifted.isEmpty()) null else request.baselineRestore(readBack, snapshot, ruleKey),
         ),
     )
     is NativeVerifiedWriteOutcome.NotApplied -> NativeActionExecutionResult.Failure(
-        message = when (reason) {
-            NativeNotAppliedReason.NotAppliedAfterSuccess ->
+        message = when {
+            request.baselineRestore -> message
+            reason == NativeNotAppliedReason.NotAppliedAfterSuccess ->
                 "The app reported success, but the change was not applied. Changes here are paused on this device."
             else -> message
         },
@@ -334,20 +346,25 @@ private fun NativeVerifiedWriteOutcome<List<NativeRecord>>.toExecutionResult(
 private fun NativeActionRequest.Submit.baselineRestore(
     readBack: NativeWriteReadBack,
     snapshot: List<NativeRecord>,
+    ruleKey: DynamicWriteRuleKey,
 ): NativeActionRequest.Submit? {
     if (!readBack.echoUntouched || baselineRestore) return null
+    // There is no declared way to restore an absent field, or a custom shape without its own verifier.
+    if (readBack.absentPrevious.isNotEmpty() || readBack.customFields.isNotEmpty() && readBack.verifyRestoreTarget == null) return null
     val original = precondition ?: return null
     val drifted = snapshot.filter { it.id == readBack.targetId }.singleOrNull()?.takeIf(NativeRecord::actionSafeIdentity) ?: return null
     val baseline = readBack.untouched + readBack.previous
     return copy(
-        values = values.filterKeys { key -> key !in readBack.previous },
+        values = values.filterKeys { key -> key !in readBack.editedFields && key !in readBack.customFields },
         precondition = NativeWritePrecondition(original.readValues, readBack.targetId) { current ->
             current.values == drifted.values && sameWireValue(JsonObject(current.wireValues), JsonObject(drifted.wireValues))
         },
-        // Every field travels verbatim; a custom-shaped field is echoed but not compared by wire value.
-        readBack = NativeWriteReadBack(readBack.targetId, emptyMap(), baseline, echoUntouched = true, customFields = readBack.customFields),
+        readBack = NativeWriteReadBack(
+            readBack.targetId, emptyMap(), baseline, echoUntouched = true,
+            verifyTarget = readBack.verifyRestoreTarget, customFields = readBack.customFields,
+        ),
         baselineRestore = true,
-    ).also(DynamicBaselineRestores::issue)
+    ).also { DynamicBaselineRestores.issue(ruleKey, it) }
 }
 
 /**
@@ -356,18 +373,23 @@ private fun NativeActionRequest.Submit.baselineRestore(
  */
 internal object DynamicBaselineRestores {
     private val lock = DynamicNativeMemoryCacheLock()
-    private val issued = ArrayDeque<NativeActionRequest.Submit>()
+    private val issued = ArrayDeque<Pair<DynamicWriteRuleKey, NativeActionRequest.Submit>>()
 
-    fun issue(request: NativeActionRequest.Submit) {
+    fun issue(key: DynamicWriteRuleKey, request: NativeActionRequest.Submit) {
         lock.withLock {
-            issued.addLast(request)
+            issued.addLast(key to request)
             while (issued.size > MAX_OFFERED_RESTORES) issued.removeFirst()
         }
     }
 
-    fun isOffered(request: NativeActionRequest.Submit): Boolean = lock.withLock { request in issued }
+    fun isOffered(key: DynamicWriteRuleKey, request: NativeActionRequest.Submit): Boolean = lock.withLock {
+        issued.any { it.first == key && it.second === request }
+    }
 
-    fun take(request: NativeActionRequest.Submit): Boolean = lock.withLock { issued.remove(request) }
+    fun take(key: DynamicWriteRuleKey, request: NativeActionRequest.Submit): Boolean = lock.withLock {
+        val index = issued.indexOfFirst { it.first == key && it.second === request }
+        if (index < 0) false else { issued.removeAt(index); true }
+    }
 }
 
 private const val MAX_OFFERED_RESTORES = 32

@@ -337,6 +337,20 @@ class NativeChildRecordWritesTest {
         assertIs<NativeChildRecordRequestResult.Ready>(json.updateRequest(editable, editable.draft + ("amount" to "20")))
     }
 
+    @Test
+    fun anEditedOptionalFieldMissingFromTheReadHasAnExplicitAbsentBaseline() {
+        val patch = assertNotNull(plan())
+        val original = expenseRecord().let { it.copy(values = it.values - "comment", wireValues = it.wireValues - "comment") }
+        val expense = assertNotNull(patch.record(original))
+        val request = assertIs<NativeChildRecordRequestResult.Ready>(
+            patch.updateRequest(expense, expense.draft + ("comment" to "New comment")),
+        ).request
+        val readBack = assertNotNull(request.readBack)
+        assertEquals(setOf("comment"), readBack.editedFields)
+        assertEquals(setOf("comment"), readBack.absentPrevious)
+        assertTrue("comment" !in readBack.previous)
+    }
+
     private fun expenseRecord(payer: String = "1") = NativeRecord(
         "44",
         mapOf(

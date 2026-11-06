@@ -407,6 +407,10 @@ class NativeGridRowWritesTest {
         assertEquals(setOf("cells.1"), drift.drifted, "An untouched cell that changed is drift.")
         val expectation = NativeWriteExpectation("9", emptyMap(), readBack.untouched, readBack.previous, verify)
         assertEquals(NativeWriteVerification.Unidentified, expectation.verify(emptyList()), "A read without the row confirms nothing.")
+        val verifyRestore = assertNotNull(readBack.verifyRestoreTarget)
+        assertEquals(NativeWriteVerification.Confirmed, verifyRestore(row()))
+        assertIs<NativeWriteVerification.NotApplied>(verifyRestore(row(ROW_DATA.replace("Synthetic item", "Still drifted"))))
+        assertIs<NativeWriteVerification.NotApplied>(verifyRestore(row(ROW_DATA.replace("\"value\":12", "\"value\":40"))))
     }
 
     @Test

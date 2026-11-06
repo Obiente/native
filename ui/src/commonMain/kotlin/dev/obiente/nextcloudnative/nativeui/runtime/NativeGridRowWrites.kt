@@ -447,6 +447,14 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
         echoUntouched = true,
         verifyTarget = verifyCells,
         customFields = setOf(cellField),
+        verifyRestoreTarget = { current ->
+            val restored = nativeGridStoredCells(current, cellField)
+            when {
+                restored == null -> NativeWriteVerification.Unidentified
+                sameWireValue(JsonObject(restored), JsonObject(snapshot)) -> NativeWriteVerification.Confirmed
+                else -> NativeWriteVerification.NotApplied("The previous cell values were not restored.")
+            }
+        },
     )
     return ready(update.write.action, values + (cellField to data.toString()), precondition, readBack)
 }

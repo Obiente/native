@@ -161,6 +161,8 @@ internal class NativeEditorWriteSession {
         }
         status = when {
             result is NativeActionExecutionResult.Success -> NativeEditorWriteStatus.Succeeded
+            result is NativeActionExecutionResult.Failure && result.precondition == NativeWritePreconditionFailure.Unverified ->
+                drifted.copy(message = result.message)
             (result as NativeActionExecutionResult.Failure).outcome == NativeActionFailureOutcome.Rejected ->
                 NativeEditorWriteStatus.Rejected(result.message)
             else -> unconfirmed(NativeEditorWriteRetry.AfterRefresh)
