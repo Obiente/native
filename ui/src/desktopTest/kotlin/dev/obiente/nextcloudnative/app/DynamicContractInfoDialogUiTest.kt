@@ -8,10 +8,15 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import org.jetbrains.skia.EncodedImageFormat
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -57,15 +62,81 @@ class DynamicContractInfoDialogUiTest {
     }
 
     @Test
-    fun anUnreadableStateIsExplainedAndCanBeReset() = onSceneThread {
+    fun anUnreadableStateCannotDiscardPendingOperations() = onSceneThread {
         var resumed = 0
         scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Unreadable, { resumed++ }, {}) }) {
             assertTrue(texts().any { "could not be read" in it })
-            clickText("Resume changes")
-            assertTrue(texts().any { "Resuming resets it" in it }, "${texts()}")
+            assertTrue(texts().none { it == "Resume changes" })
             assertEquals(0, resumed)
-            clickText("Resume")
-            assertEquals(1, resumed)
+        }
+    }
+
+    @Test
+    fun pendingVerificationIsDistinctFromQuarantineAndCannotBeResumed() = onSceneThread {
+        val entries = listOf(DynamicWriteSafetyEntry("/apps/reader/items/{}", DynamicWriteRuleStatus.probation,
+            null, "item-state-pair v1", pendingVerification = true))
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Ready(entries), {}, {}) }) {
+            assertTrue(texts().any { "Needs verification" in it })
+            assertTrue(texts().none { it == "Resume changes" })
+        }
+    }
+
+    @Test
+    fun stoppingChecksNeedsConfirmationAndKeepsTheUnknownRoutePaused() = onSceneThread {
+        for ((width, height) in listOf(900 to 1000, 360 to 720)) DynamicRuleExecutionFixture().use { f ->
+            f.writeStatus = 503
+            f.afterWrite = null
+            val executor = f.executor()
+            executor.execute(f.request())
+            val pending = f.entries().single().pendingVerification
+            val requests = f.requests.size
+            val stopStarted = CompletableDeferred<Unit>()
+            val finishStop = CompletableDeferred<Unit>()
+            scene({ DynamicContractInfoHost(INFO, f.safety, f.session.accountId.storageKey,
+                f.descriptor.app.id, {}, onStopChecking = { handle ->
+                    stopStarted.complete(Unit)
+                    finishStop.await()
+                    executor.stopCheckingRuleOperation(handle)
+                }) }, width, height) {
+                NativeSceneTestDriver(this).settleUntil { texts().any { it == "Stop checking" } }
+                clickText("Stop checking")
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().any { "result will remain unknown" in it && "stay paused" in it })
+                capture("stop-checking-confirmation-$width")
+                clickText("Cancel")
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().none { it == "Resume changes" })
+                clickText("Stop checking")
+                clickText("Stop checking and keep paused")
+                withTimeout(5_000) { stopStarted.await() }
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().none { it == "Resume changes" })
+                finishStop.complete(Unit)
+                NativeSceneTestDriver(this).settleUntil(5_000) {
+                    texts().any { "earlier result remains unknown" in it }
+                }
+                val stopped = f.entries().single()
+                assertEquals(null, stopped.pendingVerification)
+                assertEquals(DynamicWriteRuleStatus.quarantined, stopped.status)
+                assertEquals(DynamicWriteQuarantineReason.abandonedUnknown, stopped.reason)
+                assertTrue(texts().any { "earlier result remains unknown" in it })
+                assertTrue(texts().none { it == "Stop checking" })
+                assertEquals(requests, f.requests.size, "Stopping checking does not send or refresh anything.")
+                clickText("Resume changes")
+                assertTrue(texts().any { "results remain unknown" in it })
+                assertEquals(DynamicWriteRuleStatus.quarantined, f.entries().single().status)
+                clickText("Cancel")
+                assertEquals(DynamicWriteRuleStatus.quarantined, f.entries().single().status)
+            }
+        }
+    }
+
+    private suspend fun ImageComposeScene.capture(name: String) {
+        val directory = System.getenv("NATIVE_PRIVATE_QA_DIR")?.let(Path::of) ?: return
+        Files.createDirectories(directory)
+        kotlinx.coroutines.delay(400) // Let the dialog's entrance animation finish in private captures.
+        render(System.nanoTime()).use { image ->
+            image.encodeToData(EncodedImageFormat.PNG)!!.use { data -> Files.write(directory.resolve("$name.png"), data.bytes) }
         }
     }
 
@@ -91,8 +162,8 @@ class DynamicContractInfoDialogUiTest {
         assertEquals(1, store.records(account, "ledger").size, "Another app's state is untouched.")
     }
 
-    private suspend fun scene(content: @androidx.compose.runtime.Composable () -> Unit, block: suspend ImageComposeScene.() -> Unit) {
-        val scene = ImageComposeScene(900, 1000, Density(1f), coroutineContext = kotlin.coroutines.coroutineContext) {
+    private suspend fun scene(content: @androidx.compose.runtime.Composable () -> Unit, width: Int = 900, height: Int = 1000, block: suspend ImageComposeScene.() -> Unit) {
+        val scene = ImageComposeScene(width, height, Density(1f), coroutineContext = kotlin.coroutines.coroutineContext) {
             MaterialTheme { Surface { content() } }
         }
         try {

@@ -55,6 +55,7 @@ internal data class NativeFeedReaderPlan(
     val feeds: List<NativeFeedSource>,
     val folders: List<NativeFeedSource>,
     val selectedArticle: NativeFeedArticle?,
+    val authority: NativeRuleAuthority? = null,
 ) {
     val hasReadState: Boolean get() = articles.any { it.unread != null }
     val hasStarredState: Boolean get() = articles.any { it.starred != null }
@@ -107,6 +108,7 @@ internal fun nativeFeedReaderPlan(
     records: List<NativeRecord>,
     context: NativeDatasetContext,
     selectedRecordId: String? = null,
+    authority: NativeRuleAuthority? = null,
 ): NativeFeedReaderPlan? {
     if (records.isEmpty()) return null
     val declared = view.component == NativeComponent.feedReader
@@ -131,6 +133,7 @@ internal fun nativeFeedReaderPlan(
         feeds = sources.filterNot(NativeFeedSource::folder),
         folders = sources.filter(NativeFeedSource::folder),
         selectedArticle = selectedRecordId?.let { id -> articles.firstOrNull { it.record.id == id } },
+        authority = authority,
     )
 }
 

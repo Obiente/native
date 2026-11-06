@@ -146,7 +146,13 @@ entries and successful guesses do not prove that an operation is safe.
   declared contract, and it sends the complete representation (full echo).
   Every write carries its evidence tier and risk class, passes the admission
   matrix at the transport boundary, and, where its surface opts in, is read
-  back and verified; a contradiction quarantines the route on that device. See
+  back and verified; a contradiction quarantines the route on that device.
+  Registered item-state rules additionally rebuild typed execution plans from
+  current authority, save encrypted recovery before reserving a durable token,
+  and force network confirmation. Pending tokens cannot be cleared by ordinary
+  Resume changes or version observation. Explicitly stopping recovery resolves
+  only the chosen token as unknown and keeps its route quarantined until a
+  separate Resume confirmation. See
   [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification).
   Dynamic app behavior
   follows semantic patterns over that contract and its data, not an app ID,

@@ -12,8 +12,66 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class NativeFeedReaderSessionTest {
+    @Test
+    fun `a completed save requests refresh after pagination changes the load generation`() {
+        val session = NativeFeedReaderSession()
+        val first = article("1", true)
+        session.reconcile(listOf(first), 1)
+        val token = session.begin(first, markRead())
+        session.reconcile(listOf(first, article("2", true)), 2)
+        var refreshed = false
+        assertFalse(session.succeeded(first, token) { refreshed = true })
+        assertTrue(refreshed)
+        assertTrue(session.overrides.isEmpty())
+    }
+
+    @Test
+    fun `unknown completion checks durable repeat eligibility after pagination`() = runBlocking<Unit> {
+        val session = NativeFeedReaderSession()
+        val first = article("1", true)
+        session.reconcile(listOf(first), 1)
+        val token = session.begin(first, markRead())
+        session.reconcile(listOf(first, article("2", true)), 2)
+        var checked = false
+        assertTrue(session.checkUnresolved(first, "Unknown", token) { checked = true; true })
+        assertTrue(checked)
+        assertTrue(session.overrides.isEmpty())
+    }
+    @Test
+    fun `stale completion cannot roll back a newer mutation or another item`() {
+        val session = NativeFeedReaderSession()
+        val first = article("1", true)
+        val second = article("2", true)
+        session.reconcile(listOf(first, second), 1)
+        val old = session.begin(first, markRead())
+        assertNull(session.begin(first, markRead()), "One in-flight mutation per item")
+        session.reconcile(listOf(first, second), 2)
+        val current = session.begin(first, markRead())
+        val other = session.begin(second, markRead())
+        assertFalse(session.failed(first, "Old failure", old))
+        assertFalse(session.succeeded(first, old))
+        assertEquals(2, session.overrides.size)
+        assertTrue(session.failed(first, "Current failure", current))
+        assertNull(session.overrides[first.key])
+        assertEquals(NativeFeedArticleState(unread = false), session.overrides[second.key])
+        assertTrue(session.succeeded(second, other))
+    }
+
+    @Test
+    fun `failure restores only the current mutation baseline including an earlier confirmed state`() {
+        val session = NativeFeedReaderSession()
+        val first = article("1", true)
+        session.reconcile(listOf(first), 1)
+        val previous = session.begin(first, markRead())
+        assertTrue(session.succeeded(first, previous))
+        val next = session.begin(first, markRead().copy(kind = NativeFeedItemActionKind.Star))
+        assertTrue(session.failed(first, "Cancelled", next))
+        assertEquals(NativeFeedArticleState(unread = false), session.overrides[first.key])
+    }
+
     @Test
     fun `a pending change and its error survive appending a page`() {
         val session = NativeFeedReaderSession()

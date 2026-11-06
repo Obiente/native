@@ -50,6 +50,8 @@ internal class DynamicWriteContext(
     val observedInputSchema: JsonElement?,
     val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit,
     val clock: () -> Long,
+    val ruleAuthority: () -> dev.obiente.nextcloudnative.nativeui.runtime.NativeRuleAuthority? = { null },
+    val accountProducer: AccountPrivateMemoryProducer? = sharedAccountPrivateMemoryGate.producer(session.accountId.storageKey),
 ) {
     /** The platform's durable store; a platform without one has no persisted write safety state. */
     val store: DynamicWriteQuarantineStore? by lazy {
@@ -88,6 +90,7 @@ internal class DynamicWriteContext(
 private val ENFORCED_REFUSALS = setOf(
     DynamicWriteRefusal.insufficientEvidence,
     DynamicWriteRefusal.ruleQuarantined,
+    DynamicWriteRefusal.pendingVerification,
     DynamicWriteRefusal.identityUnbound,
     DynamicWriteRefusal.bodyNotRepresentable,
     DynamicWriteRefusal.noSendSafeguard,
@@ -100,9 +103,31 @@ internal suspend fun executeDynamicWrite(
     context: DynamicWriteContext,
     request: NativeActionRequest.Submit,
 ): NativeActionExecutionResult {
+    val route = context.patternRuleAdmissionGate()
+    if (route != null && !DynamicWriteInFlightGate.tryAcquire(route)) {
+        val message = "Another change here is still being checked. Wait for it to finish."
+        return if (request.rulePlan == null) refusal(message)
+        else NativeActionExecutionResult.Failure(message, NativeActionFailureOutcome.Unknown)
+    }
+    try {
+        return if (request.rulePlan != null) executeDynamicRuleWrite(context, request)
+        else executeDeclaredDynamicWrite(context, request)
+    } finally {
+        route?.let(DynamicWriteInFlightGate::release)
+    }
+}
+
+private suspend fun executeDeclaredDynamicWrite(
+    context: DynamicWriteContext,
+    request: NativeActionRequest.Submit,
+): NativeActionExecutionResult {
+    if (context.requiresRulePlan()) return refusal("This item change needs a current verified plan. Refresh and use its item controls.")
     val action = context.action
     val ruleState = try {
         context.store?.let { store ->
+            if (store.records(context.session.accountId.storageKey, context.descriptor.app.id).any {
+                    (it.pendingVerification != null || it.reason == DynamicWriteQuarantineReason.abandonedUnknown) && it.key.route == context.canonicalRuleRoute()
+                }) return NativeActionExecutionResult.Failure("Changes here are paused because an earlier result remains unknown. Review it in Contract info.", NativeActionFailureOutcome.Unknown)
             store.observeAppVersion(context.ruleKey.accountDigest, context.descriptor.app.id, context.descriptor.app.version)
             store.ruleState(context.ruleKey, ruleApplies = false)
         } ?: DynamicWriteRuleState.notRequired
@@ -135,7 +160,9 @@ internal suspend fun executeDynamicWrite(
         )
         return refusal(admission.reason.message())
     }
-    val target = request.targetKey(context)
+    val target = try { context.canonicalTargetGate(action, request.values) } catch (_: IllegalArgumentException) {
+        return refusal("This item's target could not be resolved, so nothing was changed.")
+    }
     if (!DynamicWriteInFlightGate.tryAcquire(target)) {
         return refusal("Another change to this item is still being saved. Wait for it to finish.")
     }
@@ -424,15 +451,6 @@ private class DynamicWriteExecutionResult(val response: NextcloudApiResponse, va
 
 private suspend fun DynamicWriteContext.send(prepared: DynamicPreparedWrite): DynamicWriteExecutionResult =
     DynamicWriteExecutionResult(services.executeNextcloudApi(session, prepared.request), prepared.request.multipartBody?.file)
-
-private fun NativeActionRequest.Submit.targetKey(context: DynamicWriteContext): String =
-    listOf(
-        context.session.accountId.storageKey,
-        context.descriptor.app.id,
-        context.action.binding.method.name,
-        context.action.binding.path,
-        context.action.binding.pathParameters.joinToString("/") { parameter -> values[parameter.name] ?: context.runtimeContext[parameter.name].orEmpty() },
-    ).joinToString("\u0000")
 
 private fun DynamicWriteContext.record(code: DynamicDiagnosticCode?, outcome: String, detail: String? = null) {
     val event = SupportDiagnosticEventDraft(

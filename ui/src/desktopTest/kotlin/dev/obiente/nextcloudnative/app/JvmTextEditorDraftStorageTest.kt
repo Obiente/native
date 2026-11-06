@@ -128,6 +128,30 @@ class JvmTextEditorDraftStorageTest {
     }
 
     @Test
+    fun `maintenance requires matching identity and preserves retained foreign and unreadable drafts`() = runBlocking<Unit> {
+        withRoot { root ->
+            val storage = JvmTextEditorDraftStorage(root, { key })
+            val first = storage.bind(account, "/one.txt")
+            first.save(draft)
+            val second = storage.bind(account, "/two.txt")
+            second.save(draft)
+            val foreign = storage.bind(otherAccount, "/one.txt")
+            foreign.save(draft)
+            assertEquals(0, first.pruneUnreferenced(setOf("/one.txt")) { "/one.txt" })
+            assertEquals(0, first.pruneUnreferenced(emptySet()) { "/wrong.txt" })
+            val retained = root.listFiles()!!.toSet()
+            storage.bind(account, "/corrupt.txt").save(draft)
+            val corrupt = root.listFiles()!!.single { it !in retained }
+            corrupt.writeBytes(byteArrayOf(0))
+            assertEquals(1, first.pruneUnreferenced(emptySet()) { "/one.txt" })
+            assertNull(first.load())
+            assertEquals(draft, second.load())
+            assertEquals(draft, foreign.load())
+            assertTrue(corrupt.exists())
+        }
+    }
+
+    @Test
     fun `directory symlinks and Windows junctions cannot redirect draft storage or cleanup`() = runBlocking {
         withRoot { parent ->
             val target = File(parent, "target").apply { mkdir() }

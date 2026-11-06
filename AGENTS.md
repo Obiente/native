@@ -211,13 +211,15 @@ the app ID:
 Every class above R0 allows one in-flight write per target record, and at most
 one unconfirmed write per route while a rule is in probation.
 
-Implementation gap (Last reviewed: 2026-11-02; this may have changed, see
+Implementation boundary (Last reviewed: 2026-11-06; this may have changed, see
 [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)):
-until pattern rules ship, R1 is admitted from the compiler's effect
-classification of the declared operation rather than from an E4 rule, and its
-read-back, rollback, and quarantine safeguards are not yet applied. R1 writes
-are listed there with the other surfaces that are not yet read back. New code
-must not rely on that gap.
+the feed item-state rule slice applies R1 read-back, rollback, quarantine and
+encrypted durable recovery to declared inverse item commands and supported
+single-boolean item updates. R1 actions outside that slice still need those
+safeguards. Pending rule operations survive Resume changes and version changes.
+Token-checked reconciliation or definite rejection resolves their status. A
+separate confirmed Stop checking action can instead end recovery while keeping
+the result unknown and the route quarantined until explicit Resume.
 
 ### Rules
 

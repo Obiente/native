@@ -89,15 +89,15 @@ class DynamicWriteQuarantineStoreTest {
     }
 
     @Test
-    fun `an unreadable file fails closed until the person clears it`() = runBlocking<Unit> {
+    fun `an unreadable file cannot discard possible pending operations through Resume`() = runBlocking<Unit> {
         directory.mkdirs()
         File(directory, "$ACCOUNT.json").writeText("""{"version":1,"records":[{"broken":true}]}""")
         val store = FileDynamicWriteQuarantineStore(directory)
         assertFailsWith<IllegalStateException> { store.record(key()) }
         assertFailsWith<IllegalStateException> { store.beginProbation(key(), 1) }
 
-        store.clearApp(ACCOUNT, "notebook")
-        assertNull(store.record(key()))
+        assertFailsWith<IllegalStateException> { store.clearApp(ACCOUNT, "notebook") }
+        assertFailsWith<IllegalStateException> { store.record(key()) }
     }
 
     @Test

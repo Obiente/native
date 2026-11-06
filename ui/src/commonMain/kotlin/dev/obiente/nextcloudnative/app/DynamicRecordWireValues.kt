@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * The exact JSON of every contract-declared top-level field of one read record, bounded so a
@@ -23,6 +25,20 @@ internal fun JsonObject.boundedDynamicWireValues(
             key to value
         }
         .toMap()
+}
+
+/** Keeps exact scalar observations separately so they never become declared full-echo fields. */
+internal fun JsonObject.boundedDynamicRuleObservations(retained: (String, JsonElement) -> Boolean): Map<String, JsonElement> =
+    entries.asSequence().filter { (key, value) ->
+        key.length <= 64 && value is JsonPrimitive && value.toString().length <= 256 && retained(key, value)
+    }.take(MAX_WIRE_FIELDS_PER_RECORD).associate { it.key to it.value }
+
+/** Display deduplication must not turn an ambiguous or truncated response into write authority. */
+internal fun List<NativeRecord>.withoutAmbiguousDynamicIdentities(complete: Boolean): List<NativeRecord> {
+    val counts = groupingBy(NativeRecord::id).eachCount()
+    return distinctBy(NativeRecord::id).map { record ->
+        if (!complete || counts.getValue(record.id) > 1) record.copy(actionBindingProvenanceValid = false) else record
+    }
 }
 
 private const val MAX_WIRE_FIELDS_PER_RECORD = 128

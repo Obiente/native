@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.rules
 
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.DynamicOperationRiskClass
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import kotlinx.serialization.json.JsonElement
 
@@ -17,7 +18,7 @@ import kotlinx.serialization.json.JsonElement
  * confirm the rule; a contradiction quarantines that key. Rules are registered with fixtures from
  * at least two apps, and a rule never special-cases an app ID or version.
  *
- * Phase one ships the interface and an empty registry; the first rules arrive with their fixtures.
+ * Registered rules are re-matched at execution against the authoritative descriptor.
  */
 
 /** A write and the declared reads of its route family, as the rule sees them. */
@@ -69,8 +70,13 @@ class PatternRuleRegistry(rules: List<PatternRule> = emptyList()) {
 
     companion object {
         /** The rules shipped with this build. */
-        val shipped: PatternRuleRegistry = PatternRuleRegistry()
+        val shipped: PatternRuleRegistry = PatternRuleRegistry(listOf(ItemStatePairRule(), DeclaredBooleanStateRule()))
     }
 }
 
 private fun String.isRuleId(): Boolean = length in 1..64 && all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
+
+/** Shared availability gate for surfaces that cannot yet supply an authoritative rule plan. */
+internal fun NativeAppSchema.requiresPatternRulePlan(action: ActionSpec): Boolean =
+    action.needsItemStateProof() || PatternRuleRegistry.shipped.ruleFor(this,
+        PatternRouteFamily(action, (actions + dedicatedActions).filter { it.binding.method == HttpMethod.GET })) != null

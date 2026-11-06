@@ -108,6 +108,9 @@ enum class DynamicDiagnosticCode(val code: String) {
     /** A pattern rule's first read-back on this device confirmed it. */
     WriteRuleConfirmed("write-rule-confirmed"),
 
+    /** The person stopped recovery without claiming delivery or enabling another write. */
+    WriteRecoveryStopped("write-recovery-stopped"),
+
     /** A write ran under a pattern rule that this device has not confirmed yet. */
     WriteRuleProbation("write-rule-probation"),
 

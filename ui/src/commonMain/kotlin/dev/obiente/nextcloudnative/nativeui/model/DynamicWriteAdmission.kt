@@ -34,6 +34,8 @@ enum class DynamicWriteRuleState {
 
     /** A read-back contradicted the rule; the route stays disabled until the person clears it. */
     quarantined,
+    /** An operation may have been sent; ordinary admission cannot clear or replay it. */
+    pendingVerification,
 }
 
 /** Contract facts and surface guarantees that the admission rules consult. */
@@ -100,6 +102,7 @@ enum class DynamicWriteRefusal {
     insufficientEvidence,
     identityUnbound,
     ruleQuarantined,
+    pendingVerification,
     semanticsUndeclared,
     mergeUndeclared,
     incompleteRepresentation,
@@ -139,9 +142,10 @@ fun admitDynamicWrite(input: DynamicWriteAdmissionInput): DynamicWriteAdmission 
     // Every write needs a declared operation. A rule or an observation never invents one.
     if (tier == null || !tier.declaresOperation) return refuse(DynamicWriteRefusal.insufficientEvidence)
     if (input.rule == DynamicWriteRuleState.quarantined) return refuse(DynamicWriteRefusal.ruleQuarantined)
+    if (input.rule == DynamicWriteRuleState.pendingVerification) return refuse(DynamicWriteRefusal.pendingVerification)
     if (input.identityBinding == DynamicIdentityBinding.refused) return refuse(DynamicWriteRefusal.identityUnbound)
     val ruleApplied = input.rule == DynamicWriteRuleState.probation || input.rule == DynamicWriteRuleState.confirmed
-    val probation = if (input.rule == DynamicWriteRuleState.probation) setOf(DynamicWriteSafeguard.probationLimit) else emptySet()
+    val probation = if (input.rule == DynamicWriteRuleState.probation) setOf(DynamicWriteSafeguard.probationLimit, DynamicWriteSafeguard.durablePendingRecord) else emptySet()
     val verifiedEdit = setOf(DynamicWriteSafeguard.preReadCompare, DynamicWriteSafeguard.readBackDiff, DynamicWriteSafeguard.baselineUndo)
     return when (riskClass) {
         DynamicOperationRiskClass.idempotentStateSet -> when {

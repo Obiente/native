@@ -206,7 +206,9 @@ Windows, and an early macOS package) with:
   including News: unread and starred filters over the loaded articles, feeds
   beside the list, and an article reader that does not load remote images.
   Read and star changes appear only when the app's own contract describes
-  them for one article, so News opens read-only;
+  them for one article and a registered rule proves its identity and state.
+  Changes are read back; unresolved results survive restart and can be checked
+  before an explicit repeat. See the [implemented boundaries](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification);
 - Activity, global search, Dashboard, user status and app navigation;
 - native Settings for personal info, Talk privacy and conversation settings,
   and, for administrators, read-only views of apps, accounts, groups and server

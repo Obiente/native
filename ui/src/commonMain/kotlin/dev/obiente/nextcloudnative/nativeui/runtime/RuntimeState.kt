@@ -33,6 +33,8 @@ data class NativeRecord(
      * a field missing here cannot be echoed, so a replacement that needs it is not offered.
      */
     val wireValues: Map<String, JsonElement> = emptyMap(),
+    /** Bounded observed scalar evidence for per-action rules only; never full-echo/body authority. */
+    val observedRuleValues: Map<String, JsonElement> = emptyMap(),
 )
 
 @Serializable
@@ -253,6 +255,8 @@ sealed interface NativeActionRequest {
          * through, and it still runs the pre-read compare, the full echo, and the read-back.
          */
         val baselineRestore: Boolean = false,
+        val rulePlan: NativePatternRulePlan? = null,
+        val ruleRecovery: NativeRuleRecoveryIntent? = null,
     ) : NativeActionRequest
 }
 

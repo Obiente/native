@@ -909,12 +909,42 @@ opt in through the request's read-back and are recorded, not yet enforced,
 for the remaining surfaces listed below. One write per target record may be
 in flight at a time.
 
-Until pattern rules ship, an idempotent state set (R1) is admitted from the
-compiler's effect classification of the declared operation (its declared
-effect and typed body), not from a reviewed E4 rule. Its matrix safeguards
-(read-back of the state field, rollback on mismatch, and quarantine on
-contradiction) are not yet applied: R1 writes are sent once without a
-read-back, like the other surfaces listed below as not yet read back.
+The first bounded rule slice covers feed item state changes. The registered
+`ItemStatePairRule` requires both declared inverse, body-free commands under
+one item route (read/unread, seen/unseen, star/unstar, and the reviewed spelling
+pairs in the rule). A separate declared-boolean rule preserves single-boolean
+item updates. Both require E2/E3 operation evidence, a current authoritative
+load, unique typed identity, navigation-bound parents, and a declared
+verification read. Mark-all and feed-wide commands do not qualify. No app ID
+or version selects this behavior; exact versions partition safety evidence.
+The boolean update accepts only its state field and proven required identity
+inputs; optional identity-like inputs and read-only properties do not qualify.
+Generic record and mailbox planners omit commands and flat boolean updates
+requiring these plans until those surfaces carry rule authority and recovery.
+Nested mailbox flag updates are outside this rule and retain their existing
+limitations below.
+
+[`NativePatternRulePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativePatternRulePlan.kt)
+contains typed target, rule, identity, generation, baseline and expected-state
+evidence, with separate write and read bindings. The executor rebuilds the
+plan from its descriptor and current load. Observed identities receive only
+per-action proof; their records do not become globally write-safe. A declared
+item read must confirm the identity before sending. Sibling commands share a
+canonical target gate, and unresolved operations block the canonical route
+across rule and app versions. Routes with item-state candidates also share a
+process admission gate with ordinary sibling writes, from the initial safety
+read through completion. Different targets on such a route cannot race its
+pending reservation; unrelated routes retain per-target concurrency.
+
+The feed applies item state optimistically. Network read-back must identify
+exactly one item and return the exact JSON boolean requested. A successful
+response with unchanged or differently typed state quarantines the rule;
+it cannot count as an adjusted success. Failure rolls back only the current
+item mutation, and newer authoritative loads fence stale completions. A verified
+completion still refreshes the surface after pagination changes the generation;
+an unknown completion still checks durable recovery without rolling back newer
+local state.
+Other R1 surfaces retain the limitations listed below.
 
 OCS failures reported inside an HTTP `2xx` response are classified by status
 code ([`DynamicOcsFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicOcsFailure.kt)).
@@ -950,17 +980,63 @@ exact app version, route template, rule ID, and rule version
 ([`DynamicWriteQuarantine.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicWriteQuarantine.kt),
 file-backed on desktop and Android by
 [`FileDynamicWriteQuarantineStore.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/FileDynamicWriteQuarantineStore.kt),
-written to a temporary file and moved into place). It survives restart, a
-version change drops it, account removal deletes it, and an unreadable file
-refuses writes until the person resets it. An app ID, exact version, or route
-template that holds characters outside the key alphabet, or exceeds its length
-bound, is keyed by a SHA-256 digest of its exact string, so every write has a
-key and a quarantine is never dropped. Writes whose encoding the contract
-declares use the rule ID `contract-declared` version 1. The contract
-information dialog (**App compatibility details** in the app's header menu)
-shows paused and probationary routes and offers **Resume changes**, which
-asks for a separate confirmation naming each route and why it was paused
-before it clears that app's state.
+written to a temporary file and moved into place). Resolved state can be
+cleared by the person or an app-version change, except a stopped unknown
+operation stays quarantined across versions until explicit Resume. Pending operations cannot:
+Resume changes, ordinary confirmation, version observation and capacity
+eviction preserve them. Unreadable safety files fail closed, including when
+the person selects Resume changes. Account retirement removes safety and
+encrypted recovery through generation fencing. Store instances sharing a
+storage directory reload under one synchronized owner before each transition.
+
+Before any rule write, complete typed recovery evidence is saved using the
+platform's encrypted `TextEditorDraftStore`, then an opaque random operation
+token is atomically reserved in the safety store. Safety JSON and diagnostics
+contain no bound IDs, state values, content or payload fingerprints. A failed
+reservation sends nothing. Cancellation, unreadable read-back, restart, and
+missing, corrupt or incompatible encrypted evidence retain the pending token.
+Exact confirmation atomically resolves only its matching token before deleting
+the encrypted evidence. Definite first-attempt rejection clears only that token
+and leaves probation. Pending and quarantined entries are protected from
+capacity eviction; exhausted protected capacity refuses new operations.
+Cancelled preparation removes evidence that has no durable reservation. Before
+new writes and status checks, bounded account-local maintenance removes
+recognized orphan evidence while preserving every pending token across apps and
+versions. Save/reserve and maintenance share a lock. Unreadable drafts and drafts
+whose stored identity does not match the recovery token are never swept.
+Transient deletion failures are retried by the next maintenance pass, so resolved
+rule evidence does not permanently consume the shared text/mail draft capacity.
+An offline status read leaves verification pending; it does not claim that the
+encrypted recovery information is corrupt.
+
+**Check earlier changes** in the feed performs network reads only, including
+after restart. An unresolved operation can be repeated only by an explicit
+**Repeat same change**, after status reconciliation and current authority
+checks, with the same logical token, target, action, bindings and expected
+state. An inverse command or another target is not the same operation. A
+rejected repeat after an earlier unknown result still needs read-back. An
+authoritative unchanged baseline after that rejection resolves the pending
+intent, without claiming that the first attempt was never delivered.
+There is no automatic replay. A changed app or rule contract cannot reinterpret
+old encrypted evidence; the operation stays pending for compatible recovery or
+an explicit terminal decision.
+
+For a deleted target, changed contract, unreadable evidence or another operation
+that can no longer be verified, **Stop checking** in Contract info asks for a
+separate confirmation. It clears only the chosen token, deletes its encrypted
+evidence and records `write-recovery-stopped`, without any transport request.
+Its result remains unknown and may still take effect. The canonical route stays
+quarantined, including across versions, until the person reviews the affected
+item and separately confirms **Resume changes**. A stale or foreign token cannot
+end another operation. Evidence is deleted before resolving the token, so a
+failed deletion keeps the operation pending for another explicit Stop checking,
+even when damaged evidence cannot be recognized by ordinary cleanup.
+
+An app ID, exact version or route template outside the safe key alphabet or
+length bound is keyed by its SHA-256 digest. Contract-declared editor writes
+keep `contract-declared` version 1. The contract information dialog shows
+paused, probationary and pending-verification routes. **Resume changes** asks
+for confirmation and clears only resolved safety records.
 
 After drift, the person may send the offered baseline restore: a full echo of
 every value from before the drifted write. It is the only write a quarantined
@@ -984,25 +1060,27 @@ Diagnostics record the evidence tier, risk class,
 rule ID, and rule version of each write without payload values, and use the
 codes `write-quarantined`, `write-postcondition-mismatch`,
 `identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
-The last two belong to pattern rules, which this phase does not ship yet.
+Rule execution records the registered rule identity and lifecycle codes without payload values.
 
-Present in source with deterministic tests but not yet used by a shipped
-surface: observed identity binding
-([`NativeObservedIdentityBinding.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeObservedIdentityBinding.kt),
-all six invariants) and the pattern rule interface and empty registry
-([`PatternRule.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/rules/PatternRule.kt)).
+The rule registry and observed identity binding are used by the feed surface
+in this source slice. Synthetic executor, persistence and session fixtures
+cover two app identities and unknown versions. This is not live News/server
+qualification or a published artifact. Deck membership, member-list encoding,
+Mail outbox, trash semantics and Phase 4 remain later scopes.
 
 Writes that pass admission and the verified write path: grid row updates
 (full echo or cell-checked PATCH) and child record updates (full echo or
 read-back PATCH). A replacement whose body is not JSON cannot carry stored
 values back exactly, so such a record stays read-only. Writes that pass
-admission but are not yet read back: idempotent state sets (R1, see above),
-generic record, collection, and board actions, mailbox and feed state
+admission but are not yet read back: other R1 actions outside the bounded item-state
+rules above, generic record, collection, and board actions, mailbox state
 changes, notes, questionnaire responses, creates (which keep their durable
 pending records), deletes, and the mail composer's send (which uses the
 exactly-once path instead and is refused when no durable draft storage can
 record its attempt). Deck board writes are read back through the verified
 write function but are not admitted by the generic write path.
+The item-state candidates explicitly omitted from generic record and mailbox
+planners above are unavailable, rather than admitted without verification.
 
 ## Reviewed limits
 

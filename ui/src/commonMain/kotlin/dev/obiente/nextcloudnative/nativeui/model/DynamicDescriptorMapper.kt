@@ -102,6 +102,9 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                 method = action.binding.method,
                 path = action.binding.path,
                 operationId = action.id,
+                pathParameterTypes = action.binding.pathParameters.associate { parameter ->
+                    parameter.name to ((parameter.schema as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
+                },
                 pathParameterNames = action.binding.pathParameters.map(HttpParameter::name),
                 requiredPathParameterNames = action.binding.pathParameters.filter(HttpParameter::required)
                     .map(HttpParameter::name),

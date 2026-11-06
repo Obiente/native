@@ -251,9 +251,9 @@ fun GenericNativeAppScreen(
     }
     val presentedResource = hydrated?.resource ?: baseResource
     val presentedRecords = hydrated?.records ?: baseRecords
-    val feedReader = remember(schema, view, presentedResource, presentedRecords, datasetContext, selectedRecordId) {
+    val feedReader = remember(schema, view, state, presentedResource, presentedRecords, datasetContext, selectedRecordId) {
         presentedResource?.takeIf { nestedBoard == null && state is NativeScreenState.Ready }?.let {
-            nativeFeedReaderPlan(schema, view, it, presentedRecords, datasetContext, selectedRecordId)
+            nativeFeedReaderPlan(schema, view, it, presentedRecords, datasetContext, selectedRecordId, NativeRuleAuthority(state as NativeScreenState.Ready, view.sourceActionId, datasetContext.bindingValues))
         }
     }
     if (feedReader != null) {

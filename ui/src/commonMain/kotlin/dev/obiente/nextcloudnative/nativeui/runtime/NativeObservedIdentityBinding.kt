@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import dev.obiente.nextcloudnative.nativeui.model.DynamicRouteFamilyRelation
 import dev.obiente.nextcloudnative.nativeui.model.dynamicRouteFamilyRelation
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /*
  * Observed identity binding (technique A). An id seen only in a list response may fill a write's
@@ -81,11 +83,15 @@ internal fun bindObservedIdentity(
     if (placeholder.contractKey() !in acceptedIdentityNames(resourceWord)) return refused(NativeIdentityBindingRefusal.PlaceholderNameMismatch)
     // 6. Uniqueness, and agreement of every identity-like field.
     val id = record.id
+    val identityValues = record.observedRuleValues.mapValues { (_, value) -> (value as? JsonPrimitive)?.contentOrNull } + record.values
+    if (identityValues.none { (key, value) -> key.contractKey() in acceptedIdentityNames(resourceWord) && value == id }) {
+        return refused(NativeIdentityBindingRefusal.AmbiguousIdentity)
+    }
     if (page.count { it.id == id } != 1 || record.safeActionBindingValues(allowUnsafeIdentity = true) == null) {
         return refused(NativeIdentityBindingRefusal.AmbiguousIdentity)
     }
-    val disagreeing = record.values.any { (key, value) ->
-        key.contractKey() in acceptedIdentityNames(resourceWord) && value != null && value.trim() != id
+    val disagreeing = identityValues.any { (key, value) ->
+        key.contractKey() in (acceptedIdentityNames(resourceWord) + setOf("uid", "uuid", "databaseid")) && value != null && value.trim() != id
     }
     if (disagreeing) return refused(NativeIdentityBindingRefusal.AmbiguousIdentity)
     if (!id.isSafeContractPathValue()) return refused(NativeIdentityBindingRefusal.UnsafeValue)
@@ -104,6 +110,10 @@ internal fun bindObservedIdentity(
             ?: return refused(NativeIdentityBindingRefusal.ParentUnbound)
         val parentValue = navigationValues[parentName]?.takeIf(String::isSafeContractPathValue)
             ?: return refused(NativeIdentityBindingRefusal.ParentUnbound)
+        val parentNames = setOf(parentName.contractKey(), segment.removeSurrounding("{", "}").contractKey())
+        if (identityValues.any { (name, value) -> name.contractKey() in parentNames && value != null && value != parentValue }) {
+            return refused(NativeIdentityBindingRefusal.AmbiguousIdentity)
+        }
         values[segment.removeSurrounding("{", "}")] = parentValue
     }
     if (writeSegments.drop(targetIndex + 1).any(String::isRoutePlaceholder)) return refused(NativeIdentityBindingRefusal.ParentUnbound)

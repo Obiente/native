@@ -51,7 +51,7 @@ class NativeFeedSemanticPatternTest {
             assertEquals(listOf("11"), plan.visible(NativeFeedFilter.Unread, null).map { it.record.id })
             assertEquals("Example Feed", plan.feedTitle(plan.articles.first()))
             plan.articles.map { article ->
-                nativeFeedItemActions(schema, article).all.map { change ->
+                actions(schema, article).all.map { change ->
                     Triple(change.kind, change.action.binding.path.removePrefix("/apps/$appId"), change.request().values)
                 }
             }
@@ -79,7 +79,7 @@ class NativeFeedSemanticPatternTest {
     }
 
     @Test
-    fun `articles without contract-declared identity stay read-only`() {
+    fun `articles without authoritative load evidence stay read-only`() {
         val schema = compile("feedreader", "0.0.1", feedOpenApi("feedreader")).toNativeAppSchema()
         val resource = assertNotNull(schema.resource("items"))
         val observed = assertNotNull(nativeFeedArticle(resource, article("11", true, false).copy(actionSafeIdentity = false)))
@@ -91,7 +91,7 @@ class NativeFeedSemanticPatternTest {
         val schema = compile("feedreader", "0.0.1", feedOpenApi("feedreader", includeStateRoutes = false)).toNativeAppSchema()
         val resource = assertNotNull(schema.resource("items"))
         val article = assertNotNull(nativeFeedArticle(resource, article("11", true, false)))
-        assertTrue(nativeFeedItemActions(schema, article).all.isEmpty())
+        assertTrue(actions(schema, article).all.isEmpty())
     }
 
     @Test
@@ -115,7 +115,7 @@ class NativeFeedSemanticPatternTest {
         val schema = compile("feedreader", "0.0.1", feedOpenApi("feedreader", includeStateRoutes = false, includeBulkRoutes = true)).toNativeAppSchema()
         val resource = assertNotNull(schema.resource("items"))
         val unread = assertNotNull(nativeFeedArticle(resource, article("11", unread = true, starred = false)))
-        assertNull(nativeFeedItemActions(schema, unread).readState, "opening or marking one article must not mark all read")
+        assertNull(actions(schema, unread).readState, "opening or marking one article must not mark all read")
     }
 
     @Test
@@ -123,7 +123,7 @@ class NativeFeedSemanticPatternTest {
         val schema = compile("feedreader", "0.0.1", feedOpenApi("feedreader", includeBulkRoutes = true)).toNativeAppSchema()
         val resource = assertNotNull(schema.resource("items"))
         val unread = assertNotNull(nativeFeedArticle(resource, article("11", unread = true, starred = false)))
-        val change = assertNotNull(nativeFeedItemActions(schema, unread).readState)
+        val change = assertNotNull(actions(schema, unread).readState)
         assertEquals("/apps/feedreader/api/items/{itemId}/read", change.action.binding.path)
         assertEquals(NativeFeedItemActionKind.MarkRead, change.kind)
     }
@@ -147,10 +147,10 @@ class NativeFeedSemanticPatternTest {
         val unread = assertNotNull(nativeFeedArticle(resource, article("11", unread = true, starred = false)))
 
         val both = schema.copy(actions = schema.actions + bulk)
-        assertEquals(perItem.id, nativeFeedItemActions(both, unread).readState?.action?.id)
+        assertEquals(perItem.id, actions(both, unread).readState?.action?.id)
 
         val bulkOnly = schema.copy(actions = schema.actions.filterNot { it.id == perItem.id } + bulk)
-        assertNull(nativeFeedItemActions(bulkOnly, unread).readState)
+        assertNull(actions(bulkOnly, unread).readState)
     }
 
     @Test
@@ -185,8 +185,13 @@ class NativeFeedSemanticPatternTest {
         assertEquals("2026-01-02 03:04", nativeFeedArticle(resource(null), iso)?.publishedLabel)
     }
 
+    private fun actions(schema: NativeAppSchema, article: NativeFeedArticle) = nativeFeedItemActions(schema, article,
+        NativeRuleAuthority(NativeScreenState.Ready.authoritative(listOf(article.record)),
+            schema.actions.single { it.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list && it.resourceId == "items" }.id))
+
     private fun article(id: String, unread: Boolean, starred: Boolean) = NativeRecord(
         id = id,
+        wireValues = mapOf("id" to kotlinx.serialization.json.JsonPrimitive(id.toInt()), "unread" to kotlinx.serialization.json.JsonPrimitive(unread), "starred" to kotlinx.serialization.json.JsonPrimitive(starred)),
         values = mapOf(
             "id" to id,
             "feedId" to "3",

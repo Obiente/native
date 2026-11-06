@@ -166,10 +166,12 @@ component stays read-only and explains why.
   input, any other required input, an undeclared recipient shape, or two equal
   candidates offers nothing.
 - A feed reader offers read, unread, star, and unstar only for idempotent
-  verified writes on an article with a contract-declared identity whose
-  route takes that identity as a required path parameter: a body-free route
-  whose last segment names the state, or a write with a single boolean state
-  field. Routes for every article or a whole feed, and broader updates that
+  verified writes with a current per-action identity proof. Both body-free
+  inverse commands must be declared under the same item route, or the item
+  update must declare a single supported boolean state field. The Kotlin
+  binding retains `pathParameterTypes` for typed identity checks; a schema
+  without those types cannot enable these rules. Separate read bindings and
+  exact boolean read-back are required, with encrypted pending recovery. Routes for every article or a whole feed, and broader updates that
   would resend other fields, are not used.
 
 **Editing**

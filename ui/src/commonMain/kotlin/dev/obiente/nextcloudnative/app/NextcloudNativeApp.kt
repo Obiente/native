@@ -3087,17 +3087,10 @@ private fun DynamicDiscoveredAppScreen(
         formRelationCache = formRelationCache.withDynamicRelationOutcomes(outcomes)
     }
     val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests) - feedReaderSourceRequests.toSet()
-    val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
-        DynamicNextcloudActionExecutor(
-            services = services,
-            session = session,
-            descriptor = descriptor,
-            runtimeContext = runtimeValues,
-            versionStatus = discovery.versionStatus,
-            writeGate = writeGate,
-            onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
-        )
-    }
+    val executor = rememberDynamicActionExecutor(
+        services, session, descriptor, runtimeValues, discovery.versionStatus, writeGate,
+        viewState, selectedView?.sourceActionId, ::releaseSelectedDynamicUploadFile,
+    )
     val pendingMutationStore = remember(services, session, descriptor, schema) {
         object : NativePendingMutationStore {
             override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
@@ -4478,7 +4471,7 @@ private fun DynamicDiscoveredAppScreen(
                 if (contractInfoOpen) {
                     DynamicContractInfoHost(
                         remember(discovery) { discovery.toContractInfo(null) }, services.dynamicWriteQuarantineStore(),
-                        session.accountId.storageKey, descriptor.app.id, onDismiss = { contractInfoOpen = false },
+                        session.accountId.storageKey, descriptor.app.id, onDismiss = { contractInfoOpen = false }, onStopChecking = executor::stopCheckingRuleOperation,
                     )
                 }
                 if (!showContextDestinationMenu) {

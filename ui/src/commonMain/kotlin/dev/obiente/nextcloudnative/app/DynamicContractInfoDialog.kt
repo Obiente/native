@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 sealed interface DynamicWriteSafetyView {
     data object Loading : DynamicWriteSafetyView
 
-    /** The device state could not be read; writes for this app are refused until it is cleared. */
+    /** The device state could not be read; ordinary Resume cannot erase possible pending writes. */
     data object Unreadable : DynamicWriteSafetyView
 
     data class Ready(val entries: List<DynamicWriteSafetyEntry>) : DynamicWriteSafetyView
@@ -40,13 +40,19 @@ data class DynamicWriteSafetyEntry(
     val status: DynamicWriteRuleStatus,
     val reason: DynamicWriteQuarantineReason?,
     val rule: String,
+    val pendingVerification: Boolean = false,
+    val pendingHandle: DynamicPendingRuleHandle? = null,
 ) {
     val label: String
-        get() = when (status) {
+        get() = if (pendingVerification) {
+            if (status == DynamicWriteRuleStatus.quarantined) "Needs verification; paused because an earlier change read back differently than expected"
+            else "Needs verification: check earlier changes in the item view"
+        } else when (status) {
             DynamicWriteRuleStatus.quarantined -> "Paused: " + when (reason) {
                 DynamicWriteQuarantineReason.notAppliedAfterSuccess -> "the app reported success but did not apply a change"
                 DynamicWriteQuarantineReason.untouchedFieldDrift -> "other values changed during a change"
                 DynamicWriteQuarantineReason.encodingMismatch -> "a value read back differently than it was written"
+                DynamicWriteQuarantineReason.abandonedUnknown -> "checking stopped; the earlier result remains unknown"
                 null -> "a change did not turn out as reported"
             }
             DynamicWriteRuleStatus.probation -> "In probation: the first change is checked by reading it back"
@@ -60,12 +66,14 @@ internal fun List<DynamicWriteRuleRecord>.toWriteSafetyEntries(): List<DynamicWr
         status = record.status,
         reason = record.reason,
         rule = "${record.key.ruleId} v${record.key.ruleVersion}",
+        pendingVerification = record.pendingVerification != null,
+        pendingHandle = record.pendingVerification?.let { DynamicPendingRuleHandle(record.key, it.operationId) },
     )
 }
 
 /**
- * Loads write safety for the dialog and owns the person's clear action. Clearing is the only way,
- * besides an app version change, that a quarantine ends.
+ * Loads write safety and owns explicit recovery decisions. A stopped unknown operation stays
+ * paused across app versions and requires a separate Resume confirmation.
  */
 @Composable
 internal fun DynamicContractInfoHost(
@@ -74,10 +82,13 @@ internal fun DynamicContractInfoHost(
     accountDigest: String,
     appId: String,
     onDismiss: () -> Unit,
+    onStopChecking: (suspend (DynamicPendingRuleHandle) -> Boolean)? = null,
 ) {
     var view by remember(store, accountDigest, appId) { mutableStateOf<DynamicWriteSafetyView>(DynamicWriteSafetyView.Loading) }
     var generation by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    var stopping by remember(store, accountDigest, appId) { mutableStateOf(false) }
+    var recoveryError by remember(store, accountDigest, appId) { mutableStateOf<String?>(null) }
     LaunchedEffect(store, accountDigest, appId, generation) {
         view = if (store == null) {
             DynamicWriteSafetyView.Ready(emptyList())
@@ -87,7 +98,7 @@ internal fun DynamicContractInfoHost(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Persistence fault boundary: show that the state is unreadable and offer the reset.
+                // Persistence fault boundary: possible pending writes cannot be discarded by Resume.
                 DynamicWriteSafetyView.Unreadable
             }
         }
@@ -110,6 +121,17 @@ internal fun DynamicContractInfoHost(
             }
         },
         onDismiss = onDismiss,
+        onStopChecking = onStopChecking?.takeUnless { stopping }?.let { stop -> { handle ->
+            stopping = true
+            scope.launch {
+                try {
+                    recoveryError = if (stop(handle)) null else "Checking could not be stopped. The change remains unresolved."
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { recoveryError = "Checking could not be stopped. The change remains unresolved." }
+                finally { stopping = false; generation += 1 }
+            }
+        } },
+        recoveryError = recoveryError,
     )
 }
 
@@ -119,14 +141,22 @@ internal fun DynamicContractInfoDialog(
     writeSafety: DynamicWriteSafetyView,
     onResumeWrites: (() -> Unit)?,
     onDismiss: () -> Unit,
+    onStopChecking: ((DynamicPendingRuleHandle) -> Unit)? = null,
+    recoveryError: String? = null,
 ) {
     val clearable = onResumeWrites != null && when (writeSafety) {
-        DynamicWriteSafetyView.Unreadable -> true
-        is DynamicWriteSafetyView.Ready -> writeSafety.entries.isNotEmpty()
+        DynamicWriteSafetyView.Unreadable -> false
+        is DynamicWriteSafetyView.Ready -> writeSafety.entries.any { !it.pendingVerification }
         DynamicWriteSafetyView.Loading -> false
     }
     // Ephemeral: the confirmation is asked again after recreation rather than resumed.
     var confirmingResume by remember(writeSafety) { mutableStateOf(false) }
+    var confirmingStop by remember(writeSafety) { mutableStateOf<DynamicWriteSafetyEntry?>(null) }
+    confirmingStop?.let { entry ->
+        StopCheckingConfirmation(entry.route,
+            onConfirm = { confirmingStop = null; entry.pendingHandle?.let { onStopChecking?.invoke(it) } },
+            onDismiss = { confirmingStop = null })
+    }
     if (confirmingResume && clearable) {
         ResumeWritesConfirmation(
             writeSafety = writeSafety,
@@ -145,7 +175,8 @@ internal fun DynamicContractInfoDialog(
                 modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
-                DynamicWriteSafetySection(writeSafety)
+                DynamicWriteSafetySection(writeSafety, onStopChecking?.let { { entry -> confirmingStop = entry } })
+                recoveryError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 ContractInfoSection("Acquisition", info.acquisition)
                 ContractInfoSection("App version", info.appVersion)
                 ContractInfoSection("Source spec", info.sourceSpecFile)
@@ -190,13 +221,12 @@ private fun ResumeWritesConfirmation(
     val entries = (writeSafety as? DynamicWriteSafetyView.Ready)?.entries.orEmpty()
     val paused = entries.filter { it.status == DynamicWriteRuleStatus.quarantined }
     val summary = when {
-        writeSafety == DynamicWriteSafetyView.Unreadable ->
-            "This device's write safety record for this app could not be read. Resuming resets it, " +
-                "which also ends any pause it held, so check this app's recently changed items first."
+        paused.any { it.reason == DynamicWriteQuarantineReason.abandonedUnknown } ->
+            "These routes include changes whose results remain unknown. Review the affected items before resuming."
         paused.isNotEmpty() ->
             "Changes through these routes were paused because the app did not do what it reported. " +
                 "Check the affected items before resuming; the next change is checked by reading it back again."
-        else -> "Resuming clears this device's record for these routes; their next change is checked by reading it back again."
+        else -> "Resuming clears resolved safety records. Unverified operations remain blocked until their status is checked."
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -219,14 +249,17 @@ private fun ResumeWritesConfirmation(
 }
 
 @Composable
-private fun DynamicWriteSafetySection(view: DynamicWriteSafetyView) {
+private fun DynamicWriteSafetySection(view: DynamicWriteSafetyView, onStopChecking: ((DynamicWriteSafetyEntry) -> Unit)? = null) {
     val summary = when (view) {
         DynamicWriteSafetyView.Loading -> "Checking..."
         DynamicWriteSafetyView.Unreadable ->
             "This device's write safety record for this app could not be read, so changes are paused. " +
-                "Resume changes to reset it."
+                "Unverified operations stay blocked until recovery information can be read."
         is DynamicWriteSafetyView.Ready -> when {
+            view.entries.any { it.pendingVerification } -> "Earlier changes still need verification. Resuming changes or updating the app does not discard them."
             view.entries.isEmpty() -> "No paused or probationary changes on this device."
+            view.entries.any { it.reason == DynamicWriteQuarantineReason.abandonedUnknown } ->
+                "An earlier result remains unknown. Changes stay paused until you review the affected item and resume changes."
             view.entries.any { it.status == DynamicWriteRuleStatus.quarantined } ->
                 "Some changes are paused on this device because an app did not do what it reported. " +
                     "Check the affected items, then resume changes. Updating the app also resumes them."
@@ -239,8 +272,26 @@ private fun DynamicWriteSafetySection(view: DynamicWriteSafetyView) {
         (view as? DynamicWriteSafetyView.Ready)?.entries?.forEach { entry ->
             val line = "${entry.route} · ${entry.label} · ${entry.rule}"
             Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.semantics { contentDescription = line })
+            if (entry.pendingHandle != null && onStopChecking != null) {
+                TextButton(onClick = { onStopChecking(entry) }) { Text("Stop checking") }
+            }
         }
     }
+}
+
+@Composable
+private fun StopCheckingConfirmation(route: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Stop checking this change?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+            Text("The earlier change may still take effect and its result will remain unknown. " +
+                "Checking will stop and this route will stay paused. Resume changes separately after reviewing the affected item.")
+            Text(route, style = MaterialTheme.typography.bodySmall)
+        } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Stop checking and keep paused") } },
+    )
 }
 
 @Composable

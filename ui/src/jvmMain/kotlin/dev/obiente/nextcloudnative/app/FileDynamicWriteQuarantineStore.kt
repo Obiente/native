@@ -10,6 +10,7 @@ import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 /**
@@ -18,19 +19,35 @@ import java.nio.file.StandardCopyOption
  * Every change is written to a temporary file in the same directory, flushed to the device, and
  * moved over the previous file, so a crash leaves either the old or the new state and never a
  * partial one. An unreadable file fails closed: reads throw, so callers refuse writes instead of
- * silently forgetting a quarantine. Only the person's clear action replaces such a file.
+ * silently forgetting a quarantine or pending operation. Ordinary clear actions also fail closed.
  */
 class FileDynamicWriteQuarantineStore(private val directory: File) : DynamicWriteQuarantineStore {
-    private val lock = Any()
-    private val loaded = mutableMapOf<String, DynamicWriteRuleRecords>()
+    private class Owner { val generations = mutableMapOf<String, Long>() }
+    // All instances reload under one directory owner. No instance-local cache can overwrite a
+    // reservation made by another instance or resurrect a retired account.
+    private val lock = synchronized(owners) { owners.getOrPut(directory.canonicalFile.toPath()) { Owner() } }
+
+    override suspend fun generation(accountDigest: String): Long = synchronized(lock) { lock.generations[accountDigest] ?: 0L }
+
+    override suspend fun reserve(key: DynamicWriteRuleKey, pending: DynamicPendingRuleOperation, generation: Long): Boolean =
+        change(key.accountDigest) {
+            (lock.generations[key.accountDigest] ?: 0L) == generation && reserve(key, pending)
+        }
+
+    override suspend fun resolve(key: DynamicWriteRuleKey, operationId: String, resolution: DynamicPendingRuleResolution, nowEpochMillis: Long) =
+        change(key.accountDigest) { resolve(key, operationId, resolution, nowEpochMillis) }
 
     override suspend fun record(key: DynamicWriteRuleKey) = read(key.accountDigest) { record(key) }
 
     override suspend fun records(accountDigest: String, appId: String) =
         read(accountDigest) { forApp(appId) }
 
-    override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long) =
-        change(key.accountDigest) { beginProbation(key, nowEpochMillis) }
+    override suspend fun pendingOperationIds(accountDigest: String) = read(accountDigest) {
+        all.mapNotNullTo(mutableSetOf()) { it.pendingVerification?.operationId }
+    }
+
+    override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long, generation: Long?) =
+        change(key.accountDigest, generation) { beginProbation(key, nowEpochMillis) }
 
     override suspend fun confirm(key: DynamicWriteRuleKey, nowEpochMillis: Long) =
         change(key.accountDigest) { confirm(key, nowEpochMillis) }
@@ -39,11 +56,11 @@ class FileDynamicWriteQuarantineStore(private val directory: File) : DynamicWrit
         change(key.accountDigest) { quarantine(key, reason, nowEpochMillis) }
 
     override suspend fun clear(key: DynamicWriteRuleKey) {
-        change(key.accountDigest, resetUnreadable = true) { clear(key) }
+        change(key.accountDigest) { clear(key) }
     }
 
     override suspend fun clearApp(accountDigest: String, appId: String) {
-        change(accountDigest, resetUnreadable = true) { clearApp(appId) }
+        change(accountDigest) { clearApp(appId) }
     }
 
     override suspend fun observeAppVersion(accountDigest: String, appId: String, appVersion: String) {
@@ -52,39 +69,37 @@ class FileDynamicWriteQuarantineStore(private val directory: File) : DynamicWrit
 
     override suspend fun removeAccount(accountDigest: String) = withContext(Dispatchers.IO) {
         synchronized(lock) {
-            loaded.remove(accountDigest)
+            lock.generations[accountDigest] = (lock.generations[accountDigest] ?: 0L) + 1L
             val file = fileFor(accountDigest)
             check(!file.exists() || file.delete()) { "Could not remove write safety state." }
         }
     }
 
     private suspend fun <T> read(digest: String, block: DynamicWriteRuleRecords.() -> T): T =
-        withContext(Dispatchers.IO) { synchronized(lock) { load(digest, resetUnreadable = false).block() } }
+        withContext(Dispatchers.IO) { synchronized(lock) { load(digest).block() } }
 
     private suspend fun <T> change(
         digest: String,
-        resetUnreadable: Boolean = false,
+        generation: Long? = null,
         block: DynamicWriteRuleRecords.() -> T,
     ): T = withContext(Dispatchers.IO) {
         synchronized(lock) {
-            val records = load(digest, resetUnreadable)
+            check(generation == null || (lock.generations[digest] ?: 0L) == generation) { "The account changed before write safety state could be saved." }
+            val records = load(digest)
             // Work on a copy so a failed write never leaves memory ahead of the device.
             val updated = DynamicWriteRuleRecords(records.all)
             val result = updated.block()
-            persist(digest, updated)
-            loaded[digest] = updated
+            if (updated.all != records.all) persist(digest, updated)
             result
         }
     }
 
-    private fun load(digest: String, resetUnreadable: Boolean): DynamicWriteRuleRecords {
-        loaded[digest]?.let { return it }
+    private fun load(digest: String): DynamicWriteRuleRecords {
         val file = fileFor(digest)
         val records = when {
             !Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS) -> DynamicWriteRuleRecords()
-            else -> decode(file, digest) ?: if (resetUnreadable) DynamicWriteRuleRecords() else error("Write safety state is unreadable.")
+            else -> decode(file, digest) ?: error("Write safety state is unreadable.")
         }
-        loaded[digest] = records
         return records
     }
 
@@ -144,8 +159,9 @@ class FileDynamicWriteQuarantineStore(private val directory: File) : DynamicWrit
     private data class StoredRecords(val version: Int, val records: List<DynamicWriteRuleRecord>)
 
     private companion object {
+        val owners = mutableMapOf<Path, Owner>()
         const val FORMAT_VERSION = 1
         const val MAX_FILE_BYTES = 512L * 1024L
-        val storeJson = Json { ignoreUnknownKeys = false; encodeDefaults = true }
+        val storeJson = Json { ignoreUnknownKeys = false; encodeDefaults = true; explicitNulls = false }
     }
 }

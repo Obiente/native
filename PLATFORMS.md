@@ -286,7 +286,16 @@ interaction validation is still required.
   a rail beside the list or reader from 680dp, and filter chips above the list
   on narrower screens, where system back closes the open article. A filtered
   list says in one line that it covers only the loaded articles. The selected
-  filter and feed survive recreation; the open article does not.
+  filter and feed survive recreation; the open article does not. Item-state
+  rule recovery uses encrypted account-scoped draft storage on Android and
+  desktop, with a shared JVM safety-store owner. Pending operations survive
+  restart and remain separate from optimistic UI state. This source slice has
+  synthetic shared/JVM coverage. On an isolated API 36 emulator,
+  `TextEditorDraftStorageInstrumentedTest` also verified encrypted store
+  recreation, orphan recovery cleanup, pending and other-account draft
+  retention, and account retirement using Android Keystore and app-private
+  storage. That storage test does not qualify feed UI lifecycle or live servers
+  (Last reviewed: 2026-11-06; see [the implementation boundary](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification), which may change).
 - Mailboxes (any app whose contract exposes accounts, mailboxes, and
   messages) use the shared mailbox workspace. When the contract describes a
   send operation, a Compose button opens a composer that fills the screen on

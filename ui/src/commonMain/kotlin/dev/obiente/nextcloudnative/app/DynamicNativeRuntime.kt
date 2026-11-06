@@ -32,12 +32,8 @@ import dev.obiente.nextcloudnative.nativeui.model.repeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.requireValid
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryRead
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeResultRecoveryReader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -338,64 +334,6 @@ internal fun NextcloudAppEntry.canonicalAppStoreId(): String {
 
 private fun String.coreVersionOrNull(): String? =
     Regex("([0-9]+)\\.([0-9]+)\\.([0-9]+)").find(this)?.value
-
-class DynamicNextcloudActionExecutor(
-    private val services: NextcloudPlatformServices,
-    private val session: NextcloudSession,
-    private val descriptor: DynamicAppDescriptor,
-    private val runtimeContext: Map<String, String> = emptyMap(),
-    private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
-    private val writeGate: DynamicContractWriteGate? = null,
-    private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
-    private val clock: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
-) : NativeActionExecutor, NativeResultRecoveryReader {
-    init {
-        descriptor.requireValid()
-    }
-
-    override suspend fun readResult(request: NativeActionRequest.Submit): NativeResultRecoveryRead =
-        readDynamicResultRecovery(services, session, descriptor, request, runtimeContext)
-
-    override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
-        val action = descriptor.actions.firstOrNull { it.id == request.action.id }
-            ?: return NativeActionExecutionResult.Failure(
-                message = "The dynamic action is no longer available.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        if (!versionStatus.allows(action.risk) || writeGate?.authorizesWrite(action.risk, descriptor) == false) {
-            return NativeActionExecutionResult.Failure(
-                message = "Reconnect to verify the server and app versions before changing cloud data.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        }
-        val values = (request as? NativeActionRequest.Submit)?.values.orEmpty()
-        val observedInputSchema = (request as? NativeActionRequest.Submit)?.action?.takeIf { submitted ->
-            submitted.id == action.id && submitted.binding.allowsObservedBodyFields && action.binding.body?.schema.observesSettingsBody()
-        }?.inputSchema
-        if (request is NativeActionRequest.Submit && action.requiresConfirmation && !request.confirmed) {
-            return NativeActionExecutionResult.Failure(
-                message = "Confirm this action before changing server data.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        }
-        (request as? NativeActionRequest.Submit)?.takeIf { action.binding.method != HttpMethod.GET }?.let { submit ->
-            val context = DynamicWriteContext(services, session, descriptor, action, runtimeContext, observedInputSchema, onMultipartUploadSucceeded, clock)
-            return executeDynamicWrite(context, submit)
-        }
-        return runCatching {
-            val execution = executeDynamicAction(services, session, descriptor, action, values, runtimeContext, observedInputSchema)
-            execution.response.toDynamicActionExecutionResult(action).also { result ->
-                releaseMultipartUploadAfterSuccess(
-                    result = result,
-                    file = execution.multipartFile,
-                    release = onMultipartUploadSucceeded,
-                )
-            }
-        }.getOrElse { failure ->
-            NativeActionExecutionResult.Failure(failure.message ?: "The dynamic action failed.")
-        }
-    }
-}
 
 /**
  * Validates a mutation response against the action's declared response envelope.
@@ -850,7 +788,7 @@ private fun ByteArray.hasBoundedDynamicJsonDepth(): Boolean {
     return true
 }
 
-private data class DynamicActionExecution(
+internal data class DynamicActionExecution(
     val response: NextcloudApiResponse,
     val multipartFile: LocalUploadFile?,
 )
@@ -863,7 +801,7 @@ internal fun releaseMultipartUploadAfterSuccess(
     if (result is NativeActionExecutionResult.Success && file != null) release(file)
 }
 
-private suspend fun executeDynamicAction(
+internal suspend fun executeDynamicAction(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     descriptor: DynamicAppDescriptor,
@@ -986,7 +924,7 @@ internal fun Throwable.isUnsynchronizedDynamicCollectionFailure(): Boolean =
 internal fun NextcloudApiResponse.acceptedDynamicRefresh(): Boolean =
     status in 200..299 || status == 409
 
-private fun bindDynamicPath(
+internal fun bindDynamicPath(
     binding: DynamicHttpBinding,
     values: Map<String, String>,
     runtimeContext: Map<String, String>,
@@ -1416,7 +1354,7 @@ private fun buildDynamicBody(
     }
 }
 
-private fun JsonElement?.observesSettingsBody(): Boolean {
+internal fun JsonElement?.observesSettingsBody(): Boolean {
     val schema = this as? JsonObject ?: return false
     return (schema["x-nextcloud-native-observed-settings-body"] as? JsonPrimitive)?.booleanOrNull == true &&
         (schema["additionalProperties"] as? JsonPrimitive)?.booleanOrNull == true
@@ -1613,7 +1551,7 @@ private fun JsonElement.toNativeRecords(
             actionSafeIdentity = false,
         ),
     )
-}).distinctBy(NativeRecord::id).take(MAX_DYNAMIC_NATIVE_RECORDS)
+}).withoutAmbiguousDynamicIdentities(this !is JsonArray || size <= MAX_DYNAMIC_NATIVE_RECORDS).take(MAX_DYNAMIC_NATIVE_RECORDS)
 
 /**
  * Finds a conventional list inside a response envelope without treating arbitrary nested arrays
@@ -1765,6 +1703,7 @@ private fun JsonElement.toNativeRecord(
         actionSafeIdentity = actionSafeIdentity,
         structuredValues = structuredValues,
         wireValues = objectValue.boundedDynamicWireValues(declaredFieldIds) { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
+        observedRuleValues = objectValue.boundedDynamicRuleObservations { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
     )
 }
 

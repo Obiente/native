@@ -8,7 +8,8 @@ import kotlinx.serialization.Serializable
  * were confirmed by a read-back, and which are quarantined because a read-back contradicted the
  * expected postcondition. State is keyed by the local account identity digest, app ID, exact app
  * version, route, rule ID, and rule version. It survives restarts and is cleared only by the
- * person (contract information dialog) or by an app version change.
+ * person (contract information dialog) or by an app version change. Neither can discard pending
+ * verification; only a matching token resolution or account retirement removes it.
  */
 
 /** The rule ID used for writes whose encoding and semantics the contract itself declares. */
@@ -83,7 +84,20 @@ enum class DynamicWriteQuarantineReason {
 
     /** A written value reads back as something the rule's encoding did not produce. */
     encodingMismatch,
+
+    /** The person stopped checking an unknown result; only explicit Resume may unpause it. */
+    abandonedUnknown,
 }
+
+@Serializable
+data class DynamicPendingRuleOperation(val operationId: String, val createdAtEpochMillis: Long) {
+    init {
+        require(operationId.length == 36 && operationId.all { it in "0123456789abcdef-" })
+        require(createdAtEpochMillis >= 0)
+    }
+}
+
+enum class DynamicPendingRuleResolution { confirmed, rejected, contradicted, contradictedPending, abandonedUnknown }
 
 @Serializable
 data class DynamicWriteRuleRecord(
@@ -91,9 +105,11 @@ data class DynamicWriteRuleRecord(
     val status: DynamicWriteRuleStatus,
     val reason: DynamicWriteQuarantineReason? = null,
     val updatedAtEpochMillis: Long,
+    /** Only an opaque token. Recovery values belong in encrypted draft storage. */
+    val pendingVerification: DynamicPendingRuleOperation? = null,
 ) {
     val ruleState: DynamicWriteRuleState
-        get() = when (status) {
+        get() = if (pendingVerification != null) DynamicWriteRuleState.pendingVerification else when (status) {
             DynamicWriteRuleStatus.probation -> DynamicWriteRuleState.probation
             DynamicWriteRuleStatus.confirmed -> DynamicWriteRuleState.confirmed
             DynamicWriteRuleStatus.quarantined -> DynamicWriteRuleState.quarantined
@@ -105,17 +121,30 @@ data class DynamicWriteRuleRecord(
  * every account's records separate. Writes are durable before the call returns.
  */
 interface DynamicWriteQuarantineStore {
+    /** Incarnation captured before saving recovery; retirement invalidates outstanding producers. */
+    suspend fun generation(accountDigest: String): Long
+
+    /** Atomic across store instances. Pending routes are protected across app and rule versions. */
+    suspend fun reserve(key: DynamicWriteRuleKey, pending: DynamicPendingRuleOperation, generation: Long): Boolean
+
+    /** Only the owner of the matching token can resolve an operation. */
+    suspend fun resolve(key: DynamicWriteRuleKey, operationId: String, resolution: DynamicPendingRuleResolution, nowEpochMillis: Long): Boolean
+
     /** The record for exactly [key], or null when the route has no recorded state. */
     suspend fun record(key: DynamicWriteRuleKey): DynamicWriteRuleRecord?
 
     /** Every record of one app for one account, for the contract information dialog. */
     suspend fun records(accountDigest: String, appId: String): List<DynamicWriteRuleRecord>
 
+    /** Protects recovery evidence for every app and version during account-local maintenance. */
+    suspend fun pendingOperationIds(accountDigest: String): Set<String>
+
     /**
      * Starts probation for [key] unless it already has a state. Records of the same route and rule
-     * under another rule version are replaced, so a rule change restarts probation.
+     * under another rule version are replaced unless pending, so a rule change restarts probation
+     * without discarding an unresolved operation.
      */
-    suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long): DynamicWriteRuleRecord
+    suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long, generation: Long? = null): DynamicWriteRuleRecord
 
     /** Marks [key] confirmed by a read-back. A quarantined key stays quarantined. */
     suspend fun confirm(key: DynamicWriteRuleKey, nowEpochMillis: Long): DynamicWriteRuleRecord
@@ -129,7 +158,7 @@ interface DynamicWriteQuarantineStore {
     /** The person's clear action for every route of one app. */
     suspend fun clearApp(accountDigest: String, appId: String)
 
-    /** Drops every record of [appId] observed with a version other than [appVersion]. */
+    /** Drops resolved records of [appId] observed with another version; pending tokens survive. */
     suspend fun observeAppVersion(accountDigest: String, appId: String, appVersion: String)
 
     /** Removes every record of a removed account. */
@@ -140,6 +169,7 @@ interface DynamicWriteQuarantineStore {
 suspend fun DynamicWriteQuarantineStore.ruleState(key: DynamicWriteRuleKey, ruleApplies: Boolean): DynamicWriteRuleState {
     val record = record(key)
     return when {
+        record?.pendingVerification != null -> DynamicWriteRuleState.pendingVerification
         record?.status == DynamicWriteRuleStatus.quarantined -> DynamicWriteRuleState.quarantined
         !ruleApplies -> DynamicWriteRuleState.notRequired
         record == null -> DynamicWriteRuleState.probation
@@ -152,7 +182,9 @@ suspend fun DynamicWriteQuarantineStore.ruleState(key: DynamicWriteRuleKey, rule
  * store and the file store apply exactly the same transitions.
  */
 internal class DynamicWriteRuleRecords(initial: List<DynamicWriteRuleRecord> = emptyList()) {
-    private val records = initial.takeLast(MAX_RECORDS_PER_ACCOUNT).associateBy(DynamicWriteRuleRecord::key).toMutableMap()
+    private val records = initial.associateBy(DynamicWriteRuleRecord::key).toMutableMap()
+
+    init { require(initial.size <= MAX_RECORDS_PER_ACCOUNT && records.size == initial.size) }
 
     val all: List<DynamicWriteRuleRecord> get() = records.values.sortedWith(compareBy({ it.key.appId }, { it.key.route }, { it.key.ruleId }))
 
@@ -160,42 +192,75 @@ internal class DynamicWriteRuleRecords(initial: List<DynamicWriteRuleRecord> = e
 
     fun beginProbation(key: DynamicWriteRuleKey, now: Long): DynamicWriteRuleRecord {
         records[key]?.let { return it }
-        records.keys.removeAll { other -> other != key && other.sameRouteAndRule(key) }
+        removeObsolete(key)
         return put(DynamicWriteRuleRecord(key, DynamicWriteRuleStatus.probation, null, now))
     }
 
     fun confirm(key: DynamicWriteRuleKey, now: Long): DynamicWriteRuleRecord {
         val current = records[key]
-        if (current?.status == DynamicWriteRuleStatus.quarantined) return current
-        records.keys.removeAll { other -> other != key && other.sameRouteAndRule(key) }
+        if (current?.status == DynamicWriteRuleStatus.quarantined || current?.pendingVerification != null) return current
+        removeObsolete(key)
         return put(DynamicWriteRuleRecord(key, DynamicWriteRuleStatus.confirmed, null, now))
     }
 
     fun quarantine(key: DynamicWriteRuleKey, reason: DynamicWriteQuarantineReason, now: Long): DynamicWriteRuleRecord =
-        put(DynamicWriteRuleRecord(key, DynamicWriteRuleStatus.quarantined, reason, now))
+        put(DynamicWriteRuleRecord(key, DynamicWriteRuleStatus.quarantined, reason, now, records[key]?.pendingVerification))
 
-    fun clear(key: DynamicWriteRuleKey): Boolean = records.remove(key) != null
+    fun clear(key: DynamicWriteRuleKey): Boolean = if (records[key]?.pendingVerification != null) false else records.remove(key) != null
 
     fun forApp(appId: String): List<DynamicWriteRuleRecord> = dynamicWriteAppKey(appId).let { app -> all.filter { it.key.appId == app } }
 
-    fun clearApp(appId: String): Boolean = dynamicWriteAppKey(appId).let { app -> records.keys.removeAll { it.appId == app } }
+    fun clearApp(appId: String): Boolean = dynamicWriteAppKey(appId).let { app ->
+        records.keys.removeAll { it.appId == app && records[it]?.pendingVerification == null }
+    }
 
     fun observeAppVersion(appId: String, appVersion: String): Boolean {
         val app = dynamicWriteAppKey(appId)
         val version = dynamicWriteVersionKey(appVersion)
-        return records.keys.removeAll { it.appId == app && it.appVersion != version }
+        return records.keys.removeAll { it.appId == app && it.appVersion != version && records[it]?.pendingVerification == null &&
+            records[it]?.reason != DynamicWriteQuarantineReason.abandonedUnknown }
+    }
+
+    fun reserve(key: DynamicWriteRuleKey, pending: DynamicPendingRuleOperation): Boolean {
+        if (records.values.any { it.key.sameCanonicalRoute(key) && (it.pendingVerification != null || it.reason == DynamicWriteQuarantineReason.abandonedUnknown) }) return false
+        if (records[key]?.status == DynamicWriteRuleStatus.quarantined) return false
+        if (key !in records && records.size >= MAX_RECORDS_PER_ACCOUNT && records.values.none { !it.protected }) return false
+        val current = records[key] ?: DynamicWriteRuleRecord(key, DynamicWriteRuleStatus.probation, updatedAtEpochMillis = pending.createdAtEpochMillis)
+        put(current.copy(pendingVerification = pending, updatedAtEpochMillis = pending.createdAtEpochMillis))
+        return true
+    }
+
+    fun resolve(key: DynamicWriteRuleKey, token: String, resolution: DynamicPendingRuleResolution, now: Long): Boolean {
+        val current = records[key]?.takeIf { it.pendingVerification?.operationId == token } ?: return false
+        val status = when (resolution) {
+            DynamicPendingRuleResolution.confirmed -> if (current.status == DynamicWriteRuleStatus.quarantined) current.status else DynamicWriteRuleStatus.confirmed
+            DynamicPendingRuleResolution.rejected -> current.status
+            DynamicPendingRuleResolution.contradicted, DynamicPendingRuleResolution.contradictedPending,
+            DynamicPendingRuleResolution.abandonedUnknown -> DynamicWriteRuleStatus.quarantined
+        }
+        put(current.copy(status = status,
+            pendingVerification = current.pendingVerification.takeIf { resolution == DynamicPendingRuleResolution.contradictedPending }, updatedAtEpochMillis = now,
+            reason = when (resolution) {
+                DynamicPendingRuleResolution.abandonedUnknown -> DynamicWriteQuarantineReason.abandonedUnknown
+                DynamicPendingRuleResolution.contradicted, DynamicPendingRuleResolution.contradictedPending -> DynamicWriteQuarantineReason.encodingMismatch
+                else -> current.reason
+            }))
+        return true
+    }
+
+    private fun removeObsolete(key: DynamicWriteRuleKey) {
+        records.keys.removeAll { it != key && it.sameRouteAndRule(key) && records[it]?.pendingVerification == null &&
+            records[it]?.reason != DynamicWriteQuarantineReason.abandonedUnknown }
     }
 
     private fun put(record: DynamicWriteRuleRecord): DynamicWriteRuleRecord {
-        records.remove(record.key)
-        records[record.key] = record
-        // Keep the bound by evicting the oldest non-quarantined state first; a quarantine is the
-        // last thing to forget because forgetting it would silently re-enable a contradicted route.
-        while (records.size > MAX_RECORDS_PER_ACCOUNT) {
-            val evicted = records.values.filter { it.status != DynamicWriteRuleStatus.quarantined }.minByOrNull { it.updatedAtEpochMillis }
-                ?: records.values.minBy { it.updatedAtEpochMillis }
+        if (record.key !in records && records.size >= MAX_RECORDS_PER_ACCOUNT) {
+            val evicted = records.values.filter { !it.protected }.minByOrNull { it.updatedAtEpochMillis }
+            check(evicted != null) { "Write safety storage has no unprotected capacity." }
             records.remove(evicted.key)
         }
+        records.remove(record.key)
+        records[record.key] = record
         return record
     }
 }
@@ -209,13 +274,27 @@ interface DynamicWriteSafetyPlatformServices {
 class MemoryDynamicWriteQuarantineStore : DynamicWriteQuarantineStore {
     private val lock = DynamicNativeMemoryCacheLock()
     private val accounts = mutableMapOf<String, DynamicWriteRuleRecords>()
+    private val generations = mutableMapOf<String, Long>()
+
+    override suspend fun generation(accountDigest: String): Long = lock.withLock { generations[accountDigest] ?: 0L }
+    override suspend fun reserve(key: DynamicWriteRuleKey, pending: DynamicPendingRuleOperation, generation: Long): Boolean = lock.withLock {
+        if ((generations[key.accountDigest] ?: 0L) != generation) false else account(key.accountDigest) { reserve(key, pending) }
+    }
+    override suspend fun resolve(key: DynamicWriteRuleKey, operationId: String, resolution: DynamicPendingRuleResolution, nowEpochMillis: Long) =
+        account(key.accountDigest) { resolve(key, operationId, resolution, nowEpochMillis) }
 
     private fun <T> account(digest: String, block: DynamicWriteRuleRecords.() -> T): T =
         lock.withLock { accounts.getOrPut(digest) { DynamicWriteRuleRecords() }.block() }
 
     override suspend fun record(key: DynamicWriteRuleKey) = account(key.accountDigest) { record(key) }
     override suspend fun records(accountDigest: String, appId: String) = account(accountDigest) { forApp(appId) }
-    override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long) = account(key.accountDigest) { beginProbation(key, nowEpochMillis) }
+    override suspend fun pendingOperationIds(accountDigest: String) = account(accountDigest) {
+        all.mapNotNullTo(mutableSetOf()) { it.pendingVerification?.operationId }
+    }
+    override suspend fun beginProbation(key: DynamicWriteRuleKey, nowEpochMillis: Long, generation: Long?) = lock.withLock {
+        check(generation == null || (generations[key.accountDigest] ?: 0L) == generation) { "The account changed before probation could begin." }
+        account(key.accountDigest) { beginProbation(key, nowEpochMillis) }
+    }
     override suspend fun confirm(key: DynamicWriteRuleKey, nowEpochMillis: Long) = account(key.accountDigest) { confirm(key, nowEpochMillis) }
     override suspend fun quarantine(key: DynamicWriteRuleKey, reason: DynamicWriteQuarantineReason, nowEpochMillis: Long) =
         account(key.accountDigest) { quarantine(key, reason, nowEpochMillis) }
@@ -224,8 +303,17 @@ class MemoryDynamicWriteQuarantineStore : DynamicWriteQuarantineStore {
     override suspend fun observeAppVersion(accountDigest: String, appId: String, appVersion: String) {
         account(accountDigest) { observeAppVersion(appId, appVersion) }
     }
-    override suspend fun removeAccount(accountDigest: String) { lock.withLock { accounts.remove(accountDigest) } }
+    override suspend fun removeAccount(accountDigest: String) { lock.withLock {
+        generations[accountDigest] = (generations[accountDigest] ?: 0L) + 1L
+        accounts.remove(accountDigest)
+    } }
 }
+
+internal fun DynamicWriteRuleKey.sameCanonicalRoute(other: DynamicWriteRuleKey): Boolean =
+    accountDigest == other.accountDigest && appId == other.appId && route == other.route
+
+private val DynamicWriteRuleRecord.protected: Boolean
+    get() = pendingVerification != null || status == DynamicWriteRuleStatus.quarantined
 
 /** The stored form of an app ID: itself when it fits the key alphabet, otherwise its digest. */
 fun dynamicWriteAppKey(appId: String): String = appId.stableKeyPart(MAX_APP_ID_LENGTH)

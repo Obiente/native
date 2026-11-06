@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,6 +53,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 /**
  * Feed reader for any app whose contract exposes articles. The selected filter and feed survive
@@ -68,42 +70,55 @@ internal fun NativeFeedReaderWorkspace(
     loadingMore: Boolean,
     loadMoreError: String?,
     modifier: Modifier = Modifier,
+    authority: NativeRuleAuthority? = plan.authority,
 ) {
     var savedFilter by rememberSaveable(schema.app.id) { mutableStateOf(plan.filters.first()) }
     var savedFeedId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
     // A filter or feed that the current data no longer supports falls back without a state write.
     val filter = savedFilter.takeIf { it in plan.filters } ?: plan.filters.first()
     val feedId = savedFeedId?.takeIf { id -> plan.feeds.any { it.record.id == id } }
-    var openKey by remember(schema.app.id) { mutableStateOf<String?>(null) }
+    var openKey by remember(schema.app.id, actionExecutor) { mutableStateOf<String?>(null) }
     // Local read and star state belongs to the app, so loading another page keeps it.
-    val session = remember(schema.app.id) { NativeFeedReaderSession() }
-    LaunchedEffect(session, plan.articles) { session.reconcile(plan.articles) }
+    val session = remember(schema.app.id, actionExecutor) { NativeFeedReaderSession() }
+    val activeSession by rememberUpdatedState(session)
+    LaunchedEffect(session, plan.articles, authority?.state?.generation) { session.reconcile(plan.articles, authority?.state?.generation ?: 0L) }
     val overrides = session.overrides
     val actionError = session.actionError
     val scope = rememberCoroutineScope()
+    var unresolved by remember(schema.app.id, actionExecutor) { mutableStateOf<Pair<NativeFeedItemActionPlan, NativeFeedArticle>?>(null) }
+    var recoveryMessage by remember(schema.app.id, actionExecutor) { mutableStateOf<String?>(null) }
     val visible = plan.visible(filter, feedId, overrides)
     val open = (openKey ?: plan.selectedArticle?.key)
         ?.let { key -> plan.articles.firstOrNull { it.key == key } }
         ?.withOverride(overrides[openKey ?: plan.selectedArticle?.key])
 
-    fun apply(change: NativeFeedItemActionPlan, article: NativeFeedArticle) {
-        session.begin(article, change)
+    fun apply(change: NativeFeedItemActionPlan, article: NativeFeedArticle, repeat: Boolean = false) {
+        val token = session.begin(article, change) ?: return
         scope.launch {
-            val result = runCatchingUnlessCancelled { actionExecutor.execute(change.request()) }.getOrElse { failure ->
+            val result = try { runCatchingUnlessCancelled { actionExecutor.execute(change.request().copy(
+                ruleRecovery = if (repeat) NativeRuleRecoveryIntent.RepeatSameOperation else null,
+            )) }.getOrElse { failure ->
                 NativeActionExecutionResult.Failure(failure.message.orEmpty(), NativeActionFailureOutcome.Unknown)
+            } } catch (cancelled: CancellationException) {
+                session.failed(article, "The change still needs verification.", token)
+                throw cancelled
             }
+            if (activeSession !== session) return@launch
             when (result) {
                 is NativeActionExecutionResult.Success -> {
-                    session.succeeded(article)
-                    onStateChanged?.invoke(change.action)
+                    if (session.succeeded(article, token) { onStateChanged?.invoke(change.action) }) { unresolved = null; recoveryMessage = null }
                 }
                 is NativeActionExecutionResult.Failure -> {
                     // A rejected change is rolled back for this article alone. An unknown result is
                     // also rolled back and the list is read again, so the server state wins.
                     if (result.outcome == NativeActionFailureOutcome.Rejected) {
-                        session.failed(article, result.message.ifBlank { "The app did not accept this change." })
+                        session.failed(article, result.message.ifBlank { "The app did not accept this change." }, token)
                     } else {
-                        session.failed(article, "The change could not be confirmed. The articles were read again.")
+                        val repeatable = session.checkUnresolved(article, result.message, token) {
+                            (actionExecutor as? NativeRuleRecoveryExecutor)?.canRepeatRuleOperation(change.request()) == true
+                        }
+                        if (activeSession !== session) return@launch
+                        if (repeatable) unresolved = change to article
                         onStateChanged?.invoke(change.action)
                     }
                 }
@@ -115,13 +130,36 @@ internal fun NativeFeedReaderWorkspace(
         openKey = article.key
         // Opening marks only this article read, through a route bound to its identity.
         if (article.unread == true) {
-            nativeFeedItemActions(schema, article).readState
+            nativeFeedItemActions(schema, article, authority).readState
                 ?.takeIf { it.kind == NativeFeedItemActionKind.MarkRead }
                 ?.let { apply(it, article) }
         }
     }
 
-    BoxWithConstraints(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize()) {
+        if (actionExecutor is NativeRuleRecoveryExecutor) {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                TextButton(onClick = { scope.launch {
+                    val result = actionExecutor.recoverRuleOperations()
+                    if (activeSession !== session) return@launch
+                    recoveryMessage = when (result) {
+                        is NativeActionExecutionResult.Success -> {
+                            unresolved = null
+                            session.recoveryVerified()
+                            authority?.sourceActionId?.let(schema::action)?.let { onStateChanged?.invoke(it) }
+                            result.message
+                        }
+                        is NativeActionExecutionResult.Failure -> result.message
+                    }
+                } }) { Text("Check earlier changes") }
+                unresolved?.let { (change, article) ->
+                    val refreshed = authority?.let { current -> planNativePatternRule(schema, change.action.id, article.record.id, current, change.request().values) }
+                    if (refreshed != null) TextButton(onClick = { apply(change.copy(rulePlan = refreshed), article, true) }) { Text("Repeat same change") }
+                }
+            }
+            recoveryMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val width = maxWidth
         val list: @Composable (Modifier) -> Unit = { modifier ->
             NativeFeedArticleList(plan, visible, open?.key, filter, feedId, ::openArticle, onLoadMore, loadingMore, loadMoreError, modifier)
@@ -130,7 +168,7 @@ internal fun NativeFeedReaderWorkspace(
             if (open == null) {
                 NativeFeedPlaceholder("Choose an article to read it here.", modifier)
             } else {
-                NativeFeedArticleReader(schema, plan, open, actionError, ::apply, onOpenLink, modifier)
+                NativeFeedArticleReader(schema, plan, open, actionError, { change, article -> apply(change, article) }, onOpenLink, modifier, authority)
             }
         }
         val rail: @Composable (Modifier) -> Unit = { modifier ->
@@ -171,6 +209,7 @@ internal fun NativeFeedReaderWorkspace(
                 list(Modifier.weight(1f).fillMaxWidth())
             }
         }
+    }
     }
 }
 
@@ -378,8 +417,9 @@ private fun NativeFeedArticleReader(
     onApply: (NativeFeedItemActionPlan, NativeFeedArticle) -> Unit,
     onOpenLink: ((String) -> Unit)?,
     modifier: Modifier,
+    authority: NativeRuleAuthority? = null,
 ) {
-    val actions = remember(schema, article) { nativeFeedItemActions(schema, article) }
+    val actions = remember(schema, article, authority) { nativeFeedItemActions(schema, article, authority) }
     val html = remember(article.body, article.html) { article.body?.takeIf { article.html }?.let(::sanitizeNativeMailHtml) }
     val richText = rememberRichTextState()
     LaunchedEffect(html) { if (!html.isNullOrBlank()) richText.setHtml(html) }

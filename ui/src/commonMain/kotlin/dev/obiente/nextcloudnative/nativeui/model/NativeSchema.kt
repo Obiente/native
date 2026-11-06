@@ -188,6 +188,8 @@ data class ApiBinding(
     /** Exact validated request-body schema retained for semantic, schema-gated native writes. */
     val bodySchema: JsonElement? = null,
     val allowsObservedBodyFields: Boolean = false,
+    /** Declared types retained for per-action observed identity proof. */
+    val pathParameterTypes: Map<String, String?> = emptyMap(),
 )
 
 @Serializable

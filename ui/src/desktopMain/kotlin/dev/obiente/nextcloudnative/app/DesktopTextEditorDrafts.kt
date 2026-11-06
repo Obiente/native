@@ -33,6 +33,8 @@ internal class DesktopTextEditorDrafts {
             override suspend fun load() = access { delegate.load() }
             override suspend fun save(draft: TextEditorDraft) = access { delegate.save(draft) }
             override suspend fun remove() = access { delegate.remove() }
+            override suspend fun pruneUnreferenced(retainedPaths: Set<String>, identifyPath: (TextEditorDraft) -> String?) =
+                access { delegate.pruneUnreferenced(retainedPaths, identifyPath) }
         }
     }
 
