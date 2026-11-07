@@ -57,7 +57,7 @@ internal suspend fun <T> runVerifiedDeckWrite(
                 throw cancelled
             } catch (failure: Exception) {
                 val message = failure.deckWriteMessage(actionLabel)
-                if (isAmbiguousDeckMutationFailure(status)) NativeWriteSendResult.Ambiguous(message) else NativeWriteSendResult.Rejected(message)
+                if (isAmbiguousDeckMutationFailure(status, failure)) NativeWriteSendResult.Ambiguous(message) else NativeWriteSendResult.Rejected(message)
             }
         },
         readBack = reread,

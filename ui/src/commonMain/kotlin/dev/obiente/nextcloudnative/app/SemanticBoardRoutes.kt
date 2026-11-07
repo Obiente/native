@@ -506,3 +506,9 @@ internal const val MAX_BOARD_COMMENT_PAGE_SIZE = 100
 private const val BOARD_READ_RESPONSE_BYTES = 8L * 1024L * 1024L
 private const val BOARD_WRITE_RESPONSE_BYTES = 2L * 1024L * 1024L
 private const val BOARD_ATTACHMENT_RESPONSE_BYTES = 4L * 1024L * 1024L
+
+internal fun SemanticBoardRoutes.labelChanges(access: DeckBoardAccess, card: DeckCard, selected: List<DeckLabel>): List<NextcloudApiRequest> {
+    val current = card.labels.map { it.id }.toSet()
+    val desired = selected.map { it.id }.toSet()
+    return (desired - current).map { assignLabel(access, card, it) } + (current - desired).map { removeLabel(access, card, it) }
+}

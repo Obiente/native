@@ -57,6 +57,9 @@ data class DeckBoardCollection(
     val archived: List<DeckBoard>,
 )
 
+/** Origin of a completed item read. An equal numeric ID in another route is not this record. */
+data class DeckCardReadSource(val actionId: String, val routeTemplate: String, val requestPath: String)
+
 data class DeckCard(
     val id: Long,
     val boardId: Long,
@@ -78,6 +81,9 @@ data class DeckCard(
     val etag: String?,
     /** Scalar server values, used only to keep unchanged fields in a full-replacement update. */
     val rawFields: Map<String, String> = emptyMap(),
+    val membershipObservation: dev.obiente.nextcloudnative.nativeui.runtime.NativeMembershipObservation =
+        dev.obiente.nextcloudnative.nativeui.runtime.NativeMembershipObservation.Absent,
+    val readSource: DeckCardReadSource? = null,
 )
 
 data class DeckStack(
@@ -268,6 +274,7 @@ private fun JsonObject.toDeckCard(boardId: Long, expectedStackId: Long): DeckCar
         unreadCommentCount = int("commentsUnread") ?: 0,
         etag = string("ETag") ?: string("etag"),
         rawFields = scalarFields(),
+        membershipObservation = dev.obiente.nextcloudnative.nativeui.runtime.membershipObservation(this["labels"]),
     )
 }
 

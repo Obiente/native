@@ -94,17 +94,24 @@ internal fun SemanticAppWorkspaceScreen(
         }?.let { contract -> SemanticSettings(workspace.descriptor, contract) }
     }
     when (workspace) {
-        is SemanticAppWorkspace.Board -> NativeDeckScreen(
-            services = services,
-            session = session,
-            routes = remember(workspace) { SemanticBoardRoutes(workspace.contract) },
-            appSettings = settings,
-            execute = execute,
-            authorizeWrite = { writeGate.authorizesWrite(ActionRisk.mutating, workspace.descriptor) },
-            currentUserId = currentUserId,
-            onBack = onBack,
-            modifier = modifier,
-        )
+        is SemanticAppWorkspace.Board -> {
+            val routes = remember(workspace) { SemanticBoardRoutes(workspace.contract) }
+            val membership = remember(services, session, routes, writeGate, execute) {
+                SemanticBoardMembershipController(services, session, routes, writeGate, execute)
+            }
+            NativeDeckScreen(
+                services = services,
+                session = session,
+                routes = routes,
+                appSettings = settings,
+                execute = membership::execute,
+                membershipController = membership,
+                authorizeWrite = { writeGate.authorizesWrite(ActionRisk.mutating, workspace.descriptor) },
+                currentUserId = currentUserId,
+                onBack = onBack,
+                modifier = modifier,
+            )
+        }
         is SemanticAppWorkspace.Notes -> NextcloudNotesScreen(
             services = services,
             session = session,

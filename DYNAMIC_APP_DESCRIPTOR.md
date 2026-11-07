@@ -946,6 +946,78 @@ an unknown completion still checks durable recovery without rolling back newer
 local state.
 Other R1 surfaces retain the limitations listed below.
 
+The next bounded Phase 3 slice is LABEL membership (Last reviewed: 2026-11-07;
+this source state may change). [`SetMembershipRule.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/rules/SetMembershipRule.kt)
+requires declared E2/E3 `POST T/assignLabel` and `POST T/removeLabel`, where
+`T` ends in the record placeholder, both JSON bodies require the same single
+scalar `labelId` (or `label_id`) field, and exactly one declared `GET T` exists.
+Direct and nested parent routes qualify. Parent placeholders may differ in the
+read: bindings and their string/integer types must agree by route position.
+The chosen write resolves its read from all descriptor actions. An unrelated
+read, matching resource names or observed IDs, or a preferred board `ReadCard`
+action cannot substitute for that exact read. No collection endpoint is invented.
+Sharing, ACL, user, group and permission operations are excluded. Only the
+exact reviewed inverse can reinterpret the general classifier's conservative
+"remove" naming result as R1; destructive effects remain excluded. The nested
+`POST/DELETE T/labels/{labelId}` relationship shape remains deferred.
+
+[`NativeMembershipRulePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMembershipRulePlan.kt)
+uses a fresh typed item-read authority and separate record, parent and member
+bindings. [`NativeRulePostcondition.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRulePostcondition.kt)
+retains complete bounded raw `labels` arrays, with uniform scalar IDs or object
+`id` projections. Empty arrays do not invent member identities. Absent, null,
+malformed, duplicate, wrong-typed and bounded-away arrays cannot prove a baseline.
+Limits are 256 members and 16,384 JSON characters per array. The pre-send
+network read must preserve the authoritative baseline. Read-back verifies the
+requested member delta and the complete representation of every untouched
+member, ignoring only set order. Drift stops a send or quarantines a contradictory
+result; there is no automatic inverse or restore. Display-only `DeckLabel`
+lists are never membership proof.
+
+The same durable rule executor handles Boolean and membership postconditions.
+Recovery envelope version 2 adds typed plans and the inverse contract; version-1
+Boolean evidence still decodes and uses its original pending token. Encrypted
+evidence precedes reservation and one send. Malformed or unknown recovery
+versions retain the pending operation. Unknown delivery survives restart;
+status checks only read. An explicit repeat requires the same target, member,
+direction, compatible exact contracts and original membership baseline.
+Cancellation, disk faults, account retirement, cleanup and stale-token fences
+remain shared with the Boolean path. Both rule kinds recheck current contract
+authorization after network reads and durable reservation, immediately before
+the initial send or an explicit repeat. Rediscovery in progress or a revoked or
+replaced contract refuses an unsent operation and preserves an earlier unknown
+operation's recovery token without repeating it.
+
+[`SemanticBoardMembershipController.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticBoardMembershipController.kt)
+classifies each label command from contract evidence as `NotManaged` or
+`Managed(proof)`. Managed admission requires the board's selected item-read
+action to be the rule's exact read. The loaded card retains that action, route
+template and bound request path; the controller checks all three before using
+its identities. Equal IDs and labels from a different route cannot authorize
+a managed write. Only managed commands enter this path. Missing data, failed
+planning, denied edit permission, pending delivery and quarantine cannot fall
+back to legacy sending. The board bridge requires numeric board/card/label
+identities and a complete object-label display/catalog; the generic planner also
+handles declared string identities and scalar membership arrays. Picker
+batches serialize and stop at the first unresolved result. Exact same-target
+legacy siblings share admission guards. Previously recorded managed routes keep
+those guards when a later descriptor loses the inverse proof, so pending or
+quarantined membership cannot downgrade into a legacy send. Unrelated route
+families retain their existing path. The picker offers read-only status checking
+and explicit repeat of a recorded operation. Both preserve the unsaved selection
+and leave the picker open. After every result, including partial batch success,
+the picker refreshes its authoritative baseline before enabling another save;
+a failed refresh leaves saving disabled until a later check succeeds. Even a
+submission with no selected changes checks durable safety state under the shared
+route gate before reading current membership. An unresolved operation keeps its
+token and leaves the picker open; a matching baseline cannot prove that an
+earlier ambiguous send will not apply. Membership is never updated optimistically. Cross-family
+Deck fixtures remain on the documented legacy
+path; equal IDs and inferred relationships do not prove route equivalence.
+This slice has synthetic planner/executor/controller coverage, not live Deck
+qualification, device qualification or a published artifact. Broader membership,
+member-list encodings, Mail outbox, trash and Phase 4 remain outside this slice.
+
 OCS failures reported inside an HTTP `2xx` response are classified by status
 code ([`DynamicOcsFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicOcsFailure.kt)).
 Client errors (`400` to `499`, the OCS v1 app failure codes `101` to `199`,
@@ -970,10 +1042,10 @@ outcomes Confirmed, Adjusted, NotApplied, and Unknown. A definite rejection is
 not read back. A successful response whose read-back shows the previous value,
 or an untouched field that drifted, contradicts the postcondition and
 quarantines the route. Server bookkeeping fields (modification time, ETag,
-revision) are not drift. Deck's board writes call the same verified write
-function, but they run through the reviewed Deck adapter's own transport
-rather than the descriptor executor, so the admission check, the in-flight
-gate, quarantine, and write diagnostics described here do not apply to them.
+revision) are not drift. Managed board label commands use the descriptor rule
+executor described above. Other board writes retain the board transport path;
+its exact same-target siblings share the managed route's admission guard, but
+this does not qualify their postconditions or convert cross-family operations.
 
 Quarantine and probation state is stored per account identity digest, app ID,
 exact app version, route template, rule ID, and rule version
@@ -1062,10 +1134,10 @@ codes `write-quarantined`, `write-postcondition-mismatch`,
 `identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
 Rule execution records the registered rule identity and lifecycle codes without payload values.
 
-The rule registry and observed identity binding are used by the feed surface
-in this source slice. Synthetic executor, persistence and session fixtures
-cover two app identities and unknown versions. This is not live News/server
-qualification or a published artifact. Deck membership, member-list encoding,
+The rule registry serves feed state changes and the bounded managed label
+commands above. Synthetic fixtures cover differently named apps and unknown
+versions. This is source and deterministic evidence, not live News/Deck/server
+qualification or a published artifact. Broader membership, member-list encoding,
 Mail outbox, trash semantics and Phase 4 remain later scopes.
 
 Writes that pass admission and the verified write path: grid row updates
@@ -1073,12 +1145,12 @@ Writes that pass admission and the verified write path: grid row updates
 read-back PATCH). A replacement whose body is not JSON cannot carry stored
 values back exactly, so such a record stays read-only. Writes that pass
 admission but are not yet read back: other R1 actions outside the bounded item-state
-rules above, generic record, collection, and board actions, mailbox state
+and LABEL rules above, generic record, collection, and board actions, mailbox state
 changes, notes, questionnaire responses, creates (which keep their durable
 pending records), deletes, and the mail composer's send (which uses the
 exactly-once path instead and is refused when no durable draft storage can
-record its attempt). Deck board writes are read back through the verified
-write function but are not admitted by the generic write path.
+record its attempt). Managed board label commands are admitted by the generic
+rule path. Other board writes retain their existing verification boundaries.
 The item-state candidates explicitly omitted from generic record and mailbox
 planners above are unavailable, rather than admitted without verification.
 

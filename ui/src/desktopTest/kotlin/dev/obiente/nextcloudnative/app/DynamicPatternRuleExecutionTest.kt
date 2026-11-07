@@ -160,7 +160,8 @@ class DynamicPatternRuleExecutionTest {
                 assertEquals(mapOf("folderId" to "3", "itemId" to "41"), evidence.plan.writeBindings)
                 assertEquals(mapOf("folderId" to "3"), evidence.plan.readBindings)
                 assertEquals(listOf("3", "41"), evidence.plan.target.identities)
-                assertTrue(evidence.plan.baseline); assertFalse(evidence.plan.expected)
+                val booleanPlan = assertIs<NativePatternRulePlan>(evidence.plan)
+                assertTrue(booleanPlan.baseline); assertFalse(booleanPlan.expected)
             }
             assertIs<NativeActionExecutionResult.Success>(f.executor().execute(f.request()))
         }
@@ -384,8 +385,8 @@ class DynamicPatternRuleExecutionTest {
                     val store = f.services.ruleRecoveryStore(f.session, token)!!
                     val evidence = store.load()!!
                     store.save(when (damage) {
-                        "rule" -> evidence.copy(plan = evidence.plan.copy(ruleVersion = 98))
-                        "read-binding" -> evidence.copy(plan = evidence.plan.copy(readBindings = mapOf("id" to "42")))
+                        "rule" -> evidence.copy(plan = assertIs<NativePatternRulePlan>(evidence.plan).copy(ruleVersion = 98))
+                        "read-binding" -> evidence.copy(plan = assertIs<NativePatternRulePlan>(evidence.plan).copy(readBindings = mapOf("id" to "42")))
                         else -> evidence.copy(write = f.descriptor.actions.single { it.binding.path.endsWith("/unread") })
                     })
                 }

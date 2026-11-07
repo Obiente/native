@@ -16,6 +16,7 @@ import dev.obiente.nextcloudnative.nativeui.model.operationRiskClass
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
+import dev.obiente.nextcloudnative.nativeui.runtime.executionRulePlan
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeNotAppliedReason
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeVerifiedWriteOutcome
@@ -51,7 +52,9 @@ internal class DynamicWriteContext(
     val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit,
     val clock: () -> Long,
     val ruleAuthority: () -> dev.obiente.nextcloudnative.nativeui.runtime.NativeRuleAuthority? = { null },
+    val membershipAuthority: () -> dev.obiente.nextcloudnative.nativeui.runtime.NativeItemReadAuthority? = { null },
     val accountProducer: AccountPrivateMemoryProducer? = sharedAccountPrivateMemoryGate.producer(session.accountId.storageKey),
+    val writeIsAuthorized: () -> Boolean = { true },
 ) {
     /** The platform's durable store; a platform without one has no persisted write safety state. */
     val store: DynamicWriteQuarantineStore? by lazy {
@@ -106,11 +109,11 @@ internal suspend fun executeDynamicWrite(
     val route = context.patternRuleAdmissionGate()
     if (route != null && !DynamicWriteInFlightGate.tryAcquire(route)) {
         val message = "Another change here is still being checked. Wait for it to finish."
-        return if (request.rulePlan == null) refusal(message)
+        return if (request.executionRulePlan == null) refusal(message)
         else NativeActionExecutionResult.Failure(message, NativeActionFailureOutcome.Unknown)
     }
     try {
-        return if (request.rulePlan != null) executeDynamicRuleWrite(context, request)
+        return if (request.executionRulePlan != null) executeDynamicRuleWrite(context, request)
         else executeDeclaredDynamicWrite(context, request)
     } finally {
         route?.let(DynamicWriteInFlightGate::release)
@@ -126,7 +129,8 @@ private suspend fun executeDeclaredDynamicWrite(
     val ruleState = try {
         context.store?.let { store ->
             if (store.records(context.session.accountId.storageKey, context.descriptor.app.id).any {
-                    (it.pendingVerification != null || it.reason == DynamicWriteQuarantineReason.abandonedUnknown) && it.key.route == context.canonicalRuleRoute()
+                    (it.pendingVerification != null || it.reason == DynamicWriteQuarantineReason.abandonedUnknown ||
+                        it.key.ruleId == "label-membership" && it.status == DynamicWriteRuleStatus.quarantined) && it.key.route == context.canonicalRuleRoute()
                 }) return NativeActionExecutionResult.Failure("Changes here are paused because an earlier result remains unknown. Review it in Contract info.", NativeActionFailureOutcome.Unknown)
             store.observeAppVersion(context.ruleKey.accountDigest, context.descriptor.app.id, context.descriptor.app.version)
             store.ruleState(context.ruleKey, ruleApplies = false)

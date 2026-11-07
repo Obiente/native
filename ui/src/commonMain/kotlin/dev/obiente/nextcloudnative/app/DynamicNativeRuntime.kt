@@ -1704,7 +1704,7 @@ private fun JsonElement.toNativeRecord(
         structuredValues = structuredValues,
         wireValues = objectValue.boundedDynamicWireValues(declaredFieldIds) { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
         observedRuleValues = objectValue.boundedDynamicRuleObservations { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
-    )
+    ).withMembershipObservation(objectValue)
 }
 
 private fun String.toSafeDynamicRecordId(): String {

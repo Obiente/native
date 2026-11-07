@@ -70,7 +70,7 @@ class PatternRuleRegistry(rules: List<PatternRule> = emptyList()) {
 
     companion object {
         /** The rules shipped with this build. */
-        val shipped: PatternRuleRegistry = PatternRuleRegistry(listOf(ItemStatePairRule(), DeclaredBooleanStateRule()))
+        val shipped: PatternRuleRegistry = PatternRuleRegistry(listOf(ItemStatePairRule(), DeclaredBooleanStateRule(), SetMembershipRule()))
     }
 }
 

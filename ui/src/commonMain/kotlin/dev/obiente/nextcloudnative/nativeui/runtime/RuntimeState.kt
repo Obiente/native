@@ -35,6 +35,8 @@ data class NativeRecord(
     val wireValues: Map<String, JsonElement> = emptyMap(),
     /** Bounded observed scalar evidence for per-action rules only; never full-echo/body authority. */
     val observedRuleValues: Map<String, JsonElement> = emptyMap(),
+    /** Complete bounded membership evidence, independent of display filtering. */
+    val membershipObservations: Map<String, NativeMembershipObservation> = emptyMap(),
 )
 
 @Serializable
@@ -256,6 +258,7 @@ sealed interface NativeActionRequest {
          */
         val baselineRestore: Boolean = false,
         val rulePlan: NativePatternRulePlan? = null,
+        val membershipPlan: NativeMembershipRulePlan? = null,
         val ruleRecovery: NativeRuleRecoveryIntent? = null,
     ) : NativeActionRequest
 }

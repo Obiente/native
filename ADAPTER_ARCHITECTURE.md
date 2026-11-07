@@ -147,9 +147,20 @@ entries and successful guesses do not prove that an operation is safe.
   Every write carries its evidence tier and risk class, passes the admission
   matrix at the transport boundary, and, where its surface opts in, is read
   back and verified; a contradiction quarantines the route on that device.
-  Registered item-state rules additionally rebuild typed execution plans from
+  Registered item-state and bounded LABEL rules rebuild typed execution plans from
   current authority, save encrypted recovery before reserving a durable token,
-  and force network confirmation. Pending tokens cannot be cleared by ordinary
+  and force network confirmation. Both rule kinds recheck current contract
+  authorization immediately before sending after network and disk suspensions.
+  Membership uses exact item-read authority,
+  separate parent/record/member identities and full bounded raw set observations.
+  The shared typed postcondition executor verifies the requested delta and every
+  untouched member; it never restores drift automatically. Recovery format 2
+  retains version-1 Boolean decoding. A narrow board controller sends only
+  contract-proven candidates through this path, serializes batches and guards
+  proven same-target legacy siblings. Cards retain their source read and bound
+  request path; missing proof is never fabricated from cross-family IDs. The
+  picker keeps its unsaved selection separate from the refreshed server baseline.
+  Pending tokens cannot be cleared by ordinary
   Resume changes or version observation. Explicitly stopping recovery resolves
   only the chosen token as unknown and keeps its route quarantined until a
   separate Resume confirmation. See

@@ -17,11 +17,9 @@ import kotlin.uuid.Uuid
 
 /** Re-match with the runtime's descriptor and load. Caller-supplied safety facts are not authority. */
 internal suspend fun executeDynamicRuleWrite(context: DynamicWriteContext, request: NativeActionRequest.Submit): NativeActionExecutionResult {
-    val submitted = request.rulePlan ?: return ruleRefused()
-    val authority = context.ruleAuthority() ?: return ruleRefused()
-    val schema = context.descriptor.toNativeAppSchema()
-    val plan = planNativePatternRule(schema, context.action.id, submitted.targetId, authority, request.values)
-        ?: return ruleRefused()
+    val submitted = request.executionRulePlan ?: return ruleRefused()
+    if (request.rulePlan != null && request.membershipPlan != null) return ruleRefused()
+    val plan = context.rebuildRulePlan(submitted, request.values) ?: return ruleRefused()
     if (plan != submitted || request.values != plan.writeBindings || request.baselineRestore || request.sendAttempt != null) return ruleRefused()
     val store = context.store ?: return ruleRefused("Encrypted recovery and write safety storage are required before changing this item.")
     val key = context.ruleKey(plan)
@@ -63,12 +61,16 @@ internal suspend fun executeDynamicRuleWrite(context: DynamicWriteContext, reque
         if (plan.identity.roundTripReadActionId != null) {
             val before = context.readRuleState(plan, read)
             if (before.singleOrNull()?.id != plan.targetId || !context.identifiesRuleTarget(plan, before)) return ruleRefused()
+            if (plan is NativeMembershipRulePlan && !plan.postcondition.baselineMatches(before.single())) return ruleRefused("The labels changed. Refresh this item before trying again.")
         }
-        if (context.ruleAuthority() != authority || !context.accountIsCurrent()) return ruleRefused()
+        if (context.rebuildRulePlan(plan, request.values) != plan || !context.accountIsCurrent()) return ruleRefused()
         val token = newRuleToken(context.clock())
         val recovery = context.recovery(token.operationId) ?: return ruleRefused()
         val evidence = DynamicRuleRecoveryEvidence(key = key, pending = token, appId = context.descriptor.app.id,
-            appVersion = context.descriptor.app.version, plan = plan, write = context.action, read = read, sourceRead = source)
+            appVersion = context.descriptor.app.version, plan = plan, write = context.action, read = read, sourceRead = source,
+            inverseWrite = (plan as? NativeMembershipRulePlan)?.let { membership -> context.descriptor.actions.single {
+                it.id == if (membership.actionId == membership.proof.assignActionId) membership.proof.removeActionId else membership.proof.assignActionId
+            } })
         val reserved = withRuleRecoveryMaintenance {
             context.services.pruneRuleRecovery(context.session, store)
             try {
@@ -92,7 +94,7 @@ internal suspend fun executeDynamicRuleWrite(context: DynamicWriteContext, reque
         }
         if (!reserved) return ruleUnknown(PENDING_MESSAGE)
         // From reservation onwards cancellation and failures retain recovery. No background replay.
-        if (context.ruleAuthority() != authority || !context.accountIsCurrent()) {
+        if (context.rebuildRulePlan(plan, request.values) != plan || !context.accountIsCurrent()) {
             context.finish(evidence, store, DynamicPendingRuleResolution.rejected)
             return ruleRefused()
         }
@@ -202,12 +204,13 @@ private suspend fun DynamicWriteContext.loadRecovery(record: DynamicWriteRuleRec
     val write = actions.singleOrNull { it.id == evidence.plan.actionId } ?: return null
     val rule = PatternRuleRegistry.shipped.ruleFor(schema, PatternRouteFamily(write, actions.filter { it.binding.method == HttpMethod.GET })) ?: return null
     if (rule.ruleId != evidence.plan.ruleId || rule.ruleVersion != evidence.plan.ruleVersion || ruleKey(evidence.plan) != record.key) return null
+    if (evidence.inverseWrite != null && descriptor.actions.singleOrNull { it.id == evidence.inverseWrite.id } != evidence.inverseWrite) return null
     if (!evidence.hasConsistentPlan(schema)) return null
     return evidence
 }
 
 internal suspend fun canRepeatDynamicRuleOperation(context: DynamicWriteContext, request: NativeActionRequest.Submit): Boolean = try {
-    val plan = request.rulePlan
+    val plan = request.executionRulePlan
     val record = plan?.let { candidate -> context.store?.records(context.session.accountId.storageKey, context.descriptor.app.id)
         ?.singleOrNull { it.key.sameCanonicalRoute(context.ruleKey(candidate)) && it.pendingVerification != null } }
     if (plan == null || record == null || record.status == DynamicWriteRuleStatus.quarantined || !context.accountIsCurrent()) false
@@ -215,27 +218,6 @@ internal suspend fun canRepeatDynamicRuleOperation(context: DynamicWriteContext,
 } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
     // Missing or incompatible recovery never advertises a repeat.
     false
-}
-
-/** Validate stored bindings and read selection again without interpreting old evidence as a new load. */
-private fun DynamicRuleRecoveryEvidence.hasConsistentPlan(schema: NativeAppSchema): Boolean {
-    val path = write.binding.path.split('/')
-    val targetName = path.lastOrNull { it.startsWith('{') }?.removeSurrounding("{", "}") ?: return false
-    val type = write.binding.pathParameters.singleOrNull { it.name == targetName }?.schema as? kotlinx.serialization.json.JsonObject ?: return false
-    val wireId = when ((type["type"] as? JsonPrimitive)?.content) {
-        "integer" -> JsonPrimitive(plan.targetId.toLongOrNull() ?: return false)
-        "string" -> JsonPrimitive(plan.targetId)
-        else -> return false
-    }
-    val navigation = sourceRead.binding.path.split('/').mapIndexedNotNull { index, segment ->
-        if (!segment.startsWith('{')) null else segment.removeSurrounding("{", "}") to
-            (plan.writeBindings[path[index].removeSurrounding("{", "}")] ?: return false)
-    }.toMap() + plan.readBindings.filterKeys { name -> (sourceRead.binding.queryParameters + read.binding.queryParameters).any { it.name == name } }
-    val baseline = NativeRecord(plan.targetId, mapOf("id" to plan.targetId, plan.stateField to plan.baseline.toString()),
-        actionSafeIdentity = !plan.identity.observed, wireValues = mapOf("id" to wireId, plan.stateField to JsonPrimitive(plan.baseline)))
-    val rebuilt = planNativePatternRule(schema, write.id, plan.targetId,
-        NativeRuleAuthority(NativeScreenState.Ready(listOf(baseline), plan.identity.generation), sourceRead.id, navigation), plan.writeBindings)
-    return rebuilt == plan
 }
 
 private suspend fun DynamicWriteContext.reconcile(
@@ -246,22 +228,19 @@ private suspend fun DynamicWriteContext.reconcile(
     if (!accountIsCurrent()) return ruleUnknown(PENDING_MESSAGE)
     val plan = evidence.plan
     val records = readRuleState(plan, evidence.read)
-    if (!identifiesRuleTarget(plan, records)) return ruleUnknown(PENDING_MESSAGE)
+    if (!identifiesRuleTarget(plan, records) || !accountIsCurrent()) return ruleUnknown(PENDING_MESSAGE)
     if (plan.verifyRuleState(records) == NativeWriteVerification.Confirmed) {
         return if (finish(evidence, store, DynamicPendingRuleResolution.confirmed)) NativeActionExecutionResult.Success("The earlier change was verified.")
         else ruleUnknown(PENDING_MESSAGE)
     }
-    val state = (records.single { it.id == plan.targetId }.ruleObservation(plan.stateField) as? JsonPrimitive)
-    if (state == null || state.isString || state.booleanOrNull != plan.baseline) {
+    if (!plan.postcondition.baselineMatches(records.single { it.id == plan.targetId })) {
         store.resolve(evidence.key, evidence.pending.operationId, DynamicPendingRuleResolution.contradictedPending, clock())
         ruleDiagnostic(plan, DynamicDiagnosticCode.WritePostconditionMismatch, "contradicted")
         return ruleUnknown("The earlier change read back differently than expected. Changes remain paused.")
     }
     if (!repeat) return ruleUnknown(PENDING_MESSAGE)
     // Explicit R1 repeat after status reconciliation, retaining the same logical operation token.
-    val authority = ruleAuthority() ?: return ruleRefused()
-    val current = planNativePatternRule(descriptor.toNativeAppSchema(), plan.actionId, plan.targetId, authority, plan.writeBindings)
-        ?: return ruleRefused()
+    val current = rebuildRulePlan(plan, plan.writeBindings) ?: return ruleRefused()
     if (!current.sameOperation(plan) || !accountIsCurrent()) return ruleRefused()
     val record = store.record(evidence.key)
     if (record?.pendingVerification != evidence.pending || record.status == DynamicWriteRuleStatus.quarantined) return ruleUnknown(PENDING_MESSAGE)
@@ -277,7 +256,15 @@ private suspend fun DynamicWriteContext.sendRule(
 ): NativeActionExecutionResult {
     currentCoroutineContext().ensureActive()
     if (!accountIsCurrent() || store.record(evidence.key)?.pendingVerification != evidence.pending) return ruleUnknown(PENDING_MESSAGE)
+    // The entry check preceded network and disk suspensions. Never wait for rediscovery here:
+    // its result could leave the already-read baseline stale. A repeat keeps its earlier token.
+    if (!accountIsCurrent() || !writeIsAuthorized()) {
+        if (repeating) return ruleUnknown("The app contract changed before the repeat. The earlier result remains unknown.")
+        return if (finish(evidence, store, DynamicPendingRuleResolution.rejected))
+            ruleRefused("The app contract changed before sending. Refresh before trying again.") else ruleUnknown(PENDING_MESSAGE)
+    }
     var repeatRejected = false
+    var invalidMembershipReadBack = false
     val outcome = runNativeVerifiedWrite(
         send = {
             val result = services.executeNextcloudApi(session, prepared).toDynamicActionExecutionResult(evidence.write)
@@ -291,8 +278,13 @@ private suspend fun DynamicWriteContext.sendRule(
             }
         },
         readBack = { readRuleState(evidence.plan, evidence.read) },
-        verify = { records -> if (identifiesRuleTarget(evidence.plan, records)) evidence.plan.verifyRuleState(records) else NativeWriteVerification.Unidentified },
-        actionLabel = "Change item state",
+        verify = { records ->
+            if (identifiesRuleTarget(evidence.plan, records)) {
+                invalidMembershipReadBack = !evidence.plan.postcondition.observationAvailable(records.single { it.id == evidence.plan.targetId })
+                evidence.plan.verifyRuleState(records)
+            } else NativeWriteVerification.Unidentified
+        },
+        actionLabel = "Change item",
     )
     return when (outcome) {
         is NativeVerifiedWriteOutcome.Confirmed -> if (finish(evidence, store, DynamicPendingRuleResolution.confirmed)) NativeActionExecutionResult.Success("Saved and verified.") else ruleUnknown(PENDING_MESSAGE)
@@ -307,29 +299,38 @@ private suspend fun DynamicWriteContext.sendRule(
                 ruleRefused("The app reported success but did not store the requested state. Changes here are paused.")
             }
             else -> {
-                val value = outcome.snapshot?.singleOrNull { it.id == evidence.plan.targetId }?.ruleObservation(evidence.plan.stateField)
-                if (repeatRejected && value == JsonPrimitive(evidence.plan.baseline)) {
+                val baselineMatches = outcome.snapshot?.singleOrNull { it.id == evidence.plan.targetId }?.let(evidence.plan.postcondition::baselineMatches) == true
+                if (repeatRejected && baselineMatches) {
                     return if (finish(evidence, store, DynamicPendingRuleResolution.rejected))
                         ruleRefused("The app rejected the repeat, and the current state is unchanged.") else ruleUnknown(PENDING_MESSAGE)
                 }
-                if (value != JsonPrimitive(evidence.plan.baseline)) {
+                if (!baselineMatches && accountIsCurrent()) {
                     store.resolve(evidence.key, evidence.pending.operationId, DynamicPendingRuleResolution.contradictedPending, clock())
                     ruleDiagnostic(evidence.plan, DynamicDiagnosticCode.WriteQuarantined, "contradicted")
                 }
                 ruleUnknown(PENDING_MESSAGE)
             }
         }
-        is NativeVerifiedWriteOutcome.Unknown -> ruleUnknown(PENDING_MESSAGE)
-        is NativeVerifiedWriteOutcome.Adjusted -> error("Boolean rule verification never adjusts values.")
+        is NativeVerifiedWriteOutcome.Unknown -> {
+            if (invalidMembershipReadBack && accountIsCurrent()) {
+                store.resolve(evidence.key, evidence.pending.operationId, DynamicPendingRuleResolution.contradictedPending, clock())
+                ruleDiagnostic(evidence.plan, DynamicDiagnosticCode.WriteQuarantined, "unreadable-membership")
+            }
+            ruleUnknown(PENDING_MESSAGE)
+        }
+        is NativeVerifiedWriteOutcome.Adjusted -> error("Rule postconditions never adjust values.")
     }
 }
 
-private suspend fun DynamicWriteContext.readRuleState(plan: NativePatternRulePlan, read: DynamicAction): List<NativeRecord> {
+private suspend fun DynamicWriteContext.readRuleState(plan: NativeRuleExecutionPlan, read: DynamicAction): List<NativeRecord> {
     val request = buildDynamicApiRequest(descriptor, read, plan.readBindings, emptyMap()).copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
     return parseDynamicRecords(read, services.executeNextcloudApi(session, request), read.responseFieldIds.toSet())
 }
 
-private fun DynamicWriteContext.identifiesRuleTarget(plan: NativePatternRulePlan, records: List<NativeRecord>): Boolean {
+private fun DynamicWriteContext.identifiesRuleTarget(plan: NativeRuleExecutionPlan, records: List<NativeRecord>): Boolean {
+    if (plan is NativeMembershipRulePlan) return records.singleOrNull()?.let {
+        it.id == plan.targetId && membershipIdentityMatches(plan.proof, it, plan.readBindings)
+    } == true
     val record = records.singleOrNull { it.id == plan.targetId } ?: return false
     val schema = descriptor.toNativeAppSchema()
     val actions = schema.actions + schema.dedicatedActions
@@ -374,15 +375,12 @@ private fun DynamicWriteContext.recovery(token: String): TextDraftBackedDynamicR
 
 private fun DynamicWriteContext.accountIsCurrent(): Boolean = sharedAccountPrivateMemoryGate.read(accountProducer, false) { true }
 
-private fun NativePatternRulePlan.sameOperation(other: NativePatternRulePlan): Boolean =
-    copy(identity = identity.copy(generation = 0), baseline = other.baseline) == other.copy(identity = other.identity.copy(generation = 0))
-
-private fun DynamicWriteContext.ruleKey(plan: NativePatternRulePlan) = DynamicWriteRuleKey.of(session.accountId.storageKey,
+private fun DynamicWriteContext.ruleKey(plan: NativeRuleExecutionPlan) = DynamicWriteRuleKey.of(session.accountId.storageKey,
     descriptor.app.id, descriptor.app.version, plan.target.family, plan.ruleId, plan.ruleVersion)
-private fun DynamicWriteContext.targetGate(plan: NativePatternRulePlan) =
+private fun DynamicWriteContext.targetGate(plan: NativeRuleExecutionPlan) =
     canonicalTargetGate(descriptor.actions.single { it.id == plan.actionId }, plan.writeBindings)
 
-private fun DynamicWriteContext.ruleDiagnostic(plan: NativePatternRulePlan, code: DynamicDiagnosticCode, outcome: String) {
+private fun DynamicWriteContext.ruleDiagnostic(plan: NativeRuleExecutionPlan, code: DynamicDiagnosticCode, outcome: String) {
     try {
         services.recordSupportDiagnostic(SupportDiagnosticEventDraft(severity = SupportDiagnosticSeverity.Info,
             component = SupportDiagnosticComponent.AdaptiveApps, operation = "dynamic-rule-write", outcome = outcome, code = code.code,

@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 import dev.obiente.nextcloudnative.nativeui.model.*
 import dev.obiente.nextcloudnative.nativeui.rules.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -28,20 +29,22 @@ data class NativeRuleIdentityProof(
 
 /** Immutable recovery evidence. No executable callbacks and no caller-selected risk downgrade. */
 @Serializable
+@SerialName("boolean")
 data class NativePatternRulePlan(
-    val ruleId: String,
-    val ruleVersion: Int,
-    val actionId: String,
-    val targetId: String,
-    val target: NativeRuleTarget,
-    val identity: NativeRuleIdentityProof,
-    val verificationReadActionId: String,
-    val writeBindings: Map<String, String>,
-    val readBindings: Map<String, String>,
+    override val ruleId: String,
+    override val ruleVersion: Int,
+    override val actionId: String,
+    override val targetId: String,
+    override val target: NativeRuleTarget,
+    override val identity: NativeRuleIdentityProof,
+    override val verificationReadActionId: String,
+    override val writeBindings: Map<String, String>,
+    override val readBindings: Map<String, String>,
     val stateField: String,
     val expected: Boolean,
     val baseline: Boolean,
-) {
+) : NativeRuleExecutionPlan {
+    override val postcondition: NativeRulePostcondition get() = NativeRulePostcondition.BooleanState(stateField, expected, baseline)
     override fun toString(): String = "NativePatternRulePlan($ruleId v$ruleVersion, <private evidence>)"
 }
 
@@ -131,15 +134,6 @@ internal fun NativeRecord.matchesRuleIdentityType(type: String?): Boolean {
             (value as? JsonPrimitive)?.content == id
     }.map { it.value as? JsonPrimitive ?: return false }
     return identity.isNotEmpty() && identity.all { (type == "string") == it.isString && provenPathType(type, it.content) }
-}
-
-/** Exact boolean agreement only. A different type is a contradiction, never a scalar adjustment. */
-internal fun NativePatternRulePlan.verifyRuleState(records: List<NativeRecord>): NativeWriteVerification {
-    val targetRecord = records.singleOrNull { it.id == targetId } ?: return NativeWriteVerification.Unidentified
-    if (targetRecord.safeActionBindingValues(allowUnsafeIdentity = true) == null) return NativeWriteVerification.Unidentified
-    val state = targetRecord.ruleObservation(stateField) as? JsonPrimitive
-    return if (state != null && !state.isString && state.booleanOrNull == expected) NativeWriteVerification.Confirmed
-    else NativeWriteVerification.NotApplied("The app did not confirm the requested item state.")
 }
 
 internal fun NativeRecord.ruleObservation(field: String) = wireValues[field] ?: observedRuleValues[field]

@@ -246,6 +246,17 @@ discovery and persistent caching need more work, and native UX quality varies
 by workflow. The [public Project](https://github.com/orgs/Obiente/projects/4)
 tracks these gaps.
 
+For board label changes covered by the verified membership workflow, an uncertain
+result remains pending across restart. Open the label picker and use **Check
+earlier changes** to read its status, or **Repeat same change** for an available
+recorded operation. Checking or repeating keeps the picker open and preserves
+your unsaved selection. After a partial save, the picker reloads the saved labels
+before allowing another save. A paused route must be reviewed in Contract info. These
+controls apply only to the bounded contract shapes described in
+[write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification).
+This source slice has synthetic coverage, with no live Deck qualification
+(Last reviewed: 2026-11-07; the linked implementation boundary may change).
+
 ## Planned work
 
 The project is strengthening the foundations a dependable daily client needs.

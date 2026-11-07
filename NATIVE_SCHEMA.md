@@ -152,6 +152,19 @@ component stays read-only and explains why.
   workspace instead of the generic component. The choice comes from route
   shape and field roles, never from the app ID or version; see
   [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#semantic-surfaces-boards-and-notes).
+- LABEL command plans have typed item-read authority independent of a collection.
+  Their exact read, generation and parent bindings prove only the selected write.
+  Complete bounded membership observations live separately from display fields;
+  absent/null/malformed/truncated/duplicate arrays do not mean an empty set.
+  String and integer identities remain distinct, and member IDs never bind the
+  record slot. The shared typed postcondition verifies both the requested member
+  and unchanged other members. Board pickers use a conditional controller with
+  durable recovery and verified card read provenance; unrelated route families
+  retain their documented behavior. A refreshed baseline does not replace the
+  unsaved selection, and status or repeat completion does not close the picker.
+  This is bounded source/deterministic coverage, not live Deck qualification
+  (Last reviewed: 2026-11-07; may change; see
+  [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)).
 - Compact mailboxes expose the same loaded accounts and mailboxes as the
   desktop rail. Message actions stay limited to verified available contracts.
 - A mailbox offers composing only for one verified send write that the

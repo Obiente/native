@@ -56,8 +56,12 @@ internal suspend fun fetchAuthoritativeCard(
     routes: SemanticBoardRoutes,
     card: DeckCard,
 ): DeckCard = if (routes.supports(BoardOperation.ReadCard)) {
-    val response = execute(routes.card(card, authoritative = true))
-    parseDeckResponseOffUi { parseDeckCard(card.boardId, card.stackId, response) }
+    val request = routes.card(card, authoritative = true)
+    val read = routes.contract.binding(BoardOperation.ReadCard).action
+    val response = execute(request)
+    parseDeckResponseOffUi { parseDeckCard(card.boardId, card.stackId, response) }.copy(
+        readSource = DeckCardReadSource(read.id, read.binding.path, request.relativePath),
+    )
 } else {
     fetchBoardStacks(execute, routes, card.boardId, authoritative = true)
         .firstNotNullOfOrNull { stack -> stack.cards.firstOrNull { it.id == card.id } }

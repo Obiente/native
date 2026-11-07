@@ -296,6 +296,13 @@ interaction validation is still required.
   retention, and account retirement using Android Keystore and app-private
   storage. That storage test does not qualify feed UI lifecycle or live servers
   (Last reviewed: 2026-11-06; see [the implementation boundary](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification), which may change).
+- Managed board LABEL commands use the same encrypted draft and safety stores
+  as feed rules, with shared typed membership postconditions. Synthetic planner,
+  executor, recovery and board-controller tests cover this source slice. No new
+  emulator/device, live Deck or packaged-artifact qualification is claimed.
+  Existing API 36 Boolean/storage evidence does not qualify label picker lifecycle
+  or the new recovery envelope on a device (Last reviewed: 2026-11-07; may change;
+  see [the implementation boundary](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)).
 - Mailboxes (any app whose contract exposes accounts, mailboxes, and
   messages) use the shared mailbox workspace. When the contract describes a
   send operation, a Compose button opens a composer that fills the screen on

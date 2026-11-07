@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.membershipObservation
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -44,3 +45,7 @@ internal fun List<NativeRecord>.withoutAmbiguousDynamicIdentities(complete: Bool
 private const val MAX_WIRE_FIELDS_PER_RECORD = 128
 private const val MAX_WIRE_CHARACTERS_PER_VALUE = 16 * 1024
 private const val MAX_WIRE_CHARACTERS_PER_RECORD = 64 * 1024
+
+/** Label evidence is retained in full or explicitly unavailable, never display-truncated. */
+internal fun NativeRecord.withMembershipObservation(source: JsonObject): NativeRecord =
+    if ("labels" !in source) this else copy(membershipObservations = mapOf("labels" to membershipObservation(source["labels"])))

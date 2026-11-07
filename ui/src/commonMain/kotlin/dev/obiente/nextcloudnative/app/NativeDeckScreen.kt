@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.nativeui.runtime.BoardField
 import dev.obiente.nextcloudnative.nativeui.runtime.BoardOperation
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -37,6 +38,7 @@ internal fun NativeDeckScreen(
     currentUserId: String = session.loginName,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    membershipController: SemanticBoardMembershipController? = null,
 ) {
     val scope = rememberCoroutineScope()
     val appId = routes.appId
@@ -204,7 +206,7 @@ internal fun NativeDeckScreen(
                 refreshBoard()
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                if (isAmbiguousDeckMutationFailure(responseStatus, error)) {
                     mutationOutcomeUnknown = true
                     mutationError = "The app may have applied this action. Refreshing before another change."
                     outcomeUnknownBoardRecovery?.let { board ->
@@ -248,7 +250,7 @@ internal fun NativeDeckScreen(
                 refreshBoard()
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                boardRecovery = if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                boardRecovery = if (isAmbiguousDeckMutationFailure(responseStatus, error)) {
                     mutationOutcomeUnknown = true
                     DeckUiBoardRecovery(
                         board = board,
@@ -305,7 +307,7 @@ internal fun NativeDeckScreen(
                             refreshBoard()
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
-                            if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                            if (isAmbiguousDeckMutationFailure(responseStatus, error)) {
                                 mutationOutcomeUnknown = true
                                 mutationError =
                                     "The app may have applied this card update. Refreshing before another change."
@@ -361,7 +363,7 @@ internal fun NativeDeckScreen(
                             refreshBoard()
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
-                            if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                            if (isAmbiguousDeckMutationFailure(responseStatus, error)) {
                                 mutationOutcomeUnknown = true
                                 mutationError =
                                     "The app may have applied this board update. Refreshing before another change."
@@ -413,7 +415,7 @@ internal fun NativeDeckScreen(
                 mutationError = error.deckMessage()
                 val requiresReconciliation = requiresDeckBatchMutationReconciliation(
                     confirmedWrites = confirmedWrites,
-                    failedResponseStatus = failedResponseStatus,
+                    failedResponseStatus = failedResponseStatus, failure = error,
                 )
                 val reconciliation = runCatching { fetchAuthoritativeCard(card) }
                 reconciliation
@@ -606,7 +608,7 @@ internal fun NativeDeckScreen(
                 if (activeCommentsCardId() != card.id) {
                     return@onFailure
                 }
-                if (isAmbiguousDeckMutationFailure(responseStatus)) {
+                if (isAmbiguousDeckMutationFailure(responseStatus, error)) {
                     mutationOutcomeUnknown = true
                     commentsState = commentsState.copy(
                         submitting = false,
@@ -1356,28 +1358,25 @@ internal fun NativeDeckScreen(
                 )
             },
         )
-        is DeckUiInteraction.Labels -> DeckUiLabelPickerDialog(
+        is DeckUiInteraction.Labels -> SemanticBoardLabelDialog(
+            controller = membershipController,
+            board = boardState()?.board,
             card = overlay.card,
-            availableLabels = boardState()?.board?.labels.orEmpty(),
+            onBusyChanged = { mutationBusy = it },
+            onCardChanged = { replaceCard(it); interaction = DeckUiInteraction.Labels(it) },
+            onSaved = { interaction = null },
+            onResult = { result ->
+                mutationError = when (result) {
+                    is NativeActionExecutionResult.Success -> result.message
+                    is NativeActionExecutionResult.Failure -> result.message
+                }
+                refreshBoard()
+            },
             busy = mutationBusy,
             errorMessage = mutationError,
             onDismiss = { if (!mutationBusy) interaction = null },
-            onSubmit = { selected ->
-                val board = checkNotNull(boardState()?.board)
-                val access = boardAccess(board)
-                val currentIds = overlay.card.labels.mapTo(mutableSetOf(), DeckLabel::id)
-                val selectedIds = selected.mapTo(mutableSetOf(), DeckLabel::id)
-                runMutations(
-                    card = overlay.card,
-                    requests = {
-                        (selectedIds - currentIds).map { labelId ->
-                            writePlan().assignLabel(access, overlay.card, labelId)
-                        } + (currentIds - selectedIds).map { labelId ->
-                            writePlan().removeLabel(access, overlay.card, labelId)
-                        }
-                    },
-                    reconciledInteraction = DeckUiInteraction::Labels,
-                )
+            onLegacySubmit = { selected ->
+                runMutations(overlay.card, { routes.labelChanges(boardAccess(checkNotNull(boardState()?.board)), overlay.card, selected) }, DeckUiInteraction::Labels)
             },
             onManageLabels = boardState()?.board
                 ?.takeIf { it.permissions.canManage && !it.archived && routes.managesLabels() }

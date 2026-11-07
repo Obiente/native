@@ -211,12 +211,19 @@ the app ID:
 Every class above R0 allows one in-flight write per target record, and at most
 one unconfirmed write per route while a rule is in probation.
 
-Implementation boundary (Last reviewed: 2026-11-06; this may have changed, see
+Implementation boundary (Last reviewed: 2026-11-07; this may have changed, see
 [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)):
 the feed item-state rule slice applies R1 read-back, rollback, quarantine and
 encrypted durable recovery to declared inverse item commands and supported
-single-boolean item updates. R1 actions outside that slice still need those
-safeguards. Pending rule operations survive Resume changes and version changes.
+single-boolean item updates. The bounded LABEL slice also uses that executor
+for declared inverse JSON commands with a unique exact item GET, typed
+record/parent/member bindings and full bounded membership observations.
+The board controller manages only contract-proven candidates with matching
+card read provenance and never falls back after a managed failure. Both rule
+kinds recheck contract authorization immediately before initial sends and
+explicit repeats. Cross-family board routes and nested label
+relation URLs remain outside that conversion. R1 actions outside these slices
+still need those safeguards. Pending rule operations survive Resume changes and version changes.
 Token-checked reconciliation or definite rejection resolves their status. A
 separate confirmed Stop checking action can instead end recovery while keeping
 the result unknown and the route quarantined until explicit Resume.

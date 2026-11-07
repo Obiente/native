@@ -16,6 +16,7 @@ class DynamicNextcloudActionExecutor(
     private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
     private val clock: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
     private val ruleAuthority: () -> NativeRuleAuthority? = { null },
+    private val membershipAuthority: () -> NativeItemReadAuthority? = { null },
 ) : NativeActionExecutor, NativeResultRecoveryReader, NativeRuleRecoveryExecutor {
     private val accountProducer = sharedAccountPrivateMemoryGate.producer(session.accountId.storageKey)
 
@@ -31,7 +32,7 @@ class DynamicNextcloudActionExecutor(
         val action = descriptor.actions.singleOrNull { it.id == request.action.id } ?: return false
         if (!versionStatus.allows(action.risk) || writeGate?.authorizesWrite(action.risk, descriptor) == false) return false
         return canRepeatDynamicRuleOperation(DynamicWriteContext(services, session, descriptor, action, runtimeContext,
-            null, onMultipartUploadSucceeded, clock, ruleAuthority, accountProducer), request)
+            null, onMultipartUploadSucceeded, clock, ruleAuthority, membershipAuthority, accountProducer), request)
     }
 
     init {
@@ -64,7 +65,9 @@ class DynamicNextcloudActionExecutor(
             )
         }
         (request as? NativeActionRequest.Submit)?.takeIf { action.binding.method != HttpMethod.GET }?.let { submit ->
-            val context = DynamicWriteContext(services, session, descriptor, action, runtimeContext, observedInputSchema, onMultipartUploadSucceeded, clock, ruleAuthority, accountProducer)
+            val context = DynamicWriteContext(services, session, descriptor, action, runtimeContext, observedInputSchema,
+                onMultipartUploadSucceeded, clock, ruleAuthority, membershipAuthority, accountProducer,
+                writeIsAuthorized = { versionStatus.allows(action.risk) && writeGate?.authorizesWriteNow(action.risk, descriptor) != false })
             return executeDynamicWrite(context, submit)
         }
         return runCatching {
