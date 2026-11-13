@@ -16,7 +16,17 @@ internal data class NativeMailAddress(
     /** RFC 5322 style form used in editable recipient text and quote headers. */
     val headerForm: String
         get() = label?.takeIf(String::isNotBlank)?.let { "$it <$email>" } ?: email
+
+    /**
+     * The form placed in an editable recipient field, which is parsed again before sending. A
+     * display name that holds a separator or an address would read back as other recipients, so
+     * such a name is left out and the address alone identifies the recipient.
+     */
+    val recipientFieldForm: String
+        get() = if (label.orEmpty().none { it in RECIPIENT_LABEL_BREAKERS }) headerForm else email
 }
+
+private const val RECIPIENT_LABEL_BREAKERS = ",;<>@\"\n\r"
 
 internal enum class NativeMailComposeMode {
     New,
@@ -137,8 +147,8 @@ internal fun nativeMailResponseDraft(
     return NativeMailComposeDraft(
         mode = mode,
         senderId = senderId,
-        to = to.joinToString(", ", transform = NativeMailAddress::headerForm),
-        cc = cc.joinToString(", ", transform = NativeMailAddress::headerForm),
+        to = to.joinToString(", ", transform = NativeMailAddress::recipientFieldForm),
+        cc = cc.joinToString(", ", transform = NativeMailAddress::recipientFieldForm),
         subject = if (forward) {
             original.subject.withNativeMailSubjectPrefix("Fwd:", FORWARD_PREFIXES)
         } else {

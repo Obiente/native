@@ -28,6 +28,24 @@ class NativeMailComposeTest {
     }
 
     @Test
+    fun `a display name that reads as recipients never adds or breaks a reply recipient`() {
+        val tricky = nativeMailResponseDraft(
+            NativeMailComposeMode.Reply,
+            original("from" to "grace@example.test"),
+            senderId = "7",
+            ownAddresses = setOf("ada@example.test"),
+        ).copy()
+        assertEquals("grace@example.test", tricky.to)
+        listOf("extra@example.test, Alice", "Doe, Alice", "Alice; Bob", "A <b>").forEach { label ->
+            val form = NativeMailAddress("alice@example.test", label).recipientFieldForm
+            val (valid, invalid) = parseNativeMailRecipients(form)
+            assertEquals(listOf("alice@example.test"), valid.map { it.email }, label)
+            assertTrue(invalid.isEmpty(), label)
+        }
+        assertEquals("Alice Doe <alice@example.test>", NativeMailAddress("alice@example.test", "Alice Doe").recipientFieldForm)
+    }
+
+    @Test
     fun `reply all leaves out the own address and duplicates`() {
         val draft = nativeMailResponseDraft(
             NativeMailComposeMode.ReplyAll,
