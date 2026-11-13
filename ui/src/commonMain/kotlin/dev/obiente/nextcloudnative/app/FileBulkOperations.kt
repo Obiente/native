@@ -196,8 +196,9 @@ internal class FileBulkOperationRunner(
 private enum class CopyEvidence { Matches, Different, Inconclusive }
 
 /**
- * Compares a destination entry with the copied source. A folder, or a file without a known size,
- * cannot be told apart from an item that was already there, so it stays inconclusive.
+ * Compares a destination entry with the copied source. Only a content checksum both entries carry
+ * proves that the destination holds the copy: a folder, or a file that merely has the same size
+ * and type, cannot be told apart from an item that was already there, so it stays inconclusive.
  */
 private fun copyEvidence(source: NextcloudFile, destination: NextcloudFile): CopyEvidence {
     if (source.isDirectory != destination.isDirectory) return CopyEvidence.Different
@@ -210,8 +211,22 @@ private fun copyEvidence(source: NextcloudFile, destination: NextcloudFile): Cop
     if (sourceType != null && destinationType != null && !sourceType.equals(destinationType, ignoreCase = true)) {
         return CopyEvidence.Different
     }
-    return CopyEvidence.Matches
+    val sourceSums = source.checksums.byAlgorithm()
+    val destinationSums = destination.checksums.byAlgorithm()
+    val shared = sourceSums.keys.intersect(destinationSums.keys)
+    return when {
+        shared.isEmpty() -> CopyEvidence.Inconclusive
+        shared.all { algorithm -> sourceSums[algorithm] == destinationSums[algorithm] } -> CopyEvidence.Matches
+        else -> CopyEvidence.Different
+    }
 }
+
+/** DAV checksums such as `SHA256:<hex>`, keyed by algorithm, compared without regard to case. */
+private fun List<String>.byAlgorithm(): Map<String, String> = mapNotNull { checksum ->
+    val separator = checksum.indexOf(':')
+    if (separator <= 0 || separator == checksum.lastIndex) return@mapNotNull null
+    checksum.substring(0, separator).trim().lowercase() to checksum.substring(separator + 1).trim().lowercase()
+}.toMap()
 
 private fun transferFailureReason(failure: NextcloudFileOperationException): String = when (failure.error) {
     NextcloudFileOperationError.Conflict -> "An item with this name already exists there, or it changed. Nothing was overwritten."
