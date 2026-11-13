@@ -160,7 +160,7 @@ class FileTrashbinController(
             }
             val verificationStart = readSequence + 1
             val verification = read()
-            val stillListed = (verification as? TrashRead.Loaded)?.keys
+            val stillListed = verification as? TrashRead.Loaded
             val results = targets.map { item ->
                 trashItemResult(action, item, outcomes[item.key], stillListed, verificationStart)
             }
@@ -185,10 +185,17 @@ class FileTrashbinController(
         action: TrashbinAction,
         item: NextcloudTrashItem,
         outcome: FilesDavWriteOutcome?,
-        stillListed: Set<String>?,
+        stillListed: TrashRead.Loaded?,
         verificationStart: Long,
     ): BulkItemResult {
-        val gone = stillListed?.let { item.key !in it }
+        // A truncated listing can omit an item that is still in the trash bin, so only a complete
+        // listing proves that the item left it.
+        val gone = when {
+            stillListed == null -> null
+            item.key in stillListed.keys -> false
+            stillListed.complete -> true
+            else -> null
+        }
         return when (outcome) {
             null -> BulkItemResult(item.key, item.name, BulkItemOutcome.Skipped, "Not attempted.", retrySafe = true)
             is FilesDavWriteOutcome.Confirmed -> if (gone == false) {
@@ -264,7 +271,7 @@ class FileTrashbinController(
             state = state.copy(availability = availability)
             if (availability !is TrashbinAvailability.Available) {
                 state = state.copy(items = emptyList(), selectedKeys = emptySet())
-                return TrashRead.Loaded(emptySet())
+                return TrashRead.Loaded(emptySet(), complete = true)
             }
         }
         val listing = try {
@@ -297,12 +304,13 @@ class FileTrashbinController(
                 emptyUnconfirmed = emptyUnconfirmedSince != null,
             )
         }
-        return TrashRead.Loaded(keys)
+        return TrashRead.Loaded(keys, complete = !listing.truncated)
     }
 }
 
 private sealed interface TrashRead {
-    data class Loaded(val keys: Set<String>) : TrashRead
+    /** [complete] is false when the server listed more items than are kept, so absence proves nothing. */
+    data class Loaded(val keys: Set<String>, val complete: Boolean) : TrashRead
     data class Failed(val kind: FilesDavFailureKind) : TrashRead
 }
 
