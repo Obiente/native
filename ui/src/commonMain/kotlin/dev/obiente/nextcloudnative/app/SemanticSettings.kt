@@ -67,6 +67,16 @@ internal class SemanticSettings(
             .sortedWith(compareByDescending<SemanticSettingEntry> { it.writable }.thenBy { it.label })
     }
 
+    /** True when a write replaces the whole settings document instead of one key or a merge. */
+    val replacesDocument: Boolean get() = replacementProperties() != null
+
+    /** Whether [current] holds every replaced setting at the value [baseline] was built from. */
+    fun replacementBaselineHolds(baseline: List<SemanticSettingEntry>, current: List<SemanticSettingEntry>): Boolean {
+        val properties = replacementProperties() ?: return true
+        fun List<SemanticSettingEntry>.replaced() = filter { it.key in properties }.associate { it.key to it.value }
+        return baseline.replaced() == current.replaced()
+    }
+
     /** The declared settings a document replacement must carry, or null for a keyed or merge write. */
     private fun replacementProperties(): Set<String>? =
         (contract.write as? SemanticSettingsWrite.Document)
@@ -180,6 +190,25 @@ internal class SemanticSettingsController(
             return
         }
         state = current.copy(busyKey = entry.key, errorMessage = null, notice = null)
+        if (settings.replacesDocument) {
+            // The request carries every other setting as loaded; send nothing if any changed since.
+            val fresh = try {
+                settings.parse(execute(settings.readRequest()))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                state = state.copy(busyKey = null, errorMessage = "The current settings could not be checked, so nothing was saved.")
+                return
+            }
+            if (!settings.replacementBaselineHolds(current.entries, fresh)) {
+                state = state.copy(
+                    busyKey = null,
+                    entries = fresh,
+                    errorMessage = "These settings changed elsewhere, so nothing was saved. Review the current values, then change the setting again.",
+                )
+                return
+            }
+        }
         var status: Int? = null
         val writeFailure: Exception? = try {
             status = execute(request).status

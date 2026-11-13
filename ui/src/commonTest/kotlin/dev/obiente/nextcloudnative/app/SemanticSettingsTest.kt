@@ -66,6 +66,31 @@ class SemanticSettingsTest {
     }
 
     @Test
+    fun `a replacement is not sent when another setting changed since the dialog loaded`() = runBlocking<Unit> {
+        var reads = 0
+        var writes = 0
+        val controller = SemanticSettingsController(
+            execute = { request ->
+                if (request.method == NextcloudApiMethod.GET) {
+                    reads += 1
+                    response(if (reads == 1) """{"notesPath":"Notes","fileSuffix":".md"}""" else """{"notesPath":"Notes","fileSuffix":".txt"}""")
+                } else {
+                    writes += 1
+                    response("{}")
+                }
+            },
+            settings = notesSettings(),
+        )
+        controller.load()
+        controller.change(controller.state.entries.single { it.key == "notesPath" }, "Journal")
+
+        assertEquals(0, writes, "The stale suffix is not written over the change made elsewhere.")
+        assertEquals(".txt", controller.state.entries.single { it.key == "fileSuffix" }.value)
+        assertTrue(controller.state.errorMessage.orEmpty().contains("changed elsewhere"))
+        assertTrue(controller.state.canChange)
+    }
+
+    @Test
     fun `the controller reports a value the server did not keep`() = runBlocking<Unit> {
         val controller = SemanticSettingsController(
             execute = { request ->
@@ -88,7 +113,8 @@ class SemanticSettingsTest {
             execute = { request ->
                 if (request.method == NextcloudApiMethod.GET) {
                     reads += 1
-                    if (reads > 1) throw IllegalStateException("offline")
+                    // The load and the pre-write comparison answer; the verification read does not.
+                    if (reads > 2) throw IllegalStateException("offline")
                     response("""{"notesPath":"Notes","fileSuffix":".md"}""")
                 } else {
                     throw IllegalStateException("connection reset")
@@ -120,7 +146,7 @@ class SemanticSettingsTest {
         controller.load()
         controller.change(controller.state.entries.single { it.key == "fileSuffix" }, ".txt")
 
-        assertEquals(1, reads)
+        assertEquals(2, reads, "The load and the pre-write comparison, with no read after the refusal.")
         assertFalse(controller.state.outcomeUnknown)
         assertTrue(controller.state.errorMessage.orEmpty().contains("HTTP 400"))
     }
