@@ -51,6 +51,21 @@ class SemanticSettingsTest {
     }
 
     @Test
+    fun `a replacement stays read-only when a declared setting cannot be sent back unchanged`() {
+        val settings = notesSettings()
+        for (document in listOf(
+            """{"notesPath":"Notes","fileSuffix":null}""",
+            """{"notesPath":"Notes","fileSuffix":[".md"]}""",
+            """{"notesPath":"Notes"}""",
+        )) {
+            val entries = settings.parse(response(document))
+            val path = entries.single { it.key == "notesPath" }
+            assertFalse(path.writable, document)
+            assertFailsWith<IllegalArgumentException>(document) { settings.writeRequest(path, "Journal", entries) }
+        }
+    }
+
+    @Test
     fun `the controller reports a value the server did not keep`() = runBlocking<Unit> {
         val controller = SemanticSettingsController(
             execute = { request ->

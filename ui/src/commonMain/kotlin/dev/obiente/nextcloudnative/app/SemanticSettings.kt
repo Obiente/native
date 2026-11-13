@@ -51,16 +51,27 @@ internal class SemanticSettings(
         val document = ((root as? JsonObject)?.get("ocs") as? JsonObject)?.get("data") as? JsonObject
             ?: root as? JsonObject
             ?: error("Settings returned an unexpected response.")
-        return document.entries.asSequence()
+        val entries = document.entries.asSequence()
             .mapNotNull { (key, element) ->
                 val primitive = element as? JsonPrimitive ?: return@mapNotNull null
                 if (element is JsonNull || key.isBlank() || key.length > MAX_SETTING_KEY_CHARS) return@mapNotNull null
                 entry(key, primitive)
             }
             .take(MAX_SETTINGS)
-            .sortedWith(compareByDescending<SemanticSettingEntry> { it.writable }.thenBy { it.label })
             .toList()
+        // A replacement sends the whole document. When any declared setting is not held here as
+        // a plain value, it could not be sent back unchanged, so nothing is offered for editing.
+        val readable = entries.mapTo(hashSetOf(), SemanticSettingEntry::key)
+        val complete = replacementProperties()?.all { it in readable } != false
+        return (if (complete) entries else entries.map { it.copy(writable = false) })
+            .sortedWith(compareByDescending<SemanticSettingEntry> { it.writable }.thenBy { it.label })
     }
+
+    /** The declared settings a document replacement must carry, or null for a keyed or merge write. */
+    private fun replacementProperties(): Set<String>? =
+        (contract.write as? SemanticSettingsWrite.Document)
+            ?.takeIf { it.action.binding.method != HttpMethod.PATCH }
+            ?.properties?.keys
 
     fun writeRequest(entry: SemanticSettingEntry, value: String, current: List<SemanticSettingEntry>): NextcloudApiRequest {
         require(entry.writable) { "This setting cannot be changed from here." }
