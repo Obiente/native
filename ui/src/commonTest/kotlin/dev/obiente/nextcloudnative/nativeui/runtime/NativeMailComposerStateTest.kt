@@ -243,6 +243,31 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `an unreadable device copy is neither overwritten nor bypassed by a send`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val earlier = NativeMailStoredComposer(readyDraft(), unknownAttempt = readyDraft())
+        val store = MemoryDraftStore(value = earlier, failLoads = true)
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0)
+        state.expectRestore()
+        state.restore()
+        assertNotNull(state.storageProblem)
+
+        state.open(readyDraft().copy(body = "A new message"))
+        owner.settle()
+        assertEquals(earlier, store.value, "The copy that could not be read is not overwritten.")
+        val executor = RecordingExecutor { error("Nothing may be sent while earlier evidence is unreadable.") }
+        state.send(capability(), executor)
+        assertEquals(0, executor.calls)
+        assertIs<NativeMailSendPhase.Rejected>(state.phase)
+
+        store.failLoads = false
+        state.restore()
+        assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertTrue(state.resendNeedsConfirmation)
+        owner.cancel()
+    }
+
+    @Test
     fun `the attempt is stored before its request starts and comes back unconfirmed`() = runBlocking<Unit> {
         val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         val store = MemoryDraftStore()
@@ -410,8 +435,12 @@ class NativeMailComposerStateTest {
     private class MemoryDraftStore(
         var value: NativeMailStoredComposer? = null,
         private val failSaves: Boolean = false,
+        var failLoads: Boolean = false,
     ) : NativeMailDraftStore {
-        override suspend fun load(): NativeMailStoredComposer? = value
+        override suspend fun load(): NativeMailStoredComposer? {
+            check(!failLoads) { "Synthetic storage is unreadable." }
+            return value
+        }
 
         override suspend fun save(value: NativeMailStoredComposer) {
             check(!failSaves) { "Synthetic storage is full." }

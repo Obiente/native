@@ -83,6 +83,13 @@ internal class NativeMailComposerState(
     /** True from creation by the retention until [restore] finishes; nothing is sent meanwhile. */
     private var restorePending by mutableStateOf(false)
 
+    /**
+     * True while the device copy could not be read. It may hold an unconfirmed attempt, so it is
+     * neither overwritten nor bypassed: nothing is saved or sent until a later [restore] reads it
+     * or the person discards the draft.
+     */
+    private var storedCopyUnreadable = false
+
     private val persistence = Mutex()
     private var pendingSave: Job? = null
     private var sendingAttempt: NativeMailComposeDraft? = null
@@ -161,9 +168,11 @@ internal class NativeMailComposerState(
                 throw cancelled
             } catch (_: Exception) {
                 // Persistence fault boundary: the saved copy is unreadable; keep working in memory.
-                storageProblem = "A draft saved on this device could not be read."
+                storedCopyUnreadable = true
+                storageProblem = "A draft saved on this device could not be read. Nothing is sent or saved until it can be read or you discard this draft."
                 return
             }
+            storedCopyUnreadable = false
             if (stored == null || busy) return
             val replacesOpenDraft = draft?.hasContent == true
             if (replacesOpenDraft && stored.unknownAttempt == null) return
@@ -199,6 +208,8 @@ internal class NativeMailComposerState(
         draft = null
         attemptRecord = null
         phase = NativeMailSendPhase.Editing
+        // Discarding is the explicit decision to give up whatever the unreadable copy held.
+        storedCopyUnreadable = false
         persistSoon(immediately = true)
     }
 
@@ -354,6 +365,7 @@ internal class NativeMailComposerState(
     /** Writes the current state, or clears the device copy when nothing needs to survive. */
     private suspend fun persistNow(): Boolean {
         val store = store ?: return true
+        if (storedCopyUnreadable) return false
         return persistence.withLock {
             val snapshot = snapshot()
             try {

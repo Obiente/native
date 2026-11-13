@@ -29,6 +29,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 /** Composer drafts persist through the platform's account-scoped, encrypted text draft storage. */
 class NativeMailComposerRegistryTest {
@@ -53,7 +54,7 @@ class NativeMailComposerRegistryTest {
         val state = NativeMailComposerState(null, TextDraftBackedNativeMailDraftStore { text })
         state.restore()
         assertNull(state.draft)
-        assertEquals("A draft saved on this device could not be read.", state.storageProblem)
+        assertTrue(state.storageProblem.orEmpty().startsWith("A draft saved on this device could not be read."))
     }
 
     @Test
