@@ -22,7 +22,9 @@ internal suspend fun readDynamicResultRecovery(
     val mutation = descriptor.actions.firstOrNull { it.id == request.action.id } ?: return NativeResultRecoveryRead.Unavailable
     val recovery = descriptor.actions.singleOrNull { it.id == mutation.resultRecoveryActionId }
         ?: return NativeResultRecoveryRead.Unavailable
+    // A status that was cached while the attempt was still queued would be repeated forever.
     val apiRequest = buildDynamicResultRecoveryRequest(descriptor, mutation, request.values, runtimeContext)
+        ?.copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
         ?: return NativeResultRecoveryRead.Unavailable
     val records = try {
         parseDynamicRecords(recovery, services.executeNextcloudApi(session, apiRequest))
