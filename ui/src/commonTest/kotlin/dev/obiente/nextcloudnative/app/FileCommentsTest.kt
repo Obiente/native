@@ -29,6 +29,9 @@ class FileCommentsTest {
         var postThrowsBeforeApply = false
         var listFails = false
         var deleteStatus = 204
+        var deleteThrowsAfterApply = false
+        /** When set, a listing returns only this many comments, as a paged server does. */
+        var pageLimit: Int? = null
         val requests = mutableListOf<FilesDavRequest>()
 
         suspend fun execute(request: FilesDavRequest): NextcloudApiResponse {
@@ -60,6 +63,7 @@ class FileCommentsTest {
                 FilesDavMethod.DELETE -> {
                     val id = request.relativePath.substringAfterLast('/').toLong()
                     if (deleteStatus == 204) comments.removeAll { it.id == id }
+                    if (deleteThrowsAfterApply) throw IllegalStateException("reset after apply")
                     response(deleteStatus)
                 }
                 else -> error("unexpected")
@@ -68,8 +72,10 @@ class FileCommentsTest {
 
         fun listing() = buildString {
             append("""<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">""")
-            append("<d:response><d:href>/remote.php/dav/comments/files/42/</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>")
-            comments.forEach { c ->
+            if (pageLimit == null) {
+                append("<d:response><d:href>/remote.php/dav/comments/files/42/</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>")
+            }
+            comments.take(pageLimit ?: comments.size).forEach { c ->
                 append("<d:response><d:href>/remote.php/dav/comments/files/42/${c.id}</d:href><d:propstat><d:prop>")
                 append("<oc:id>${c.id}</oc:id><oc:verb>comment</oc:verb><oc:actorType>users</oc:actorType><oc:actorId>${c.actor}</oc:actorId>")
                 append("<oc:actorDisplayName>${c.actor.replaceFirstChar(Char::uppercaseChar)}</oc:actorDisplayName>")
@@ -203,6 +209,22 @@ class FileCommentsTest {
         controller.confirmDelete()
         assertTrue(controller.state.comments!!.any { it.id == own.id })
         assertTrue(controller.state.notice!!.startsWith("Couldn't delete"))
+    }
+
+    @Test
+    fun anUnconfirmedDeleteIsNotConfirmedByAFullFirstPage() {
+        val fake = FakeComments().apply {
+            comments.clear()
+            repeat(FILE_COMMENTS_PAGE_SIZE + 50) { index -> comments += Comment(1_000L + index, "alice", "Comment $index") }
+            pageLimit = FILE_COMMENTS_PAGE_SIZE
+            deleteThrowsAfterApply = true
+        }
+        val controller = controller(fake).also { it.start() }
+        val own = controller.state.comments!!.first()
+        controller.requestDelete(own)
+        controller.confirmDelete()
+        assertTrue(own.id in controller.state.unconfirmedIds, "More comments may exist, so absence from the first page proves nothing.")
+        assertTrue(controller.state.notice!!.startsWith("Couldn't confirm"))
     }
 
     @Test
