@@ -139,6 +139,8 @@ private data class RouteTarget(
     val parent: BoardEntity? = null,
 )
 
+private val ECHOABLE_JSON_TYPES = setOf("string", "integer", "number", "boolean")
+
 private fun classifyBoardRoute(action: DynamicAction, shape: SemanticRouteShape): BoardOperationBinding? {
     val target = shape.boardTarget() ?: return null
     val bodyProperties = action.declaredBodyProperties()
@@ -163,6 +165,14 @@ private fun classifyBoardRoute(action: DynamicAction, shape: SemanticRouteShape)
     // A required input the client can neither name nor read back from a record cannot be supplied.
     val echoAllowed = operation in ECHOING_OPERATIONS
     if (required.any { it in echoed } && !echoAllowed) return null
+    // A replacement must send back every declared field. The client keeps plain values only, so
+    // a declared list or object it cannot name would be dropped, and the route is not offered.
+    if (
+        action.binding.method == HttpMethod.PUT &&
+        echoed.any { name -> bodyProperties.getValue(name).declaredJsonType() !in ECHOABLE_JSON_TYPES }
+    ) {
+        return null
+    }
     if (
         operation == BoardOperation.UploadAttachment &&
         action.binding.body?.contentType?.substringBefore(';')?.trim()?.lowercase() != "multipart/form-data"
