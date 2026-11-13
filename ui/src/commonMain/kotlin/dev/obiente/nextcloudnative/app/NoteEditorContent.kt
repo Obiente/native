@@ -62,9 +62,15 @@ internal fun NoteEditorContent(
     onViewModeChange: (NoteViewMode) -> Unit,
     onSave: () -> Unit,
     titleSharedKey: String? = null,
+    /** False when the app's contract takes no title on an update; the field is then read-only. */
+    canRename: Boolean = true,
+    /** False when the app's contract takes no folder on an update. */
+    canCategorize: Boolean = true,
 ) {
     var showDetails by remember { mutableStateOf(false) }
     val editable = !readOnly && !mutationInProgress
+    val titleEditable = editable && canRename
+    val folderEditable = editable && canCategorize
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
         Column(
@@ -83,7 +89,7 @@ internal fun NoteEditorContent(
                 }
                 Button(enabled = canSave, onClick = onSave) { Text(if (saving) "Saving..." else "Save") }
             }
-            if (!compact) NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange, titleSharedKey)
+            if (!compact) NoteEditorMetadata(title, category, folderOptions, titleEditable, folderEditable, onTitleChange, onCategoryChange, titleSharedKey)
             if (viewMode == NoteViewMode.Edit) {
                 MarkdownFormattingToolbar(content, onContentChange, editable)
                 OutlinedTextField(value = content, onValueChange = onContentChange,
@@ -118,7 +124,7 @@ internal fun NoteEditorContent(
             onDismissRequest = { showDetails = false },
             title = { Text("Note details") },
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange)
+                NoteEditorMetadata(title, category, folderOptions, titleEditable, folderEditable, onTitleChange, onCategoryChange)
             } },
             confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Done") } },
         )
@@ -127,17 +133,17 @@ internal fun NoteEditorContent(
 
 @Composable
 private fun NoteEditorMetadata(
-    title: String, category: String, folderOptions: List<String>, editable: Boolean,
+    title: String, category: String, folderOptions: List<String>, titleEditable: Boolean, folderEditable: Boolean,
     onTitleChange: (String) -> Unit, onCategoryChange: (String) -> Unit, titleSharedKey: String? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth().sharedElement(titleSharedKey), label = { Text("Title") }, singleLine = true, enabled = editable)
-        OutlinedTextField(category, onCategoryChange, Modifier.fillMaxWidth(), label = { Text("Folder") }, singleLine = true, enabled = editable)
+        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth().sharedElement(titleSharedKey), label = { Text("Title") }, singleLine = true, enabled = titleEditable)
+        OutlinedTextField(category, onCategoryChange, Modifier.fillMaxWidth(), label = { Text("Folder") }, singleLine = true, enabled = folderEditable)
         if (folderOptions.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-            NextcloudFilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = editable)
+            NextcloudFilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = folderEditable)
             folderOptions.forEach { path ->
-                NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = editable)
+                NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = folderEditable)
             }
         }
     }

@@ -431,6 +431,7 @@ internal fun NextcloudNoteEditor(
                 loadError = loadError, saveError = saveError,
                 onTitleChange = { title = it }, onCategoryChange = { category = it },
                 onContentChange = { content = it }, onViewModeChange = { viewMode = it }, onSave = ::saveNote,
+                canRename = noteStore.capabilities.canRename, canCategorize = noteStore.capabilities.canCategorize,
             )
         }
     }
