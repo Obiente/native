@@ -126,6 +126,20 @@ class GroupwareTaskFieldsTest {
     }
 
     @Test
+    fun aProgressOnlyChangeIsNotVerifiedAgainstTheUnchangedTask() {
+        val original = task("UID:t", "SUMMARY:T", "PERCENT-COMPLETE:20", "STATUS:IN-PROCESS")
+        val extras = original.extras().copy(percentComplete = 50)
+        val content = applyGroupwareTaskExtras(original.rawCalendar, "t", null, extras, completed = false)
+        val draft = TaskDraft("T", "", "", false, extras)
+        val postcondition = TaskMutationPostcondition.Upsert(original.href, list, "t", null, "\"1\"", draft.normalized(), expectedDue = null)
+        assertTrue(postcondition.isSatisfiedBy(ok(content)))
+        assertFalse(postcondition.isSatisfiedBy(ok(original.rawCalendar)), "The task still at 20 percent is not the saved one.")
+        val reopened = postcondition.copy(draft = draft.copy(extras = extras.copy(percentComplete = 100)))
+        val restarted = applyGroupwareTaskExtras(original.rawCalendar, "t", null, extras.copy(percentComplete = 100), completed = false)
+        assertTrue(reopened.isSatisfiedBy(ok(restarted)), "An open task saved at 100 percent starts over at 0.")
+    }
+
+    @Test
     fun rowSummariesListTheUsefulFields() {
         val task = task("UID:t", "SUMMARY:T", "DUE;VALUE=DATE:20261105", "PRIORITY:9", "PERCENT-COMPLETE:50", "CATEGORIES:home")
         assertEquals("Due 05-11-2026 - Low priority - 50% done - home", taskRowSummary(task))

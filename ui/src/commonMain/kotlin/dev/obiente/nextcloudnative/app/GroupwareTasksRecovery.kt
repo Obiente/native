@@ -75,6 +75,9 @@ internal sealed interface TaskMutationPostcondition {
                 ) {
                     return false
                 }
+                // The same rule the write applies: an open task never keeps 100 percent.
+                val wantedProgress = if (wanted.percentComplete >= 100) 0 else wanted.percentComplete
+                if (!expected.completed && stored.percentComplete != wantedProgress) return false
             }
             return task.href == href &&
                 task.uid == expectedUid &&
