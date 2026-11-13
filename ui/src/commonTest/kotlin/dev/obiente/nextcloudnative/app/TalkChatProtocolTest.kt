@@ -157,10 +157,10 @@ class TalkChatProtocolTest {
         assertIs<TalkWriteOutcome.Confirmed<Unit>>(talkWriteOutcome(response(202, "")) {})
         listOf(400 to TalkFailureKind.NotAllowed, 403 to TalkFailureKind.Forbidden, 404 to TalkFailureKind.NotFound,
             405 to TalkFailureKind.NotAllowed, 412 to TalkFailureKind.Lobby, 413 to TalkFailureKind.TooLong,
-            429 to TalkFailureKind.Throttled, 502 to TalkFailureKind.Server).forEach { (status, kind) ->
+            429 to TalkFailureKind.Throttled).forEach { (status, kind) ->
             assertEquals(kind, assertIs<TalkWriteOutcome.Rejected>(talkWriteOutcome(response(status, "")) {}).failure.kind)
         }
-        listOf(500, 503, 504, 302).forEach { status ->
+        listOf(500, 502, 503, 504, 302).forEach { status ->
             assertEquals(TalkWriteOutcome.Unknown, talkWriteOutcome(response(status, "")) {}, "HTTP $status")
         }
     }
