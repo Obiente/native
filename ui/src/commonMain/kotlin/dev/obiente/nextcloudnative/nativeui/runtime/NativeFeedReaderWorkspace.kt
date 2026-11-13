@@ -77,7 +77,8 @@ internal fun NativeFeedReaderWorkspace(
     // A filter or feed that the current data no longer supports falls back without a state write.
     val filter = savedFilter.takeIf { it in plan.filters } ?: plan.filters.first()
     val feedId = savedFeedId?.takeIf { id -> plan.feeds.any { it.record.id == id } }
-    var openKey by remember(schema.app.id, actionExecutor) { mutableStateOf<String?>(null) }
+    // The supplied selection opens once; closing it then shows the list instead of reopening it.
+    var openKey by remember(schema.app.id, actionExecutor, plan.selectedArticle?.key) { mutableStateOf(plan.selectedArticle?.key) }
     // Local read and star state belongs to the app, so loading another page keeps it.
     val session = remember(schema.app.id, actionExecutor) { NativeFeedReaderSession() }
     val activeSession by rememberUpdatedState(session)
@@ -88,9 +89,9 @@ internal fun NativeFeedReaderWorkspace(
     var unresolved by remember(schema.app.id, actionExecutor) { mutableStateOf<Pair<NativeFeedItemActionPlan, NativeFeedArticle>?>(null) }
     var recoveryMessage by remember(schema.app.id, actionExecutor) { mutableStateOf<String?>(null) }
     val visible = plan.visible(filter, feedId, overrides)
-    val open = (openKey ?: plan.selectedArticle?.key)
+    val open = openKey
         ?.let { key -> plan.articles.firstOrNull { it.key == key } }
-        ?.withOverride(overrides[openKey ?: plan.selectedArticle?.key])
+        ?.withOverride(overrides[openKey])
 
     fun apply(change: NativeFeedItemActionPlan, article: NativeFeedArticle, repeat: Boolean = false) {
         val token = session.begin(article, change) ?: return
