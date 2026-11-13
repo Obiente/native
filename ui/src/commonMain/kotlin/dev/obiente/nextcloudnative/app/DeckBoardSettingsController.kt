@@ -32,21 +32,30 @@ internal class DeckBoardSettingsController(private val context: DeckBoardToolCon
     var state: DeckUiSettingsState? by mutableStateOf(null)
         private set
 
+    /** Advances whenever the dialog opens or closes, so a load started for an earlier dialog is dropped. */
+    private var dialogGeneration = 0
+
     fun open(board: DeckBoard) {
+        dialogGeneration++
         state = DeckUiSettingsState(board = board)
     }
 
     fun close() {
-        if (state?.busy != true) state = null
+        if (state?.busy == true) return
+        dialogGeneration++
+        state = null
     }
 
     suspend fun load() {
         val current = state ?: return
+        val generation = dialogGeneration
         state = current.copy(loadingUserSettings = true, userSettingsError = null)
         try {
             val board = context.fetchBoard(current.board.id)
+            if (generation != dialogGeneration) return
             context.onBoardRefreshed(board)
             val user = fetchUserSettings()
+            if (generation != dialogGeneration) return
             state = state?.copy(
                 board = board,
                 userSettings = user,
@@ -56,6 +65,7 @@ internal class DeckBoardSettingsController(private val context: DeckBoardToolCon
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
+            if (generation != dialogGeneration) return
             state = state?.copy(
                 loadingUserSettings = false,
                 userSettingsError = failure.message ?: "Deck settings could not be loaded.",

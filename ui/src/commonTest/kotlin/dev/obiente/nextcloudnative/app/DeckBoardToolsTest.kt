@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -225,6 +228,35 @@ class DeckBoardToolsTest {
         val state = checkNotNull(controller.state)
         assertEquals("Deck did not save this setting.", state.errorMessage)
         assertEquals(DeckDueNotification.Assigned, state.board.settings?.dueNotification)
+    }
+
+    @Test
+    fun `a settings load for a closed dialog does not replace the board opened next`() = runBlocking<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        val controller = DeckBoardSettingsController(
+            context(
+                execute = { request ->
+                    when {
+                        request.relativePath.endsWith("/config") -> deckToolResponse(ocs("""{"calendar":"1"}"""))
+                        else -> {
+                            gate.await()
+                            deckToolResponse(boardJson(acl = ""))
+                        }
+                    }
+                },
+            ),
+        )
+        controller.open(board())
+        val staleLoad = launch(Dispatchers.Unconfined) { controller.load() }
+        controller.close()
+        val next = board().copy(id = 99, title = "Next board")
+        controller.open(next)
+        gate.complete(Unit)
+        staleLoad.join()
+        val state = checkNotNull(controller.state)
+        assertEquals(99, state.board.id)
+        assertEquals("Next board", state.board.title)
+        assertNull(state.userSettings, "The earlier dialog's settings are not shown for this board.")
     }
 
     private fun context(
