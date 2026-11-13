@@ -139,6 +139,26 @@ class FileTrashbinControllerTest {
     }
 
     @Test
+    fun unknownResultIsNotResolvedByATruncatedListing() {
+        val fake = FakeTrash().apply {
+            items.clear()
+            // The oldest entry is the one being restored; the listing is exactly full.
+            items["old.d0"] = "old"
+            repeat(MAX_TRASH_ITEMS - 1) { index -> items["k$index.d${index + 1}"] = "k$index" }
+            writeThrows += "old.d0"
+        }
+        val restored = mutableListOf<String>()
+        val controller = controller(fake, restored).also { it.start() }
+        assertTrue(controller.state.items!!.any { it.key == "old.d0" })
+        // Another client deletes a newer file, which pushes the oldest entry out of the kept listing.
+        fake.items["newer.d999999"] = "newer"
+        controller.restore(setOf("old.d0"))
+        val result = assertIs<BulkOperationReport>(controller.state.report).results.single()
+        assertEquals(BulkItemOutcome.Unconfirmed, result.outcome)
+        assertTrue(restored.isEmpty(), "A restore that never happened is not announced as done.")
+    }
+
+    @Test
     fun unverifiableUnknownResultBlocksFurtherWritesUntilAFreshListing() {
         val fake = FakeTrash()
         val controller = controller(fake).also { it.start() }
