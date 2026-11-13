@@ -12,7 +12,13 @@ import kotlin.test.assertTrue
 class FileBulkOperationsTest {
     private val accountId = deriveNextcloudAccountId("https://cloud.example.test", "synthetic-user")
 
-    private fun file(path: String, etag: String? = "e", favorite: Boolean = false, directory: Boolean = false) = NextcloudFile(
+    private fun file(
+        path: String,
+        etag: String? = "e",
+        favorite: Boolean = false,
+        directory: Boolean = false,
+        checksums: List<String> = emptyList(),
+    ) = NextcloudFile(
         path = path,
         name = path.substringAfterLast('/'),
         isDirectory = directory,
@@ -23,6 +29,7 @@ class FileBulkOperationsTest {
         hasPreview = false,
         etag = etag,
         favorite = favorite,
+        checksums = checksums,
     )
 
     /** Synthetic folder tree keyed by folder path, holding item names. */
@@ -34,6 +41,8 @@ class FileBulkOperationsTest {
         val favorites = mutableListOf<Pair<String, Boolean>>()
         /** Sizes by item path for entries that differ from the default one-byte file. */
         val sizes = mutableMapOf<String, Long>()
+        /** Content checksums by item path; an entry without one has none. */
+        val checksums = mutableMapOf<String, List<String>>()
 
         fun mutate(mutation: NextcloudFileMutation): NextcloudFileMutationResult {
             mutations += mutation
@@ -60,7 +69,10 @@ class FileBulkOperationsTest {
 
         fun listing(folder: String) = NextcloudFileListing(
             folders.getValue(folder).map { name ->
-                NextcloudFile("$folder/$name", name, false, "text/plain", sizes["$folder/$name"] ?: 1, null, 1, false, etag = "e")
+                NextcloudFile(
+                    "$folder/$name", name, false, "text/plain", sizes["$folder/$name"] ?: 1, null, 1, false,
+                    etag = "e", checksums = checksums["$folder/$name"].orEmpty(),
+                )
             },
             NextcloudFileListingSource.Network,
         )
@@ -109,9 +121,33 @@ class FileBulkOperationsTest {
 
     @Test
     fun unknownCopyIsVerifiedAgainstTheMatchingDestinationFile(): Unit = runBlocking {
-        val fake = FakeFiles().apply { appliedThenUnknown += "Docs/a.txt" }
-        val result = runner(fake).transfer(listOf(file("Docs/a.txt")), "Archive", copy = true).results.single()
+        val fake = FakeFiles().apply {
+            appliedThenUnknown += "Docs/a.txt"
+            checksums["Archive/a.txt"] = listOf("sha256:AB12")
+        }
+        val source = file("Docs/a.txt", checksums = listOf("SHA256:ab12"))
+        val result = runner(fake).transfer(listOf(source), "Archive", copy = true).results.single()
         assertEquals(BulkItemOutcome.Completed, result.outcome)
+    }
+
+    @Test
+    fun unknownCopyIsNotConfirmedBySizeAndTypeAlone(): Unit = runBlocking {
+        val fake = FakeFiles().apply { failures["Docs/b.txt"] = IllegalStateException("reset") }
+        // Archive already holds another b.txt with the same size and type.
+        val result = runner(fake).transfer(listOf(file("Docs/b.txt")), "Archive", copy = true).results.single()
+        assertEquals(BulkItemOutcome.Unconfirmed, result.outcome)
+    }
+
+    @Test
+    fun unknownCopyIsNotConfirmedByAFileWithAnotherChecksum(): Unit = runBlocking {
+        val fake = FakeFiles().apply {
+            failures["Docs/b.txt"] = IllegalStateException("reset")
+            checksums["Archive/b.txt"] = listOf("SHA256:ffff")
+        }
+        val source = file("Docs/b.txt", checksums = listOf("SHA256:ab12"))
+        val result = runner(fake).transfer(listOf(source), "Archive", copy = true).results.single()
+        assertEquals(BulkItemOutcome.Failed, result.outcome)
+        assertEquals(false, result.retrySafe)
     }
 
     @Test

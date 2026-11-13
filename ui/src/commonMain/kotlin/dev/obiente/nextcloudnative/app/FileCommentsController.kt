@@ -190,7 +190,15 @@ class FileCommentsController(
                 }
                 outcome is FilesDavWriteOutcome.Rejected -> "Couldn't delete the comment. ${commentFailureReason(outcome.kind)}"
                 else -> when (val read = readFirstPage()) {
-                    is CommentsRead.Loaded -> if (read.page.comments.none { it.id == id }) null else "The comment was not deleted. You can try again."
+                    is CommentsRead.Loaded -> when {
+                        read.page.comments.any { it.id == id } -> "The comment was not deleted. You can try again."
+                        // An older comment is not on the first page whether or not it still exists.
+                        read.page.mayHaveMore -> {
+                            state = state.copy(unconfirmedIds = state.unconfirmedIds + id)
+                            "Couldn't confirm whether the comment was deleted. Load older comments to check before trying again."
+                        }
+                        else -> null
+                    }
                     is CommentsRead.Failed -> {
                         state = state.copy(unconfirmedIds = state.unconfirmedIds + id)
                         "Couldn't confirm whether the comment was deleted. Refresh before trying again."
