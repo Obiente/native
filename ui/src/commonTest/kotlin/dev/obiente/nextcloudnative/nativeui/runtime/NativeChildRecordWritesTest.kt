@@ -311,6 +311,7 @@ class NativeChildRecordWritesTest {
         val request = assertIs<NativeChildRecordRequestResult.Ready>(patch.updateRequest(expense, expense.draft + ("amount" to "20"))).request
         val readBack = assertNotNull(request.readBack)
         assertFalse(readBack.echoUntouched)
+        assertTrue(readBack.preReadBaseline, "A merge edit compares the edited fields with a fresh read first.")
         assertEquals(JsonPrimitive("Synthetic dinner"), readBack.untouched["what"], "Untouched fields are compared after the write.")
     }
 

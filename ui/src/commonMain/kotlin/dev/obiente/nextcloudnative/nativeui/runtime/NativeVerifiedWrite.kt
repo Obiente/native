@@ -246,13 +246,33 @@ internal fun sameWireValue(left: JsonElement?, right: JsonElement?): Boolean = w
     left is JsonPrimitive && right is JsonPrimitive -> when {
         left.isString || right.isString -> left.isString == right.isString && left.content == right.content
         left.booleanOrNull != null || right.booleanOrNull != null -> left.booleanOrNull == right.booleanOrNull
-        else -> left.contentOrNull == right.contentOrNull ||
-            (left.contentOrNull?.toDoubleOrNull()?.let { value -> value == right.contentOrNull?.toDoubleOrNull() } == true)
+        else -> left.contentOrNull == right.contentOrNull || sameWireNumber(left.contentOrNull, right.contentOrNull)
     }
     left is JsonArray && right is JsonArray -> left.size == right.size && left.zip(right).all { (a, b) -> sameWireValue(a, b) }
     left is JsonObject && right is JsonObject -> left.keys == right.keys && left.keys.all { key -> sameWireValue(left[key], right[key]) }
     else -> false
 }
+
+/** Whole numbers compare exactly, so integers past 2^53 stay distinct; `5` still equals `5.0`. */
+private fun sameWireNumber(left: String?, right: String?): Boolean {
+    if (left == null || right == null) return false
+    val leftWhole = left.wireWholeNumberOrNull()
+    val rightWhole = right.wireWholeNumberOrNull()
+    if (leftWhole != null && rightWhole != null) return leftWhole == rightWhole
+    return left.toDoubleOrNull()?.let { value -> value == right.toDoubleOrNull() } == true
+}
+
+private fun String.wireWholeNumberOrNull(): Long? {
+    toLongOrNull()?.let { return it }
+    val point = indexOf('.')
+    if (point <= 0 || point == lastIndex) return null
+    return if (substring(point + 1).all { it == '0' }) substring(0, point).toLongOrNull() else null
+}
+
+/** Whether [record] still holds every edited field exactly as the editor read it. */
+internal fun NativeWriteReadBack.editedBaselineHolds(record: NativeRecord): Boolean =
+    previous.all { (field, value) -> field in customFields || sameWireValue(record.wireValues.valueNamed(field), value) } &&
+        absentPrevious.all { field -> field in customFields || record.wireValues.valueNamed(field) == null }
 
 /**
  * Asks the executor to verify a record write by reading [targetId] back through the contract's
@@ -276,4 +296,9 @@ class NativeWriteReadBack(
     val absentPrevious: Set<String> = emptySet(),
     /** Compares custom-shaped fields with their complete baseline when restoring, not the edit. */
     val verifyRestoreTarget: ((NativeRecord) -> NativeWriteVerification)? = null,
+    /**
+     * A merge write without a same-route read: the executor reads the target through the
+     * route-family read first and sends nothing when an edited field no longer holds [previous].
+     */
+    val preReadBaseline: Boolean = false,
 )

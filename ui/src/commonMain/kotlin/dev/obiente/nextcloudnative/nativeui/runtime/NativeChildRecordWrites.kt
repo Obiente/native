@@ -192,7 +192,8 @@ internal fun NativeChildRecordWritePlan.createRequest(draft: Map<String, String>
 }
 
 /**
- * PATCH sends the changed fields. A verified PUT is a full echo: changed fields are encoded from
+ * PATCH sends the changed fields, after the executor has read the record again and found the
+ * edited fields unchanged since the editor opened. A verified PUT is a full echo: changed fields are encoded from
  * the draft and every other declared body field travels exactly as stored, never re-encoded (so a
  * stored date-time is not shortened to the date the editor shows). Immediately before the write
  * the record is read again through the contract's same-route read, and nothing is sent when any
@@ -230,6 +231,7 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
         return ready(route.write, identities + values, readBack = NativeWriteReadBack(
             record.id, previous, untouched, echoUntouched = false,
             editedFields = editedNames, absentPrevious = editedNames - previous.keys,
+            preReadBaseline = true,
         ))
     }
     val echo = when (val plan = nativeFullEchoUpdatePlan(route.write.action, record.wire, editedNames, route.contextInputs)) {

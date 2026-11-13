@@ -26,6 +26,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePrecondition
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreRead
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWritePreconditionFailure
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteReadBack
+import dev.obiente.nextcloudnative.nativeui.runtime.editedBaselineHolds
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteSendResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeWriteVerification
 import dev.obiente.nextcloudnative.nativeui.runtime.contradictsPostcondition
@@ -237,6 +238,30 @@ private suspend fun executeUnverified(context: DynamicWriteContext, request: Nat
     }
 }
 
+/**
+ * A merge write to a record the editor read earlier compares the edited fields with a fresh
+ * route-family read first, so an edit never silently replaces a concurrent change.
+ */
+private fun baselinePreRead(
+    context: DynamicWriteContext,
+    request: NativeActionRequest.Submit,
+    readBack: NativeWriteReadBack,
+    readAction: DynamicAction,
+): (suspend () -> NativeWritePreRead)? {
+    if (!readBack.preReadBaseline) return null
+    return {
+        val read = buildDynamicApiRequest(context.descriptor, readAction, request.values, context.runtimeContext + request.values)
+            .copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
+        val records = parseDynamicRecords(readAction, context.services.executeNextcloudApi(context.session, read), readAction.responseFieldIds.toSet())
+        val target = records.filter { it.id == readBack.targetId }.singleOrNull()?.takeIf(NativeRecord::actionSafeIdentity)
+        when {
+            target == null -> NativeWritePreRead.Unverified
+            readBack.editedBaselineHolds(target) -> NativeWritePreRead.Unchanged
+            else -> NativeWritePreRead.Changed
+        }
+    }
+}
+
 private suspend fun executeVerified(
     context: DynamicWriteContext,
     request: NativeActionRequest.Submit,
@@ -266,7 +291,7 @@ private suspend fun executeVerified(
                     NativeWritePreconditionFailure.Unverified -> NativeWritePreRead.Unverified
                 }
             }
-        },
+        } ?: baselinePreRead(context, request, readBack, readAction),
         send = {
             // Preparation and pre-read failures preserve the offer. Consume it immediately before
             // the transport attempt, while the target gate is held, including ambiguous attempts.

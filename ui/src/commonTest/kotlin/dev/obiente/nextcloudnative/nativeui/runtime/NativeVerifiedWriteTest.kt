@@ -150,6 +150,12 @@ class NativeVerifiedWriteTest {
     @Test
     fun `wire values compare as JSON`() {
         assertTrue(sameWireValue(JsonPrimitive(5), JsonPrimitive(5.0)))
+        assertFalse(
+            sameWireValue(JsonPrimitive(9007199254740992), JsonPrimitive(9007199254740993)),
+            "Whole numbers past 2^53 stay distinct.",
+        )
+        assertTrue(sameWireValue(JsonPrimitive(9007199254740993), JsonPrimitive(9007199254740993)))
+        assertFalse(sameWireValue(JsonPrimitive(5), JsonPrimitive(5.5)))
         assertFalse(sameWireValue(JsonPrimitive("5"), JsonPrimitive(5)), "A string is not a number.")
         assertFalse(sameWireValue(JsonPrimitive(true), JsonPrimitive("true")))
         assertTrue(sameWireValue(JsonNull, JsonNull))

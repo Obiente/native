@@ -400,6 +400,29 @@ class DynamicWriteExecutionTest {
         assertIs<NativeActionExecutionResult.Success>(executor(Transport(readBody = stored(title = "New title"))).execute(request))
     }
 
+    @Test
+    fun `a merge edit is not sent when the edited field changed since it was read`() = runBlocking<Unit> {
+        val request = echoUpdate().copy(readBack = NativeWriteReadBack(
+            "7", mapOf("title" to JsonPrimitive("Old title")), emptyMap(), false, preReadBaseline = true,
+        ))
+        val changed = Transport(readBody = stored(title = "Edited elsewhere"))
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(changed).execute(request))
+        assertEquals(NativeActionFailureOutcome.Rejected, refused.outcome)
+        assertEquals(listOf(NextcloudApiMethod.GET), changed.requests.map { it.method }, "Nothing is written over the concurrent change.")
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, changed.requests.single().cachePolicy)
+
+        val unchanged = Transport(readBody = stored(title = "Old title"), afterWrites = ArrayDeque(listOf(stored(title = "New title"))))
+        assertIs<NativeActionExecutionResult.Success>(executor(unchanged).execute(request))
+        assertEquals(
+            listOf(NextcloudApiMethod.GET, NextcloudApiMethod.PUT, NextcloudApiMethod.GET),
+            unchanged.requests.map { it.method },
+        )
+
+        val unreadable = Transport(readBody = "{}", readStatus = 503)
+        assertIs<NativeActionExecutionResult.Failure>(executor(unreadable).execute(request))
+        assertEquals(listOf(NextcloudApiMethod.GET), unreadable.requests.map { it.method }, "An unchecked target is not written.")
+    }
+
     private fun share() = submit("notes.share", mapOf("noteId" to "7", "shareWith" to "synthetic-friend"))
 
     private fun unchangedPrecondition() = NativeWritePrecondition(mapOf("noteId" to "7"), "7") { true }
