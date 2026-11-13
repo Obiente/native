@@ -103,9 +103,14 @@ internal class NativeMailComposerState(
             // Without a durable store the attempt would not survive process death, so the send is
             // refused (AttemptNotRecorded) rather than sent with only an in-memory record.
             checkNotNull(store) { "No durable draft storage is available for the attempt." }
+            val previous = attemptRecord
             attemptRecord = attempt
             pendingSave?.cancel()
-            check(persistNow()) { "The attempt could not be recorded." }
+            if (!persistNow()) {
+                // Nothing was sent for this record, so it must not later look like an open attempt.
+                attemptRecord = previous
+                error("The attempt could not be recorded.")
+            }
         }
 
         override suspend fun clear() {

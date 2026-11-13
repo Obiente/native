@@ -297,6 +297,23 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `a send whose attempt could not be recorded can be sent once storage works again`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore(failSaves = true)
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0).apply { open(readyDraft()) }
+        val executor = RecordingExecutor { NativeActionExecutionResult.Success() }
+        state.send(capability(), executor)
+        assertEquals(0, executor.calls, "An attempt that cannot be recorded is not sent.")
+        assertIs<NativeMailSendPhase.Rejected>(state.phase)
+
+        store.failSaves = false
+        state.send(capability(), executor)
+        assertEquals(1, executor.calls, "The unrecorded attempt does not block the next send.")
+        assertNull(state.draft)
+        owner.cancel()
+    }
+
+    @Test
     fun `the attempt is stored before its request starts and comes back unconfirmed`() = runBlocking<Unit> {
         val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         val store = MemoryDraftStore()
@@ -463,7 +480,7 @@ class NativeMailComposerStateTest {
 
     private class MemoryDraftStore(
         var value: NativeMailStoredComposer? = null,
-        private val failSaves: Boolean = false,
+        var failSaves: Boolean = false,
         var failLoads: Boolean = false,
     ) : NativeMailDraftStore {
         override suspend fun load(): NativeMailStoredComposer? {
