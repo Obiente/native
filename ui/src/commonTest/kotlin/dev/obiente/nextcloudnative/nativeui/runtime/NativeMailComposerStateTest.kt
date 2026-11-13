@@ -220,6 +220,29 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `an unconfirmed attempt on the device is kept when a draft was opened before restoration`() = runBlocking<Unit> {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val store = MemoryDraftStore()
+        store.value = NativeMailStoredComposer(readyDraft(), unknownAttempt = readyDraft())
+        val state = NativeMailComposerState(owner, store, saveDelayMillis = 0)
+        state.expectRestore()
+        assertFalse(state.sendAvailable, "Nothing is sent before the device copy is known.")
+        state.open(readyDraft().copy(body = "A new message"))
+        val executor = RecordingExecutor { error("Nothing may be sent before restoration.") }
+        state.send(capability(), executor)
+        assertEquals(0, executor.calls)
+
+        state.restore()
+        owner.settle()
+        assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        assertEquals(readyDraft(), state.draft)
+        assertTrue(state.resendNeedsConfirmation)
+        assertNotNull(state.notice)
+        assertEquals(readyDraft(), store.value?.unknownAttempt, "The queued save of the newer draft does not erase the evidence.")
+        owner.cancel()
+    }
+
+    @Test
     fun `the attempt is stored before its request starts and comes back unconfirmed`() = runBlocking<Unit> {
         val owner = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         val store = MemoryDraftStore()

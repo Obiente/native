@@ -80,6 +80,9 @@ internal class NativeMailComposerState(
     var storageProblem: String? by mutableStateOf(null)
         private set
 
+    /** True from creation by the retention until [restore] finishes; nothing is sent meanwhile. */
+    private var restorePending by mutableStateOf(false)
+
     private val persistence = Mutex()
     private var pendingSave: Job? = null
     private var sendingAttempt: NativeMailComposeDraft? = null
@@ -118,7 +121,7 @@ internal class NativeMailComposerState(
      * no status read, or when that read answered without showing the message as sent.
      */
     val sendAvailable: Boolean
-        get() = when (val current = phase) {
+        get() = !restorePending && when (val current = phase) {
             NativeMailSendPhase.Editing, is NativeMailSendPhase.Rejected -> true
             NativeMailSendPhase.Sending -> false
             is NativeMailSendPhase.Unknown -> current.recovery is NativeMailSendRecovery.Unavailable ||
@@ -132,8 +135,24 @@ internal class NativeMailComposerState(
             else -> false
         }
 
-    /** Restores a draft saved before the process ended. A draft with content opened meanwhile wins. */
+    /** Marks that [restore] is about to run, so a send cannot start before the device copy is known. */
+    fun expectRestore() {
+        if (store != null) restorePending = true
+    }
+
+    /**
+     * Restores a draft saved before the process ended. A draft with content opened meanwhile wins,
+     * unless the device copy holds an unconfirmed attempt: that evidence is never replaced.
+     */
     suspend fun restore() {
+        try {
+            restoreStored()
+        } finally {
+            restorePending = false
+        }
+    }
+
+    private suspend fun restoreStored() {
         val store = store ?: return
         persistence.withLock {
             val stored = try {
@@ -145,7 +164,12 @@ internal class NativeMailComposerState(
                 storageProblem = "A draft saved on this device could not be read."
                 return
             }
-            if (stored == null || draft?.hasContent == true || busy) return
+            if (stored == null || busy) return
+            val replacesOpenDraft = draft?.hasContent == true
+            if (replacesOpenDraft && stored.unknownAttempt == null) return
+            if (replacesOpenDraft) {
+                notice = "An earlier message was not confirmed as sent and is shown again. Resolve it before writing a new message."
+            }
             draft = stored.draft
             attemptRecord = stored.attempt?.afterRestart()?.takeIf { stored.unknownAttempt != null }
             phase = stored.unknownAttempt
@@ -212,7 +236,7 @@ internal class NativeMailComposerState(
         onSent: () -> Unit = {},
     ) {
         val current = draft ?: return
-        if (busy) return
+        if (busy || restorePending) return
         val unknown = phase as? NativeMailSendPhase.Unknown
         if (unknown != null && (!confirmedResend || !sendAvailable)) return
         val request = try {
@@ -372,7 +396,10 @@ class NativeMailComposerRetention internal constructor(
 
     internal fun stateFor(appId: String): NativeMailComposerState = lock.withLock {
         states.getOrPut(appId) {
-            NativeMailComposerState(scope, storeFor(appId)).also { state -> scope.launch { state.restore() } }
+            NativeMailComposerState(scope, storeFor(appId)).also { state ->
+                state.expectRestore()
+                scope.launch { state.restore() }
+            }
         }
     }
 
