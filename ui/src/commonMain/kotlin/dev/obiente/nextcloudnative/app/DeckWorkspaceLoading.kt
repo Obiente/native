@@ -90,7 +90,10 @@ internal suspend fun fetchBoardStacks(
         } else if (index >= MAX_SEPARATE_CARD_LIST_READS) {
             stack.copy(cardsLoaded = false)
         } else {
-            val cardsResponse = execute(routes.cards(boardId, stack.id))
+            val cardsRequest = routes.cards(boardId, stack.id)
+            val cardsResponse = execute(
+                if (authoritative) cardsRequest.copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork) else cardsRequest,
+            )
             stack.copy(
                 cards = parseDeckResponseOffUi {
                     parseDeckStackCards(boardId, stack.id, cardsResponse, includeArchivedCards = archived)

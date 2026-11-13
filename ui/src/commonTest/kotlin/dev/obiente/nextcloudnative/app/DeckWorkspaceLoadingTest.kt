@@ -46,4 +46,37 @@ class DeckWorkspaceLoadingTest {
         assertTrue(stacks.drop(MAX_SEPARATE_CARD_LIST_READS).all { !it.cardsLoaded && it.cards.isEmpty() })
         assertFalse(stacks.last().cardsLoaded)
     }
+
+    @Test
+    fun `an authoritative load bypasses the cache for every separate card read`() = runBlocking<Unit> {
+        val policies = mutableListOf<Pair<String, NextcloudApiCachePolicy>>()
+        val routes = SemanticBoardRoutes(
+            requireNotNull(
+                resolveSemanticBoardContract(
+                    semanticDescriptor(
+                        "kanban_x",
+                        "42.0.0",
+                        (boardRoutes() + get("/apps/APP/api/v2/boards/{boardId}/lists/{listId}/cards")).forApp("kanban_x"),
+                    ),
+                    writesAuthorized = true,
+                ),
+            ),
+        )
+        val lists = """[{"id":1,"title":"Open","order":1},{"id":2,"title":"Done","order":2}]"""
+
+        val stacks = fetchBoardStacks(
+            execute = { request ->
+                policies += request.relativePath to request.cachePolicy
+                val body = if (request.relativePath.endsWith("/lists")) lists else """[{"id":900,"title":"Card","order":1}]"""
+                NextcloudApiResponse(200, body.encodeToByteArray(), "application/json", null)
+            },
+            routes = routes,
+            boardId = 7,
+            authoritative = true,
+        )
+
+        assertEquals(2, stacks.size)
+        assertEquals(3, policies.size)
+        assertTrue(policies.all { (_, policy) -> policy == NextcloudApiCachePolicy.ForceNetwork }, "$policies")
+    }
 }
