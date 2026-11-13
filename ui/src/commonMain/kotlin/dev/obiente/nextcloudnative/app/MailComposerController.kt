@@ -79,6 +79,10 @@ internal class MailComposerController(
         private set
 
     private var persistJob: Job? = null
+
+    /** True once the device copy was removed on purpose (sent, saved to Drafts, or discarded). */
+    var localDraftForgotten: Boolean = false
+        private set
     private var suggestionJob: Job? = null
     private var undoJob: Job? = null
 
@@ -94,6 +98,7 @@ internal class MailComposerController(
     fun update(change: (MailComposeDraft) -> MailComposeDraft) {
         if (!state.editable) return
         state = state.copy(draft = change(state.draft))
+        localDraftForgotten = false
         schedulePersist()
     }
 
@@ -486,6 +491,7 @@ internal class MailComposerController(
 
     suspend fun persistNow(): Boolean {
         val store = store ?: return true
+        if (localDraftForgotten) return true
         val draft = state.draft
         if (!draft.hasContent && draft.outboxMessageId == null && draft.storeAttemptSendAt == null) return true
         return try {
@@ -505,6 +511,7 @@ internal class MailComposerController(
 
     private suspend fun forgetLocalDraft() {
         persistJob?.cancel()
+        localDraftForgotten = true
         try {
             store?.remove(state.draft.slotId)
         } catch (cancelled: CancellationException) {

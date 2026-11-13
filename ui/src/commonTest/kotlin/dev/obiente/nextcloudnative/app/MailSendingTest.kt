@@ -324,6 +324,21 @@ class MailSendingTest {
     }
 
     @Test
+    fun `a discarded draft is not saved again when the composer closes`() {
+        val store = MemoryDraftStore()
+        val composer = composer(MailFakeServer(), store, ManualClock())
+        composer.update { it.copy(body = "Never mind") }
+        runBlocking { composer.persistNow() }
+        assertEquals(1, store.saved.size)
+        var discarded = false
+        composer.discard { discarded = true }
+        assertTrue(discarded)
+        runBlocking { composer.persistNow() }
+        assertTrue(store.saved.isEmpty(), "Closing after Discard must not bring the draft back.")
+        assertTrue(composer.localDraftForgotten)
+    }
+
+    @Test
     fun `a recovered message already in the Outbox is checked, not stored again`() {
         val server = MailFakeServer()
         val composer = composer(

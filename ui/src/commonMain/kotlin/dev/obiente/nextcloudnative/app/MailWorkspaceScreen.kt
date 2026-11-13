@@ -135,7 +135,9 @@ internal class MailWorkspaceSession(
         scope.launch {
             current.persistNow()
             // A message the Outbox already holds keeps sending; it is not an unsent draft.
-            if (current.state.draft.hasContent && !current.state.finished && current.state.draft.outboxMessageId == null) {
+            if (current.state.draft.hasContent && !current.state.finished && current.state.draft.outboxMessageId == null &&
+                !current.localDraftForgotten
+            ) {
                 recoveredDrafts = (recoveredDrafts + current.state.draft).distinctBy(MailComposeDraft::slotId)
             }
         }

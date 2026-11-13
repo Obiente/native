@@ -48,7 +48,6 @@ import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.material3.OutlinedRichTextEditor
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
@@ -161,9 +160,10 @@ internal fun MailRichBodyEditor(
     val rich = rememberRichTextState()
     LaunchedEffect(slotId) {
         if (initialHtml.isNotBlank()) rich.setHtml(initialHtml)
+        // The draft follows the editor at once, so a send right after typing carries the latest
+        // text. Saving to the device is debounced by the composer itself.
         snapshotFlow { rich.toHtml() }
             .distinctUntilChanged()
-            .debounce(MAIL_RICH_BODY_DEBOUNCE_MILLIS)
             .collect(onHtmlChanged)
     }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
@@ -231,4 +231,3 @@ internal fun MailComposeAttachments(
     }
 }
 
-private const val MAIL_RICH_BODY_DEBOUNCE_MILLIS = 300L
