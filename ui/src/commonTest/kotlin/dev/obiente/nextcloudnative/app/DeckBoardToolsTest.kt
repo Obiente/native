@@ -5,6 +5,9 @@ import dev.obiente.nextcloudnative.nativeui.runtime.forApp
 import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
 import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -189,6 +192,33 @@ class DeckBoardToolsTest {
         assertTrue(state.groups.isEmpty())
         assertEquals(1, contentChanged)
         assertEquals("Old is back on the board", state.notice)
+    }
+
+    @Test
+    fun `an archived cards load for a closed dialog does not replace the board opened next`() = runBlocking<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        var reads = 0
+        val controller = DeckArchivedCardsController(
+            context(
+                execute = {
+                    if (reads++ == 0) gate.await()
+                    deckToolResponse(
+                        """[{"id":1,"boardId":7,"title":"Todo","cards":[{"id":10,"stackId":1,"title":"Old","archived":true}]}]""",
+                    )
+                },
+            ),
+        )
+        controller.open(board())
+        val staleLoad = launch(Dispatchers.Unconfined) { controller.load() }
+        controller.close()
+        val next = board().copy(id = 99, title = "Next board")
+        controller.open(next)
+        gate.complete(Unit)
+        staleLoad.join()
+        val state = checkNotNull(controller.state)
+        assertEquals(99, state.board.id)
+        assertTrue(state.groups.isEmpty(), "The earlier board's archived cards are not shown for this board.")
+        assertTrue(state.loading, "This dialog still waits for its own load.")
     }
 
     private fun context(

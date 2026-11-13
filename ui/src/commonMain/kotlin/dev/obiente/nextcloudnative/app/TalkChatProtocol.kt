@@ -200,13 +200,14 @@ internal sealed interface TalkWriteOutcome<out T> {
 }
 
 /**
- * Classifies a write response. Statuses that Talk documents as a decision are definitive; a gateway
- * timeout or other 5xx can follow a change that was already stored, so it stays unknown.
+ * Classifies a write response. Statuses that Talk documents as a decision are definitive; any 5xx,
+ * including a proxy's 502 or gateway timeout, can follow a change that was already stored, so it
+ * stays unknown.
  */
 internal fun <T> talkWriteOutcome(response: TalkTransportResponse, parse: (TalkTransportResponse) -> T): TalkWriteOutcome<T> =
     when (response.status) {
         in 200..299 -> TalkWriteOutcome.Confirmed(parse(response))
-        in 400..499, 502 -> TalkWriteOutcome.Rejected(requireNotNull(talkFailureForStatus(response.status)))
+        in 400..499 -> TalkWriteOutcome.Rejected(requireNotNull(talkFailureForStatus(response.status)))
         else -> TalkWriteOutcome.Unknown
     }
 
