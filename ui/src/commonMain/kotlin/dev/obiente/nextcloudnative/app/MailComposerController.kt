@@ -264,14 +264,7 @@ internal class MailComposerController(
                 state = state.copy(draft = state.draft.copy(outboxMessageId = outboxId))
                 persistNow()
                 when {
-                    result.missingAttachments > 0 -> state = state.copy(
-                        phase = MailSendPhase.NeedsAttention(
-                            "${result.missingAttachments} attachment(s) could not be added. A file may have been moved, " +
-                                "or you may not be allowed to download it.",
-                            outboxId = outboxId,
-                            canSendAnyway = true,
-                        ),
-                    )
+                    result.missingAttachments > 0 -> withdrawIncomplete(outboxId, result.missingAttachments)
                     scheduled -> {
                         state = state.copy(phase = MailSendPhase.Scheduled(sendAt))
                         forgetLocalDraft()
@@ -287,7 +280,15 @@ internal class MailComposerController(
                 )
                 persistNow()
             }
-            MailStoreResult.NotStored -> {
+            // A sent message leaves the Outbox, so an absent one proves nothing once its send time has passed.
+            MailStoreResult.NotStored -> if (sendAt <= nowEpochSeconds()) {
+                state = state.copy(
+                    phase = MailSendPhase.Unknown(
+                        "The message is not in the Outbox, and it may already have been sent. Check your Sent folder before sending again.",
+                        mayAlreadyBeSent = true,
+                    ),
+                )
+            } else {
                 state = state.copy(
                     draft = state.draft.copy(storeAttemptSendAt = null),
                     phase = MailSendPhase.NeedsAttention("The message was not stored on the server. You can send it again."),
@@ -298,6 +299,34 @@ internal class MailComposerController(
                 phase = MailSendPhase.Unknown("Could not confirm that the message reached the Outbox. Check its status before sending again."),
             )
         }
+    }
+
+    /**
+     * Nextcloud sends due Outbox messages on its own, so a message stored without all of its
+     * attachments is taken out of the Outbox before the user is asked what to do.
+     */
+    private suspend fun withdrawIncomplete(outboxId: Long, missing: Int) {
+        val problem = "$missing attachment(s) could not be added. A file may have been moved, or you may not be allowed to download it."
+        state = when (sender.cancel(outboxId)) {
+            MailCancelResult.Cancelled -> state.copy(
+                draft = state.draft.copy(outboxMessageId = null, storeAttemptSendAt = null),
+                phase = MailSendPhase.NeedsAttention("$problem The message was not sent. Remove or replace the attachment, then send again."),
+            )
+            MailCancelResult.AlreadyGone -> state.copy(
+                phase = MailSendPhase.Unknown(
+                    "$problem The message had already left the Outbox, so it was probably sent without them.",
+                    mayAlreadyBeSent = true,
+                ),
+            )
+            is MailCancelResult.Rejected, MailCancelResult.Unknown -> state.copy(
+                phase = MailSendPhase.NeedsAttention(
+                    "$problem The message is still in the Outbox, and Nextcloud may send it without them.",
+                    outboxId = outboxId,
+                    canSendAnyway = true,
+                ),
+            )
+        }
+        persistNow()
     }
 
     private fun startUndoWindow(outboxId: Long, sendAt: Long) {

@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -262,7 +263,7 @@ class MailSendingTest {
     }
 
     @Test
-    fun `a dropped attachment holds the message until the user decides`() {
+    fun `a message stored without an attachment is withdrawn before the user decides`() {
         val server = MailFakeServer().apply { storedAttachmentLimit = 0 }
         val clock = ManualClock()
         val composer = composer(
@@ -276,11 +277,50 @@ class MailSendingTest {
         )
         composer.send()
         val attention = assertIs<MailSendPhase.NeedsAttention>(composer.state.phase)
+        assertNull(attention.outboxId)
+        assertTrue(server.outbox.isEmpty(), "Nextcloud cannot send the incomplete message while the user decides.")
+        assertTrue(composer.state.editable)
+        assertNull(composer.state.draft.outboxMessageId)
+        assertNull(composer.state.draft.storeAttemptSendAt)
+    }
+
+    @Test
+    fun `an incomplete message that cannot be withdrawn stays held with a warning`() {
+        val server = MailFakeServer().apply { storedAttachmentLimit = 0 }
+        val composer = composer(
+            server,
+            MemoryDraftStore(),
+            ManualClock(),
+            newMailCompose(account, slotId = "s".repeat(24)).copy(
+                to = listOf(MailRecipient("bob@example.test")),
+                attachments = listOf(MailComposeAttachment.FromFiles("/Docs/a.pdf", "a.pdf")),
+            ),
+        )
+        server.forcedStatus["DELETE /outbox/${server.nextOutboxId}"] = 403
+        composer.send()
+        val attention = assertIs<MailSendPhase.NeedsAttention>(composer.state.phase)
+        assertEquals(server.outbox.single().id, attention.outboxId)
         assertTrue(attention.canSendAnyway)
-        assertEquals(1, server.outbox.size)
-        composer.cancelHeld()
-        assertEquals(MailSendPhase.Editing, composer.state.phase)
-        assertTrue(server.outbox.isEmpty())
+    }
+
+    @Test
+    fun `a store missing from the Outbox after its send time may have been sent`() {
+        val server = MailFakeServer().apply { lostResponses += "POST /outbox" }
+        val gate = CompletableDeferred<Unit>().also { server.gates["GET /outbox"] = it }
+        val clock = ManualClock()
+        val composer = composer(server, MemoryDraftStore(), clock)
+        composer.send()
+        // The server sent the message and removed it from the Outbox before the check answered.
+        clock.now += 60
+        server.outbox.clear()
+        gate.complete(Unit)
+        val unknown = assertIs<MailSendPhase.Unknown>(composer.state.phase)
+        assertTrue(unknown.mayAlreadyBeSent)
+        assertNotNull(composer.state.draft.storeAttemptSendAt)
+        composer.send()
+        assertEquals(1, server.count("POST /outbox"))
+        composer.send(acknowledgeMayBeSent = true)
+        assertEquals(2, server.count("POST /outbox"))
     }
 
     @Test
