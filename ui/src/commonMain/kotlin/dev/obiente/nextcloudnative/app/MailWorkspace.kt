@@ -146,6 +146,7 @@ internal class MailWorkspaceController(
     fun selectAccount(accountId: Long) {
         if (state.accounts?.none { it.id == accountId } != false || accountId == state.selectedAccountId) return
         accountGeneration += 1
+        invalidateDetail()
         state = state.copy(
             selectedAccountId = accountId,
             mailboxes = null,
@@ -160,6 +161,7 @@ internal class MailWorkspaceController(
 
     fun selectMailbox(mailboxId: Long) {
         if (state.mailbox(mailboxId) == null) return
+        invalidateDetail()
         state = state.copy(selectedMailboxId = mailboxId, opened = null, searchQuery = "", view = MailWorkspaceView.Mailbox)
         loadMessages(mailboxId, reset = true)
         syncAndReload(mailboxId, reloadWithoutSync = false)
@@ -223,6 +225,12 @@ internal class MailWorkspaceController(
 
     fun retryOpen() {
         state.opened?.summary?.let(::open)
+    }
+
+    /** A message body still loading belongs to the context being left and must not reopen there. */
+    private fun invalidateDetail() {
+        detailGeneration += 1
+        detailJob?.cancel()
     }
 
     fun closeMessage() {
@@ -360,8 +368,13 @@ internal class MailWorkspaceController(
                 MailWriteOutcome.Unknown -> {
                     // The message leaves its folder only if the change happened; re-read to find out.
                     if (state.opened?.summary?.id == message.id) closeMessage()
-                    notice("The result could not be confirmed. The folder was reloaded to show what happened.")
-                    loadMessages(message.mailboxId, reset = true)
+                    if (state.selectedMailboxId == message.mailboxId) {
+                        notice("The result could not be confirmed. The folder was reloaded to show what happened.")
+                        loadMessages(message.mailboxId, reset = true)
+                    } else {
+                        // The folder is read again when it is opened; the one on screen stays as it is.
+                        notice("The result could not be confirmed. Open that folder again to see what happened.")
+                    }
                 }
             }
         }

@@ -72,6 +72,33 @@ class MailWorkspaceControllerTest {
     }
 
     @Test
+    fun `a body still loading does not reopen its message after switching folders`() {
+        val server = MailFakeServer()
+        val (_, controller) = started(server)
+        val gate = CompletableDeferred<Unit>()
+        server.gates["GET /messages/101/body"] = gate
+        controller.open(controller.items[0])
+        controller.selectMailbox(30)
+        gate.complete(Unit)
+        assertEquals(null, controller.state.opened)
+        assertEquals(30L, controller.state.selectedMailboxId)
+    }
+
+    @Test
+    fun `an unknown move in a folder that was left does not replace the folder on screen`() {
+        val server = MailFakeServer().apply { unreachable += "POST /messages/101/move" }
+        val (_, controller) = started(server)
+        val gate = CompletableDeferred<Unit>()
+        server.gates["POST /messages/101/move"] = gate
+        controller.move(controller.items.first(), 30)
+        controller.selectMailbox(30)
+        assertIs<MailMessagesState.Loaded>(controller.state.messages)
+        gate.complete(Unit)
+        assertIs<MailMessagesState.Loaded>(controller.state.messages)
+        assertEquals(30L, controller.state.selectedMailboxId)
+    }
+
+    @Test
     fun `a rejected flag change rolls back only that message`() {
         val server = MailFakeServer().apply { forcedStatus["PUT /messages/102/flags"] = 403 }
         val (_, controller) = started(server)
