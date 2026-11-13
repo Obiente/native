@@ -875,7 +875,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSystemTagAssignments.kt": "b84f0b3837b6bbdcf42e52081075eeb51c38054c8608f371f137264c5598867c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileTransferDialog.kt": "06d4ca3ab5a19d25fe9bf98a02aee7142bcfe2299edfd831398411863a0fd230",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileTrashbin.kt": "d08eef985524503b2aaa06a9a472da30c843ad7ba50f83efaeed54a00758f669",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileTrashbinController.kt": "c348965310329f6e39c979624e2895c7efeaba5dba4d22d22145954921bb30f8",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileTrashbinController.kt": "d4c2c0d04e1bfdd1c992a53e39002e9e21bd5371d8567b789757543e8758a261",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileTrashbinScreen.kt": "cd755b2af20e9c41f46b02c38c80c821fb806265644263f9269f3d1cec026f72",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "7d01527acc00eafe092885d19f318734263597b4c2c5c09cf39159d174a371dd",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "392c33270deaa5fd9b298cad3cd627454f0c86a260c3640f1d7d4370377a84db",
@@ -1686,7 +1686,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "98d7c792928e07fcdb833680ee761fd6410572bb50085b477e82279221193d84"
+            "sha256": "5f85df0e03397d81fd981837a54a028ec8946582fe87bef55f0d3bd16c998470"
         },
         {
             "scenario": "homepage-conversations-desktop-light",
