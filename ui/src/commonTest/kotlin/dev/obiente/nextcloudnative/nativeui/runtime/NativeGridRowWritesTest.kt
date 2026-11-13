@@ -132,6 +132,17 @@ class NativeGridRowWritesTest {
     }
 
     @Test
+    fun aDateTimeWithSecondsOrAZoneIsNotRewrittenFromTheMinuteEditor() {
+        val dated = column("11", "Starts", "datetime", "")
+        val stored = """[{"columnId":1,"value":"Synthetic item"},{"columnId":11,"value":"2026-08-01T12:34:56+02:00"}]"""
+        val plan = assertNotNull(plan(columns = columns() + dated, rows = listOf(row(stored))))
+        val row = assertNotNull(plan.row(row(stored)))
+        val invalid = assertIs<NativeGridRowRequestResult.Invalid>(plan.updateRequest(row, mapOf("11" to "2026-08-01 13:34")))
+        assertTrue("11" in invalid.fieldErrors, "Rewriting it would drop the seconds and the time zone.")
+        assertIs<NativeGridRowRequestResult.Ready>(plan.updateRequest(row, mapOf("1" to "Renamed")))
+    }
+
+    @Test
     fun untouchedCellsTravelExactlyAsStoredEvenWhenTheEditorCannotShowThem() {
         val dated = column("11", "Starts", "datetime", "")
         val stored = """[{"columnId":1,"value":"Synthetic item"},{"columnId":2,"value":12},""" +

@@ -397,6 +397,14 @@ internal fun NativeGridRowWritePlan.createRequest(drafts: Map<String, String>): 
     return ready(create.action, create.placeholders.zip(listValues).toMap() + (cellField to data.toString()))
 }
 
+private fun JsonElement?.isMinuteDateTimeOrEmpty(): Boolean {
+    val text = (this as? JsonPrimitive)?.contentOrNull ?: return this == null || this is JsonNull
+    return text.isEmpty() || text.length == MINUTE_DATE_TIME_LENGTH
+}
+
+/** `YYYY-MM-DD HH:MM` or its `T` form: the whole value the editor can show and write back. */
+private const val MINUTE_DATE_TIME_LENGTH = 16
+
 /**
  * PATCH sends only the changed cells, after the row is read again and those cells are found
  * unchanged since the editor opened. PUT replaces the row, so it is offered only when the
@@ -415,6 +423,14 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
     if (changed.isEmpty()) return NativeGridRowRequestResult.NoChanges
     val errors = validate(drafts, changed)
     if (errors.isNotEmpty()) return NativeGridRowRequestResult.Invalid(errors)
+    // The editor holds a date and minutes. A stored value with seconds or a time zone would lose
+    // them when rewritten, so such a cell is left as it is; untouched it still travels unchanged.
+    changed.firstOrNull { column -> column.kind == NativeGridColumnKind.DateTime && !row.cells[column.key].isMinuteDateTimeOrEmpty() }
+        ?.let { column ->
+            return NativeGridRowRequestResult.Invalid(
+                mapOf(column.key to "This date and time has seconds or a time zone that cannot be kept here, so it cannot be changed here."),
+            )
+        }
     val edited = changed.associate { column -> column.key to column.encodeDraft(drafts.getValue(column.key)) }
     val verifyCells: (NativeRecord) -> NativeWriteVerification = { current -> verifyCells(current, edited, row.cells) }
     if (update.write.action.binding.method != HttpMethod.PUT) {
