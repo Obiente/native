@@ -57,6 +57,25 @@ class NativeEditorWriteSessionTest {
     }
 
     @Test
+    fun closingTheEditorKeepsAnUnconfirmedCreateBlocked() = runBlocking {
+        var calls = 0
+        val session = NativeEditorWriteSession()
+        val unknown = NativeActionExecutor {
+            calls++
+            NativeActionExecutionResult.Failure("Timed out.", NativeActionFailureOutcome.Unknown)
+        }
+        session.submit(unknown, request, NativeEditorWriteRetry.NonIdempotent) {}
+        session.reset()
+        assertFalse(session.canSubmit, "Reopening the editor must not allow a second create.")
+        assertFalse(session.submit(unknown, request, NativeEditorWriteRetry.NonIdempotent) {})
+        assertEquals(1, calls)
+        session.acceptAuthoritativeRefresh()
+        session.reset()
+        assertEquals(NativeEditorWriteStatus.Idle, session.status)
+        assertTrue(session.canSubmit)
+    }
+
+    @Test
     fun unconfirmedIdempotentWriteMayBeRepeated() = runBlocking {
         val session = NativeEditorWriteSession()
         session.submit({ NativeActionExecutionResult.Failure("x", NativeActionFailureOutcome.Unknown) },

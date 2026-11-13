@@ -85,8 +85,15 @@ internal class NativeEditorWriteSession {
         }
     }
 
+    /**
+     * Clears the outcome when an editor closes. An unconfirmed create stays until an authoritative
+     * refresh arrives, so closing and reopening the editor cannot send it a second time.
+     */
     fun reset() {
-        if (!submitting) status = NativeEditorWriteStatus.Idle
+        val current = status
+        val unresolvedCreate = current is NativeEditorWriteStatus.Unconfirmed &&
+            current.retry == NativeEditorWriteRetry.NonIdempotent && current.awaitingRefresh
+        if (!submitting && !unresolvedCreate) status = NativeEditorWriteStatus.Idle
     }
 
     /**
