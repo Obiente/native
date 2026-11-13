@@ -535,6 +535,65 @@ content, throttling, server failure, or rejected request.
 covers message privacy, status classification, malformed and oversized error
 bodies, invalid text, and deeply nested JSON.
 
+## Reviewed write adapters
+
+**Last reviewed: 2026-10-31.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. None of these writes has been validated against a live server or
+shipped in a published release. See [COMPATIBILITY.md](COMPATIBILITY.md) for
+recorded device and server evidence.
+
+Some contracts declare a write but not the meaning of its payload. A reviewed
+write adapter explains that meaning from the app's own source at a reviewed
+version. It never adds an operation:
+[`NativeReviewedContractActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeReviewedContractActions.kt)
+selects only actions already in the verified schema, with trusted provenance,
+the exact method and route shape, matching path parameters, and the body
+fields the adapter relies on. Two matching actions are ambiguous and select
+none. A restored read-only contract has no write actions, so it offers no
+adapter writes either.
+
+| App and versions | Workflow | Payload meaning from reviewed source |
+| --- | --- | --- |
+| Tables 2.x | New, edit, and delete rows in a table or view grid | `data` keys are column IDs and each value uses its column type parser ([Tables v2.4.0](https://github.com/nextcloud/tables/tree/v2.4.0/lib/Service/ColumnTypes)) |
+| Cospend 4.x | New, edit, and delete bills in a project's bill list | `payer` and `payedFor` are member IDs of that project, a new bill sends `repeat` `n`, and dates are YYYY-MM-DD ([Cospend v4.3.0](https://github.com/julien-nc/cospend-nc/blob/v4.3.0/lib/Service/LocalProjectService.php)) |
+| Forms 5.x | Fill in and send a form from its detail | `answers` maps question IDs to string arrays: option IDs, scale values, or fixed date and time formats ([Forms v5.4.1](https://github.com/nextcloud/forms/blob/v5.4.1/lib/Service/SubmissionService.php)) |
+
+Rules shared by the adapters:
+
+- Identities come from authoritative records: the table or view, the project,
+  the form, the row, and the bill. A row ID never replaces a table or view ID,
+  and a bill ID never replaces a project ID. Routes with two placeholders bind
+  them by route position.
+- Permissions gate each write before it is offered: Tables share flags (an
+  unknown share state grants nothing), Cospend access level participant or
+  higher, and the Forms submit permission, open state, and `canSubmit`.
+- Tables updates send only the changed cells, because the server merges cells
+  into the stored row. Rich text, user and group, and relation columns are kept
+  unchanged. The generic inline cell editor is off for Tables grids because its
+  row-object reconstruction would send a `{columnId, value}` wrapper as a
+  value.
+- Cospend edits send every editable field. Deletes keep Cospend's default of
+  moving the bill to the project trash. An existing bill keeps a payer or ower
+  who was later deactivated.
+- Forms questions of type file, grid, ranking, color, and date or time range
+  are not answered natively. If such a question is required, the form explains
+  that instead of offering a send.
+- [`NativeReviewedWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeReviewedWriteSession.kt)
+  sends each request once. A rejection keeps the draft. An unconfirmed create,
+  bill, or response triggers an authoritative refresh and blocks sending again
+  until that refresh arrives, so the person can check for the change first.
+  Repeating an unconfirmed update or delete is allowed because it is
+  idempotent. Cancellation is rethrown and the result stays unconfirmed.
+- Drafts are ordinary remembered UI state and are not kept across process
+  death. Nothing is stored on the server until a request is confirmed.
+
+Not covered yet: Tables table, column, and view management beyond the generic
+contract forms; Cospend member management, recurring bills, and settlement
+actions beyond the generic contract surfaces; Forms results for owners; and a
+new bill in a project without bills, because the empty bill list uses the
+generic empty state.
+
 ## Reviewed limits
 
 **Server bases and origins**
@@ -719,7 +778,10 @@ loading, retry, and later pages.
 
 ### Mail reading hierarchy
 
-Mail reading sections put the verified message body and thread reads first.
+The Nextcloud Mail app itself now opens in the reviewed Mail adapter described in
+[ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md#mail-composing-and-organizing).
+The rules below still apply to any other app whose contract has mail
+semantics. Mail reading sections put the verified message body and thread reads first.
 DKIM, raw source, smart-reply, and itinerary probe routes stay in the contract
 but are left out of the ordinary section chooser. This issues no optional reads
 and invents no diagnostics destination. Attachment cards show bounded metadata

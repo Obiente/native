@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -102,6 +105,8 @@ internal fun CalendarDayHeading(date: String, count: Int, modifier: Modifier = M
 
 @Composable
 internal fun calendarWorkspaceColor(calendar: GroupwareCalendar?, fallbackHref: String? = null): Color {
+    // The color chosen in Nextcloud wins, so events look the same here as on the web.
+    calendar?.color?.parseCalendarColor()?.let { return it }
     val palette = listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary,
         MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.error)
     val hash = (calendar?.href ?: fallbackHref)?.hashCode() ?: 0
@@ -117,6 +122,7 @@ internal fun CalendarVisibilityRow(
     eventCount: Int,
     onVisibilityChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onManage: (() -> Unit)? = null,
 ) {
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(10.dp))
         .toggleable(visible, role = Role.Checkbox, onValueChange = onVisibilityChanged)
@@ -127,9 +133,29 @@ internal fun CalendarVisibilityRow(
         Box(Modifier.size(8.dp).background(calendarWorkspaceColor(calendar), CircleShape))
         Column(Modifier.weight(1f)) {
             Text(calendar.displayName, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!calendar.writable) Text("Read only", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            calendar.accessDescription()?.let { Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(eventCount.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (onManage != null) IconButton(onClick = onManage) {
+            Icon(NextcloudIcons.More, contentDescription = "Manage ${calendar.displayName}")
+        }
     }
+}
+
+/** Whose calendar this is and whether it can be changed, when that is not simply "yours". */
+internal fun GroupwareCalendar.accessDescription(): String? = when (kind) {
+    GroupwareCalendarKind.Subscription -> "Subscription, read only"
+    GroupwareCalendarKind.Shared -> (ownerName?.let { "Shared by $it" } ?: "Shared with you") + if (writable) "" else ", read only"
+    GroupwareCalendarKind.Owned -> "Read only".takeIf { !writable }
+}
+
+/** A CalDAV calendar color such as `#0082C9` or `#0082C9FF`; anything else is ignored. */
+internal fun String.parseCalendarColor(): Color? {
+    val hex = trim().removePrefix("#")
+    if (hex.length != 6 && hex.length != 8) return null
+    val value = hex.toLongOrNull(16) ?: return null
+    val rgb = if (hex.length == 8) value ushr 8 else value
+    val alpha = if (hex.length == 8) (value and 0xFF).toInt() else 0xFF
+    return Color(red = ((rgb shr 16) and 0xFF).toInt(), green = ((rgb shr 8) and 0xFF).toInt(), blue = (rgb and 0xFF).toInt(), alpha = alpha)
 }

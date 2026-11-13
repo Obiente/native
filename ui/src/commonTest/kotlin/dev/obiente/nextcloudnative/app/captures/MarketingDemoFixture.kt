@@ -2,6 +2,14 @@ package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * Synthetic, network-inert account used only by deterministic product captures.
@@ -94,48 +102,72 @@ internal val marketingHomepageTalkRoom = TalkRoom(
     unreadMessages = 5,
 )
 
-internal val marketingHomepageTalkPage = TalkMessagePage(
-    messages = listOf(
-        marketingHomepageTalkMessage(
-            id = 1,
-            actorId = "mara",
-            actorDisplayName = "Mara",
-            message = "The product direction is ready for review.",
-        ),
-        marketingHomepageTalkMessage(
-            id = 2,
-            actorId = marketingHomepageTalkUserId,
-            actorDisplayName = "Obiente",
-            message = "Great. I will review it from the shared project folder.",
-        ),
-        marketingHomepageTalkMessage(
-            id = 3,
-            actorId = "mara",
-            actorDisplayName = "Mara",
-            message = "Perfect. I also added the light and dark interface notes.",
-        ),
-        marketingHomepageTalkMessage(
-            id = 4,
-            actorId = "kai",
-            actorDisplayName = "Kai",
-            message = "Folder sync QA is green on Linux and Windows.",
-        ),
-        marketingHomepageTalkMessage(
-            id = 5,
-            actorId = marketingHomepageTalkUserId,
-            actorDisplayName = "Mara Lind",
-            message = "I will review the active transfers and publish the visual QA set.",
-        ),
-        marketingHomepageTalkMessage(
-            id = 6,
-            actorId = "mara",
-            actorDisplayName = "Mara",
-            message = "Great. The design review is at 14:30 in the product room.",
-        ),
-    ),
-    olderCursor = null,
-    hasMoreHistory = false,
+private val marketingHomepageTalkLines = listOf(
+    Triple("mara", "Mara", "The product direction is ready for review."),
+    Triple(marketingHomepageTalkUserId, "Obiente", "Great. I will review it from the shared project folder."),
+    Triple("mara", "Mara", "Perfect. I also added the light and dark interface notes."),
+    Triple("kai", "Kai", "Folder sync QA is green on Linux and Windows."),
+    Triple(marketingHomepageTalkUserId, "Mara Lind", "I will review the active transfers and publish the visual QA set."),
+    Triple("mara", "Mara", "Great. The design review is at 14:30 in the product room."),
 )
+
+/** The latest page of the capture conversation, as Talk's chat API would return it. */
+internal val marketingHomepageTalkHistory: JsonObject = buildJsonObject {
+    putJsonObject("ocs") {
+        putJsonArray("data") {
+            marketingHomepageTalkLines.forEachIndexed { index, (actorId, actorDisplayName, message) ->
+                addJsonObject {
+                    put("id", index + 1L)
+                    put("token", marketingHomepageTalkRoom.token)
+                    put("actorType", "users")
+                    put("actorId", actorId)
+                    put("actorDisplayName", actorDisplayName)
+                    put("timestamp", 1_775_000_001L + index)
+                    put("message", message)
+                    put("messageType", "comment")
+                    put("systemMessage", "")
+                    put("isReplyable", true)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Network-inert Talk transport for captures: fixed capabilities, conversation, and history.
+ * A long poll waits until cancelled and every write is rejected before it is sent anywhere.
+ */
+internal suspend fun marketingHomepageTalkExecute(request: TalkTransportRequest): TalkTransportResponse {
+    check(request.isRead) { "The capture conversation is read-only." }
+    val data = when {
+        request.relativePath == "/ocs/v2.php/cloud/capabilities" -> buildJsonObject {
+            putJsonObject("ocs") {
+                putJsonObject("data") {
+                    putJsonObject("capabilities") {
+                        putJsonObject("spreed") {
+                            putJsonArray("features") { listOf("chat-replies", "reactions").forEach { add(JsonPrimitive(it)) } }
+                        }
+                    }
+                }
+            }
+        }
+        request.relativePath.startsWith("/ocs/v2.php/apps/spreed/api/v4/room/") -> buildJsonObject {
+            putJsonObject("ocs") {
+                putJsonObject("data") {
+                    put("token", marketingHomepageTalkRoom.token)
+                    put("type", 2)
+                    put("readOnly", 0)
+                    put("lobbyState", 0)
+                    put("participantType", 3)
+                    put("permissions", 254)
+                }
+            }
+        }
+        ("lookIntoFuture" to "1") in request.queryParameters -> awaitCancellation()
+        else -> marketingHomepageTalkHistory
+    }
+    return TalkTransportResponse(200, data.toString().encodeToByteArray(), chatLastGiven = null)
+}
 
 internal val marketingHomepageFiles = listOf(
     marketingHomepageFile(
@@ -354,25 +386,6 @@ private fun marketingHomepageFile(
     ownerDisplayName = "Morgan Lee",
     unreadComments = unreadComments,
     permissions = "RGDNVW",
-)
-
-private fun marketingHomepageTalkMessage(
-    id: Long,
-    actorId: String,
-    actorDisplayName: String,
-    message: String,
-) = TalkMessage(
-    id = id,
-    actorDisplayName = actorDisplayName,
-    actorId = actorId,
-    actorType = "users",
-    message = message,
-    timestamp = 1_775_000_000L + id,
-    messageType = TalkMessageType.Comment,
-    systemMessage = TalkSystemMessageType.Unknown,
-    systemMessageName = null,
-    parameters = emptyMap(),
-    content = TalkMessageContent.Text(summary = message, markdown = false),
 )
 
 data class MarketingFileShareFixture(

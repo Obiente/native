@@ -50,12 +50,12 @@ class NewsPresentationTest {
     @Test
     fun `published labels are relative for a week and dated after`() {
         val now = 1_800_000_000L
-        assertEquals("Just now", newsPublishedLabel(now - 30, now))
-        assertEquals("5 min ago", newsPublishedLabel(now - 300, now))
-        assertEquals("3 h ago", newsPublishedLabel(now - 3 * 3_600, now))
-        assertEquals("Yesterday", newsPublishedLabel(now - 30 * 3_600, now))
-        assertEquals("4 days ago", newsPublishedLabel(now - 4 * 86_400, now))
-        assertEquals("2027-01-05", newsPublishedLabel(now - 10 * 86_400, now))
-        assertEquals("2027-01-15", newsPublishedLabel(now + 3_600, now), "Future dates are shown as dates.")
+        assertEquals("Just now", compactAgeLabel(now - 30, now))
+        assertEquals("5 min ago", compactAgeLabel(now - 300, now))
+        assertEquals("3 h ago", compactAgeLabel(now - 3 * 3_600, now))
+        assertEquals("Yesterday", compactAgeLabel(now - 30 * 3_600, now))
+        assertEquals("4 days ago", compactAgeLabel(now - 4 * 86_400, now))
+        assertEquals("2027-01-05", compactAgeLabel(now - 10 * 86_400, now))
+        assertEquals("2027-01-15", compactAgeLabel(now + 3_600, now), "Future dates are shown as dates.")
     }
 }

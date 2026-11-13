@@ -147,3 +147,17 @@ private val APP_WORKSPACE_NATIVE_IDS = setOf(
 private const val APP_WORKSPACE_RECENT_LIMIT = 3
 
 internal fun appWorkspaceCountLabel(count: Int): String = "$count ${if (count == 1) "app" else "apps"}"
+
+/** Apps that open in a reviewed native workspace rather than the adaptive runtime. */
+internal val nativeAppIds = setOf(
+    "files",
+    "photos",
+    "memories",
+    "spreed",
+    "talk",
+    "activity",
+    "notes",
+    "dashboard",
+    "user_status",
+    "mail",
+)

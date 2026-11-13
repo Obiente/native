@@ -348,13 +348,6 @@ data class TalkReaction(
     }
 }
 
-data class TalkMessagePage(
-    val messages: List<TalkMessage>,
-    /** Opaque history position returned by Talk for the next older-page request. */
-    val olderCursor: Long?,
-    val hasMoreHistory: Boolean,
-)
-
 data class NextcloudActivity(
     val id: Long,
     val app: String,
@@ -1585,20 +1578,19 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
 
     suspend fun listTalkRooms(session: NextcloudSession): List<TalkRoom>
 
-    suspend fun listTalkMessages(session: NextcloudSession, token: String): List<TalkMessage>
-
-    suspend fun listTalkMessagePage(
+    /**
+     * Dedicated same-origin transport for reviewed Talk chat requests.
+     *
+     * Implementations reject redirects that leave the account, bound the response, cancel the
+     * network call with the coroutine, and keep a long poll open for at least
+     * [TalkTransportRequest.serverWaitSeconds]. Writes use the account mutation path.
+     */
+    suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-        olderCursor: Long? = null,
-        limit: Int = DEFAULT_TALK_MESSAGE_PAGE_SIZE,
-    ): TalkMessagePage = TalkMessagePage(
-        messages = listTalkMessages(session, token),
-        olderCursor = null,
-        hasMoreHistory = false,
-    )
-
-    suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String)
+        request: TalkTransportRequest,
+    ): TalkTransportResponse {
+        error("Talk transport is unavailable on this platform.")
+    }
 
     suspend fun revokeSession(session: NextcloudSession)
 }
@@ -1687,7 +1679,7 @@ fun buildNextcloudChunkUploadUrl(serverUrl: String, userId: String, uploadId: St
 
 private fun encodeUrlPathSegment(value: String): String = encodeUrlComponent(value)
 
-private fun encodeUrlComponent(value: String): String = buildString {
+internal fun encodeUrlComponent(value: String): String = buildString {
     for (byte in value.encodeToByteArray()) {
         val unsigned = byte.toInt() and 0xff
         val isUnreserved = unsigned in 'a'.code..'z'.code ||

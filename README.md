@@ -194,13 +194,21 @@ Windows, and an early macOS package) with:
 - Photos and Memories: collections, albums, tags, people, favorites, RAW and
   JPEG grouping, full-quality originals loaded on zoom, and foundations for
   edits that keep the original;
-- Talk history, with message cards for text, files, recordings, calls, system
-  events and shared objects;
+- Talk conversations with live updates, replies, reactions, and editing or
+  deleting your own messages where the server allows it, and message cards for
+  text, files, recordings, calls, system events and shared objects;
 - Notes, with folders, ETag-aware saving and Markdown editing and preview;
 - News, as a feed reader with unread and starred views, folders, feeds and an
   article reader that does not load remote images;
 - Activity, global search, Dashboard, user status and app navigation;
-- native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
+- native Settings for personal info, Talk privacy and conversation settings,
+  and, for administrators, read-only views of apps, accounts, groups and server
+  information;
+- Mail, with folders, reply, reply all and forward, a composer with address
+  suggestions, identities and attachments, undo and scheduled sending, drafts
+  kept on the device, message and folder organizing, and signature and alias
+  settings, for Mail 5.0 to 5.12 when the installed version can be confirmed;
+- native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
   Deck, Cospend, Budget and administration inventory, at different levels of
   completeness;
 - an Office document browser with editor choices based on server

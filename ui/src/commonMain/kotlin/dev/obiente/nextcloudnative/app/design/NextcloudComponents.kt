@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -66,6 +68,7 @@ fun NextcloudBottomNavigation(
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
     activeApp: NextcloudDesktopSidebarApp? = null,
     onSwitchApp: (() -> Unit)? = null,
+    badges: Map<NextcloudDestination, NextcloudDestinationBadge> = emptyMap(),
 ) {
     val selection = nextcloudSelectionColors()
     Column(modifier = modifier.fillMaxWidth()) {
@@ -80,9 +83,14 @@ fun NextcloudBottomNavigation(
         ) {
             items.forEach { item ->
                 val navigation = nextcloudShellNavigationItem(item, selected, activeApp)
+                val badge = badges[item.destination]
                 NavigationBarItem(
                     modifier = Modifier.semantics {
-                        if (navigation.switchesApps && onSwitchApp != null) contentDescription = "${navigation.label}. Switch app"
+                        if (navigation.switchesApps && onSwitchApp != null) {
+                            contentDescription = "${navigation.label}. Switch app"
+                        } else if (badge != null) {
+                            contentDescription = "${navigation.label}, ${badge.description}"
+                        }
                     },
                     selected = navigation.selected,
                     enabled = enabled,
@@ -91,7 +99,9 @@ fun NextcloudBottomNavigation(
                     },
                     icon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(navigation.icon, contentDescription = null, modifier = Modifier.size(24.dp))
+                            NextcloudNavigationBadge(badge) {
+                                Icon(navigation.icon, contentDescription = null, modifier = Modifier.size(24.dp))
+                            }
                             if (navigation.switchesApps && onSwitchApp != null) Icon(NextcloudIcons.ExpandMore, null, Modifier.size(14.dp))
                         }
                     },
@@ -126,6 +136,7 @@ fun NextcloudNavigationRail(
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
     activeApp: NextcloudDesktopSidebarApp? = null,
     onSwitchApp: (() -> Unit)? = null,
+    badges: Map<NextcloudDestination, NextcloudDestinationBadge> = emptyMap(),
 ) {
     val selection = nextcloudSelectionColors()
     Box(
@@ -139,9 +150,14 @@ fun NextcloudNavigationRail(
         ) {
             items.forEach { item ->
                 val navigation = nextcloudShellNavigationItem(item, selected, activeApp)
+                val badge = badges[item.destination]
                 NavigationRailItem(
                     modifier = Modifier.semantics {
-                        if (navigation.switchesApps && onSwitchApp != null) contentDescription = "${navigation.label}. Switch app"
+                        if (navigation.switchesApps && onSwitchApp != null) {
+                            contentDescription = "${navigation.label}. Switch app"
+                        } else if (badge != null) {
+                            contentDescription = "${navigation.label}, ${badge.description}"
+                        }
                     },
                     selected = navigation.selected,
                     enabled = enabled,
@@ -149,11 +165,13 @@ fun NextcloudNavigationRail(
                         if (navigation.switchesApps && onSwitchApp != null) onSwitchApp() else onSelected(item.destination)
                     },
                     icon = {
-                        Icon(
-                            navigation.icon,
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                        )
+                        NextcloudNavigationBadge(badge) {
+                            Icon(
+                                navigation.icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     },
                     label = {
                         Text(
@@ -184,6 +202,15 @@ fun NextcloudNavigationRail(
             thickness = 1.dp,
             color = androidx.compose.material3.MaterialTheme.colorScheme.outlineVariant,
         )
+    }
+}
+
+@Composable
+private fun NextcloudNavigationBadge(badge: NextcloudDestinationBadge?, icon: @Composable () -> Unit) {
+    if (badge == null) {
+        icon()
+    } else {
+        BadgedBox(badge = { Badge { Text(badge.text) } }) { icon() }
     }
 }
 

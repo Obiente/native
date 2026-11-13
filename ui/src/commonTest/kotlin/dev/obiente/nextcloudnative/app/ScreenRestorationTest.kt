@@ -20,25 +20,22 @@ class ScreenRestorationTest {
     }
 
     @Test
-    fun `notes drafts guard pending navigation before submission`() {
+    fun `notes folder drafts and mutations guard pending navigation`() {
         assertTrue(
             notesListRequiresPendingNavigationGuard(
                 mutationInProgress = false,
-                createDraftOpen = true,
-                renameDraftOpen = false,
+                renameDraftOpen = true,
             ),
         )
         assertTrue(
             notesListRequiresPendingNavigationGuard(
-                mutationInProgress = false,
-                createDraftOpen = false,
-                renameDraftOpen = true,
+                mutationInProgress = true,
+                renameDraftOpen = false,
             ),
         )
         assertFalse(
             notesListRequiresPendingNavigationGuard(
                 mutationInProgress = false,
-                createDraftOpen = false,
                 renameDraftOpen = false,
             ),
         )

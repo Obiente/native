@@ -5,6 +5,9 @@ enum class NativeMediaCollectionAction {
     CreateCollection,
     AddItem,
     RemoveItem,
+    RenameCollection,
+    DeleteCollection,
+    LeaveSharedCollection,
 }
 
 enum class NativeMediaCollectionActionRisk {
@@ -19,6 +22,7 @@ enum class NativeMediaCollectionTransportMethod {
     MKCOL,
     COPY,
     DELETE,
+    MOVE,
 }
 
 /**
@@ -53,8 +57,16 @@ data class NativeMediaCollectionTransportRequest(
                 require(ifMatch != null && !ifNoneMatch && overwrite == false)
             }
             NativeMediaCollectionTransportMethod.DELETE -> {
-                require(relativePath.isAlbumMemberPath())
+                require(relativePath.isAlbumMemberPath() || relativePath.isAlbumCollectionPath())
                 require(destinationRelativePath == null && ifMatch == null && !ifNoneMatch && overwrite == null)
+            }
+            NativeMediaCollectionTransportMethod.MOVE -> {
+                require(relativePath.isOwnAlbumCollectionPath())
+                require(destinationRelativePath?.isOwnAlbumCollectionPath() == true)
+                require(relativePath.split('/')[4] == destinationRelativePath.split('/')[4]) {
+                    "An album can only be renamed inside its owner's albums."
+                }
+                require(ifMatch == null && !ifNoneMatch && overwrite == false)
             }
         }
     }
@@ -254,6 +266,98 @@ fun planRemoveItemFromMediaCollection(
     )
 }
 
+/**
+ * Plans the Photos DAV MOVE that renames an album the authenticated user owns. Photos answers
+ * 403 for a shared album, so a collaborator is never offered this action.
+ */
+fun planRenameMediaAlbum(
+    collection: NativeMediaCollection,
+    newName: String,
+    currentUserId: String?,
+    existingAlbums: List<NativeMediaCollection> = emptyList(),
+): NativeMediaCollectionActionPlan {
+    val normalized = newName.trim()
+    val base = NativeMediaCollectionActionPlan(
+        action = NativeMediaCollectionAction.RenameCollection,
+        collectionKey = collection.key,
+        collectionName = collection.name,
+        fileId = null,
+        fileName = null,
+        risk = NativeMediaCollectionActionRisk.CollectionStructure,
+        confirmation = NativeMediaCollectionActionConfirmation(
+            title = "Rename ${collection.name}?",
+            message = "Only the album name changes. Its photos stay where they are.",
+            confirmLabel = "Rename album",
+        ),
+        request = null,
+        disabledReason = null,
+    )
+    val userId = currentUserId?.takeIf(::isSafeDavIdentity)
+        ?: return base.copy(disabledReason = "The authenticated user ID is unavailable.")
+    if (collection.type != NativeMediaCollectionType.Album || collection.ownerUserId != userId) {
+        return base.copy(disabledReason = "Only the owner can rename this album.")
+    }
+    if (normalized == collection.name) return base.copy(disabledReason = "Enter a different name.")
+    if (!isSafeDavSegment(normalized) || !isSafeDavSegment(collection.name)) {
+        return base.copy(disabledReason = "Enter a valid album name without slashes or control characters.")
+    }
+    if (existingAlbums.any { it.key != collection.key && it.ownerUserId == userId && it.name.equals(normalized, ignoreCase = true) }) {
+        return base.copy(disabledReason = "An album with this name already exists.")
+    }
+    return base.copy(
+        request = NativeMediaCollectionTransportRequest(
+            method = NativeMediaCollectionTransportMethod.MOVE,
+            relativePath = albumCollectionPath(userId, collection.name),
+            destinationRelativePath = albumCollectionPath(userId, normalized),
+            overwrite = false,
+        ),
+    )
+}
+
+/**
+ * Plans deleting an owned album, or leaving an album shared with the user. Photos deletes only
+ * the album record for an owner and only removes the collaborator for a shared album; original
+ * files are never addressed.
+ */
+fun planDeleteOrLeaveMediaAlbum(
+    collection: NativeMediaCollection,
+    currentUserId: String?,
+): NativeMediaCollectionActionPlan {
+    val owned = collection.ownerUserId != null && collection.ownerUserId == currentUserId
+    val base = NativeMediaCollectionActionPlan(
+        action = if (owned) NativeMediaCollectionAction.DeleteCollection else NativeMediaCollectionAction.LeaveSharedCollection,
+        collectionKey = collection.key,
+        collectionName = collection.name,
+        fileId = null,
+        fileName = null,
+        risk = NativeMediaCollectionActionRisk.CollectionStructure,
+        confirmation = if (owned) {
+            NativeMediaCollectionActionConfirmation(
+                title = "Delete ${collection.name}?",
+                message = "The album is deleted for you and everyone it is shared with. The photos stay in Files.",
+                confirmLabel = "Delete album",
+            )
+        } else {
+            NativeMediaCollectionActionConfirmation(
+                title = "Leave ${collection.name}?",
+                message = "The album disappears from your shared albums. The owner and other collaborators keep it.",
+                confirmLabel = "Leave album",
+            )
+        },
+        request = null,
+        disabledReason = null,
+    )
+    val userId = currentUserId?.takeIf(::isSafeDavIdentity)
+        ?: return base.copy(disabledReason = "The authenticated user ID is unavailable.")
+    val owner = collection.ownerUserId?.takeIf(::isSafeDavIdentity)
+        ?: return base.copy(disabledReason = "The album owner could not be verified.")
+    if (collection.type != NativeMediaCollectionType.Album || !isSafeDavSegment(collection.name)) {
+        return base.copy(disabledReason = "This album cannot be changed safely.")
+    }
+    val path = if (owned) albumCollectionPath(userId, collection.name) else sharedAlbumCollectionPath(userId, collection.name, owner)
+    return base.copy(request = NativeMediaCollectionTransportRequest(NativeMediaCollectionTransportMethod.DELETE, path))
+}
+
 data class NativeMediaCollectionMutationResult(
     val status: Int,
     val action: NativeMediaCollectionAction,
@@ -300,6 +404,15 @@ private fun NativeMediaCollectionTransportRequest.matches(action: NativeMediaCol
         NativeMediaCollectionAction.CreateCollection -> NativeMediaCollectionTransportMethod.MKCOL
         NativeMediaCollectionAction.AddItem -> NativeMediaCollectionTransportMethod.COPY
         NativeMediaCollectionAction.RemoveItem -> NativeMediaCollectionTransportMethod.DELETE
+        NativeMediaCollectionAction.RenameCollection -> NativeMediaCollectionTransportMethod.MOVE
+        NativeMediaCollectionAction.DeleteCollection,
+        NativeMediaCollectionAction.LeaveSharedCollection,
+        -> NativeMediaCollectionTransportMethod.DELETE
+    } && when (action) {
+        NativeMediaCollectionAction.RemoveItem -> relativePath.isAlbumMemberPath()
+        NativeMediaCollectionAction.DeleteCollection -> relativePath.isOwnAlbumCollectionPath()
+        NativeMediaCollectionAction.LeaveSharedCollection -> relativePath.isAlbumCollectionPath() && !relativePath.isOwnAlbumCollectionPath()
+        else -> true
     }
 
 private fun NextcloudApiResponse.collectionMutationError(action: NativeMediaCollectionAction): String = when (status) {
@@ -314,6 +427,9 @@ private fun NativeMediaCollectionAction.failureLabel(): String = when (this) {
     NativeMediaCollectionAction.CreateCollection -> "Creating the album"
     NativeMediaCollectionAction.AddItem -> "Adding the item to the album"
     NativeMediaCollectionAction.RemoveItem -> "Removing the item from the album"
+    NativeMediaCollectionAction.RenameCollection -> "Renaming the album"
+    NativeMediaCollectionAction.DeleteCollection -> "Deleting the album"
+    NativeMediaCollectionAction.LeaveSharedCollection -> "Leaving the shared album"
 }
 
 private fun albumCollectionPath(userId: String, albumName: String): String =
@@ -340,6 +456,12 @@ private fun String.isSafeCollectionDavPath(): Boolean {
 private fun String.isOwnAlbumCollectionPath(): Boolean {
     val segments = removePrefix("/remote.php/dav/").split('/')
     return segments.size == 4 && segments[0] == "photos" && segments[2] == "albums" && segments[3].isNotBlank()
+}
+
+private fun String.isAlbumCollectionPath(): Boolean {
+    val segments = removePrefix("/remote.php/dav/").split('/')
+    return segments.size == 4 && segments[0] == "photos" &&
+        segments[2] in setOf("albums", "sharedalbums") && segments[3].isNotBlank()
 }
 
 private fun String.isAlbumMemberPath(): Boolean {

@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -45,6 +46,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudMotion
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun DesktopGroupwareCalendarWorkspace(
@@ -70,8 +72,18 @@ internal fun DesktopGroupwareCalendarWorkspace(
     onRefresh: () -> Unit,
     onEditEvent: (GroupwareCalendarEvent) -> Unit,
     onDeleteEvent: (GroupwareCalendarEvent) -> Unit,
+    onCreateAt: ((String) -> Unit)? = null,
     todayDate: String = currentCalendarDate(),
+    collectionActions: CalendarCollectionActions? = null,
+    invitation: CalendarInvitationActions? = null,
 ) {
+    val now by produceState(calendarLocalNow()) {
+        while (true) {
+            delay(30_000)
+            value = calendarLocalNow()
+        }
+    }
+    val nowMinute = now?.takeIf { it.first == todayDate }?.second
     val presentation = remember(events, calendars, hiddenCalendarHrefs, query, selectedDate, month) {
         buildCalendarWorkspacePresentation(events, calendars, hiddenCalendarHrefs, query, selectedDate, month)
     }
@@ -91,7 +103,11 @@ internal fun DesktopGroupwareCalendarWorkspace(
         }
         Column(Modifier.fillMaxSize()) {
             DesktopCalendarToolbar(
-                title = if (view == CalendarWorkspaceView.Week) calendarWeekTitle(presentation.weekDates) else month.title,
+                title = when (view) {
+                    CalendarWorkspaceView.Week -> calendarWeekTitle(presentation.weekDates)
+                    CalendarWorkspaceView.Day -> selectedDate.displayCalendarDate()
+                    CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> month.title
+                },
                 view = view,
                 query = query,
                 loading = loading,
@@ -123,6 +139,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                     onCalendarVisibilityChanged = onCalendarVisibilityChanged,
                     onClose = { sourcesRequested = false },
                     modifier = Modifier.width(216.dp).fillMaxHeight(),
+                    collectionActions = collectionActions,
                 )
                 Surface(
                     Modifier.weight(1f).fillMaxHeight(),
@@ -136,10 +153,17 @@ internal fun DesktopGroupwareCalendarWorkspace(
                             selectDay, showDay,
                             { date, event -> onSelectDate(date); selectEvent(event) },
                         )
-                        CalendarWorkspaceView.Week -> DesktopCalendarWeek(
-                            presentation.weekDates, selectedDate, todayDate, presentation.eventsByDate,
-                            calendarByHref, selectDay,
-                            { date, event -> onSelectDate(date); selectEvent(event) },
+                        CalendarWorkspaceView.Week -> CalendarTimeGrid(
+                            presentation.weekDates, selectedDate, todayDate, presentation.eventsByDate, calendarByHref,
+                            onSelectDate = { date -> selectDay(date); onViewChanged(CalendarWorkspaceView.Day) },
+                            onSelectEvent = { date, event -> onSelectDate(date); selectEvent(event) },
+                            onCreateAt = onCreateAt.takeIf { createEnabled }, nowMinute = nowMinute,
+                        )
+                        CalendarWorkspaceView.Day -> CalendarTimeGrid(
+                            listOf(selectedDate), selectedDate, todayDate, presentation.eventsByDate, calendarByHref,
+                            onSelectDate = selectDay,
+                            onSelectEvent = { date, event -> onSelectDate(date); selectEvent(event) },
+                            onCreateAt = onCreateAt.takeIf { createEnabled }, nowMinute = nowMinute,
                         )
                         CalendarWorkspaceView.Agenda -> DesktopCalendarAgenda(
                             presentation.visibleEvents, calendarByHref, selectedEvent,
@@ -164,6 +188,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                             onClose = { detailsRequested = false },
                             onShowDay = { onSelectEvent(null) },
                             modifier = Modifier.fillMaxSize(),
+                            invitation = invitation,
                         )
                     }
                 }
@@ -177,7 +202,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                     DesktopCalendarSourcesPane(
                         calendars, hiddenCalendarHrefs, presentation.eventCountByCalendar, loading,
                         onCalendarVisibilityChanged, onClose = null,
-                        modifier = Modifier.fillMaxWidth().height(480.dp),
+                        modifier = Modifier.fillMaxWidth().height(480.dp), collectionActions = collectionActions,
                     )
                 },
                 confirmButton = { TextButton(onClick = { sourcesRequested = false }) { Text("Done") } },
@@ -197,6 +222,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
                         { event -> detailsRequested = false; onDeleteEvent(event) },
                         onClose = null, onShowDay = { onSelectEvent(null) },
                         modifier = Modifier.fillMaxWidth().height(480.dp),
+                        invitation = invitation,
                     )
                 },
                 confirmButton = { TextButton(onClick = { detailsRequested = false }) { Text("Close") } },
@@ -301,5 +327,6 @@ private fun DesktopCalendarPeriodNavigation(
 
 private fun CalendarWorkspaceView.navigationPeriod(): String = when (this) {
     CalendarWorkspaceView.Week -> "week"
+    CalendarWorkspaceView.Day -> "day"
     CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> "month"
 }

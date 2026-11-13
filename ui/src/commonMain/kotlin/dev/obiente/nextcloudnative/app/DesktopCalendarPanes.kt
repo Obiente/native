@@ -42,6 +42,7 @@ internal fun DesktopCalendarSourcesPane(
     onCalendarVisibilityChanged: (String, Boolean) -> Unit,
     onClose: (() -> Unit)?,
     modifier: Modifier,
+    collectionActions: CalendarCollectionActions? = null,
 ) {
     Surface(modifier, shape = RoundedCornerShape(NextcloudRadii.Medium), color = MaterialTheme.colorScheme.surfaceContainerLow) {
         LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -53,6 +54,7 @@ internal fun DesktopCalendarSourcesPane(
                 CalendarVisibilityRow(
                     calendar, calendar.href !in hiddenCalendarHrefs, eventCountByCalendar[calendar.href] ?: 0,
                     { visible -> onCalendarVisibilityChanged(calendar.href, visible) },
+                    onManage = collectionActions?.let { actions -> { actions.onManage(calendar) } },
                 )
             }
             if (calendars.isEmpty()) item {
@@ -61,6 +63,7 @@ internal fun DesktopCalendarSourcesPane(
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            collectionActions?.let { actions -> item { CalendarCollectionCreateButton(actions, Modifier.fillMaxWidth().padding(top = 8.dp)) } }
         }
     }
 }
@@ -80,6 +83,7 @@ internal fun DesktopCalendarInspectorPane(
     onClose: (() -> Unit)?,
     onShowDay: () -> Unit,
     modifier: Modifier,
+    invitation: CalendarInvitationActions? = null,
 ) {
     val calendar = event?.let { calendarByHref[it.calendarHref] }
     Surface(
@@ -122,15 +126,15 @@ internal fun DesktopCalendarInspectorPane(
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                     )
                 }
-                item { CalendarEventDetailsBody(event) }
+                item { CalendarEventDetailsBody(event, invitation = invitation) }
                 item {
-                    val editable = mutationsEnabled && calendar?.writable == true && event.etag != null && !event.isGeneratedOccurrence
+                    val editable = mutationsEnabled && calendar?.writable == true && event.etag != null
                     OutlinedButton(onClick = { onEditEvent(event) }, enabled = editable, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (event.recurrenceRule != null) "Edit series" else "Edit event")
+                        Text("Edit event")
                     }
                     TextButton(onClick = { onDeleteEvent(event) }, enabled = editable, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            if (event.recurrenceRule != null) "Delete series" else "Delete event",
+                            "Delete event",
                             color = if (editable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

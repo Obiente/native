@@ -23,6 +23,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -31,11 +32,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudAnimatedIcon
 import dev.obiente.nextcloudnative.app.design.NextcloudEntranceAxis
 import dev.obiente.nextcloudnative.app.design.NextcloudContentEntrance
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,20 +59,41 @@ internal fun MobileGroupwareCalendarWorkspace(
     onSelectDate: (String) -> Unit,
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
+    onCreateAt: ((String) -> Unit)? = null,
     todayDate: String = currentCalendarDate(),
+    collectionActions: CalendarCollectionActions? = null,
 ) {
     var searchVisible by rememberSaveable { mutableStateOf(false) }
+    // The time line follows the clock; a minute is fine-grained enough for a schedule.
+    val now by produceState(calendarLocalNow()) {
+        while (true) {
+            delay(30_000)
+            value = calendarLocalNow()
+        }
+    }
+    val nowMinute = now?.takeIf { it.first == todayDate }?.second
     var sourcesVisible by rememberSaveable { mutableStateOf(false) }
     val presentation = remember(events, calendars, hiddenCalendarHrefs, query, selectedDate, month) {
         buildCalendarWorkspacePresentation(events, calendars, hiddenCalendarHrefs, query, selectedDate, month)
     }
     val calendarByHref = remember(calendars) { calendars.associateBy(GroupwareCalendar::href) }
-    val period = if (view == CalendarWorkspaceView.Week) "week" else "month"
+    val period = when (view) {
+        CalendarWorkspaceView.Week -> "week"
+        CalendarWorkspaceView.Day -> "day"
+        CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> "month"
+    }
+    fun openDay(date: String) {
+        onSelectDate(date)
+        onViewChanged(CalendarWorkspaceView.Day)
+    }
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (view == CalendarWorkspaceView.Week) calendarWeekTitle(presentation.weekDates) else month.title,
-                Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold)
+            Text(when (view) {
+                CalendarWorkspaceView.Week -> calendarWeekTitle(presentation.weekDates)
+                CalendarWorkspaceView.Day -> selectedDate.displayCalendarDate()
+                CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> month.title
+            }, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = onToday) { Text("Today") }
             IconButton(onClick = onPrevious) { Icon(NextcloudIcons.Back, "Previous $period") }
             IconButton(onClick = onNext) { Icon(NextcloudIcons.ChevronRight, "Next $period") }
@@ -101,20 +125,27 @@ internal fun MobileGroupwareCalendarWorkspace(
         ) { Text("${calendars.count { it.href !in hiddenCalendarHrefs }} of ${calendars.size} calendars shown") }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         if (query.isNotBlank()) {
-            val matches = if (view == CalendarWorkspaceView.Week) presentation.visibleEvents.filter {
+            val matches = if (view == CalendarWorkspaceView.Week || view == CalendarWorkspaceView.Day) presentation.visibleEvents.filter {
                 it.overlapsCalendarDateRange(presentation.weekDates.firstOrNull(), presentation.weekDates.lastOrNull())
             } else presentation.visibleEvents
             Text("Search results", Modifier.padding(start = 16.dp, top = 12.dp).semantics { heading() },
                 style = MaterialTheme.typography.titleSmall)
             CalendarAgenda(matches, onSelectEvent, Modifier.weight(1f), calendarByHref = calendarByHref,
-                earliestDisplayDate = if (view == CalendarWorkspaceView.Week) presentation.weekDates.firstOrNull() else "${month.isoPrefix}01",
+                earliestDisplayDate = if (view == CalendarWorkspaceView.Week || view == CalendarWorkspaceView.Day) presentation.weekDates.firstOrNull() else "${month.isoPrefix}01",
                 searching = true)
-        } else NextcloudContentEntrance(view, NextcloudEntranceAxis.Horizontal, Modifier.weight(1f), order = view.ordinal) { when (view) {
-            CalendarWorkspaceView.Month -> MonthCalendar(month, selectedDate, presentation.visibleEvents,
-                onSelectDate, onSelectEvent, Modifier.fillMaxSize(), calendarByHref, todayDate)
-            CalendarWorkspaceView.Week -> CalendarWeekSchedule(
-                presentation.weekDates, selectedDate, presentation.eventsByDate, calendarByHref,
-                todayDate, onSelectDate, onSelectEvent, Modifier.fillMaxSize(),
+        } else NextcloudContentEntrance(view, NextcloudEntranceAxis.Horizontal,
+            Modifier.weight(1f).calendarPeriodSwipe(onPrevious, onNext), order = view.ordinal) { when (view) {
+            CalendarWorkspaceView.Month -> CalendarPhoneMonthGrid(month, selectedDate, todayDate, presentation.visibleEvents,
+                calendarByHref, ::openDay, onSelectEvent, Modifier.fillMaxSize())
+            CalendarWorkspaceView.Week -> CalendarTimeGrid(
+                presentation.weekDates, selectedDate, todayDate, presentation.eventsByDate, calendarByHref,
+                onSelectDate = ::openDay, onSelectEvent = { _, event -> onSelectEvent(event) },
+                onCreateAt = onCreateAt, modifier = Modifier.fillMaxSize(), nowMinute = nowMinute,
+            )
+            CalendarWorkspaceView.Day -> CalendarTimeGrid(
+                listOf(selectedDate), selectedDate, todayDate, presentation.eventsByDate, calendarByHref,
+                onSelectDate = onSelectDate, onSelectEvent = { _, event -> onSelectEvent(event) },
+                onCreateAt = onCreateAt, modifier = Modifier.fillMaxSize(), nowMinute = nowMinute,
             )
             CalendarWorkspaceView.Agenda -> CalendarAgenda(presentation.visibleEvents, onSelectEvent,
                 Modifier.fillMaxSize(), calendarByHref = calendarByHref,
@@ -138,7 +169,20 @@ internal fun MobileGroupwareCalendarWorkspace(
                 CalendarVisibilityRow(calendar, calendar.href !in hiddenCalendarHrefs,
                     presentation.eventCountByCalendar[calendar.href] ?: 0,
                     { visible -> onCalendarVisibilityChanged(calendar.href, visible) },
-                    Modifier.padding(horizontal = 8.dp))
+                    Modifier.padding(horizontal = 8.dp),
+                    onManage = collectionActions?.let { actions -> { sourcesVisible = false; actions.onManage(calendar) } })
+            }
+            collectionActions?.let { actions ->
+                item {
+                    CalendarCollectionCreateButton(
+                        CalendarCollectionActions(
+                            onCreate = { sourcesVisible = false; actions.onCreate(it) }, onManage = actions.onManage,
+                            onOpenTrash = actions.onOpenTrash?.let { open -> { sourcesVisible = false; open() } },
+                            onEnableBirthdays = actions.onEnableBirthdays,
+                        ),
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                    )
+                }
             }
         }
     }

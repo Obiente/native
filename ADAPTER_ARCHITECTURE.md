@@ -193,7 +193,7 @@ Every operation declares its risk before it reaches the UI:
 | Reversible | Small, visible, reversible write | Direct user intent and rollback on failure. |
 | Guarded | Content change with concurrency risk | Permission check, revision guard, conflict UI. |
 | Destructive | Delete, overwrite, or hard-to-reverse change | Target-specific confirmation and no blind background retry. |
-| Privileged handoff | Server administration or primary-password confirmation | Explain the effect and open authenticated server administration. |
+| Privileged handoff | Server administration or primary-password confirmation | Explain why the change is unavailable. Perform it only through an explicit authenticated handoff, which is not built yet. |
 
 Runtime evidence may raise the risk level, for example when a move would
 overwrite an existing target. It must never lower the declared level silently.
@@ -633,6 +633,69 @@ request shapes, parsing of malformed and adversarial input, stale completion,
 pending changes racing a refresh, failed refreshes, removed selections,
 rollback, and paging.
 
+### Mail composing and organizing
+
+Mail publishes an OpenAPI document only for its OCS controllers: an account
+list, message reads, and a synchronous send that cannot be undone, scheduled,
+or verified after a lost response. The routes its web client uses for the
+Outbox, drafts, attachments, message state, folders, and account settings are
+declared in the signed package's `appinfo/routes.php` but are excluded from the
+generated OpenAPI. A reviewed adapter in
+[`MailProtocol.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailProtocol.kt),
+[`MailApiRequests.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailApiRequests.kt),
+and
+[`MailApiParsing.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MailApiParsing.kt)
+uses those routes through the shared same-origin transport. Parameter names
+and response shapes were read from the
+[v5.0.0](https://github.com/nextcloud/mail/blob/v5.0.0/appinfo/routes.php),
+[v5.10.9](https://github.com/nextcloud/mail/blob/v5.10.9/appinfo/routes.php),
+[v5.11.7](https://github.com/nextcloud/mail/blob/v5.11.7/appinfo/routes.php), and
+[v5.12.6](https://github.com/nextcloud/mail/blob/v5.12.6/appinfo/routes.php)
+routes and controllers.
+
+- Writes are offered only when the installed Mail version is confirmed to be
+  at least 5.0.0 and below 5.13.0. The version comes from the OCS app
+  information endpoint, which needs an administrator account; when it is
+  unavailable the workspace reads but changes nothing, and says why.
+- Requests carry the OCS API header, which Nextcloud accepts in place of a
+  CSRF token for app-password clients without a browser session.
+- Account responses also contain IMAP and SMTP host and user names. The parser
+  never reads them. A folder whose account differs from the requested account,
+  a message body for another message, and an Outbox response that is not
+  Mail's success envelope are rejected.
+- Sending stores the message in Mail's server Outbox with a send time 10
+  seconds ahead, or the chosen scheduled time, then asks Mail to send it when
+  the undo window ends. Mail's own background job sends every due message, so
+  a stored message is sent even if the app is closed. Before the store request
+  leaves, the composer records the send time in its draft; after a lost
+  response or a restart it finds exactly that message in the Outbox instead of
+  storing it twice. If no match exists and the send time has passed, the user
+  is told it may already have been sent and must confirm before sending again.
+- A send that answers 500 or loses its response is read back from the Outbox:
+  a message that left the Outbox was processed, and one that stayed shows its
+  Mail status. Retrying a held message asks Mail to send what it already holds,
+  and Mail's status chain decides what that does; it is not offered after
+  Mail's unclear SMTP status.
+- The Outbox reports how many attachments it stored. When a Files attachment
+  is missing or not downloadable, Mail drops it silently; the composer holds
+  the message and asks whether to send without it or cancel.
+- Flags and tags are idempotent and applied optimistically; a rejection rolls
+  back that message alone, and an unknown result re-reads the folder. Moves,
+  deletes, and folder changes re-read the server state after an unknown result
+  and never retry. Folder changes are reported done only when the re-read
+  folder list shows the requested result. Folder and message actions follow
+  the IMAP rights Mail reports for each folder.
+- Unsent drafts are stored through the platform's encrypted, account-scoped
+  text draft storage, keyed by a random local slot, bounded in count and size,
+  and strictly decoded. They are offered again after a restart.
+
+`MailProtocolTest`, `MailComposeTest`, `MailSendingTest`, and
+`MailWorkspaceControllerTest` cover version gating, request shapes, malformed
+and adversarial responses, reply and forward addressing, quoting, signatures,
+draft persistence, lost and rejected store and send results, undo, scheduling,
+restart recovery, dropped attachments, stale reads, rollback, and folder
+verification.
+
 ### Administration visibility
 
 `AdministrationAccessRepository` owns session-scoped, in-memory permission
@@ -657,8 +720,51 @@ instead of navigating away silently when permission revalidation fails. An
 explicit refresh removes old access before requesting new evidence. Concurrent
 checks share the cached result, and cancellation cannot publish a late success.
 The ordinary Apps workspace remains available to regular users. Cached visibility
-never authorizes a mutation; strict operations still use authenticated browser
-handoff and server-side authorization.
+never authorizes a mutation; administration stays read-only until an explicit
+authenticated handoff exists, as described below.
+
+### Account settings, administration, and Talk settings
+
+Nextcloud marks every profile edit and every user, group, and app
+administration route `PasswordConfirmationRequired`: the provisioning
+[`UsersController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/UsersController.php),
+[`GroupsController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/GroupsController.php),
+and `AppsController`, and the app store `ApiController`. The
+[`PasswordConfirmationMiddleware`](https://github.com/nextcloud/server/blob/master/lib/private/AppFramework/Middleware/Security/PasswordConfirmationMiddleware.php)
+does not accept an app-password sign-in as that confirmation, and the
+provisioning Preferences API accepts only keys that the theming and DAV apps
+validate. nati.ve signs in with an app password and never collects the
+primary account password, so these surfaces are read-only until an explicit
+authenticated handoff exists. Each one explains that state instead of offering
+an action.
+
+- Personal info (`AccountProfileProtocol.kt`, `AccountProfileController.kt`)
+  reads `GET cloud/user` with each field's visibility scope, plus language,
+  locale, time zone, groups, quota, and additional email addresses.
+- Administration (`AdminUsersProtocol.kt`, `AdminUsersController.kt`) reads
+  accounts with search and paging from `cloud/users/details`, one account from
+  `cloud/users/{userId}`, and groups from `cloud/groups/details`. A newer search
+  or selection discards an older completion. The app catalog keeps its
+  lifecycle plans but offers no action. Server information is read from the
+  Monitoring app's `apps/serverinfo/api/v1/info` route.
+- Talk conversation settings (`TalkConversationSettingsProtocol.kt`,
+  `TalkConversationSettingsController.kt`) work with the app password and use
+  the Talk mutation transport for rename, description, notification level,
+  read-only, lobby, guest access, moderator role, and participant removal,
+  gated by participant and conversation type, and re-read the conversation
+  after each change. Read receipt and typing privacy use `POST settings/user`
+  and the `chat-read-status` and `typing-privacy` capabilities.
+
+Devices, sessions, and app passwords are not listed: Nextcloud serves them only
+to the web settings page, and `AuthSettingsController` refuses app-password
+sessions. Avatar upload is not implemented.
+
+Open investigation: `PUT core/apppassword/confirm`
+([`AppPasswordController::confirmUserPassword`](https://github.com/nextcloud/server/blob/master/core/Controller/AppPasswordController.php))
+records a confirmation in a server session. Whether a client could reuse that
+session cookie for non-strict routes is unverified, the endpoint itself takes
+the account password, and strict routes still read the password from the
+request, so it does not satisfy the handoff rule as it stands.
 
 ## Account removal and recovery
 
@@ -918,3 +1024,4 @@ recovery.
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
 - [News external API v1-3](https://nextcloud.github.io/news/api/api-v1-3/)
+- [Nextcloud Mail routes, v5.12.6](https://github.com/nextcloud/mail/blob/v5.12.6/appinfo/routes.php)

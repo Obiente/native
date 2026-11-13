@@ -2339,14 +2339,8 @@ private fun GenericRecordCollection(
         nativeFinanceCollectionPresentations(resource, records)
     }
     if (finance != null) {
-        GenericFinanceCollection(
-            resource = resource,
-            rows = finance,
-            onSelectRecord = onSelectRecord,
-            onLoadMore = onLoadMore,
-            loadingMore = loadingMore,
-            loadMoreError = loadMoreError,
-        )
+        GenericFinanceCollection(resource, finance, onSelectRecord, onLoadMore, loadingMore, loadMoreError,
+            NativeFinanceWriteContext(schema, datasetContext, actionExecutor, onInlineActionSucceeded, authoritativeRecordsKey))
         return
     }
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
@@ -4009,6 +4003,7 @@ private fun GenericRecordDetail(
 ) {
     val tableDetail = remember(schema, resource, record, datasetContext) { nativeTableRecordDetail(schema, resource, record, datasetContext) }
     if (tableDetail != null) { NativeTableRecordDetail(tableDetail, genericDetailTitleKey(resource, record)); return }
+    remember(schema, resource, record) { nativeFormsSubmissionPlan(schema, resource, record) }?.let { plan -> NativeFormsSubmissionDetail(plan, record, actionExecutor, onInlineActionSucceeded ?: onActionSucceeded); return }
     val mailTarget = remember(schema, resource, record, datasetContext) {
         nativeMailMessageRenderTarget(schema, resource, record, datasetContext)
     }

@@ -425,7 +425,11 @@ This milestone supports Activity, Talk, shares, sync, calendar reminders, backgr
 
 ### Scope
 
-- Typed Notifications app adapter and action routing.
+- Typed Notifications app adapter and action routing. The in-app inbox,
+  account-scoped cache, dismissals, and advertised actions are present in
+  source (see [COMPATIBILITY.md](COMPATIBILITY.md)); push and platform
+  notification bridges below are not. Editing notification settings needs a
+  server API that can read them first; until one exists they stay read-only.
 - Push registration per account/device with key rotation and logout cleanup.
 - Android variants for Google push where distributable and UnifiedPush for open distribution, following the official Talk Android patterns in [`UnifiedPushService.kt`](https://github.com/nextcloud/talk-android/blob/master/app/src/main/java/com/nextcloud/talk/services/UnifiedPushService.kt).
 - APNs integration on Apple platforms; native Windows/macOS/Linux notification bridges.
@@ -538,12 +542,12 @@ Adapters follow advertised capabilities, official DAV/OCS protocols, version-pin
 
 ### Delivery order
 
-1. Notes completion: chunking, attachments, settings, offline drafts, conflict resolution.
+1. Notes completion: chunking, attachments, offline drafts, conflict resolution. Settings (notes folder and file suffix) are present in source with deterministic tests.
 2. CardDAV Contacts and CalDAV Calendar/Tasks with sync-token fallback, ETag writes, recurrence/timezone correctness, invitations, and platform contacts/calendar bridges where the user opts in.
 3. Deck and Tasks through reusable schema- and data-shape-driven board/list/detail/edit flows, with related-resource label hydration rather than app-specific ID rendering.
 4. Cospend, Budget, and Tables through reusable typed table, amount, participant, metric, chart, and form components. Currency and other parent context propagate into child datasets generically.
 5. Cookbook with native recipe, ingredient, step, image, search, and offline cooking mode.
-6. Mail discovery, search, and schema-declared reads through the automatic runtime first. MIME attachments, drafts, threading, compose, identities, encryption/signing feasibility, and notifications require version-pinned verified action policies where the generic contract cannot prove safe behavior.
+6. Mail through a reviewed, version-pinned adapter (present in source for Mail 5.0.0 through 5.12.x; see [COMPATIBILITY.md](COMPATIBILITY.md)). Remaining: downloading and saving received attachments, snooze, filters, out-of-office, encryption/signing feasibility, notifications, a non-administrator way to confirm the installed version, and live-server qualification of the Outbox send path.
 7. Music through the documented Subsonic-compatible boundary first, with secure credential bootstrap and platform media session/download support.
 8. Read-only GitHub integration with authenticated web handoff for OAuth/settings and no attempt to extract server-stored tokens.
 
@@ -617,7 +621,8 @@ Administration is valuable but must not weaken server authentication.
 
 - Read-only server/app inventory, enabled state, updates, compatibility, dependencies, group restrictions, classic-app versus ExApp identity, and system health where authorized.
 - Native explanation and preflight for enable, disable, update, uninstall, bundle, force, and Memories maintenance actions.
-- Default mutation flow is an authenticated browser handoff, followed by capability/navigation/inventory refresh.
+- Default mutation flow is an explicit authenticated handoff, followed by capability/navigation/inventory refresh. It is not built yet; until then the native profile and administration screens are read-only and explain why ([contract](ADAPTER_ARCHITECTURE.md#account-settings-administration-and-talk-settings)).
+- Open investigation: whether Nextcloud's `core/apppassword/confirm` session confirmation can serve non-strict routes without the app collecting the primary password. Strict routes still need the password on the request.
 - Direct mutation remains experimental until strict/lax password confirmation, SSO, 2FA, delegated admin, brute-force delay, maintenance mode, and recovery are integration-tested.
 - The primary password, if a future direct strict flow genuinely requires it, exists only in request-scoped memory, is excluded from logs/crash state, and never replaces the stored app-password session.
 - ExApps remain read-only/deep-linked until AppAPI asynchronous lifecycle/state is separately modeled.

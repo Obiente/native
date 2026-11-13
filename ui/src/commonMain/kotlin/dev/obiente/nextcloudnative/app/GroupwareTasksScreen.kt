@@ -1,34 +1,26 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -40,17 +32,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
+import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudRefreshBar
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
-import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
-
-private enum class TaskFilter { Open, All, Completed }
 
 @Composable
 fun NativeGroupwareTasksScreen(
@@ -75,6 +65,12 @@ fun NativeGroupwareTasksScreen(
         mutableStateOf<GroupwareTaskSelection?>(null)
     }
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
+    // The parent of a subtask being created, as "calendar href" and "uid"; null for a top-level task.
+    var subtaskParentUid by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var subtaskCalendarHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    val taskLists = rememberCalendarCollectionManager(services, session, userId, forTasks = true) { loadAttempt += 1 }
+    val taskListSharing = rememberGroupwareSharingManager(services, session)
+    val taskTrash = rememberCalendarTrashBinManager(services, session, userId) { loadAttempt += 1 }
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<GroupwareTask?>(null) }
     var mutationError by remember { mutableStateOf<String?>(null) }
@@ -88,6 +84,8 @@ fun NativeGroupwareTasksScreen(
     var unreadableRecoveryDiscardRequested by remember(accountScope) { mutableStateOf(false) }
     var filter by rememberSaveable(accountScope) { mutableStateOf(TaskFilter.Open) }
     var query by rememberSaveable(accountScope) { mutableStateOf("") }
+    var taskListFilterHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    val taskListState = rememberLazyListState()
     val recoveryPostcondition = remember(accountScope, recoveryEncoded) {
         recoveryEncoded?.let { decodeTaskMutationRecoveryState(it, accountScope) }
     }
@@ -269,201 +267,257 @@ fun NativeGroupwareTasksScreen(
             if (deleting?.instanceId == selectedTask.instanceId) deleting = null
         }
     }
-    val visibleTasks = remember(ready?.tasks, filter, query) {
-        val needle = query.trim().lowercase()
-        ready?.tasks.orEmpty().filter { task ->
-            (filter == TaskFilter.All || filter == TaskFilter.Completed && task.completed ||
-                filter == TaskFilter.Open && !task.completed) &&
-                (needle.isBlank() || task.title.lowercase().contains(needle) ||
-                    task.description?.lowercase()?.contains(needle) == true)
-        }
+    val filterCalendar = taskFilterCalendar(ready, taskListFilterHref)
+    val visibleHierarchy = remember(ready?.tasks, filter, filterCalendar, query) {
+        filterGroupwareTasks(ready?.tasks.orEmpty(), filter, filterCalendar, query).inTaskHierarchy()
     }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Tasks", fontWeight = FontWeight.SemiBold)
-                        ready?.let { Text(it.countSummary) }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack, enabled = !interactionBlocked) {
-                        Icon(NextcloudIcons.Back, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { if (!operations.busy) loadAttempt += 1 }, enabled = !operations.busy) {
-                        Icon(NextcloudIcons.Refresh, contentDescription = "Refresh tasks")
-                    }
-                    IconButton(
-                        onClick = { if (!interactionBlocked) creating = true },
-                        enabled = !interactionBlocked && ready?.calendars?.any { ready.canWrite(it.href) } == true,
-                    ) {
-                        Icon(NextcloudIcons.Add, contentDescription = "Create task")
-                    }
-                },
-            )
-        },
-    ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            NextcloudRefreshBar(refreshing)
-            val statusMessage = if (unreadableRecovery) {
-                "A saved task recovery record cannot be read. The server result is unknown; discard the record only after checking the task on another client."
-            } else {
-                refreshError
-            }
-            statusMessage?.let { message ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(message, modifier = Modifier.weight(1f))
-                        if (unreadableRecovery) {
-                            TextButton(enabled = !operations.busy, onClick = { unreadableRecoveryDiscardRequested = true }) {
-                                Text("Review recovery")
-                            }
-                        } else if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
-                            TextButton(
-                                enabled = !operations.busy,
-                                onClick = {
-                                    scope.launch {
-                                        operations.recover {
-                                            if (recoveryVerification != TaskRecoveryVerification.Unapplied) return@recover
-                                            if (clearRecovery()) {
-                                                creating = false
-                                                editing = false
-                                                deleting = null
-                                                loadAttempt += 1
-                                            }
-                                        }
-                                    }
-                                },
-                            ) { Text("Keep server version") }
-                        }
-                        TextButton(enabled = !operations.busy, onClick = { if (!operations.busy) loadAttempt += 1 }) { Text("Retry") }
-                    }
-                }
-            }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = boundedGroupwareTaskQuery(it) },
-                label = { Text("Search tasks") },
-                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                TaskFilter.entries.forEach { candidate ->
-                    NextcloudFilterChip(
-                        selected = filter == candidate,
-                        onClick = { filter = candidate },
-                        label = { Text(candidate.name) },
-                    )
-                }
-            }
-            when (val current = state) {
-                TasksLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-                is TasksLoadState.Error -> WorkspaceLoadError(current.message) { if (!operations.busy) loadAttempt += 1 }
-                is TasksLoadState.Ready -> LazyColumn(
-                    contentPadding = PaddingValues(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    items(visibleTasks, key = GroupwareTask::instanceId) { task ->
-                        var menuExpanded by remember(task.instanceId) { mutableStateOf(false) }
-                        val taskWritable = current.canWrite(task.calendarHref)
-                        val taskDeleteSafe = isGroupwareTaskObjectDeleteSafe(task)
-                        Card(
-                            modifier = Modifier.fillMaxWidth().combinedClickable(
-                                onClickLabel = "Open ${task.title}",
-                                onLongClickLabel = "Show actions for ${task.title}",
-                                onClick = { selectedTaskSelection = task.selection() },
-                                onLongClick = { menuExpanded = true },
-                            ),
-                            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Checkbox(checked = task.completed, onCheckedChange = null)
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        task.title,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    task.due?.let { due ->
-                                        Text("Due ${due.displayTaskDueDate()}", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                                Box {
-                                    IconButton(onClick = { menuExpanded = true }) {
-                                        Icon(NextcloudIcons.More, contentDescription = "Actions for ${task.title}")
-                                    }
-                                    DropdownMenu(
-                                        expanded = menuExpanded,
-                                        onDismissRequest = { menuExpanded = false },
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text("View details") },
-                                            onClick = {
-                                                menuExpanded = false
-                                                selectedTaskSelection = task.selection()
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Edit") },
-                                            enabled = !interactionBlocked && taskWritable,
-                                            onClick = {
-                                                menuExpanded = false
-                                                selectedTaskSelection = task.selection()
-                                                editing = true
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Delete") },
-                                            enabled = !interactionBlocked && taskWritable && taskDeleteSafe,
-                                            onClick = {
-                                                menuExpanded = false
-                                                selectedTaskSelection = task.selection()
-                                                deleting = task
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (visibleTasks.isEmpty()) item {
-                        Text(current.emptyMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-    }
-    selectedTask?.takeIf { !editing }?.let { task ->
-        TaskDetailsDialog(
-            task = task,
+    val visibleTasks = visibleHierarchy.map { it.first }
+    val detailState = selectedTask?.let { task ->
+        TaskDetailState(
             writable = selectedTaskWritable,
             deleteSafe = selectedTaskDeleteSafe,
             interactionBlocked = interactionBlocked,
             error = mutationError,
-            onDismiss = { selectedTaskSelection = null },
             onEdit = { editing = true },
             onDelete = { deleting = task },
+            relations = taskRelations(task, ready?.tasks.orEmpty()),
+            onOpenTask = { related -> selectedTaskSelection = related.selection() },
+            onAddSubtask = { subtaskParentUid = task.uid; subtaskCalendarHref = task.calendarHref; creating = true }
+                .takeIf { selectedTaskWritable && task.recurrenceId == null && !interactionBlocked },
         )
+    }
+
+    // Saves a new or changed task through the same guarded write as the editor: the list's
+    // checkbox uses it to complete a task, keeping its other fields as they are.
+    fun saveTask(target: GroupwareTask?, draft: TaskDraft, calendar: GroupwareCalendar, editStartEtag: String?, onSaved: () -> Unit) {
+        val writable = ready ?: return
+        mutationError = null
+        if (!writable.canWrite(calendar.href)) {
+            mutationError = "This task list is read-only."
+            return
+        }
+        val normalizedDraft = draft.normalized()
+        val normalizedDue = normalizedDraft.compactDueDateOrNull()
+        val uid = target?.uid ?: "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
+        val href = target?.href ?: "${calendar.href}$uid.ics"
+        val content = prepareGroupwareDavMutation(
+            onInvalid = { mutationError = "Review the task fields and try again." },
+        ) {
+            val base = target?.let { task ->
+                updateGroupwareTaskContent(
+                    task,
+                    normalizedDraft.title,
+                    normalizedDue,
+                    normalizedDraft.completed,
+                    normalizedDraft.description,
+                )
+            } ?: createGroupwareTaskContent(
+                uid,
+                normalizedDraft.title,
+                normalizedDue,
+                normalizedDraft.completed,
+                normalizedDraft.description,
+            )
+            normalizedDraft.extras?.let { extras ->
+                applyGroupwareTaskExtras(base, uid, target?.recurrenceId, extras, normalizedDraft.completed)
+            } ?: base
+        } ?: return
+        val request = prepareGroupwareDavMutation(
+            onInvalid = { mutationError = "The task cannot be changed safely. Refresh and try again." },
+        ) {
+            GroupwareDavMutationSpec(
+                kind = GroupwareDavKind.Task,
+                mutation = if (target == null) {
+                    GroupwareDavMutation.Create
+                } else {
+                    GroupwareDavMutation.Update
+                },
+                objectHref = href,
+                etag = editStartEtag,
+                content = content,
+            ).toGroupwareDavRequest()
+        } ?: return
+        val postcondition = TaskMutationPostcondition.Upsert(
+            href = href,
+            calendarHref = calendar.href,
+            expectedUid = uid,
+            expectedRecurrenceId = target?.recurrenceId,
+            previousEtag = editStartEtag,
+            draft = normalizedDraft,
+            expectedDue = expectedGroupwareTaskDueAfterDateEdit(target, normalizedDue),
+        )
+        scope.launch {
+            operations.mutate mutation@{
+                if (!retainRecovery(postcondition)) return@mutation
+                try {
+                    val response = services.executeGroupwareDav(session, request)
+                    if (response.status !in 200..299) {
+                        if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
+                            mutationError = "Saving the task failed (HTTP ${response.status})."
+                        } else {
+                            mutationError = "The task result is unknown. Refresh to verify it."
+                            loadAttempt += 1
+                        }
+                        return@mutation
+                    }
+                    onSaved()
+                    loadAttempt += 1
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (_: Exception) {
+                    mutationError = "The task result is unknown. Refresh to verify it."
+                    loadAttempt += 1
+                }
+            }
+        }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+        val besideList = workspaceShowsDetailBesideList(maxWidth)
+        val destinations = remember(ready) { taskListDestinations(ready) }
+        val navigation = remember(destinations, filterCalendar) {
+            NextcloudCollectionNavigationModel.create(
+                destinations,
+                if (destinations.isEmpty()) null else filterCalendar?.href ?: ALL_TASK_LISTS_DESTINATION_ID,
+            )
+        }
+        NextcloudCollectionWorkspaceScaffold(
+            model = navigation,
+            mode = workspaceCollectionNavigationMode(maxWidth, destinations.size),
+            workspaceLabel = "Tasks",
+            contentTitle = filterCalendar?.displayName?.ifBlank { null } ?: "Tasks",
+            contentSubtitle = ready?.countSummary,
+            onBack = { if (!interactionBlocked) onBack() },
+            hasHierarchyBack = false,
+            onDestinationSelected = { destination ->
+                taskListFilterHref = destination.id.takeUnless { it == ALL_TASK_LISTS_DESTINATION_ID }
+            },
+            destinationIcon = { NextcloudIcons.Task },
+            headerActions = {
+                IconButton(onClick = { if (!operations.busy) loadAttempt += 1 }, enabled = !operations.busy) {
+                    Icon(NextcloudIcons.Refresh, contentDescription = "Refresh tasks")
+                }
+                TaskListMenu(filterCalendar, enabled = !interactionBlocked, lists = taskLists, trash = taskTrash)
+                IconButton(
+                    onClick = { if (!interactionBlocked) creating = true },
+                    enabled = !interactionBlocked && ready?.calendars?.any { ready.canWrite(it.href) } == true,
+                ) {
+                    Icon(NextcloudIcons.Add, contentDescription = "Create task")
+                }
+            },
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    NextcloudRefreshBar(refreshing)
+                    val statusMessage = if (unreadableRecovery) {
+                        "A saved task recovery record cannot be read. The server result is unknown; discard the record only after checking the task on another client."
+                    } else {
+                        refreshError
+                    }
+                    statusMessage?.let { message ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(message, modifier = Modifier.weight(1f))
+                                if (unreadableRecovery) {
+                                    TextButton(enabled = !operations.busy, onClick = { unreadableRecoveryDiscardRequested = true }) {
+                                        Text("Review recovery")
+                                    }
+                                } else if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
+                                    TextButton(
+                                        enabled = !operations.busy,
+                                        onClick = {
+                                            scope.launch {
+                                                operations.recover {
+                                                    if (recoveryVerification != TaskRecoveryVerification.Unapplied) return@recover
+                                                    if (clearRecovery()) {
+                                                        creating = false
+                                                        editing = false
+                                                        deleting = null
+                                                        loadAttempt += 1
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    ) { Text("Keep server version") }
+                                }
+                                TextButton(enabled = !operations.busy, onClick = { if (!operations.busy) loadAttempt += 1 }) { Text("Retry") }
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = boundedGroupwareTaskQuery(it) },
+                        label = { Text("Search tasks") },
+                        leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        TaskFilter.entries.forEach { candidate ->
+                            NextcloudFilterChip(
+                                selected = filter == candidate,
+                                onClick = { filter = candidate },
+                                label = { Text(candidate.name) },
+                            )
+                        }
+                    }
+                    when (val current = state) {
+                        TasksLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                        is TasksLoadState.Error -> WorkspaceLoadError(current.message) { if (!operations.busy) loadAttempt += 1 }
+                        is TasksLoadState.Ready -> TaskList(
+                            tasks = visibleTasks,
+                            depths = visibleHierarchy.associate { (task, depth) -> task.instanceId to depth },
+                            emptyMessage = current.emptyMessage,
+                            selectedInstanceId = selectedTask?.instanceId,
+                            listState = taskListState,
+                            actions = TaskRowActions(
+                                canEdit = { task -> !interactionBlocked && current.canWrite(task.calendarHref) },
+                                canDelete = { task ->
+                                    !interactionBlocked && current.canWrite(task.calendarHref) &&
+                                        isGroupwareTaskObjectDeleteSafe(task)
+                                },
+                                canToggle = { task -> !interactionBlocked && current.canWrite(task.calendarHref) && task.etag != null },
+                                onToggleDone = { task, done ->
+                                    current.calendars.firstOrNull { it.href == task.calendarHref }?.let { calendar ->
+                                        saveTask(task, task.toTaskDraft().copy(completed = done), calendar, task.etag) {}
+                                    }
+                                },
+                                onOpen = { task -> selectedTaskSelection = task.selection() },
+                                onEdit = { task ->
+                                    selectedTaskSelection = task.selection()
+                                    editing = true
+                                },
+                                onDelete = { task ->
+                                    selectedTaskSelection = task.selection()
+                                    deleting = task
+                                },
+                            ),
+                        )
+                    }
+                }
+                if (besideList) {
+                    WorkspaceSideInspector(selectedTask?.let { it to requireNotNull(detailState) }, { (task, _) -> task.instanceId }) {
+                        (task, detail) -> TaskInspector(task, detail)
+                    }
+                }
+            }
+        }
+        if (!besideList && !editing) {
+            selectedTask?.let { task ->
+                TaskDetailOverlay(task, requireNotNull(detailState), onDismiss = { selectedTaskSelection = null })
+            }
+        }
     }
 
     if ((creating || editing && selectedTaskWritable) && ready != null) {
@@ -471,95 +525,29 @@ fun NativeGroupwareTasksScreen(
             task = selectedTask.takeIf { editing },
             calendars = if (editing) {
                 ready.calendars.filter { calendar -> calendar.href == selectedTask?.calendarHref }
+            } else if (subtaskParentUid != null) {
+                ready.calendars.filter { calendar -> calendar.href == subtaskCalendarHref && ready.canWrite(calendar.href) }
             } else {
                 ready.calendars.filter { ready.canWrite(it.href) }
+                    .sortedByDescending { calendar -> calendar.href == filterCalendar?.href }
             },
             mutationInProgress = interactionBlocked,
             error = mutationError,
             onDismiss = {
                 creating = false
                 editing = false
+                subtaskParentUid = null
                 if (selectedTask == null) selectedTaskSelection = null
             },
-            onSave = save@{ draft, calendar, editStartEtag ->
-                mutationError = null
-                if (!ready.canWrite(calendar.href)) {
-                    mutationError = "This task list is read-only."
-                    return@save
-                }
-                val normalizedDraft = draft.normalized()
-                val normalizedDue = normalizedDraft.compactDueDateOrNull()
-                val uid = selectedTask?.uid ?: "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
-                val href = selectedTask?.href ?: "${calendar.href}$uid.ics"
-                val content = prepareGroupwareDavMutation(
-                    onInvalid = { mutationError = "Review the task fields and try again." },
-                ) {
-                    selectedTask?.let { task ->
-                        updateGroupwareTaskContent(
-                            task,
-                            normalizedDraft.title,
-                            normalizedDue,
-                            normalizedDraft.completed,
-                            normalizedDraft.description,
-                        )
-                    } ?: createGroupwareTaskContent(
-                        uid,
-                        normalizedDraft.title,
-                        normalizedDue,
-                        normalizedDraft.completed,
-                        normalizedDraft.description,
-                    )
-                } ?: return@save
-                val request = prepareGroupwareDavMutation(
-                    onInvalid = { mutationError = "The task cannot be changed safely. Refresh and try again." },
-                ) {
-                    GroupwareDavMutationSpec(
-                        kind = GroupwareDavKind.Task,
-                        mutation = if (selectedTask == null) {
-                            GroupwareDavMutation.Create
-                        } else {
-                            GroupwareDavMutation.Update
-                        },
-                        objectHref = href,
-                        etag = editStartEtag,
-                        content = content,
-                    ).toGroupwareDavRequest()
-                } ?: return@save
-                val postcondition = TaskMutationPostcondition.Upsert(
-                    href = href,
-                    calendarHref = calendar.href,
-                    expectedUid = uid,
-                    expectedRecurrenceId = selectedTask?.recurrenceId,
-                    previousEtag = editStartEtag,
-                    draft = normalizedDraft,
-                    expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
-                )
-                scope.launch {
-                    operations.mutate mutation@{
-                        if (!retainRecovery(postcondition)) return@mutation
-                        try {
-                            val response = services.executeGroupwareDav(session, request)
-                            if (response.status !in 200..299) {
-                                if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
-                                    mutationError = "Saving the task failed (HTTP ${response.status})."
-                                } else {
-                                    mutationError = "The task result is unknown. Refresh to verify it."
-                                    loadAttempt += 1
-                                }
-                                return@mutation
-                            }
-                            creating = false
-                            editing = false
-                            loadAttempt += 1
-                        } catch (failure: CancellationException) {
-                            throw failure
-                        } catch (_: Exception) {
-                            mutationError = "The task result is unknown. Refresh to verify it."
-                            loadAttempt += 1
-                        }
-                    }
+            onSave = { draft, calendar, editStartEtag ->
+                saveTask(selectedTask.takeIf { editing }, draft, calendar, editStartEtag) {
+                    creating = false
+                    editing = false
+                    subtaskParentUid = null
                 }
             },
+            tasks = ready.tasks,
+            initialParentUid = subtaskParentUid.takeIf { !editing },
         )
     }
 
@@ -620,6 +608,12 @@ fun NativeGroupwareTasksScreen(
             },
         )
     }
+
+    CalendarCollectionDialogs(taskLists, onShare = { list ->
+        taskListSharing.open(GroupwareShareTarget(list.href, list.displayName, publishable = false))
+    })
+    GroupwareShareDialog(taskListSharing)
+    CalendarTrashBinDialog(taskTrash)
 
     if (unreadableRecovery && unreadableRecoveryDiscardRequested) {
         AlertDialog(

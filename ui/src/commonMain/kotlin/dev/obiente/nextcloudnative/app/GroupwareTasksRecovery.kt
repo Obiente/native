@@ -11,11 +11,14 @@ internal data class TaskDraft(
     val dueDate: String,
     val description: String,
     val completed: Boolean,
+    /** Priority, progress, start, tags and parent; null in records written before they existed. */
+    val extras: TaskExtras? = null,
 ) {
     fun normalized(): TaskDraft = copy(
         title = title.trim().normalizeGroupwareTextLineEndings(),
         dueDate = dueDate.trim(),
         description = description.normalizeGroupwareTextLineEndings(),
+        extras = extras?.normalized(),
     )
 
     fun compactDueDateOrNull(): String? = dueDate.trim().takeIf(String::isNotBlank)?.let { value ->
@@ -64,6 +67,18 @@ internal sealed interface TaskMutationPostcondition {
             ).singleOrNull { candidate ->
                 candidate.uid == expectedUid && candidate.recurrenceId == expectedRecurrenceId
             } ?: return false
+            if (expected.extras != null) {
+                val stored = task.extras().normalized()
+                val wanted = expected.extras
+                if (stored.priority != wanted.priority || stored.startDate.taskCompactDate() != wanted.startDate.taskCompactDate() ||
+                    stored.categories != wanted.categories || stored.parentUid != wanted.parentUid
+                ) {
+                    return false
+                }
+                // The same rule the write applies: an open task never keeps 100 percent.
+                val wantedProgress = if (wanted.percentComplete >= 100) 0 else wanted.percentComplete
+                if (!expected.completed && stored.percentComplete != wantedProgress) return false
+            }
             return task.href == href &&
                 task.uid == expectedUid &&
                 task.recurrenceId == expectedRecurrenceId &&
@@ -117,3 +132,11 @@ internal fun decodeTaskMutationRecoveryState(
 ): TaskMutationPostcondition? = runCatching {
     taskMutationRecoveryJson.decodeFromString<TaskMutationRecoveryState>(encoded)
 }.getOrNull()?.takeIf { recovery -> recovery.accountScope == expectedAccountScope }?.postcondition
+
+/** The task as an editor draft, with its due date in the editor's `YYYY-MM-DD` form. */
+internal fun GroupwareTask.toTaskDraft(): TaskDraft = TaskDraft(
+    title = title,
+    dueDate = due?.take(8)?.takeIf { it.length == 8 }?.let { "${it.take(4)}-${it.substring(4, 6)}-${it.takeLast(2)}" }.orEmpty(),
+    description = description.orEmpty(),
+    completed = completed,
+)
