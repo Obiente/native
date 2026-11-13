@@ -398,7 +398,8 @@ internal fun NativeGridRowWritePlan.createRequest(drafts: Map<String, String>): 
 }
 
 /**
- * PATCH sends only the changed cells. PUT replaces the row, so it is offered only when the
+ * PATCH sends only the changed cells, after the row is read again and those cells are found
+ * unchanged since the editor opened. PUT replaces the row, so it is offered only when the
  * contract declares the same-route read, and it is a full echo: cells the person did not change
  * travel exactly as stored, never re-encoded, and every other declared body field is echoed from
  * the row as returned. Immediately before the write the row is read again and nothing is sent when
@@ -417,7 +418,17 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
     val edited = changed.associate { column -> column.key to column.encodeDraft(drafts.getValue(column.key)) }
     val verifyCells: (NativeRecord) -> NativeWriteVerification = { current -> verifyCells(current, edited, row.cells) }
     if (update.write.action.binding.method != HttpMethod.PUT) {
-        val readBack = NativeWriteReadBack(row.rowId, emptyMap(), emptyMap(), echoUntouched = false, verifyCells, setOf(cellField))
+        // Only the changed cells travel, so only they are compared with a fresh read first.
+        val editedKeys = edited.keys
+        val readBack = NativeWriteReadBack(
+            row.rowId, emptyMap(), emptyMap(), echoUntouched = false, verifyCells, setOf(cellField),
+            preReadBaseline = true,
+            customBaselineHolds = { current ->
+                nativeGridStoredCells(current, cellField)?.let { stored ->
+                    editedKeys.all { key -> sameWireValue(stored[key], row.cells[key]) }
+                } == true
+            },
+        )
         return ready(update.write.action, values + (cellField to JsonObject(edited).toString()), readBack = readBack)
     }
     val listed = columns.mapTo(hashSetOf(), NativeGridColumn::key)

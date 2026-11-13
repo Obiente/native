@@ -272,7 +272,8 @@ private fun String.wireWholeNumberOrNull(): Long? {
 /** Whether [record] still holds every edited field exactly as the editor read it. */
 internal fun NativeWriteReadBack.editedBaselineHolds(record: NativeRecord): Boolean =
     previous.all { (field, value) -> field in customFields || sameWireValue(record.wireValues.valueNamed(field), value) } &&
-        absentPrevious.all { field -> field in customFields || record.wireValues.valueNamed(field) == null }
+        absentPrevious.all { field -> field in customFields || record.wireValues.valueNamed(field) == null } &&
+        customBaselineHolds?.invoke(record) != false
 
 /**
  * Asks the executor to verify a record write by reading [targetId] back through the contract's
@@ -301,4 +302,6 @@ class NativeWriteReadBack(
      * route-family read first and sends nothing when an edited field no longer holds [previous].
      */
     val preReadBaseline: Boolean = false,
+    /** The pre-read comparison for custom-shaped fields, such as the edited cells of a grid row. */
+    val customBaselineHolds: ((NativeRecord) -> Boolean)? = null,
 )

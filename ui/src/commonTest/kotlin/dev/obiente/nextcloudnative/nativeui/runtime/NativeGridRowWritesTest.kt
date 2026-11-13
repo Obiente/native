@@ -117,7 +117,18 @@ class NativeGridRowWritesTest {
         val patchRequest = assertIs<NativeGridRowRequestResult.Ready>(
             patch.updateRequest(assertNotNull(patch.row(row())), mapOf("2" to "40")),
         ).request
-        assertNull(patchRequest.precondition, "A PATCH names only the changed cell and needs no copy check.")
+        assertNull(patchRequest.precondition, "A PATCH names only the changed cell and needs no whole-row copy check.")
+        val patchReadBack = assertNotNull(patchRequest.readBack)
+        assertTrue(patchReadBack.preReadBaseline, "The changed cell is compared with a fresh read before it is sent.")
+        assertTrue(patchReadBack.editedBaselineHolds(row()))
+        assertFalse(
+            patchReadBack.editedBaselineHolds(row(ROW_DATA.replace("\"value\":12", "\"value\":13"))),
+            "The edited cell changed elsewhere, so the edit stops.",
+        )
+        assertTrue(
+            patchReadBack.editedBaselineHolds(row(ROW_DATA.replace("Synthetic item", "Renamed elsewhere"))),
+            "A change to a cell this edit does not send does not stop it.",
+        )
     }
 
     @Test
