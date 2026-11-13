@@ -61,22 +61,54 @@ internal fun NativeMailSendCapability.recoveryVerdict(
         when {
             status != null && statusKey in SENT_STATUS_WORDS -> NativeMailSendRecovery.ShownAsSent(status)
             status != null && statusKey in IN_PROGRESS_STATUS_WORDS -> NativeMailSendRecovery.InProgress(status)
-            status == null && holdsAttempt(attempt, read.fields) -> NativeMailSendRecovery.ShownAsSent(null)
-            else -> NativeMailSendRecovery.NotShownAsSent(status)
+            status != null -> NativeMailSendRecovery.NotShownAsSent(status)
+            else -> when (attemptEvidence(attempt, read.fields)) {
+                NativeMailAttemptEvidence.Holds -> NativeMailSendRecovery.ShownAsSent(null)
+                NativeMailAttemptEvidence.Differs -> NativeMailSendRecovery.NotShownAsSent(null)
+                // The same text may belong to an earlier message to someone else.
+                NativeMailAttemptEvidence.RecipientsNotShown -> NativeMailSendRecovery.Unavailable
+            }
         }
     }
 }
 
-private fun NativeMailSendCapability.holdsAttempt(attempt: NativeMailComposeDraft, fields: Map<String, String>): Boolean {
+private enum class NativeMailAttemptEvidence { Holds, Differs, RecipientsNotShown }
+
+/**
+ * Compares a status-less read with the attempt. The body and subject must be the ones sent, and
+ * the read must name exactly the attempt's recipients; matching text alone is not this attempt.
+ */
+private fun NativeMailSendCapability.attemptEvidence(
+    attempt: NativeMailComposeDraft,
+    fields: Map<String, String>,
+): NativeMailAttemptEvidence {
     val sent = try {
         request(attempt).values
     } catch (_: IllegalArgumentException) {
         // The contract changed since the attempt; its stored state cannot be compared.
-        return false
+        return NativeMailAttemptEvidence.Differs
     }
-    if (bodyField !in fields) return false
-    return listOfNotNull(bodyField, subjectField).filter { it in fields }.all { fields[it] == sent[it] }
+    if (bodyField !in fields) return NativeMailAttemptEvidence.Differs
+    if (!listOfNotNull(bodyField, subjectField).filter { it in fields }.all { fields[it] == sent[it] }) {
+        return NativeMailAttemptEvidence.Differs
+    }
+    val shownTo = fields[to.name] ?: return NativeMailAttemptEvidence.RecipientsNotShown
+    val recipients = listOfNotNull(
+        shownTo to attempt.to,
+        cc?.name?.let(fields::get)?.let { it to attempt.cc },
+        bcc?.name?.let(fields::get)?.let { it to attempt.bcc },
+    )
+    val same = recipients.all { (shown, drafted) ->
+        shown.mailAddresses() == parseNativeMailRecipients(drafted).first.mapTo(hashSetOf()) { it.email.lowercase() }
+    }
+    return if (same) NativeMailAttemptEvidence.Holds else NativeMailAttemptEvidence.Differs
 }
+
+/** Every address in a stored recipient value, whatever list or object encoding it uses. */
+private fun String.mailAddresses(): Set<String> =
+    split(*RECIPIENT_VALUE_SEPARATORS).map(String::trim).filter(::isPlausibleNativeMailAddress).mapTo(hashSetOf(), String::lowercase)
+
+private val RECIPIENT_VALUE_SEPARATORS = charArrayOf(',', ';', '\n', ' ', '"', '[', ']', '{', '}', '<', '>')
 
 /** User-facing explanation of this state, shown in the composer's status banner. */
 internal fun NativeMailSendRecovery.description(): String = when (this) {

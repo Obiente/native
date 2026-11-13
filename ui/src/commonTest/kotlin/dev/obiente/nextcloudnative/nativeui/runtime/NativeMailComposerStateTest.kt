@@ -90,10 +90,39 @@ class NativeMailComposerStateTest {
         val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
-            read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text")) },
+            read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text", "to" to "[{\"email\":\"Grace@example.test\"}]")) },
         )
         state.send(recoverableCapability(), executor)
         assertNull(state.draft)
+    }
+
+    @Test
+    fun `the same text sent to someone else is not this attempt`() = runBlocking<Unit> {
+        val other = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
+        other.send(
+            recoverableCapability(),
+            RecoveringExecutor(
+                send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+                read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text", "to" to "alan@example.test")) },
+            ),
+        )
+        assertIs<NativeMailSendRecovery.NotShownAsSent>(assertIs<NativeMailSendPhase.Unknown>(other.phase).recovery)
+        assertNotNull(other.draft)
+
+        val unnamed = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
+        unnamed.send(
+            recoverableCapability(),
+            RecoveringExecutor(
+                send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+                read = { NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text")) },
+            ),
+        )
+        assertEquals(
+            NativeMailSendRecovery.Unavailable,
+            assertIs<NativeMailSendPhase.Unknown>(unnamed.phase).recovery,
+            "Matching text without recipients does not prove this attempt was sent.",
+        )
+        assertNotNull(unnamed.draft)
     }
 
     @Test
