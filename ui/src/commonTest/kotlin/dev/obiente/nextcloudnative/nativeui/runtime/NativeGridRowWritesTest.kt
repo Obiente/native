@@ -143,6 +143,18 @@ class NativeGridRowWritesTest {
     }
 
     @Test
+    fun aToggleColumnWithMixedEncodingsIsNotEdited() {
+        val mixed = listOf(
+            row(ROW_DATA),
+            NativeRecord("10", mapOf("id" to "10", "sheetId" to "5", "cells" to """[{"columnId":1,"value":"Other"},{"columnId":5,"value":true}]""")),
+        )
+        val plan = assertNotNull(plan(rows = mixed))
+        assertTrue(plan.editableColumns.none { it.key == "5" }, "One row stores a string and another a JSON boolean.")
+        val consistent = assertNotNull(plan())
+        assertTrue(consistent.editableColumns.any { it.key == "5" })
+    }
+
+    @Test
     fun untouchedCellsTravelExactlyAsStoredEvenWhenTheEditorCannotShowThem() {
         val dated = column("11", "Starts", "datetime", "")
         val stored = """[{"columnId":1,"value":"Synthetic item"},{"columnId":2,"value":12},""" +

@@ -186,14 +186,17 @@ internal fun parseNativeGridColumn(
         textMaxLength = listOf("textmaxlength", "maxlength").firstNotNullOfOrNull(record::valueNamed)
             ?.toIntOrNull()?.takeIf { it > 0 },
         storedForm = when (kind) {
-            NativeGridColumnKind.Toggle -> samples.firstNotNullOfOrNull { sample ->
-                val primitive = sample as? JsonPrimitive ?: return@firstNotNullOfOrNull null
+            // Every stored cell must use the one encoding the editor will write. Mixed or
+            // unrecognized cells leave the column read-only rather than converting one silently.
+            NativeGridColumnKind.Toggle -> samples.filter { it !is JsonNull }.map { sample ->
+                val primitive = sample as? JsonPrimitive
                 when {
+                    primitive == null -> null
                     primitive.isString && primitive.content in setOf("true", "false") -> NativeGridCellForm.StringBoolean
                     !primitive.isString && primitive.booleanOrNull != null -> NativeGridCellForm.JsonBoolean
                     else -> null
                 }
-            }
+            }.distinct().singleOrNull()
             NativeGridColumnKind.DateTime -> samples.firstNotNullOfOrNull { sample ->
                 val text = (sample as? JsonPrimitive)?.contentOrNull.orEmpty()
                 when {
