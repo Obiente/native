@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.DynamicOperationRiskClass
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.hasTrustedRootMutationEvidence
 import kotlinx.serialization.json.JsonArray
@@ -109,9 +110,13 @@ internal fun JsonObject.declaredEnumValues(): List<String> = (this["enum"] as? J
  *
  * Writes come only from the installed app's own published contract (OpenAPI, signed package, or
  * linked source tag) and only while that contract is verified for the installed version.
+ * An operation its descriptor classifies as administration or credentials is never selected: it
+ * needs the authenticated handoff, which no semantic settings, notes, or board control provides.
  */
 internal fun DynamicAction.isAuthorizedSemanticWrite(writesAuthorized: Boolean): Boolean =
-    writesAuthorized && hasTrustedRootMutationEvidence()
+    writesAuthorized && hasTrustedRootMutationEvidence() &&
+        riskClass != DynamicOperationRiskClass.administration &&
+        riskClass != DynamicOperationRiskClass.credential
 
 internal fun DynamicAction.isSemanticRead(): Boolean =
     binding.method == HttpMethod.GET && binding.body == null

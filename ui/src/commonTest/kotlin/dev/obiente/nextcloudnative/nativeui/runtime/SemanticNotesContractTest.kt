@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import dev.obiente.nextcloudnative.nativeui.model.DynamicOperationRiskClass
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -67,6 +68,29 @@ class SemanticNotesContractTest {
         )
 
         assertNull(resolve("journal_x", "1.0.0", routes))
+    }
+
+    @Test
+    fun `a replacement that declares a property the client does not hold is not used for editing`() {
+        val update = write(
+            HttpMethod.PUT,
+            "/apps/APP/api/v1/notes/{id}",
+            mapOf("title" to "string", "content" to "string", "category" to "string", "favorite" to "boolean", "tags" to "string"),
+        )
+        val contract = assertNotNull(resolve("jotter", "0.0.1", notesRoutes(includeUpdate = false) + update))
+
+        assertFalse(contract.supports(NoteOperation.UpdateNote), "Saving would clear the tags the client never read.")
+        assertTrue(contract.supports(NoteOperation.ReadNote))
+    }
+
+    @Test
+    fun `administration and credential operations are never selected as semantic writes`() {
+        val update = semanticDescriptor("jotter", "0.0.1", notesRoutes().forApp("jotter")).actions
+            .first { it.binding.method == HttpMethod.PUT }
+
+        assertTrue(update.isAuthorizedSemanticWrite(writesAuthorized = true))
+        assertFalse(update.copy(riskClass = DynamicOperationRiskClass.administration).isAuthorizedSemanticWrite(writesAuthorized = true))
+        assertFalse(update.copy(riskClass = DynamicOperationRiskClass.credential).isAuthorizedSemanticWrite(writesAuthorized = true))
     }
 
     @Test

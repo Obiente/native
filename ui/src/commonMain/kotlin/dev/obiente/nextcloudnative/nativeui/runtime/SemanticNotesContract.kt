@@ -131,6 +131,9 @@ private fun classifyNoteRoute(
     }.toMap()
     val required = action.requiredBodyProperties()
     if (required.any { name -> name !in bodyFields.values }) return null
+    // A replacement sends the whole note. A declared property this client does not hold could
+    // not be sent back unchanged, so that route is not used for editing.
+    if (method == HttpMethod.PUT && properties.keys.any { name -> name !in bodyFields.values }) return null
     if (operation == NoteOperation.CreateNote && NoteField.Content !in bodyFields && NoteField.Title !in bodyFields) {
         return null
     }
