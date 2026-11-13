@@ -423,6 +423,51 @@ class DynamicWriteExecutionTest {
         assertEquals(listOf(NextcloudApiMethod.GET), unreadable.requests.map { it.method }, "An unchecked target is not written.")
     }
 
+    @Test
+    fun `a write whose authorization ends during its pre-read is not sent`() = runBlocking<Unit> {
+        val descriptor = descriptor()
+        val transport = Transport(readBody = stored(title = "Old title"))
+        val request = echoUpdate(descriptor).copy(readBack = NativeWriteReadBack(
+            "7", mapOf("title" to JsonPrimitive("Old title")), emptyMap(), false, preReadBaseline = true,
+        ))
+        val context = DynamicWriteContext(
+            services = transport.services(null),
+            session = SESSION,
+            descriptor = descriptor,
+            action = descriptor.actions.single { it.id == "notes.update" },
+            runtimeContext = emptyMap(),
+            observedInputSchema = null,
+            onMultipartUploadSucceeded = {},
+            clock = { 1_000L },
+            // The contract check starts while the pre-read is in flight.
+            writeIsAuthorized = { transport.requests.none { it.method == NextcloudApiMethod.GET } },
+        )
+        assertIs<NativeActionExecutionResult.Failure>(executeDynamicWrite(context, request))
+        assertEquals(listOf(NextcloudApiMethod.GET), transport.requests.map { it.method }, "Nothing is written after authorization ended.")
+    }
+
+    @Test
+    fun `a route stays paused when its quarantine cannot be saved`() = runBlocking<Unit> {
+        val memory = MemoryDynamicWriteQuarantineStore()
+        val failing = object : DynamicWriteQuarantineStore by memory {
+            override suspend fun quarantine(
+                key: DynamicWriteRuleKey,
+                reason: DynamicWriteQuarantineReason,
+                nowEpochMillis: Long,
+            ): DynamicWriteRuleRecord = error("Synthetic disk is full.")
+        }
+        // A version of its own, because the in-memory block lasts for the whole test process.
+        val isolated = descriptor().let { it.copy(app = it.app.copy(version = "7.7.7")) }
+        val transport = Transport(readBody = stored(title = "Old title"))
+        assertIs<NativeActionExecutionResult.Failure>(executor(transport, isolated, failing).execute(echoUpdate(isolated)))
+        assertTrue(memory.records(SESSION.accountId.storageKey, "notebook").none { it.status == DynamicWriteRuleStatus.quarantined })
+
+        val before = transport.requests.size
+        val refused = assertIs<NativeActionExecutionResult.Failure>(executor(transport, isolated, failing).execute(echoUpdate(isolated)))
+        assertTrue("paused" in refused.message, refused.message)
+        assertEquals(before, transport.requests.size, "The route sends nothing although the durable record is missing.")
+    }
+
     private fun share() = submit("notes.share", mapOf("noteId" to "7", "shareWith" to "synthetic-friend"))
 
     private fun unchangedPrecondition() = NativeWritePrecondition(mapOf("noteId" to "7"), "7") { true }

@@ -142,6 +142,9 @@ private suspend fun executeDeclaredDynamicWrite(
         // Persistence fault boundary: an unreadable quarantine must not be forgotten silently.
         return refusal("This app's write safety state on this device could not be read, so nothing was changed.")
     }
+    if (DynamicUnstoredQuarantines.blocks(context.ruleKey)) {
+        return refusal("Changes here are paused because an earlier change was not applied as sent, and that could not be saved on this device.")
+    }
     if (request.baselineRestore && !DynamicBaselineRestores.isOffered(context.ruleKey, request)) {
         return refusal(RESTORE_UNAVAILABLE)
     }
@@ -224,6 +227,7 @@ private suspend fun executeUnverified(context: DynamicWriteContext, request: Nat
         checkDynamicWritePrecondition(context.services, context.session, context.descriptor, context.action, precondition, context.runtimeContext)
             ?.let { refusal -> return refusal }
     }
+    if (!context.writeIsAuthorized()) return refusal(WRITE_AUTHORIZATION_WITHDRAWN)
     return try {
         val execution = context.send(context.prepare(request))
         execution.response.toDynamicActionExecutionResult(context.action).also { result ->
@@ -295,7 +299,10 @@ private suspend fun executeVerified(
         send = {
             // Preparation and pre-read failures preserve the offer. Consume it immediately before
             // the transport attempt, while the target gate is held, including ambiguous attempts.
-            if (request.baselineRestore && !DynamicBaselineRestores.take(context.ruleKey, request)) {
+            if (!context.writeIsAuthorized()) {
+                // The pre-read can outlast a contract check; the answer from before it is stale.
+                NativeWriteSendResult.Rejected(WRITE_AUTHORIZATION_WITHDRAWN)
+            } else if (request.baselineRestore && !DynamicBaselineRestores.take(context.ruleKey, request)) {
                 NativeWriteSendResult.Rejected(RESTORE_UNAVAILABLE)
             } else {
                 val execution = context.send(prepared)
@@ -338,9 +345,13 @@ private suspend fun DynamicWriteContext.recordOutcome(outcome: NativeVerifiedWri
         try {
             store?.quarantine(ruleKey, reason, clock())
         } catch (cancelled: CancellationException) {
+            // The durable record may not exist yet; keep the route paused for this run of the app.
+            DynamicUnstoredQuarantines.block(ruleKey)
             throw cancelled
         } catch (_: Exception) {
-            // The diagnostic below still records the contradiction; the next read fails closed.
+            // Persistence fault boundary: the store still shows the route as writable, so it is
+            // paused in memory instead.
+            DynamicUnstoredQuarantines.block(ruleKey)
         }
         record(DynamicDiagnosticCode.WritePostconditionMismatch, "contradicted", reason.name)
         record(DynamicDiagnosticCode.WriteQuarantined, "quarantined", reason.name)
@@ -427,6 +438,24 @@ private fun NativeActionRequest.Submit.baselineRestore(
  * Baseline restores this process offered, each accepted once and only as the exact request that
  * was offered, so a restore can never carry values other than the drifted write's baseline.
  */
+/**
+ * Routes whose quarantine could not be written to the device. They stay paused until the app
+ * restarts, because the durable store still shows them as writable.
+ */
+internal object DynamicUnstoredQuarantines {
+    private val lock = DynamicNativeMemoryCacheLock()
+    private val keys = mutableSetOf<DynamicWriteRuleKey>()
+
+    fun block(key: DynamicWriteRuleKey) {
+        lock.withLock { keys.add(key) }
+    }
+
+    fun blocks(key: DynamicWriteRuleKey): Boolean = lock.withLock { key in keys }
+}
+
+private const val WRITE_AUTHORIZATION_WITHDRAWN =
+    "This app's contract is being checked again, so nothing was changed. Try again when the check finishes."
+
 internal object DynamicBaselineRestores {
     private val lock = DynamicNativeMemoryCacheLock()
     private val issued = ArrayDeque<Pair<DynamicWriteRuleKey, NativeActionRequest.Submit>>()
