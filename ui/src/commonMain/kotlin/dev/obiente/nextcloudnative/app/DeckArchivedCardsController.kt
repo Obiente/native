@@ -27,23 +27,32 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
     var state: DeckUiArchivedCardsState? by mutableStateOf(null)
         private set
 
+    /** Advances whenever the dialog opens or closes, so a load started for an earlier dialog is dropped. */
+    private var dialogGeneration = 0
+
     fun open(board: DeckBoard) {
+        dialogGeneration++
         state = DeckUiArchivedCardsState(board = board)
     }
 
     fun close() {
-        if (state?.busyCardId == null) state = null
+        if (state?.busyCardId != null) return
+        dialogGeneration++
+        state = null
     }
 
     suspend fun load() {
         val current = state ?: return
+        val generation = dialogGeneration
         state = current.copy(loading = true, errorMessage = null)
         try {
             val groups = fetchGroups(current.board.id)
+            if (generation != dialogGeneration) return
             state = state?.copy(groups = groups, loading = false, outcomeUnknown = false)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
+            if (generation != dialogGeneration) return
             state = state?.copy(
                 loading = false,
                 errorMessage = failure.message ?: "Archived cards could not be loaded.",
