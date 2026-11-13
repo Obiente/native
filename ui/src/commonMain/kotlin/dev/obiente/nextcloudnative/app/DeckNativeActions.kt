@@ -109,8 +109,8 @@ data class DeckCardUpdate(
     val completedAt: String?,
 ) {
     internal val normalizedTitle = title.requireDeckText("Card title", DECK_CARD_TITLE_LIMIT)
+    /** Null for a card without an owner; an update that declares an owner input refuses that. */
     internal val normalizedOwnerId = original.ownerId?.requireDeckParticipantId()
-        ?: error("The card owner is unavailable.")
     internal val normalizedDescription = descriptionMarkdown.requireDeckMarkdown()
     internal val normalizedDueAt = dueAt.requireDeckInstant("Card due date")
     internal val normalizedStartAt = startAt.requireDeckInstant("Card start date")

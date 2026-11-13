@@ -285,6 +285,13 @@ private fun JsonObject.completion(): String? {
         if (element is JsonNull) return null
         val primitive = element as? JsonPrimitive ?: return@forEach
         primitive.booleanOrNull?.let { done -> return if (done) COMPLETED_WITHOUT_TIMESTAMP else null }
+        // A contract may report the flag as 0 or 1, the same form the writer sends.
+        if (!primitive.isString) {
+            when (primitive.longOrNull) {
+                0L -> return null
+                1L -> return COMPLETED_WITHOUT_TIMESTAMP
+            }
+        }
         return primitive.contentOrNull?.takeIf(String::isNotBlank)
     }
     return null

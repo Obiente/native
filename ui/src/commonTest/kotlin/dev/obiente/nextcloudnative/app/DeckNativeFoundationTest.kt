@@ -37,6 +37,26 @@ class DeckNativeFoundationTest {
     }
 
     @Test
+    fun `integer completion flags are read as flags, not as completion dates`() {
+        val stacks = parseDeckStacks(
+            7,
+            NextcloudApiResponse(
+                200,
+                """[{"id":3,"title":"Backlog","order":1,"cards":[
+                  {"id":9,"name":"Open","listId":3,"position":1,"completed":0},
+                  {"id":10,"name":"Done","listId":3,"position":2,"completed":1}
+                ]}]""".encodeToByteArray(),
+                "application/json",
+                null,
+            ),
+        )
+
+        val (open, done) = stacks.single().cards
+        assertEquals(null, open.completedAt)
+        assertEquals(COMPLETED_WITHOUT_TIMESTAMP, done.completedAt)
+    }
+
+    @Test
     fun `a board record without permission evidence grants no write, manage, or share action`() {
         val board = parseDeckBoard(
             NextcloudApiResponse(200, """{"id":7,"name":"Roadmap"}""".encodeToByteArray(), "application/json", null),

@@ -153,6 +153,9 @@ internal class SemanticBoardRoutes(val contract: SemanticBoardContract) {
         require(update.original.boardId == context.stack.boardId.value) { "The card update belongs to another board." }
         require(update.original.stackId == context.stack.stackId) { "The card update belongs to another list." }
         require(update.original.id == context.cardId) { "The card update belongs to another card." }
+        val takesOwner = contract.binding(BoardOperation.UpdateCard).bodyRoles.values
+            .any { role -> role is BoardValueRole.Field && role.field == BoardField.Owner }
+        check(!takesOwner || update.normalizedOwnerId != null) { "The card owner is unavailable." }
         return request(
             BoardOperation.UpdateCard,
             update.original.identities(),
