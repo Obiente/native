@@ -1756,7 +1756,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5f85df0e03397d81fd981837a54a028ec8946582fe87bef55f0d3bd16c998470"
+            "sha256": "98d7c792928e07fcdb833680ee761fd6410572bb50085b477e82279221193d84"
         },
         {
             "scenario": "homepage-conversations-desktop-light",
