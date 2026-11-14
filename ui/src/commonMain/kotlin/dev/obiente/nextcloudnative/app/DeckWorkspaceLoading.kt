@@ -79,6 +79,7 @@ internal suspend fun fetchBoardStacks(
     boardId: Long,
     authoritative: Boolean = false,
     archived: Boolean = false,
+    separateCardListReads: Int = MAX_SEPARATE_CARD_LIST_READS,
 ): List<DeckStack> {
     val request = if (archived) routes.archivedStacks(boardId) else routes.stacks(boardId)
     val response = execute(if (authoritative) request.copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork) else request)
@@ -87,7 +88,7 @@ internal suspend fun fetchBoardStacks(
     return stacks.mapIndexed { index, stack ->
         if (stack.cardsEmbedded) {
             stack
-        } else if (index >= MAX_SEPARATE_CARD_LIST_READS) {
+        } else if (index >= separateCardListReads) {
             stack.copy(cardsLoaded = false)
         } else {
             val cardsRequest = routes.cards(boardId, stack.id)

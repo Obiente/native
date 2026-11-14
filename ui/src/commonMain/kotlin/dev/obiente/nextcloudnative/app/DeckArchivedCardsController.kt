@@ -9,6 +9,8 @@ import kotlinx.coroutines.CancellationException
 data class DeckUiArchivedCardsState(
     val board: DeckBoard,
     val groups: List<DeckArchivedCardGroup> = emptyList(),
+    /** Lists whose cards were not read yet; their archived cards are unknown, not absent. */
+    val unreadLists: Int = 0,
     val loading: Boolean = true,
     val busyCardId: Long? = null,
     val errorMessage: String? = null,
@@ -33,8 +35,12 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
     /** Advances whenever the dialog opens or closes, so a load started for an earlier dialog is dropped. */
     private var dialogGeneration = 0
 
+    /** How many lists have their cards read separately; raised when the person asks for more. */
+    private var listReads = MAX_SEPARATE_CARD_LIST_READS
+
     fun open(board: DeckBoard) {
         dialogGeneration++
+        listReads = MAX_SEPARATE_CARD_LIST_READS
         state = DeckUiArchivedCardsState(
             board = board,
             canRestore = context.routes.supports(BoardOperation.UnarchiveCard),
@@ -53,9 +59,14 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
         val generation = dialogGeneration
         state = current.copy(loading = true, errorMessage = null)
         try {
-            val groups = fetchGroups(current.board.id)
+            val stacks = fetchArchivedStacks(current.board.id)
             if (generation != dialogGeneration) return
-            state = state?.copy(groups = groups, loading = false, outcomeUnknown = false)
+            state = state?.copy(
+                groups = deckArchivedCardGroups(stacks),
+                unreadLists = stacks.count { !it.cardsLoaded },
+                loading = false,
+                outcomeUnknown = false,
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -65,6 +76,14 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
                 errorMessage = failure.message ?: "Archived cards could not be loaded.",
             )
         }
+    }
+
+    /** Reads the cards of the next lists a wide board did not read at first. */
+    suspend fun loadMoreLists() {
+        val current = state ?: return
+        if (current.loading || current.busyCardId != null || current.unreadLists == 0) return
+        listReads += MAX_SEPARATE_CARD_LIST_READS
+        load()
     }
 
     suspend fun unarchive(card: DeckCard) = write(
@@ -155,8 +174,9 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
         }
     }
 
-    private suspend fun fetchGroups(boardId: Long): List<DeckArchivedCardGroup> {
-        val stacks = fetchBoardStacks(context.execute, context.routes, boardId, authoritative = true, archived = true)
-        return deckArchivedCardGroups(stacks)
-    }
+    private suspend fun fetchGroups(boardId: Long): List<DeckArchivedCardGroup> = deckArchivedCardGroups(fetchArchivedStacks(boardId))
+
+    private suspend fun fetchArchivedStacks(boardId: Long): List<DeckStack> = fetchBoardStacks(
+        context.execute, context.routes, boardId, authoritative = true, archived = true, separateCardListReads = listReads,
+    )
 }

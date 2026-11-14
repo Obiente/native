@@ -119,6 +119,7 @@ internal fun DeckBoardToolsHost(tools: DeckBoardTools, currentUserId: String) {
             onRestore = { card -> scope.launch { tools.archive.unarchive(card) } },
             onRequestDelete = tools.archive::requestDeletion,
             onRefresh = { scope.launch { tools.archive.load() } },
+            onLoadMoreLists = { scope.launch { tools.archive.loadMoreLists() } },
             onDismiss = tools.archive::close,
         )
         state.pendingDeletion?.let { card ->

@@ -36,6 +36,7 @@ internal fun DeckArchivedCardsDialog(
     onRestore: (DeckCard) -> Unit,
     onRequestDelete: (DeckCard) -> Unit,
     onRefresh: () -> Unit,
+    onLoadMoreLists: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     DeckUiAdaptiveDialog(
@@ -50,6 +51,15 @@ internal fun DeckArchivedCardsDialog(
             contentPadding = PaddingValues(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
+            if (!state.loading && state.unreadLists > 0) {
+                item(key = "unread-lists") {
+                    DeckToolHint(
+                        if (state.unreadLists == 1) "1 list of this board has not been read yet, so its archived cards are not shown."
+                        else "${state.unreadLists} lists of this board have not been read yet, so their archived cards are not shown.",
+                    )
+                    OutlinedButton(onClick = onLoadMoreLists, enabled = state.busyCardId == null) { Text("Read more lists") }
+                }
+            }
             state.errorMessage?.let { item(key = "error") { DeckUiInlineError(it) } }
             state.notice?.let { item(key = "notice") { DeckToolNotice(it) } }
             if (state.outcomeUnknown || (state.errorMessage != null && !state.loading)) {
@@ -61,8 +71,11 @@ internal fun DeckArchivedCardsDialog(
             }
             when {
                 state.loading -> item(key = "loading") { CircularProgressIndicator() }
-                state.groups.isEmpty() -> item(key = "empty") {
+                state.groups.isEmpty() && state.unreadLists == 0 -> item(key = "empty") {
                     DeckToolHint("No archived cards on this board. Archive a card from its menu to hide it from the lists.")
+                }
+                state.groups.isEmpty() -> item(key = "empty-so-far") {
+                    DeckToolHint("No archived cards in the lists read so far.")
                 }
                 else -> state.groups.forEach { group ->
                     item(key = "stack:${group.stack.id}") {
