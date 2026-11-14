@@ -104,17 +104,88 @@ internal class AddressBookManager(
         val target = naming ?: return
         addressBookNameMessage(name)?.let { error = it; return }
         when (target) {
-            AddressBookNaming.New -> {
-                val href = newHref ?: newAddressBookHref(groupwareAddressBookHomeHref(userId), name).also { newHref = it }
-                change(
-                    addressBookCreateRequest(href, name),
-                    provesRejection = { it != 405 && groupwareMutationResponseProvesRejection(it) },
-                ) { books -> books.any { it.href == href && it.displayName == name.trim() } }
-            }
+            AddressBookNaming.New -> create(name)
             is AddressBookNaming.Rename -> change(
                 addressBookRenameRequest(target.addressBook.href, name),
                 provesRejection = ::groupwareMutationResponseProvesRejection,
             ) { books -> books.any { it.href == target.addressBook.href && it.displayName == name.trim() } }
+        }
+    }
+
+    private fun create(name: String) {
+        if (busy) return
+        busy = true
+        error = null
+        scope.launch {
+            var handedOver = false
+            try {
+                val href = creationHref(name) ?: return@launch
+                busy = false
+                handedOver = true
+                change(
+                    addressBookCreateRequest(href, name),
+                    provesRejection = { it != 405 && groupwareMutationResponseProvesRejection(it) },
+                    onSettled = { forgetCreation() },
+                ) { books -> books.any { it.href == href && it.displayName == name.trim() } }
+            } finally {
+                if (!handedOver) busy = false
+            }
+        }
+    }
+
+    /**
+     * The address to create at, recorded on the device before it is used, so a creation whose
+     * result was lost is found again after the dialog closed or the app restarted. Null, with
+     * [error] set, when nothing may be sent: the earlier creation exists, or could not be checked.
+     */
+    private suspend fun creationHref(name: String): String? {
+        newHref?.let { return it }
+        val home = groupwareAddressBookHomeHref(userId)
+        val store = services.textEditorDraftStore(session, PENDING_ADDRESS_BOOK_PATH)
+        val earlier = try {
+            store?.load()?.text?.takeIf { it.startsWith(home) && it.length <= MAX_PENDING_ADDRESS_BOOK_HREF }
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Persistence fault boundary: an unreadable record may be an address book already created.
+            error = "An earlier attempt saved on this device could not be read. Check the list before creating another."
+            return null
+        }
+        if (earlier != null) {
+            val listed = read()
+            if (listed == null) {
+                error = "An earlier attempt could not be checked. Check the list before trying again."
+                return null
+            }
+            addressBooks = listed
+            if (listed.any { it.href == earlier }) {
+                forgetCreation()
+                onChanged()
+                error = "An earlier attempt was created after all and is now in the list. Check it before creating another."
+                return null
+            }
+        }
+        val href = newAddressBookHref(home, name)
+        try {
+            store?.save(TextEditorDraft(originalText = "", text = href, etag = null))
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            error = "This device could not keep a record of the new address book, so it was not created."
+            return null
+        }
+        newHref = href
+        return href
+    }
+
+    /** The creation was confirmed or refused; its record is dropped. */
+    private suspend fun forgetCreation() {
+        try {
+            services.textEditorDraftStore(session, PENDING_ADDRESS_BOOK_PATH)?.remove()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // A record left behind only causes one more check of the list.
         }
     }
 
@@ -126,7 +197,13 @@ internal class AddressBookManager(
         ) { books -> books.none { it.href == target.href } }
     }
 
-    private fun change(request: GroupwareDavRequest, provesRejection: (Int) -> Boolean, confirmed: (List<ManagedAddressBook>) -> Boolean) {
+    private fun change(
+        request: GroupwareDavRequest,
+        provesRejection: (Int) -> Boolean,
+        /** Runs once the server answered definitely: the change was refused or is confirmed. */
+        onSettled: suspend () -> Unit = {},
+        confirmed: (List<ManagedAddressBook>) -> Boolean,
+    ) {
         if (busy) return
         busy = true
         error = null
@@ -140,12 +217,14 @@ internal class AddressBookManager(
                     null
                 }
                 if (status != null && provesRejection(status)) {
+                    onSettled()
                     error = calendarCollectionRejectionMessage(status).replace("calendar", "address book")
                     return@launch
                 }
                 val listed = read()
                 if (listed != null) addressBooks = listed
                 if (listed != null && confirmed(listed)) {
+                    onSettled()
                     naming = null
                     deleting = null
                     newHref = null
@@ -292,3 +371,6 @@ private fun AddressBookNameDialog(naming: AddressBookNaming, manager: AddressBoo
         dismissButton = { TextButton(onClick = manager::cancelDialog, enabled = !manager.busy) { Text("Cancel") } },
     )
 }
+
+private const val PENDING_ADDRESS_BOOK_PATH = "nextcloud-native:address-book-pending-creation"
+private const val MAX_PENDING_ADDRESS_BOOK_HREF = 2048
