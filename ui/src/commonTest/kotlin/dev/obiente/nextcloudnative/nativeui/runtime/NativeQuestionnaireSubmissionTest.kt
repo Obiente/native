@@ -118,6 +118,13 @@ class NativeQuestionnaireSubmissionTest {
         assertEquals(NativeSendAttemptState.MaybeSent, store.value?.state)
         assertNotNull(draft.unconfirmed)
 
+        assertTrue(draft.canStart, "Deciding about the unconfirmed response does not wait for another read of the form.")
+        draft.start(confirmedResend = true)
+        assertTrue(draft.open)
+        draft.send(plan, lost) {}
+        assertEquals(2, calls, "The confirmed second response is sent without a refresh in between.")
+        calls = 1
+
         // A new screen, or the app after a restart, finds the same record.
         val later = NativeQuestionnaireDraft(store, clock = { 2L })
         assertFalse(later.canStart, "Nothing is offered until the stored record has been read.")

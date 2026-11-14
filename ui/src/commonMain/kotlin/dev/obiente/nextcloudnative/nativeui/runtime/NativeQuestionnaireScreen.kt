@@ -76,7 +76,11 @@ internal class NativeQuestionnaireDraft(
     var sending by mutableStateOf(false)
         private set
 
-    val canStart: Boolean get() = session.canSubmit && !restoring && !sending
+    /**
+     * With an unconfirmed response on record, sending again or dismissing it is the person's own
+     * decision; it does not wait for the form to be read again, which shows nothing about a response.
+     */
+    val canStart: Boolean get() = !restoring && !sending && (session.canSubmit || unconfirmed != null && !session.submitting)
 
     /** Reads the attempt recorded before this screen existed. An unreadable record keeps sending off. */
     suspend fun restore() {
@@ -98,6 +102,7 @@ internal class NativeQuestionnaireDraft(
         if (session.submitting || restoring) return
         if (unconfirmed != null && !confirmedResend) return
         resendConfirmed = confirmedResend
+        if (confirmedResend) session.acceptAuthoritativeRefresh()
         storageProblem = null
         open = true
         sent = false
@@ -159,7 +164,9 @@ internal class NativeQuestionnaireDraft(
 
     /** The responses were checked elsewhere, or not knowing is accepted; the warning is dropped. */
     suspend fun dismissUnconfirmed() {
-        if (!session.submitting && !restoring) settle(null)
+        if (session.submitting || restoring) return
+        settle(null)
+        session.acceptAuthoritativeRefresh()
     }
 
     /** Makes the attempt durable before its request can leave the device, or sends nothing. */
