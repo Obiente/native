@@ -185,7 +185,14 @@ internal class FileBulkOperationRunner(
                 )
                 CopyEvidence.Inconclusive -> BulkItemResult(file.path, file.name, BulkItemOutcome.Unconfirmed, "Refresh both folders before trying again.")
             }
-            !copy && atDestination == true && atSource == false -> BulkItemResult(file.path, file.name, BulkItemOutcome.Completed, "Verified in the destination folder.")
+            // A move keeps the item's id. Without both ids, or with another item under this name,
+            // the entry in the destination is not shown to be the one that was moved.
+            !copy && destinationEntry != null && atSource == false ->
+                if (file.fileId != null && destinationEntry.fileId == file.fileId) {
+                    BulkItemResult(file.path, file.name, BulkItemOutcome.Completed, "Verified in the destination folder.")
+                } else {
+                    BulkItemResult(file.path, file.name, BulkItemOutcome.Unconfirmed, "Refresh both folders before trying again.")
+                }
             atDestination == false && (copy || atSource == true) ->
                 BulkItemResult(file.path, file.name, BulkItemOutcome.Failed, "Verified unchanged.", retrySafe = true)
             else -> BulkItemResult(file.path, file.name, BulkItemOutcome.Unconfirmed, "Refresh both folders before trying again.")

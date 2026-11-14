@@ -41,6 +41,8 @@ class FileBulkOperationsTest {
         val favorites = mutableListOf<Pair<String, Boolean>>()
         /** Sizes by item path for entries that differ from the default one-byte file. */
         val sizes = mutableMapOf<String, Long>()
+        /** File ids by item path; a moved item keeps its id, any other entry has 1. */
+        val fileIds = mutableMapOf<String, Long>()
         /** Content checksums by item path; an entry without one has none. */
         val checksums = mutableMapOf<String, List<String>>()
 
@@ -56,6 +58,7 @@ class FileBulkOperationsTest {
                     }
                     folders.getValue(parent) -= name
                     folders.getValue(mutation.destinationDirectoryPath) += name
+                    fileIds["${mutation.destinationDirectoryPath}/$name"] = mutation.sourcePath.hashCode().toLong().coerceAtLeast(1)
                 }
                 is NextcloudFileMutation.Copy -> folders.getValue(mutation.destinationDirectoryPath) += name
                 is NextcloudFileMutation.Delete -> folders.getValue(parent) -= name
@@ -70,7 +73,7 @@ class FileBulkOperationsTest {
         fun listing(folder: String) = NextcloudFileListing(
             folders.getValue(folder).map { name ->
                 NextcloudFile(
-                    "$folder/$name", name, false, "text/plain", sizes["$folder/$name"] ?: 1, null, 1, false,
+                    "$folder/$name", name, false, "text/plain", sizes["$folder/$name"] ?: 1, null, fileIds["$folder/$name"] ?: 1, false,
                     etag = "e", checksums = checksums["$folder/$name"].orEmpty(),
                 )
             },
@@ -109,6 +112,19 @@ class FileBulkOperationsTest {
         val fake = FakeFiles().apply { appliedThenUnknown += "Docs/a.txt" }
         val report = runner(fake).transfer(listOf(file("Docs/a.txt")), "Archive", copy = false)
         assertEquals(BulkItemOutcome.Completed, report.results.single().outcome)
+    }
+
+    @Test
+    fun anUnknownMoveIsNotConfirmedByAnotherItemWithTheSameNameInTheDestination(): Unit = runBlocking {
+        val fake = FakeFiles().apply {
+            // The destination already holds an unrelated b.txt; the request is lost, and another
+            // client renames the source meanwhile.
+            failures["Docs/b.txt"] = FileMutationOutcomeUnknownException("interrupted", null, FileMutationLocalFollowUp.Completed)
+        }
+        val runner = runner(fake)
+        fake.folders.getValue("Docs") -= "b.txt"
+        val report = runner.transfer(listOf(file("Docs/b.txt")), "Archive", copy = false)
+        assertEquals(BulkItemOutcome.Unconfirmed, report.results.single().outcome, "A same-named item is not the item that was moved.")
     }
 
     @Test
