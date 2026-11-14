@@ -166,6 +166,21 @@ class FileCommentsTest {
     }
 
     @Test
+    fun anUnknownPostIsNotCalledUnsentWhenTheFirstPageIsFull() {
+        val fake = FakeComments().apply {
+            comments.clear()
+            repeat(FILE_COMMENTS_PAGE_SIZE + 50) { index -> comments += Comment(1_000L + index, "bob", "Comment $index") }
+            pageLimit = FILE_COMMENTS_PAGE_SIZE
+        }
+        val controller = controller(fake).also { it.start() }
+        fake.postThrowsBeforeApply = true
+        controller.post("Hello") {}
+        assertTrue(controller.state.postUnconfirmed, "More comments may exist, so not seeing it on the first page proves nothing.")
+        controller.post("Hello") {}
+        assertEquals(1, fake.posts())
+    }
+
+    @Test
     fun unknownPostThatCannotBeVerifiedBlocksPostingUntilRefresh() {
         val fake = FakeComments()
         val controller = controller(fake).also { it.start() }

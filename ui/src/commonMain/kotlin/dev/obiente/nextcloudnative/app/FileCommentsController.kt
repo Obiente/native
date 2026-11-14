@@ -115,6 +115,10 @@ class FileCommentsController(
                     is CommentsRead.Loaded -> if (read.page.comments.any { it.id !in knownIds && it.isAuthoredBy(userId) && it.message.trim() == message }) {
                         onPosted()
                         null
+                    } else if (read.page.mayHaveMore || read.page.skippedEntries > 0) {
+                        // The comment may be beyond this page or among entries that could not be read.
+                        state = state.copy(postUnconfirmed = true)
+                        "Couldn't confirm whether the comment was posted. Refresh before sending it again."
                     } else {
                         "The comment was not posted. Your draft is kept; you can send it again."
                     }
