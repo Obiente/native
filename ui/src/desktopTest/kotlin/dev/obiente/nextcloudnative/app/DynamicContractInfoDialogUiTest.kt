@@ -1,0 +1,208 @@
+package dev.obiente.nextcloudnative.app
+
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.Density
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
+import org.jetbrains.skia.EncodedImageFormat
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/** The contract information dialog's write safety section, with synthetic routes only. */
+@OptIn(ExperimentalComposeUiApi::class)
+class DynamicContractInfoDialogUiTest {
+    @Test
+    fun aPausedRouteIsExplainedAndOffersResumingChanges() = onSceneThread {
+        var resumed = 0
+        val entries = listOf(
+            DynamicWriteSafetyEntry("PUT /apps/notebook/api/notes/{id}", DynamicWriteRuleStatus.quarantined,
+                DynamicWriteQuarantineReason.notAppliedAfterSuccess, "contract-declared v1"),
+        )
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Ready(entries), { resumed++ }, {}) }) {
+            val texts = texts()
+            assertTrue(texts.any { "paused on this device" in it }, "$texts")
+            assertTrue(texts.any { "reported success but did not apply" in it && "{id}" in it }, "$texts")
+            clickText("Resume changes")
+            assertEquals(0, resumed, "One tap only asks.")
+            val confirmation = texts()
+            assertTrue(confirmation.any { it == "Resume changes for this app?" }, "$confirmation")
+            assertTrue(confirmation.any { it == "PUT /apps/notebook/api/notes/{id}: Paused: the app reported success but did not apply a change" },
+                "The confirmation names the paused route and why: $confirmation")
+            clickText("Cancel")
+            assertEquals(0, resumed)
+            assertTrue(texts().none { it == "Resume changes for this app?" })
+            clickText("Resume changes")
+            clickText("Resume")
+            assertEquals(1, resumed)
+        }
+    }
+
+    @Test
+    fun withoutRecordedStateNothingIsOfferedToResume() = onSceneThread {
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Ready(emptyList()), {}, {}) }) {
+            assertTrue(texts().any { "No paused or probationary changes" in it })
+            assertTrue(texts().none { it == "Resume changes" })
+        }
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Loading, {}, {}) }) {
+            assertTrue(texts().none { it == "Resume changes" }, "Nothing is cleared before the state is known.")
+        }
+    }
+
+    @Test
+    fun anUnreadableStateCannotDiscardPendingOperations() = onSceneThread {
+        var resumed = 0
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Unreadable, { resumed++ }, {}) }) {
+            assertTrue(texts().any { "could not be read" in it })
+            assertTrue(texts().none { it == "Resume changes" })
+            assertEquals(0, resumed)
+        }
+    }
+
+    @Test
+    fun pendingVerificationIsDistinctFromQuarantineAndCannotBeResumed() = onSceneThread {
+        val entries = listOf(DynamicWriteSafetyEntry("/apps/reader/items/{}", DynamicWriteRuleStatus.probation,
+            null, "item-state-pair v1", pendingVerification = true))
+        scene({ DynamicContractInfoDialog(INFO, DynamicWriteSafetyView.Ready(entries), {}, {}) }) {
+            assertTrue(texts().any { "Needs verification" in it })
+            assertTrue(texts().none { it == "Resume changes" })
+        }
+    }
+
+    @Test
+    fun stoppingChecksNeedsConfirmationAndKeepsTheUnknownRoutePaused() = onSceneThread {
+        for ((width, height) in listOf(900 to 1000, 360 to 720)) DynamicRuleExecutionFixture().use { f ->
+            f.writeStatus = 503
+            f.afterWrite = null
+            val executor = f.executor()
+            executor.execute(f.request())
+            val pending = f.entries().single().pendingVerification
+            val requests = f.requests.size
+            val stopStarted = CompletableDeferred<Unit>()
+            val finishStop = CompletableDeferred<Unit>()
+            scene({ DynamicContractInfoHost(INFO, f.safety, f.session.accountId.storageKey,
+                f.descriptor.app.id, {}, onStopChecking = { handle ->
+                    stopStarted.complete(Unit)
+                    finishStop.await()
+                    executor.stopCheckingRuleOperation(handle)
+                }) }, width, height) {
+                NativeSceneTestDriver(this).settleUntil { texts().any { it == "Stop checking" } }
+                clickText("Stop checking")
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().any { "result will remain unknown" in it && "stay paused" in it })
+                capture("stop-checking-confirmation-$width")
+                clickText("Cancel")
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().none { it == "Resume changes" })
+                clickText("Stop checking")
+                clickText("Stop checking and keep paused")
+                withTimeout(5_000) { stopStarted.await() }
+                assertEquals(pending, f.entries().single().pendingVerification)
+                assertTrue(texts().none { it == "Resume changes" })
+                finishStop.complete(Unit)
+                NativeSceneTestDriver(this).settleUntil(5_000) {
+                    texts().any { "earlier result remains unknown" in it }
+                }
+                val stopped = f.entries().single()
+                assertEquals(null, stopped.pendingVerification)
+                assertEquals(DynamicWriteRuleStatus.quarantined, stopped.status)
+                assertEquals(DynamicWriteQuarantineReason.abandonedUnknown, stopped.reason)
+                assertTrue(texts().any { "earlier result remains unknown" in it })
+                assertTrue(texts().none { it == "Stop checking" })
+                assertEquals(requests, f.requests.size, "Stopping checking does not send or refresh anything.")
+                clickText("Resume changes")
+                assertTrue(texts().any { "results remain unknown" in it })
+                assertEquals(DynamicWriteRuleStatus.quarantined, f.entries().single().status)
+                clickText("Cancel")
+                assertEquals(DynamicWriteRuleStatus.quarantined, f.entries().single().status)
+            }
+        }
+    }
+
+    private suspend fun ImageComposeScene.capture(name: String) {
+        val directory = System.getenv("NATIVE_PRIVATE_QA_DIR")?.let(Path::of) ?: return
+        Files.createDirectories(directory)
+        kotlinx.coroutines.delay(400) // Let the dialog's entrance animation finish in private captures.
+        render(System.nanoTime()).use { image ->
+            image.encodeToData(EncodedImageFormat.PNG)!!.use { data -> Files.write(directory.resolve("$name.png"), data.bytes) }
+        }
+    }
+
+    @Test
+    fun theHostLoadsTheStoreAndResumingClearsOnlyThisApp() = onSceneThread {
+        val store = MemoryDynamicWriteQuarantineStore()
+        val account = "c".repeat(64)
+        val key = DynamicWriteRuleKey(account, "notebook", "2.0.0", "PUT /apps/notebook/api/notes/{id}", "contract-declared", 1)
+        store.quarantine(key, DynamicWriteQuarantineReason.untouchedFieldDrift, 1)
+        store.beginProbation(key.copy(appId = "ledger", route = "POST /apps/ledger/api/items"), 1)
+        store.beginProbation(key.copy(route = "PATCH /apps/notebook/api/notes/{id}", ruleId = "item-state-pair"), 1)
+        scene({ DynamicContractInfoHost(INFO, store, account, "notebook", {}) }) {
+            val texts = texts()
+            assertTrue(texts.any { "other values changed" in it }, "$texts")
+            assertTrue(texts.any { "In probation" in it && "item-state-pair v1" in it }, "$texts")
+            clickText("Resume changes")
+            assertEquals(1, store.records(account, "notebook").count { it.status == DynamicWriteRuleStatus.quarantined }, "Nothing clears before confirming.")
+            clickText("Resume")
+            settle()
+            assertTrue(texts().any { "No paused or probationary changes" in it }, "${texts()}")
+        }
+        assertTrue(store.records(account, "notebook").isEmpty())
+        assertEquals(1, store.records(account, "ledger").size, "Another app's state is untouched.")
+    }
+
+    private suspend fun scene(content: @androidx.compose.runtime.Composable () -> Unit, width: Int = 900, height: Int = 1000, block: suspend ImageComposeScene.() -> Unit) {
+        val scene = ImageComposeScene(width, height, Density(1f), coroutineContext = kotlin.coroutines.coroutineContext) {
+            MaterialTheme { Surface { content() } }
+        }
+        try {
+            scene.settle()
+            scene.block()
+        } finally {
+            scene.close()
+        }
+    }
+
+    private fun onSceneThread(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) {
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { dispatcher -> runBlocking(dispatcher, block) }
+    }
+
+    private suspend fun ImageComposeScene.settle() { repeat(16) { render(System.nanoTime()).close(); yield() } }
+
+    private fun ImageComposeScene.nodes(): List<SemanticsNode> {
+        fun SemanticsNode.descendants(): List<SemanticsNode> = listOf(this) + children.flatMap { it.descendants() }
+        return semanticsOwners.flatMap { it.rootSemanticsNode.descendants() }
+    }
+
+    private fun ImageComposeScene.texts(): List<String> = nodes().flatMap { node ->
+        node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text } +
+            node.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+    }
+
+    private suspend fun ImageComposeScene.clickText(label: String) {
+        val node = nodes().first { SemanticsActions.OnClick in it.config &&
+            (it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == label } ||
+                it.children.any { child -> child.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == label } }) }
+        assertTrue(node.config[SemanticsActions.OnClick].action!!.invoke())
+        settle()
+    }
+
+    private companion object {
+        val INFO = DynamicContractInfo(
+            acquisition = "Signed App Store package", appVersion = "2.0.0", sourceSpecFile = "openapi.json",
+            diagnosticCodes = emptyList(), resourceIds = listOf("notes"), layoutIds = emptyList(), linkIds = emptyList(),
+            actionIds = listOf("notes-update"), childCandidates = emptyList(),
+        )
+    }
+}

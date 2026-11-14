@@ -167,9 +167,12 @@ published API contracts. Only then does it use heuristics. It may guess field
 roles, relationships, labels and a good starting screen. It may never invent
 an endpoint, request body, permission, resource ID or retry guarantee.
 
-Small, verified adapters for a specific app are welcome when they add useful
-behavior that cannot be inferred safely. An adapter extends the same shared
-runtime; it does not become a separate app inside the app.
+Support for an app does not depend on its name or version. Rules for the data
+structures and wording found across apps link each one to the native UI that
+belongs to it, so any app whose contract and data match a pattern, such as a
+grid of rows, a ledger of expenses, a questionnaire, or a recipe collection,
+gets that interface. Writes are offered only when the installed app's own
+published contract describes them.
 
 The trust and execution rules are in
 [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
@@ -194,14 +197,34 @@ Windows, and an early macOS package) with:
 - Photos and Memories: collections, albums, tags, people, favorites, RAW and
   JPEG grouping, full-quality originals loaded on zoom, and foundations for
   edits that keep the original;
-- Talk history, with message cards for text, files, recordings, calls, system
-  events and shared objects;
-- Notes, with folders, ETag-aware saving and Markdown editing and preview;
-- News, as a feed reader with unread and starred views, folders, feeds and an
-  article reader that does not load remote images;
+- Talk conversations with live updates, replies, reactions, and editing or
+  deleting your own messages where the server allows it, and message cards for
+  text, files, recordings, calls, system events and shared objects;
+- notes, with folders, ETag-aware saving and Markdown editing and preview,
+  for Notes or any app whose own contract has the shape of a notes collection;
+- feed readers for any app whose contract exposes feeds and articles,
+  including News: unread and starred filters over the loaded articles, feeds
+  beside the list, and an article reader that does not load remote images.
+  Read and star changes appear only when the app's own contract describes
+  them for one article and a registered rule proves its identity and state.
+  Changes are read back; unresolved results survive restart and can be checked
+  before an explicit repeat. See the [implemented boundaries](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification);
 - Activity, global search, Dashboard, user status and app navigation;
-- native flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks, Tables,
-  Deck, Cospend, Budget and administration inventory, at different levels of
+- native Settings for personal info, Talk privacy and conversation settings,
+  and, for administrators, read-only views of apps, accounts, groups and server
+  information;
+- mailboxes for any app whose contract exposes accounts, folders and
+  messages, including Mail: folders, paged messages, a reader, and read, flag,
+  archive and delete where the contract describes them. Compose, reply, reply
+  all and forward appear when the app's own contract describes a send whose
+  result can be checked, with unsent drafts kept on the device; Mail's
+  synchronous send cannot, so Mail has no composer yet. No app version is
+  allowlisted;
+- boards with lists and cards, sharing, archive and list reordering, for Deck
+  or any app whose own contract has the shape of a board, offering each action
+  only when that contract describes it;
+- native flows for Music, Cookbook, Calendar, Contacts, Tasks, Tables,
+  Cospend, Budget and administration inventory, at different levels of
   completeness;
 - an Office document browser with editor choices based on server
   capabilities. Android embeds only the chosen document's editing session;
@@ -223,6 +246,17 @@ discovery and persistent caching need more work, and native UX quality varies
 by workflow. The [public Project](https://github.com/orgs/Obiente/projects/4)
 tracks these gaps.
 
+For board label changes covered by the verified membership workflow, an uncertain
+result remains pending across restart. Open the label picker and use **Check
+earlier changes** to read its status, or **Repeat same change** for an available
+recorded operation. Checking or repeating keeps the picker open and preserves
+your unsaved selection. After a partial save, the picker reloads the saved labels
+before allowing another save. A paused route must be reviewed in Contract info. These
+controls apply only to the bounded contract shapes described in
+[write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification).
+This source slice has synthetic coverage, with no live Deck qualification
+(Last reviewed: 2026-11-07; the linked implementation boundary may change).
+
 ## Planned work
 
 The project is strengthening the foundations a dependable daily client needs.
@@ -235,7 +269,7 @@ The project is strengthening the foundations a dependable daily client needs.
 | Photos and media | Truthful camera/media backup state, folder preview and destination picking, storage reclaim without hiding media unnecessarily, originals, RAW/video/Live Photos, people workflows, albums, and non-destructive editing |
 | DAV and groupware | CardDAV and CalDAV synchronization, native Contacts, Calendar, Tasks, recurrence, sync tokens, and optional operating-system account bridges |
 | Talk | Complete messages and attachments first, then push, notifications, system media integration, signaling, and separately gated WebRTC calling |
-| Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, semantic layouts, and small verified adapters where they genuinely improve the workflow |
+| Dynamic apps | Faster persistent contract acquisition, relationship-aware navigation, context-bound forms/actions, and version-agnostic semantic patterns that link data structures to the native UI that belongs to them |
 | Desktop product | Resizable multi-pane workspaces, keyboard and pointer UX, dense tables, persistent inspectors, desktop file integration, notifications, and update/packaging quality |
 | Administration | Native read-only inventory and diagnostics, safe preflight and lifecycle plans, settings generated from verified schemas, and explicit browser/authentication handoff for strict operations |
 

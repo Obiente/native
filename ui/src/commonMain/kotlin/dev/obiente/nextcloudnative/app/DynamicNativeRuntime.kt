@@ -32,9 +32,7 @@ import dev.obiente.nextcloudnative.nativeui.model.repeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.requireValid
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
-import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
@@ -337,76 +335,13 @@ internal fun NextcloudAppEntry.canonicalAppStoreId(): String {
 private fun String.coreVersionOrNull(): String? =
     Regex("([0-9]+)\\.([0-9]+)\\.([0-9]+)").find(this)?.value
 
-class DynamicNextcloudActionExecutor(
-    private val services: NextcloudPlatformServices,
-    private val session: NextcloudSession,
-    private val descriptor: DynamicAppDescriptor,
-    private val runtimeContext: Map<String, String> = emptyMap(),
-    private val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
-    private val writeGate: DynamicContractWriteGate? = null,
-    private val onMultipartUploadSucceeded: (LocalUploadFile) -> Unit = {},
-) : NativeActionExecutor {
-    init {
-        descriptor.requireValid()
-    }
-
-    override suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult {
-        val action = descriptor.actions.firstOrNull { it.id == request.action.id }
-            ?: return NativeActionExecutionResult.Failure(
-                message = "The dynamic action is no longer available.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        if (!versionStatus.allows(action.risk) || writeGate?.authorizesWrite(action.risk, descriptor) == false) {
-            return NativeActionExecutionResult.Failure(
-                message = "Reconnect to verify the server and app versions before changing cloud data.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        }
-        val values = (request as? NativeActionRequest.Submit)?.values.orEmpty()
-        val observedInputSchema = (request as? NativeActionRequest.Submit)
-            ?.action
-            ?.takeIf { submitted ->
-                submitted.id == action.id &&
-                    submitted.binding.allowsObservedBodyFields &&
-                    action.binding.body?.schema.observesSettingsBody()
-            }
-            ?.inputSchema
-        if (request is NativeActionRequest.Submit && action.requiresConfirmation && !request.confirmed) {
-            return NativeActionExecutionResult.Failure(
-                message = "Confirm this action before changing server data.",
-                outcome = NativeActionFailureOutcome.Rejected,
-            )
-        }
-        return runCatching {
-            val execution = executeDynamicAction(
-                services,
-                session,
-                descriptor,
-                action,
-                values,
-                runtimeContext,
-                observedInputSchema,
-            )
-            execution.response.toDynamicActionExecutionResult(action).also { result ->
-                releaseMultipartUploadAfterSuccess(
-                    result = result,
-                    file = execution.multipartFile,
-                    release = onMultipartUploadSucceeded,
-                )
-            }
-        }.getOrElse { failure ->
-            NativeActionExecutionResult.Failure(failure.message ?: "The dynamic action failed.")
-        }
-    }
-}
-
 /**
  * Validates a mutation response against the action's declared response envelope.
  *
  * OCS endpoints can report an application failure inside an HTTP 2xx response. A declared OCS
  * mutation therefore succeeds only when its bounded JSON metadata contains both an `ok` status
  * and a successful OCS status code. Missing, malformed, or contradictory metadata fails closed
- * without exposing the response body.
+ * without exposing the response body; [dynamicOcsFailure] separates a refusal from a server error.
  */
 internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
     action: DynamicAction,
@@ -439,14 +374,8 @@ internal fun NextcloudApiResponse.toDynamicActionExecutionResult(
     if (statusIsSuccessful && codeIsSuccessful) {
         return NativeActionExecutionResult.Success("${action.label} completed.")
     }
-    val safeMessage = (metadata["message"] as? JsonPrimitive)
-        ?.contentOrNull
-        ?.toSafeDynamicMutationErrorMessage()
-    return NativeActionExecutionResult.Failure(
-        message = safeMessage?.let { message -> "The server rejected ${action.label}: $message" }
-            ?: "The OCS endpoint rejected ${action.label}.",
-        outcome = NativeActionFailureOutcome.Rejected,
-    )
+    val safeMessage = (metadata["message"] as? JsonPrimitive)?.contentOrNull?.toSafeDynamicMutationErrorMessage()
+    return dynamicOcsFailure(action.label, statusCode, safeMessage)
 }
 
 private fun String.toSafeDynamicMutationErrorMessage(): String? {
@@ -859,7 +788,7 @@ private fun ByteArray.hasBoundedDynamicJsonDepth(): Boolean {
     return true
 }
 
-private data class DynamicActionExecution(
+internal data class DynamicActionExecution(
     val response: NextcloudApiResponse,
     val multipartFile: LocalUploadFile?,
 )
@@ -872,7 +801,7 @@ internal fun releaseMultipartUploadAfterSuccess(
     if (result is NativeActionExecutionResult.Success && file != null) release(file)
 }
 
-private suspend fun executeDynamicAction(
+internal suspend fun executeDynamicAction(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     descriptor: DynamicAppDescriptor,
@@ -894,12 +823,22 @@ private suspend fun executeDynamicAction(
     )
 }
 
+/**
+ * Builds the request [action] declares. [values] and [runtimeContext] feed every location unless a
+ * caller supplies [queryValues] or [bodyValues], which are then the only source for that location,
+ * so a path identity and a same-named body field can carry different values. Names in
+ * [nullBodyFields] are sent as JSON null when the body schema declares the property nullable.
+ */
 internal fun buildDynamicApiRequest(
     descriptor: DynamicAppDescriptor,
     action: DynamicAction,
     values: Map<String, String>,
     runtimeContext: Map<String, String> = emptyMap(),
     observedInputSchema: JsonElement? = null,
+    queryValues: Map<String, String>? = null,
+    bodyValues: Map<String, String>? = null,
+    nullBodyFields: Set<String> = emptySet(),
+    exactBodyValues: Map<String, JsonElement> = emptyMap(),
 ): NextcloudApiRequest {
     descriptor.requireValid()
     require(action in descriptor.actions) { "The action is not part of the validated descriptor." }
@@ -913,8 +852,8 @@ internal fun buildDynamicApiRequest(
     }
     val query = buildDynamicQuery(
         binding = binding,
-        values = values,
-        runtimeContext = runtimeContext,
+        values = queryValues ?: values,
+        runtimeContext = queryValues ?: runtimeContext,
         actionResourceId = action.resourceId,
         collectionRead = action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list,
     ).toMutableMap()
@@ -925,11 +864,11 @@ internal fun buildDynamicApiRequest(
         ?.lowercase()
     val multipartBody = binding.body
         ?.takeIf { normalizedBodyContentType == "multipart/form-data" }
-        ?.let { declaredBody -> buildDynamicMultipartBody(declaredBody.schema, values) }
+        ?.let { declaredBody -> buildDynamicMultipartBody(declaredBody.schema, bodyValues ?: values) }
     val body = binding.body
         ?.takeUnless { normalizedBodyContentType == "multipart/form-data" }
         ?.let { declaredBody ->
-            buildDynamicBody(declaredBody.contentType, declaredBody.schema, values, observedInputSchema)
+            buildDynamicBody(declaredBody.contentType, declaredBody.schema, bodyValues ?: values, observedInputSchema, nullBodyFields, exactBodyValues)
         }
     return NextcloudApiRequest(
         method = binding.method.toTransportMethod(),
@@ -950,96 +889,6 @@ internal fun buildDynamicApiRequest(
             path.startsWith("/ocs/", ignoreCase = true),
     ).requireSafe()
 }
-
-private fun buildDynamicMultipartBody(
-    schema: JsonElement,
-    values: Map<String, String>,
-): NextcloudMultipartBody {
-    val objectSchema = schema as? JsonObject
-        ?: error("Only object-shaped multipart request bodies are supported.")
-    require((objectSchema["type"] as? JsonPrimitive)?.contentOrNull == "object") {
-        "Only exact object-shaped multipart request bodies are supported."
-    }
-    val properties = objectSchema["properties"] as? JsonObject
-        ?: error("A multipart request must declare its fields.")
-    require(properties.size <= MAX_DYNAMIC_MULTIPART_FIELDS) {
-        "The multipart request declares too many fields."
-    }
-    val fileFields = properties.entries.filter { (_, element) ->
-        (element as? JsonObject)?.let { property ->
-            property["type"]?.let { it as? JsonPrimitive }?.contentOrNull == "string" &&
-                property["format"]?.let { it as? JsonPrimitive }?.contentOrNull == "binary"
-        } == true
-    }
-    require(fileFields.size == 1) {
-        "A dynamic multipart request must declare exactly one binary file field."
-    }
-    val fileFieldName = fileFields.single().key
-    require(fileFieldName.isSafeDynamicMultipartFieldName()) {
-        "The multipart file field name is invalid."
-    }
-    val required = (objectSchema["required"] as? JsonArray)
-        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-        .orEmpty()
-    require(required.all(properties::containsKey)) {
-        "The multipart request has invalid required fields."
-    }
-    require(fileFieldName in required) {
-        "Optional multipart file fields are not supported."
-    }
-    required.forEach { property ->
-        require(!values[property].isNullOrBlank()) { "$property is required." }
-    }
-    val file = decodeDynamicLocalUploadSelection(
-        values[fileFieldName]?.takeIf(String::isNotBlank)
-            ?: error("$fileFieldName is required."),
-    )
-    val textFields = properties.entries
-        .asSequence()
-        .filter { (name, _) -> name != fileFieldName }
-        .mapNotNull { (name, element) ->
-            require(name.isSafeDynamicMultipartFieldName()) {
-                "The multipart text field name is invalid."
-            }
-            val property = element as? JsonObject
-                ?: error("Multipart fields require exact scalar schemas.")
-            val type = (property["type"] as? JsonPrimitive)?.contentOrNull
-            require(type in DYNAMIC_MULTIPART_SCALAR_TYPES) {
-                "Multipart arrays and objects require an exact encoding contract."
-            }
-            val value = values[name]
-            if (value.isNullOrBlank() && name !in required) {
-                null
-            } else {
-                value.orEmpty().requireDynamicMultipartScalar(type)
-                MultipartTextField(name, value.orEmpty())
-            }
-        }
-        .toList()
-    return NextcloudMultipartBody(
-        file = file,
-        fileFieldName = fileFieldName,
-        textFields = textFields,
-    ).requireSafe()
-}
-
-private fun String.requireDynamicMultipartScalar(type: String?) {
-    when (type) {
-        "boolean" -> require(toBooleanStrictOrNull() != null) { "Enter true or false." }
-        "integer" -> require(toLongOrNull() != null) { "Enter a whole number." }
-        "number" -> require(toDoubleOrNull()?.isFinite() == true) { "Enter a valid number." }
-    }
-}
-
-private fun String.isSafeDynamicMultipartFieldName(): Boolean =
-    length in 1..64 &&
-        first().let { it in 'A'..'Z' || it in 'a'..'z' } &&
-        all { character ->
-            character in 'A'..'Z' ||
-                character in 'a'..'z' ||
-                character.isDigit() ||
-                character in "_.-"
-        }
 
 /** Builds a recovery request only from a verified signed refresh/sync operation in the descriptor. */
 internal fun buildDynamicRefreshRecoveryRequest(
@@ -1069,54 +918,13 @@ internal fun buildDynamicRefreshRecoveryRequest(
         .firstOrNull()
 }
 
-/**
- * Builds the exact authoritative GET declared for an idempotent replacement mutation.
- *
- * The descriptor validator proves same-route PUT/GET pairing. This function repeats the critical
- * checks at the execution boundary so deserialized or independently constructed descriptors fail
- * closed instead of turning an arbitrary action reference into a recovery read.
- */
-internal fun buildDynamicResultRecoveryRequest(
-    descriptor: DynamicAppDescriptor,
-    mutation: DynamicAction,
-    values: Map<String, String>,
-    runtimeContext: Map<String, String> = values,
-): NextcloudApiRequest? {
-    if (mutation.binding.method != HttpMethod.PUT) return null
-    val recoveryId = mutation.resultRecoveryActionId ?: return null
-    val recovery = descriptor.actions.singleOrNull { action -> action.id == recoveryId } ?: return null
-    val safeKinds = setOf(
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.verifiedAppPackage,
-        dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind.appStoreLinkedSourceTag,
-    )
-    if (
-        recovery.binding.method != HttpMethod.GET ||
-        recovery.binding.path != mutation.binding.path ||
-        recovery.binding.body != null ||
-        recovery.binding.queryParameters.any(HttpParameter::required) ||
-        recovery.fallbackOnly ||
-        mutation.provenance.none { provenance -> provenance.kind in safeKinds } ||
-        recovery.provenance.none { provenance -> provenance.kind in safeKinds }
-    ) {
-        return null
-    }
-    return runCatching {
-        buildDynamicApiRequest(
-            descriptor = descriptor,
-            action = recovery,
-            values = values,
-            runtimeContext = runtimeContext,
-        )
-    }.getOrNull()
-}
-
 internal fun Throwable.isUnsynchronizedDynamicCollectionFailure(): Boolean =
     message.orEmpty().contains("has not been synchronized", ignoreCase = true)
 
 internal fun NextcloudApiResponse.acceptedDynamicRefresh(): Boolean =
     status in 200..299 || status == 409
 
-private fun bindDynamicPath(
+internal fun bindDynamicPath(
     binding: DynamicHttpBinding,
     values: Map<String, String>,
     runtimeContext: Map<String, String>,
@@ -1463,6 +1271,8 @@ private fun buildDynamicBody(
     schema: JsonElement,
     values: Map<String, String>,
     observedInputSchema: JsonElement? = null,
+    nullFields: Set<String> = emptySet(),
+    exactValues: Map<String, JsonElement> = emptyMap(),
 ): ByteArray {
     val objectSchema = schema as? JsonObject
         ?: error("Only object-shaped dynamic request bodies are supported.")
@@ -1475,8 +1285,9 @@ private fun buildDynamicBody(
     val requiredProperties = (objectSchema["required"] as? JsonArray)
         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         .orEmpty()
+    val nulls = nullFields.filterTo(mutableSetOf()) { (properties[it] as? JsonObject)?.acceptsDynamicNull() == true }
     requiredProperties.forEach { property ->
-        require(!values[property].isNullOrBlank()) { "$property is required." }
+        require(property in nulls || property in exactValues || !values[property].isNullOrBlank()) { "$property is required." }
     }
     val allowed = if (allowsObservedSettings) {
         values.entries.asSequence()
@@ -1487,8 +1298,10 @@ private fun buildDynamicBody(
             .take(MAX_EPHEMERAL_FIELDS_PER_RECORD)
             .associate(Map.Entry<String, String>::toPair)
     } else {
-        values.filterKeys(properties::containsKey)
+        values.filterKeys { it in properties && it !in nulls && it !in exactValues }
     }
+    // Full-echo values travel exactly as the server returned them; only declared fields qualify.
+    require(exactValues.keys.all { it in properties }) { "An echoed value does not match the declared request body." }
     val normalizedContentType = contentType.substringBefore(';').trim().lowercase()
     if (normalizedContentType == "application/x-www-form-urlencoded") {
         allowed.keys.forEach { name ->
@@ -1503,11 +1316,11 @@ private fun buildDynamicBody(
         "application/json" -> {
             buildJsonObject {
                 val wireNames = mutableSetOf<String>()
-                allowed.forEach { (name, value) ->
+                (allowed + nulls.associateWith { "" } + exactValues.mapValues { "" }).forEach { (name, value) ->
                     val property = properties[name] as? JsonObject
                     val propertyType = property?.dynamicPropertyType()
                     if (
-                        value.isBlank() &&
+                        value.isBlank() && name !in nulls && name !in exactValues &&
                         name !in requiredProperties &&
                         (
                             property?.acceptsDynamicNull() == true ||
@@ -1524,23 +1337,24 @@ private fun buildDynamicBody(
                         ?.takeIf(String::isSafeDynamicBodyFieldName)
                         ?: name
                     require(wireNames.add(wireName)) { "The request maps more than one field to $wireName." }
+                    exactValues[name]?.let { exact -> put(wireName, exact); return@forEach }
                     put(
                         wireName,
-                        property?.let(value::toTypedJsonValue)
+                        if (name in nulls) JsonNull else property?.let(value::toTypedJsonValue)
                             ?: observedProperty?.let(value::toObservedTypedJsonValue)
                             ?: value.toObservedSettingsJsonValue(),
                     )
                 }
             }.toString().encodeToByteArray()
         }
-        "application/x-www-form-urlencoded" -> allowed.entries.joinToString("&") { (name, value) ->
+        "application/x-www-form-urlencoded" -> allowed.entries.also { require(exactValues.isEmpty()) { "Echoed values need a JSON body." } }.joinToString("&") { (name, value) ->
             "${name.encodeUrlComponent()}=${value.encodeUrlComponent()}"
         }.encodeToByteArray()
         else -> error("Dynamic request bodies of type $contentType are not supported yet.")
     }
 }
 
-private fun JsonElement?.observesSettingsBody(): Boolean {
+internal fun JsonElement?.observesSettingsBody(): Boolean {
     val schema = this as? JsonObject ?: return false
     return (schema["x-nextcloud-native-observed-settings-body"] as? JsonPrimitive)?.booleanOrNull == true &&
         (schema["additionalProperties"] as? JsonPrimitive)?.booleanOrNull == true
@@ -1737,7 +1551,7 @@ private fun JsonElement.toNativeRecords(
             actionSafeIdentity = false,
         ),
     )
-}).distinctBy(NativeRecord::id).take(MAX_DYNAMIC_NATIVE_RECORDS)
+}).withoutAmbiguousDynamicIdentities(this !is JsonArray || size <= MAX_DYNAMIC_NATIVE_RECORDS).take(MAX_DYNAMIC_NATIVE_RECORDS)
 
 /**
  * Finds a conventional list inside a response envelope without treating arbitrary nested arrays
@@ -1888,7 +1702,9 @@ private fun JsonElement.toNativeRecord(
             .toList(),
         actionSafeIdentity = actionSafeIdentity,
         structuredValues = structuredValues,
-    )
+        wireValues = objectValue.boundedDynamicWireValues(declaredFieldIds) { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
+        observedRuleValues = objectValue.boundedDynamicRuleObservations { key, value -> key.isSafeObservedFieldName() && !value.isSensitiveObservedValue(key) },
+    ).withMembershipObservation(objectValue)
 }
 
 private fun String.toSafeDynamicRecordId(): String {
@@ -2104,8 +1920,6 @@ private fun String.safeObservedLabel(): String = buildString(length + 4) {
 private const val MAX_EPHEMERAL_FIELDS_PER_RECORD = 24
 internal const val MAX_DYNAMIC_NATIVE_RECORDS = 1_000
 private const val MAX_DYNAMIC_BINDING_CONTEXT_VALUES = 32
-private const val MAX_DYNAMIC_MULTIPART_FIELDS = 17
-private val DYNAMIC_MULTIPART_SCALAR_TYPES = setOf("string", "integer", "number", "boolean")
 private const val MAX_DYNAMIC_JSON_DEPTH = 64
 private const val MAX_DYNAMIC_RECORD_ID_LENGTH = 256
 private const val MAX_NATIVE_FIELDS_PER_RECORD = 128

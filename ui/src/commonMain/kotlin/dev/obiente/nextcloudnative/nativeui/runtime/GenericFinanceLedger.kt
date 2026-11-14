@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -20,12 +19,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
+import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -52,8 +54,15 @@ internal fun GenericFinanceCollection(
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
+    writes: NativeFinanceWriteContext? = null,
 ) {
     val contextualCurrency = LocalNativeFinanceCurrency.current
+    val recordPlan = remember(writes?.schema, writes?.listActionId, writes?.datasetContext, rows) {
+        writes?.let { nativeChildRecordWritePlan(it.schema, it.listActionId, it.datasetContext, rows.map { (record, _) -> record }) }
+    }
+    val recordEditing = remember(resource.id, recordPlan?.parentId) { NativeChildRecordEditing() }
+    LaunchedEffect(recordEditing, writes?.recordsKey) { recordEditing.session.acceptAuthoritativeRefresh() }
+    val noun = resource.name.singularRecordNoun()
     var filter by rememberSaveable(resource.id) { mutableStateOf(NativeFinanceLedgerFilter.All) }
     var categoryFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
     var accountFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
@@ -108,9 +117,16 @@ internal fun GenericFinanceCollection(
                     ) {
                         Text(
                             "${presentations.size} loaded",
+                            modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        recordPlan?.takeIf { it.create?.unavailableReason == null && it.create != null }?.let { plan ->
+                            TextButton(
+                                enabled = !recordEditing.session.submitting,
+                                onClick = { recordEditing.open(plan, NativeChildRecordTarget.Create, nativeLocalToday()) },
+                            ) { Text("New $noun") }
+                        }
                         Text(
                             netFlow?.let { "Loaded net ${formatNativeFinanceAmount(it, currency)}" }
                                 ?: "Multiple currencies",
@@ -195,9 +211,13 @@ internal fun GenericFinanceCollection(
                         GenericCollectionCard(resource, record, onSelectRecord)
                         return@items
                     }
-                    val interaction = onSelectRecord
-                        ?.let { callback -> Modifier.clickable { callback(record) } }
-                        ?: Modifier
+                    val actions = nativeChildRecordActions(recordPlan, recordEditing, record, transaction.title, nativeLocalToday())
+                    var actionsExpanded by remember(record.id) { mutableStateOf(false) }
+                    val interaction = Modifier.nextcloudCardInteractions(
+                        onOpen = onSelectRecord?.let { callback -> { callback(record) } },
+                        onShowActions = { actionsExpanded = true }.takeIf { actions.isNotEmpty() },
+                        actionsLabel = "Show actions for ${transaction.title}",
+                    )
                     Card(
                         modifier = interaction.fillMaxWidth().heightIn(min = 92.dp),
                         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
@@ -237,6 +257,7 @@ internal fun GenericFinanceCollection(
                                     },
                                     maxLines = 1,
                                 )
+                                NextcloudCardOverflow(transaction.title, actions, actionsExpanded, { actionsExpanded = it })
                             }
                             val split = financeSplitLabel(transaction)
                             if (transaction.participant != null || split != null) {
@@ -296,6 +317,9 @@ internal fun GenericFinanceCollection(
                 }
             }
         }
+    }
+    if (recordPlan != null && writes != null) {
+        NativeChildRecordEditorDialog(recordPlan, recordEditing, writes.actionExecutor, writes.onActionSucceeded, noun)
     }
 }
 
@@ -457,3 +481,14 @@ internal fun GenericFinanceDetailHeader(
  * return records equal to the previous snapshot. This key treats a newly allocated record list as
  * a refresh even when its contents are unchanged.
  */
+
+/** "Bills" becomes "bill"; a name that is not a simple plural is used as it is. */
+internal fun String.singularRecordNoun(): String {
+    val word = trim().lowercase().ifEmpty { return "entry" }
+    return when {
+        word.endsWith("ies") && word.length > 3 -> word.dropLast(3) + "y"
+        word.endsWith("ses") || word.endsWith("xes") -> word.dropLast(2)
+        word.endsWith("s") && !word.endsWith("ss") -> word.dropLast(1)
+        else -> word
+    }
+}

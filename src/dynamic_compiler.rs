@@ -5,6 +5,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::Confidence;
+use crate::OperationRiskClass;
 use crate::{
     ActionIntent, ActionRisk, AuthKind, AuthRequirement, DescriptorValidationError, DynamicAction,
     DynamicAppDescriptor, DynamicDiscoveryInput, DynamicField, DynamicForm, DynamicHttpBinding,
@@ -252,6 +253,16 @@ impl<'a> CompilerState<'a> {
                     permission_ids,
                     confidence: Confidence::High,
                     provenance: vec![source.clone()],
+                    risk_class: Some(OperationRiskClass::classify(
+                        method,
+                        &path,
+                        &operation_id,
+                        &label,
+                        body.is_some(),
+                    )),
+                    read_back_action_id: None,
+                    idempotency_key_header: None,
+                    share_permission_field_id: None,
                 };
                 self.actions.insert(action_id.clone(), action);
 
@@ -405,6 +416,10 @@ impl<'a> CompilerState<'a> {
                 permission_ids,
                 confidence: Confidence::Medium,
                 provenance: vec![source.clone()],
+                risk_class: Some(OperationRiskClass::Read),
+                read_back_action_id: None,
+                idempotency_key_header: None,
+                share_permission_field_id: None,
             },
         );
         let kind = if collection {

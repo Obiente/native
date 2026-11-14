@@ -60,7 +60,9 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     id = layout.id,
                     title = layout.title,
                     resourceId = layout.resourceId,
-                    component = layout.toNativeComponent(
+                    component = if (layout.kind == LayoutKind.list && isFeedItemCollection(resource)) {
+                        NativeComponent.feedReader
+                    } else layout.toNativeComponent(
                         resource,
                         sourceAction,
                         hasWritableAction = actions.any { candidate ->
@@ -74,7 +76,8 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                 ),
             )
         }
-        forms.forEach { form ->
+        val dedicatedActionIds = actions.filter(DynamicAction::requiresDedicatedWriteSurface).mapTo(hashSetOf(), DynamicAction::id)
+        forms.filterNot { form -> form.actionId in dedicatedActionIds }.forEach { form ->
             add(
                 ViewSpec(
                     id = form.id,
@@ -99,6 +102,9 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                 method = action.binding.method,
                 path = action.binding.path,
                 operationId = action.id,
+                pathParameterTypes = action.binding.pathParameters.associate { parameter ->
+                    parameter.name to ((parameter.schema as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
+                },
                 pathParameterNames = action.binding.pathParameters.map(HttpParameter::name),
                 requiredPathParameterNames = action.binding.pathParameters.filter(HttpParameter::required)
                     .map(HttpParameter::name),
@@ -122,6 +128,10 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             evidence = action.provenance.map(Provenance::toEvidence),
             effect = action.effect,
             resultRecoveryActionId = action.resultRecoveryActionId,
+            riskClass = action.operationRiskClass,
+            readBackActionId = action.readBackActionId,
+            idempotencyKeyHeader = action.idempotencyKeyHeader,
+            sharePermissionFieldId = action.sharePermissionFieldId,
         )
     }
     val linkedRelationships = links.mapNotNull { link ->
@@ -190,7 +200,8 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
         confidence = resources.minOfOrNull(DynamicResource::confidence) ?: Confidence.low,
         resources = nativeResources,
         views = nativeViews,
-        actions = nativeActions,
+        actions = nativeActions.filterNot(ActionSpec::requiresDedicatedWriteSurface),
+        dedicatedActions = nativeActions.filter(ActionSpec::requiresDedicatedWriteSurface),
         relationships = nativeRelationships,
         warnings = buildList {
             addAll(warnings.map { CompilerWarning(it.code, it.message) })

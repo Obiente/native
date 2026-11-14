@@ -143,6 +143,16 @@ internal fun nextcloudLinkDestination(serverUrl: String, rawLink: String): Nextc
     return NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = true)
 }
 
+/**
+ * The account-relative path, query and fragment of an absolute web link to the signed-in
+ * account, or null for links to any other origin or outside the account's base path.
+ */
+internal fun sameAccountRelativeUrl(serverUrl: String, link: String): String? {
+    val value = link.trim()
+    if (!value.isSafeIncomingNextcloudLink() || value.startsWith("nextcloudnative:", ignoreCase = true)) return null
+    return resolveAccountLink(serverUrl, value)?.takeIf { it.sameAccount }?.relativeUrl
+}
+
 internal fun String.isSafeIncomingNextcloudLink(): Boolean {
     val value = trim()
     if (value.length !in 1..MAX_NEXTCLOUD_LINK_LENGTH) return false

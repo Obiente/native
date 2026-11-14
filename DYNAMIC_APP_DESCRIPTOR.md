@@ -22,6 +22,7 @@ exchanging models.
 | Mapping to the native schema | `DynamicDescriptorMapper.kt` (`toNativeAppSchema()`) |
 | Signed App Store acquisition | [`SignedAppStoreContractAcquirer.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt) in the `contractAcquisition` module |
 | Runtime orchestration | `DynamicNativeRuntime.kt` in `ui/src/commonMain/.../app` |
+| Board and notes surface selection | `SemanticBoardContract.kt`, `SemanticNotesContract.kt`, and `SemanticSettingsContract.kt` in `ui/src/commonMain/.../nativeui/runtime` |
 | Rust reference model and compiler | [`src/dynamic.rs`](src/dynamic.rs) and [`src/dynamic_compiler.rs`](src/dynamic_compiler.rs) |
 
 Both the Kotlin and Rust models serialize camel-case JSON with
@@ -96,7 +97,96 @@ parses `appinfo/routes.php` with a bounded literal-array parser and never runs
 PHP. It keeps a route only when its controller statically extends a supported
 Nextcloud controller, declares the referenced method, and either uses an API
 base or declares a JSON-serializable response type. Read the source comment for
-the narrow write shapes it can retain.
+the narrow write shapes it can retain; the scalar write rules live in
+[`StaticScalarWriteContract.kt`](contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/StaticScalarWriteContract.kt).
+Besides create, update, patch, delete, and a short workflow list, they accept
+two verb families for every app: relationship verbs (`assign`, `unassign`,
+`add`, or `remove` followed by a related resource whose identity the scalar
+signature requires, such as `assignLabel($cardId, $labelId)`) and restore verbs
+(`restore`, `undoDelete`, `deleteUndo`, `undelete`) on a route that names its
+target. Relationships that name sharing, access control, membership,
+permissions, ownership, groups, or teams are excluded, and send and merge verbs
+are not accepted. A `DELETE` route may carry only a removal relationship. Risk
+and confirmation still follow the HTTP method, so a `DELETE` relationship is
+destructive and confirmed.
+
+### Package declaration evidence
+
+The same signed package also yields declaration evidence that is read
+statically and never executed. Synthesis no longer needs `appinfo/routes.php`:
+
+- **Route attributes.** `#[ApiRoute]`, `#[FrontpageRoute]`, and
+  `#[Route(type: ...)]` on public controller methods directly in
+  `lib/Controller/` are read like the server router reads them, through
+  namespace imports and aliases such as `Http\Attribute\FrontpageRoute`.
+  OCS attribute routes mount under `/ocs/v2.php/apps/{app}`, others under
+  `/apps/{app}`. Only literal verbs, URLs, requirement and default maps, and
+  postfixes are accepted; a concatenated, interpolated, or constant URL, an
+  unknown argument, or a custom `root` drops the route and is counted in
+  `x-nextcloud-native-skipped-routes`. When `routes.php` and an attribute
+  claim the same route name with different URLs, both are dropped.
+- **Route file.** `resources` and `ocs-resources` expand to the router's
+  index, show, create, update, and destroy actions. Resource reads are
+  published as before; resource writes are recorded as route evidence only.
+  An omitted verb defaults to `GET`. A same-file route helper is unwrapped only
+  when its whole body is `return $route;` or `return array_merge($route, [...])`
+  with keys that cannot change the route name, URL, verb, root, or postfix.
+- **Policy facts.** Each operation carries `x-nextcloud-native-policy`: the
+  access level the server's security middleware enforces (no
+  `NoAdminRequired` means admin only), CSRF and CORS handling, password
+  confirmation and its strict flag, user and anonymous rate limits,
+  brute-force actions, request headers, the OpenAPI scope, and any
+  app-defined attribute as an opaque name with literal arguments. Legacy
+  docblock annotations are read the same way.
+- **Hidden inputs.** `$this->request->getParam('x')` where `x` is a route
+  placeholder binds that path parameter and is marked
+  `x-nextcloud-native-request-input`. One `getUploadedFile('f')` read on a
+  `POST` declares a multipart body with file field `f`. Any other request
+  access keeps the method unproven.
+- **Types.** Psalm `@param`, `@return`, `@psalm-type`, and
+  `@psalm-import-type` declarations, including `lib/ResponseDefinitions.php`,
+  map to OpenAPI schemas for the subset openapi-extractor supports. A psalm
+  parameter type narrows the native type only when compatible. Malformed,
+  recursive, or oversized types are dropped; the route keeps its weaker
+  evidence.
+- **Entities.** `jsonSerialize()` and `toAPI()` methods in `lib/Db` that
+  return one literal array record their field names, typed by `addType()`
+  where stated, in `x-nextcloud-native-entity-serializations`. A response
+  links to an entity only through a declared return type naming a
+  `JsonSerializable` entity.
+- **Merge hint.** A `PUT` or `PATCH` whose non-path parameters are all
+  nullable with `null` defaults records
+  `x-nextcloud-native-merge-hint`. It is a hint, never a merge guarantee.
+- **Capabilities.** Literal key paths in `lib/Capabilities.php`, including
+  `version` and API version keys, are recorded in
+  `x-nextcloud-native-capability-keys` for comparison with the live response.
+
+Every extracted route, published or not, is listed in
+`x-nextcloud-native-static-routes` with its signature and facts, so a later
+admission step can evaluate it without re-reading the package. Attribute
+routes and methods that read a route placeholder through
+`$this->request->getParam()` now pass the same scalar write rules as
+`appinfo/routes.php` routes, so some of their writes are published. A method
+the package marks as sub-administrator, delegated administrator, external-app,
+or password-confirmed access is never published as a write. Administrator
+access inferred from a missing `NoAdminRequired` is kept as the operation's
+`access` fact for the admission step rather than decided here, because an
+inherited or trait annotation the extractor cannot read would otherwise hide a
+user-level write. A method that reads an uploaded file stays route evidence
+until the write path can verify the stored file. A routes.php route and an
+attribute route that share a URL and verb but name different controller
+methods are both dropped, because the server dispatches to the attribute
+route. Inherited and trait methods are not read, so their routes are missing
+rather than wrong. Supplementary files (response definitions, entities,
+capabilities) have their own size budget; when it is exhausted the document
+states `x-nextcloud-native-supplementary-evidence-truncated`.
+
+The descriptor compiler copies these facts into
+`DynamicAction.contractFacts` only for verified package or exact source-tag
+provenance. A same-origin advertised document cannot assert its own access
+rules. Psalm-typed bodies, enums, nullability, defaults, and multipart bodies
+flow through the existing schema path. Entity serializations, capability
+keys, and the static route evidence list remain in the contract document.
 
 Acquisition may keep verified read routes while checking compatible releases
 for a richer contract. If an optional later package returns HTTP 404 or 410, an
@@ -535,6 +625,535 @@ content, throttling, server failure, or rejected request.
 covers message privacy, status classification, malformed and oversized error
 bodies, invalid text, and deeply nested JSON.
 
+## Semantic surfaces: boards and notes
+
+**Last reviewed: 2026-10-31.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. No board or notes write chosen this way has been validated
+against a live server or shipped in a published release.
+
+After discovery, the app screen asks whether the discovered contract has the
+shape of a board or of a notes collection
+([`SemanticAppWorkspace.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticAppWorkspace.kt)).
+The answer never depends on the app ID or its version; anything else stays
+with the generic renderer.
+
+- Route shape: mount prefixes (`/index.php`, `/ocs/v2.php`, `/apps/{app}`),
+  `api`, and version segments are removed. Each placeholder is bound to the
+  entity its name states (`stackId` is a list, `cardId` a card) or, for a
+  generic `{id}`, to the collection word before it
+  ([`SemanticRouteShape.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticRouteShape.kt)).
+- Board: a board collection read, a list collection read inside a board, and a
+  card read, create, or list. Each operation (board, list, and card edits,
+  card move, archive, labels, assignees, comments, attachments, sharing) is
+  resolved separately
+  ([`SemanticBoardContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticBoardContract.kt)).
+  A move needs a declared list field in its body, so a contract without one
+  offers no move or drag. A label or user addressed inside a card
+  (`/cards/{cardId}/label/{labelId}`) relates it to that card: `POST` or `PUT`
+  assigns and `DELETE` removes; it is never treated as deleting the label.
+- Notes: a collection read and an item read whose records carry a title and a
+  text body, and that the contract words as notes or whose records also carry
+  two of folder, favorite, and modification fields
+  ([`SemanticNotesContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticNotesContract.kt)).
+- Settings: a parameter-free settings read plus either one document write that
+  declares each setting or a `{key}` write with a single `value` field. A keyed
+  write uses only keys the server returned
+  ([`SemanticSettingsContract.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/SemanticSettingsContract.kt)).
+- Writes: only actions with trusted contract provenance (advertised OpenAPI,
+  verified package, or linked source tag), only while the contract is verified
+  for the installed version, and each request waits for the contract write
+  gate. Every request is built by the shared dynamic request builder from the
+  chosen action, so paths stay inside the approved API prefixes.
+- Inputs: request fields are matched to roles by name (title, description,
+  order, due date, list, label, user, and so on). A required field the client
+  cannot name makes a create unavailable. A full-replacement `PUT` fills
+  undeclared fields from the server's current record, and a field with a
+  single contract-declared value (a one-member enum or `const`) is sent with
+  that value. Nothing else is invented. Path, query, and body inputs are kept
+  in separate maps, so a move addresses the card in its current list in the
+  path while the same-named body field names the destination list. Clearing an
+  optional value on an update sends JSON `null` when the contract declares the
+  field nullable, and an empty string for a non-nullable text field.
+- Permissions: only an observed permission object on the board record grants
+  edit, manage, or share actions. A record without one stays readable but
+  offers none of them.
+- A list query value is sent only when the contract enumerates it or declares
+  it as the default; for example, a notes list omits note bodies only when its
+  `exclude` parameter declares `content`.
+- Duplicates: app API routes win over web routes, then the newest version
+  segment, then the route with fewer path inputs.
+
+Requests: [`SemanticBoardRoutes.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticBoardRoutes.kt)
+and [`NotesRepository.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesRepository.kt).
+Note saves and deletes send the last known ETag as `If-Match`; list and note
+refreshes send the cached ETag as `If-None-Match` and keep the cached copy on
+`304`. Notes settings writes use the same contract write gate as note writes.
+Tests:
+`SemanticBoardContractTest`, `SemanticNotesContractTest`,
+`SemanticBoardRoutesTest`, `SemanticNotesRepositoryTest`, and
+`SemanticSettingsTest`, including a board-shaped app `kanban_x` at `42.0.0`, a
+nested board shape with card relationship and restore routes, and a
+notes-shaped app `jotter` at `0.0.1`. The relationship and restore rules are
+covered by `StaticRelationshipWriteContractTest` with synthetic package
+sources.
+
+Not derivable from a contract, so not offered: board-scoped settings whose keys
+need an app-specific key format (shown read-only from the board record), an
+attachment type value that the contract does not fix, and writes the static
+route rules do not retain (for example a controller method that reads its
+inputs from the request object instead of its signature, as the signed Deck
+package's API label routes do; its web label routes are retained).
+
+## Contract-driven record writes
+
+**Last reviewed: 2026-11-01.** This section describes source and deterministic
+test behavior; the code may have changed since, and the linked sources are
+authoritative. None of these writes has been validated against a live server or
+shipped in a published release. See [COMPATIBILITY.md](COMPATIBILITY.md) for
+recorded device and server evidence.
+
+Record editors are semantic patterns, not per-app adapters. They never test an
+app ID, an exact version, a version range, or a reviewed source tag, so any app
+whose published contract and data match a pattern gets its editor. Every
+operation comes from the installed app's own contract: a server-advertised
+OpenAPI document, or the verified package or exact source tag acquired for that
+installation. Observed reads never authorize a write. A replacement (PUT) edit
+also needs the same-route read that the descriptor compiler pairs with it
+(`resultRecoveryActionId`). The compiler records that pairing for a declared
+contract: the app's advertised OpenAPI document (E2) or its verified package or
+exact source tag (E3). Every editor write passes the admission and verified
+write path described in [Write admission and verification](#write-admission-and-verification).
+
+These editors are not the whole dynamic path. A few app-specific rules outside
+them still test an app ID and exact version and are awaiting conversion to
+contract-shaped rules: the Chores 0.1.0 and 0.2.0 version gate in
+[`ChoresContractPolicy.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/ChoresContractPolicy.kt),
+used by its navigation, workspace, invitation, work completion, and create
+recovery rules,
+the Pantry 0.23.0 owner reorder authority in
+[`NativeRecordActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt),
+and the Pantry 0.34.0 timestamp presentation in
+[`NativePantryPresentation.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativePantryPresentation.kt).
+
+[`NativeContractActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeContractActions.kt)
+starts from the collection read that opened the screen, a route ending in
+`.../{container}/{parent}/{collection}`, and selects writes at the matching
+positions: create is a POST on exactly that route; an item write is the route
+followed by one identity placeholder, or the collection directly below the
+route base followed by one placeholder. Each candidate needs trusted
+provenance, the matching intent, and matching path parameters. Two candidates
+for one position are ambiguous and select none, and a restored read-only
+contract offers nothing.
+
+| Pattern | Recognized from | Editor |
+| --- | --- | --- |
+| Column-defined grid rows ([`NativeGridRowWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeGridRowWrites.kt)) | A grid view whose parent record has column records and rows that store `[{column, value}]` cells; one write body property declared as an open key-value map | New, edit, and delete rows; one input per column type word (`text`, `number`, `selection`, `datetime` and their variants) with the options, limits, and mandatory flag the column states |
+| Child records in a parent ([`NativeChildRecordWrites.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeChildRecordWrites.kt)) | A parent-scoped collection whose write bodies declare typed properties | New, edit, and delete with inputs derived from the body schema: text, money, date, choice or enum, one person, several people, and yes or no; choices come from the parent record or a related resource that lists them, such as a project's members or categories, under the choice-source rule below |
+| Questionnaire responses ([`NativeQuestionnaireSubmission.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeQuestionnaireSubmission.kt)) | A record holding a `questions` list, and a POST below its item route whose body declares exactly one map of string arrays | Fill in and send answers keyed by question identity |
+
+Rules shared by the editors:
+
+- Field names only decide presentation and choice sources. The schema decides
+  what is sent: property names, JSON types, enums, formats, limits, and the
+  required list. A required field missing from the draft blocks the request.
+- A field whose meaning is recognized but whose encoding the contract does not
+  determine, for example several people packed into one string, makes that
+  write unavailable with an explanation. Other optional fields without a
+  recognized role are not shown and not sent.
+- A reference field takes its choices from a collection named after its own
+  stem: `categoryId` from `categories`, `member` from `members`. A person
+  field named otherwise, such as `payer` or `userId`, takes another people
+  collection (members, participants, users) only when at least one loaded
+  record's stored value for that field resolves to identities in it. Without
+  that evidence there is no picker, so the field is not editable, and a create
+  that needs it is unavailable, for example in an empty collection.
+- Identities come from authoritative records: the parent, the row, the child
+  record, the questionnaire. A row ID never replaces a table or view ID, and a
+  child ID never replaces a parent ID. Route values bind by position. A global
+  item route is used only when the contract lets it name the parent, or the
+  item record itself names that parent.
+- Permissions come from what the parent record states: an owner field naming
+  the signed-in account, `isShared: false`, a permission object, or `can...`
+  flags. A parent that states nothing, or states only a value whose meaning the
+  contract does not define, such as a numeric access level, offers no write.
+  Questionnaires need a `canSubmit`-style flag, and a permission list or a
+  closed or limit flag that refuses a response is explained.
+- PATCH sends only the changed values; after the write the record is read
+  back and the untouched values are compared with what the editor opened. PUT
+  replaces the record, so it is offered only when the contract declares the
+  same-route read, and it is a full echo
+  ([`NativeFullEchoUpdatePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFullEchoUpdatePlan.kt)):
+  changed fields are encoded from the draft and every other declared body
+  field travels as the exact JSON the read returned, never re-encoded (a
+  stored date-time is not shortened to the date the editor shows, and a stored
+  `null` stays `null`). A body field the read did not return, or whose stored
+  value does not fit its declared type, makes the record read-only for that
+  route. A child-record field the editor reads under a reference alias
+  (`payer` stored as `payer_id`) is echoed only when exactly one alias holds a
+  value of the declared type. Grid cells the editor cannot show, such as a
+  choice whose option was removed or a date-time with seconds, also travel
+  exactly as read; a grid row holding a non-empty cell for a column the grid
+  does not list (as in a filtered view), or a value of a column type it cannot
+  encode, is not replaced.
+- Immediately before a PUT, the executor re-reads the target through that
+  same-route read, bypassing caches
+  ([`DynamicReplacementWriteGuard.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicReplacementWriteGuard.kt)).
+  When any stored body value differs from the copy the editor opened, nothing
+  is sent and the editor offers a refresh; when the read fails, nothing is
+  sent either. This narrows but does not close the window for a lost update:
+  these contracts declare no ETag or version precondition, so a change that
+  lands between the check and the write can still be overwritten.
+- Grid cells whose representation neither the contract nor the data fixes are
+  never encoded: links, rich text, and people columns, and boolean or
+  date-time columns until a stored cell shows their representation. The
+  generic inline cell editor is off for every column-defined grid, because its
+  row-object reconstruction would send the `{column, value}` wrapper as a
+  value.
+- Questionnaire questions of type file, grid, ranking, color, combined date and
+  time, and date or time range are not answered natively. If such a question
+  is required, the questionnaire explains that instead of offering a send.
+- After a grid or child-record update the executor reads the target back
+  and compares it with the request: an edited value that reads back as sent
+  confirms the write; one that reads back as the previous value after a
+  successful response means the app did not apply it, which pauses changes to
+  that route on this device; an untouched value that changed is drift, which
+  saves the edit, pauses the route, and offers **Restore previous values**, a
+  full-echo write of the baseline that is sent only when the person chooses
+  it. Grid rows compare cell by cell.
+- [`NativeEditorWriteSession`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeEditorWriteSession.kt)
+  sends each request once. A rejection keeps the draft. An unconfirmed create
+  or response triggers an authoritative refresh and blocks sending again until
+  that refresh arrives, so the person can check for the change first. An
+  unconfirmed PUT edit also waits for that refresh, and sending it again
+  repeats the pre-write check, which refuses the stale copy if the first
+  attempt was applied. Repeating an unconfirmed PATCH edit or delete is
+  allowed because it is idempotent. Cancellation is rethrown and the result
+  stays unconfirmed.
+- Drafts are ordinary remembered UI state and are not kept across process
+  death. Nothing is stored on the server until a request is confirmed.
+
+Writes this model leaves unavailable for contracts verified in this
+repository's fixtures, because the contract does not express what the write
+needs:
+
+- Expense create and edit when the people a bill was for are sent as one plain
+  string (the Cospend OpenAPI excerpt), and expense edit when the contract
+  offers only an unverifiable replacement, which includes every PUT edit known
+  only from a server-advertised OpenAPI document.
+- Any parent-scoped write in a container that states its access only as a
+  numeric level.
+- Questionnaire answers to combined date and time questions, and a
+  questionnaire's closed state when it is stated only as a numeric code that
+  the contract does not label. A `state` or `status` field whose contract enum
+  labels name the current value closed, expired, or archived is explained as
+  closed; otherwise the server remains the authority that refuses a response.
+- Grid link, rich text, and people cells.
+
+Not covered yet: grid table, column, and view management beyond the generic
+contract forms; member management, recurring entries, and settlement actions
+beyond the generic contract surfaces; questionnaire results for owners; and a
+new child record in an empty collection, because the empty list uses the
+generic empty state and no loaded record proves a person field's collection.
+
+## Write admission and verification
+
+**Last reviewed: 2026-11-06.** This section describes source and deterministic
+test behavior on the integration branch; it has not been validated against a
+live server or shipped in a published release, and the linked sources are
+authoritative. The rules are in [AGENTS.md section 4](AGENTS.md#4-dynamic-app-intelligence).
+
+Every compiled action carries its risk class (`riskClass`, R0 to R10, from
+[`DynamicOperationRiskClass.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicOperationRiskClass.kt)),
+the verified read of its route family (`readBackActionId`: the item read below
+a terminal command segment, or the collection the target is one placeholder
+below, from
+[`DynamicWriteRouteFamily.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicWriteRouteFamily.kt)),
+a declared `Idempotency-Key` header (`idempotencyKeyHeader`), and for sharing
+the declared field proving that the actor may share (`sharePermissionFieldId`,
+such as `canShare`). The evidence tier comes from provenance
+([`DynamicEvidenceTier.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicEvidenceTier.kt)):
+the advertised OpenAPI document is E2, the verified package or linked source
+tag (and a reviewed adapter contract until it becomes a rule) is E3, and a
+successful read is E6. A write whose verified package facts (`contractFacts`)
+limit it to administrators, such as `access: admin` inferred from a missing
+`NoAdminRequired`, is classified as administration (R9) and never offered;
+missing facts, as for a same-origin advertisement, count as unknown rather than
+administrator-only. The package's merge hint
+(`nullable-null-default-parameters`) is recorded but does not unlock sparse
+updates, and upload methods are not published as writes. The admission matrix
+is the pure function
+[`admitDynamicWrite`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicWriteAdmission.kt).
+
+The compiler no longer withholds send, share, and merge operations. It tags
+them: external effects (R6), administration (R9), credentials (R10), and
+sharing without a declared permission field (R8) are moved out of the schema's
+generic action list into `NativeAppSchema.dedicatedActions`, and no generic
+form is compiled for them. Credential-creating operations are still dropped
+with the `ignored-sensitive-credential-write` warning.
+
+At the transport boundary
+([`DynamicWriteExecution.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicWriteExecution.kt))
+every dynamic write is admitted before anything is sent. This phase enforces
+the refusals no surface may override: administration and credentials, a send
+without a durable attempt record or a declared idempotency key, a send whose
+required body fields are not all supplied, writes without a declared
+operation, and a quarantined route. A share is sent only when the contract
+declares a permission field and a fresh, bounded read of the target record
+returns that field as the JSON boolean `true`; `false` refuses it, and a
+missing, non-boolean, or unreadable value, or a read that does not identify
+exactly the target, refuses it as unverified. The other safeguards in the
+matrix (full echo for every replacement, a verified collection read for every
+create, permanent labeling for every delete) are applied by the surfaces that
+opt in through the request's read-back and are recorded, not yet enforced,
+for the remaining surfaces listed below. One write per target record may be
+in flight at a time.
+
+The first bounded rule slice covers feed item state changes. The registered
+`ItemStatePairRule` requires both declared inverse, body-free commands under
+one item route (read/unread, seen/unseen, star/unstar, and the reviewed spelling
+pairs in the rule). A separate declared-boolean rule preserves single-boolean
+item updates. Both require E2/E3 operation evidence, a current authoritative
+load, unique typed identity, navigation-bound parents, and a declared
+verification read. Mark-all and feed-wide commands do not qualify. No app ID
+or version selects this behavior; exact versions partition safety evidence.
+The boolean update accepts only its state field and proven required identity
+inputs; optional identity-like inputs and read-only properties do not qualify.
+Generic record and mailbox planners omit commands and flat boolean updates
+requiring these plans until those surfaces carry rule authority and recovery.
+Nested mailbox flag updates are outside this rule and retain their existing
+limitations below.
+
+[`NativePatternRulePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativePatternRulePlan.kt)
+contains typed target, rule, identity, generation, baseline and expected-state
+evidence, with separate write and read bindings. The executor rebuilds the
+plan from its descriptor and current load. Observed identities receive only
+per-action proof; their records do not become globally write-safe. A declared
+item read must confirm the identity before sending. Sibling commands share a
+canonical target gate, and unresolved operations block the canonical route
+across rule and app versions. Routes with item-state candidates also share a
+process admission gate with ordinary sibling writes, from the initial safety
+read through completion. Different targets on such a route cannot race its
+pending reservation; unrelated routes retain per-target concurrency.
+
+The feed applies item state optimistically. Network read-back must identify
+exactly one item and return the exact JSON boolean requested. A successful
+response with unchanged or differently typed state quarantines the rule;
+it cannot count as an adjusted success. Failure rolls back only the current
+item mutation, and newer authoritative loads fence stale completions. A verified
+completion still refreshes the surface after pagination changes the generation;
+an unknown completion still checks durable recovery without rolling back newer
+local state.
+Other R1 surfaces retain the limitations listed below.
+
+The next bounded Phase 3 slice is LABEL membership (Last reviewed: 2026-11-07;
+this source state may change). [`SetMembershipRule.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/rules/SetMembershipRule.kt)
+requires declared E2/E3 `POST T/assignLabel` and `POST T/removeLabel`, where
+`T` ends in the record placeholder, both JSON bodies require the same single
+scalar `labelId` (or `label_id`) field, and exactly one declared `GET T` exists.
+Direct and nested parent routes qualify. Parent placeholders may differ in the
+read: bindings and their string/integer types must agree by route position.
+The chosen write resolves its read from all descriptor actions. An unrelated
+read, matching resource names or observed IDs, or a preferred board `ReadCard`
+action cannot substitute for that exact read. No collection endpoint is invented.
+Sharing, ACL, user, group and permission operations are excluded. Only the
+exact reviewed inverse can reinterpret the general classifier's conservative
+"remove" naming result as R1; destructive effects remain excluded. The nested
+`POST/DELETE T/labels/{labelId}` relationship shape remains deferred.
+
+[`NativeMembershipRulePlan.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMembershipRulePlan.kt)
+uses a fresh typed item-read authority and separate record, parent and member
+bindings. [`NativeRulePostcondition.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRulePostcondition.kt)
+retains complete bounded raw `labels` arrays, with uniform scalar IDs or object
+`id` projections. Empty arrays do not invent member identities. Absent, null,
+malformed, duplicate, wrong-typed and bounded-away arrays cannot prove a baseline.
+Limits are 256 members and 16,384 JSON characters per array. The pre-send
+network read must preserve the authoritative baseline. Read-back verifies the
+requested member delta and the complete representation of every untouched
+member, ignoring only set order. Drift stops a send or quarantines a contradictory
+result; there is no automatic inverse or restore. Display-only `DeckLabel`
+lists are never membership proof.
+
+The same durable rule executor handles Boolean and membership postconditions.
+Recovery envelope version 2 adds typed plans and the inverse contract; version-1
+Boolean evidence still decodes and uses its original pending token. Encrypted
+evidence precedes reservation and one send. Malformed or unknown recovery
+versions retain the pending operation. Unknown delivery survives restart;
+status checks only read. An explicit repeat requires the same target, member,
+direction, compatible exact contracts and original membership baseline.
+Cancellation, disk faults, account retirement, cleanup and stale-token fences
+remain shared with the Boolean path. Both rule kinds recheck current contract
+authorization after network reads and durable reservation, immediately before
+the initial send or an explicit repeat. Rediscovery in progress or a revoked or
+replaced contract refuses an unsent operation and preserves an earlier unknown
+operation's recovery token without repeating it.
+
+[`SemanticBoardMembershipController.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SemanticBoardMembershipController.kt)
+classifies each label command from contract evidence as `NotManaged` or
+`Managed(proof)`. Managed admission requires the board's selected item-read
+action to be the rule's exact read. The loaded card retains that action, route
+template and bound request path; the controller checks all three before using
+its identities. Equal IDs and labels from a different route cannot authorize
+a managed write. Only managed commands enter this path. Missing data, failed
+planning, denied edit permission, pending delivery and quarantine cannot fall
+back to legacy sending. The board bridge requires numeric board/card/label
+identities and a complete object-label display/catalog; the generic planner also
+handles declared string identities and scalar membership arrays. Picker
+batches serialize and stop at the first unresolved result. Exact same-target
+legacy siblings share admission guards. Previously recorded managed routes keep
+those guards when a later descriptor loses the inverse proof, so pending or
+quarantined membership cannot downgrade into a legacy send. Unrelated route
+families retain their existing path. The picker offers read-only status checking
+and explicit repeat of a recorded operation. Both preserve the unsaved selection
+and leave the picker open. After every result, including partial batch success,
+the picker refreshes its authoritative baseline before enabling another save;
+a failed refresh leaves saving disabled until a later check succeeds. Even a
+submission with no selected changes checks durable safety state under the shared
+route gate before reading current membership. An unresolved operation keeps its
+token and leaves the picker open; a matching baseline cannot prove that an
+earlier ambiguous send will not apply. Membership is never updated optimistically. Cross-family
+Deck fixtures remain on the documented legacy
+path; equal IDs and inferred relationships do not prove route equivalence.
+This slice has synthetic planner/executor/controller coverage, not live Deck
+qualification, device qualification or a published artifact. Broader membership,
+member-list encodings, Mail outbox, trash and Phase 4 remain outside this slice.
+
+OCS failures reported inside an HTTP `2xx` response are classified by status
+code ([`DynamicOcsFailure.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicOcsFailure.kt)).
+Client errors (`400` to `499`, the OCS v1 app failure codes `101` to `199`,
+`997` unauthorised, and `998` not found) are rejections. A server error
+(`996`, `500` and above), the unknown error `999`, any other code, or
+metadata that contradicts itself is an unknown result, so the exactly-once
+send keeps its attempt record and never resends without confirmation.
+
+Dynamic API requests other than `GET`, including multipart uploads and
+exactly-once sends, use an HTTP client with connection-failure retries
+disabled on desktop and Android
+([`JvmDynamicApiClients.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/JvmDynamicApiClients.kt)),
+and a per-call network attempt guard. The guard also blocks automatic HTTP
+follow-ups such as `503` with `Retry-After: 0` before a second request reaches
+the server, including body-free writes. A blocked repeat surfaces as an
+unknown result; only a new explicit call can make another attempt.
+
+[`NativeVerifiedWrite.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeVerifiedWrite.kt)
+is the one verified write path: an optional pre-read compare, one send, and a
+read-back through the exact same-route read or the route-family read, with
+outcomes Confirmed, Adjusted, NotApplied, and Unknown. A definite rejection is
+not read back. A successful response whose read-back shows the previous value,
+or an untouched field that drifted, contradicts the postcondition and
+quarantines the route. Server bookkeeping fields (modification time, ETag,
+revision) are not drift. Managed board label commands use the descriptor rule
+executor described above. Other board writes retain the board transport path;
+its exact same-target siblings share the managed route's admission guard, but
+this does not qualify their postconditions or convert cross-family operations.
+
+Quarantine and probation state is stored per account identity digest, app ID,
+exact app version, route template, rule ID, and rule version
+([`DynamicWriteQuarantine.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicWriteQuarantine.kt),
+file-backed on desktop and Android by
+[`FileDynamicWriteQuarantineStore.kt`](ui/src/jvmMain/kotlin/dev/obiente/nextcloudnative/app/FileDynamicWriteQuarantineStore.kt),
+written to a temporary file and moved into place). Resolved state can be
+cleared by the person or an app-version change, except a stopped unknown
+operation stays quarantined across versions until explicit Resume. Pending operations cannot:
+Resume changes, ordinary confirmation, version observation and capacity
+eviction preserve them. Unreadable safety files fail closed, including when
+the person selects Resume changes. Account retirement removes safety and
+encrypted recovery through generation fencing. Store instances sharing a
+storage directory reload under one synchronized owner before each transition.
+
+Before any rule write, complete typed recovery evidence is saved using the
+platform's encrypted `TextEditorDraftStore`, then an opaque random operation
+token is atomically reserved in the safety store. Safety JSON and diagnostics
+contain no bound IDs, state values, content or payload fingerprints. A failed
+reservation sends nothing. Cancellation, unreadable read-back, restart, and
+missing, corrupt or incompatible encrypted evidence retain the pending token.
+Exact confirmation atomically resolves only its matching token before deleting
+the encrypted evidence. Definite first-attempt rejection clears only that token
+and leaves probation. Pending and quarantined entries are protected from
+capacity eviction; exhausted protected capacity refuses new operations.
+Cancelled preparation removes evidence that has no durable reservation. Before
+new writes and status checks, bounded account-local maintenance removes
+recognized orphan evidence while preserving every pending token across apps and
+versions. Save/reserve and maintenance share a lock. Unreadable drafts and drafts
+whose stored identity does not match the recovery token are never swept.
+Transient deletion failures are retried by the next maintenance pass, so resolved
+rule evidence does not permanently consume the shared text/mail draft capacity.
+An offline status read leaves verification pending; it does not claim that the
+encrypted recovery information is corrupt.
+
+**Check earlier changes** in the feed performs network reads only, including
+after restart. An unresolved operation can be repeated only by an explicit
+**Repeat same change**, after status reconciliation and current authority
+checks, with the same logical token, target, action, bindings and expected
+state. An inverse command or another target is not the same operation. A
+rejected repeat after an earlier unknown result still needs read-back. An
+authoritative unchanged baseline after that rejection resolves the pending
+intent, without claiming that the first attempt was never delivered.
+There is no automatic replay. A changed app or rule contract cannot reinterpret
+old encrypted evidence; the operation stays pending for compatible recovery or
+an explicit terminal decision.
+
+For a deleted target, changed contract, unreadable evidence or another operation
+that can no longer be verified, **Stop checking** in Contract info asks for a
+separate confirmation. It clears only the chosen token, deletes its encrypted
+evidence and records `write-recovery-stopped`, without any transport request.
+Its result remains unknown and may still take effect. The canonical route stays
+quarantined, including across versions, until the person reviews the affected
+item and separately confirms **Resume changes**. A stale or foreign token cannot
+end another operation. Evidence is deleted before resolving the token, so a
+failed deletion keeps the operation pending for another explicit Stop checking,
+even when damaged evidence cannot be recognized by ordinary cleanup.
+
+An app ID, exact version or route template outside the safe key alphabet or
+length bound is keyed by its SHA-256 digest. Contract-declared editor writes
+keep `contract-declared` version 1. The contract information dialog shows
+paused, probationary and pending-verification routes. **Resume changes** asks
+for confirmation and clears only resolved safety records.
+
+After drift, the person may send the offered baseline restore: a full echo of
+every value from before the drifted write. It is the only write a quarantined
+route accepts, only as the exact request the executor offered for that account,
+app version, and route, and only once a transport attempt starts. A failed
+pre-read leaves the restore action available for another explicit attempt.
+It still runs the pre-read compare against the drifted state the person saw,
+and its read-back checks every baseline field, including the complete cell map
+for grid rows. An ignored or partial restore is a failure, not an adjusted
+success. A restore is not offered when an original field was absent or a
+custom-shaped field has no baseline verifier. Offers live only in process
+memory, with at most 32 retained across accounts; closing the editor, eviction,
+or restarting the app can lose the offer. Quarantine persists independently,
+and the route stays paused until the person resumes changes.
+
+Edited fields are tracked separately from request-context inputs. A field
+absent from the original read is distinct from an explicit JSON null and is
+still verified after a partial update.
+
+Diagnostics record the evidence tier, risk class,
+rule ID, and rule version of each write without payload values, and use the
+codes `write-quarantined`, `write-postcondition-mismatch`,
+`identity-binding-refused`, `write-rule-probation`, and `write-rule-confirmed`.
+Rule execution records the registered rule identity and lifecycle codes without payload values.
+
+The rule registry serves feed state changes and the bounded managed label
+commands above. Synthetic fixtures cover differently named apps and unknown
+versions. This is source and deterministic evidence, not live News/Deck/server
+qualification or a published artifact. Broader membership, member-list encoding,
+Mail outbox, trash semantics and Phase 4 remain later scopes.
+
+Writes that pass admission and the verified write path: grid row updates
+(full echo or cell-checked PATCH) and child record updates (full echo or
+read-back PATCH). A replacement whose body is not JSON cannot carry stored
+values back exactly, so such a record stays read-only. Writes that pass
+admission but are not yet read back: other R1 actions outside the bounded item-state
+and LABEL rules above, generic record, collection, and board actions, mailbox state
+changes, notes, questionnaire responses, creates (which keep their durable
+pending records), deletes, and the mail composer's send (which uses the
+exactly-once path instead and is refused when no durable draft storage can
+record its attempt). Managed board label commands are admitted by the generic
+rule path. Other board writes retain their existing verification boundaries.
+The item-state candidates explicitly omitted from generic record and mailbox
+planners above are unavailable, rather than admitted without verification.
+
 ## Reviewed limits
 
 **Server bases and origins**
@@ -564,6 +1183,10 @@ bodies, invalid text, and deeply nested JSON.
   `ContractModuleInitializationTest` loads every facade and fails when one is
   missing from the instrumented list. JVM loading does not prove ART or ICU
   compatibility.
+- `ContractModuleAndroidJsonApiTest` checks the contract module's compiled
+  `org.json` references against the Android SDK API. Package response extraction
+  uses Android-compatible key iteration; JVM JSON-java tests alone cannot catch
+  methods absent from Android's framework implementation.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are rejected,
   not ignored. An absent override inherits the base; an explicit empty array
@@ -719,12 +1342,128 @@ loading, retry, and later pages.
 
 ### Mail reading hierarchy
 
+Every app whose contract has mailbox semantics, including Nextcloud Mail,
+opens in the same mailbox workspace; no app identifier or version selects it.
 Mail reading sections put the verified message body and thread reads first.
 DKIM, raw source, smart-reply, and itinerary probe routes stay in the contract
 but are left out of the ordinary section chooser. This issues no optional reads
 and invents no diagnostics destination. Attachment cards show bounded metadata
 only; opening an attachment needs a separate validated message and attachment
 binding plus native download integration.
+
+### Mailbox composing
+
+[`NativeMailSendPlanning.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailSendPlanning.kt)
+offers Compose, Reply, Reply all, and Forward only when the contract describes
+exactly one send operation that the composer can fill without inventing a
+value.
+
+- The descriptor compiler retains a declared send as an external effect (risk
+  class R6) and keeps it out of every generic form and action list
+  (`NativeAppSchema.dedicatedActions`). The composer is the dedicated surface
+  that may offer it, because it sends through the exactly-once path below. The
+  planner accepts a POST, or an idempotent PUT with an exact recovery read,
+  with high or verified confidence, a JSON body, and the word `send` in its ID,
+  label, operation ID, or route. Draft, test, preview, invitation, and share
+  routes are excluded. A synchronous send with no recovery read, such as the
+  OCS `message/send` operation in Mail's signed package, is therefore offered
+  as a composer; this has deterministic test coverage only and has not been
+  validated against a live Mail server (Last reviewed: 2026-11-02).
+- Every required body, path, and query input maps to a mail role:
+  recipients, Cc, Bcc, subject, body, an HTML flag (sent as false), the
+  sending account's identity or address, or a threading header (In-Reply-To
+  or References). Recipients
+  use the declared shape: an array of objects with an address field and an
+  optional label field, an array of strings, or a single address string,
+  which accepts one recipient.
+- The sending account comes from a loaded record of a resource named as an
+  account, with an action-safe identity; its address comes from the record's
+  email field. Contacts, suggestions, and other records with addresses are
+  never senders. Without such a record the composer is not offered.
+- Each identity input takes the value of the one role its name states. Account
+  inputs (`accountId`, `account`) take the sending account's identity. A
+  sender-identity input (`identityId`, `aliasId`) would need a record from
+  another resource: when required, the composer is not offered; when optional,
+  it is left out so the server uses its default.
+- A reply uses Reply-To when present and leaves the sender's own addresses out
+  of Reply all. A declared In-Reply-To field takes the original Message-ID, and
+  a declared References field takes the original's References chain followed
+  by that Message-ID (at most 20 identifiers, keeping the thread root). Only
+  identifiers of the `<...@...>` form are used.
+- A send is not idempotent, so it runs through
+  [`NativeExactlyOnceSend`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeExactlyOnceSend.kt):
+  an attempt record (attempt ID, time, a content-free target summary such as
+  "2 recipients", and a SHA-256 fingerprint of the exact request values) is
+  stored with the draft before the request can leave the device, and the
+  request is sent once and never retried automatically. When the operation
+  declares an `Idempotency-Key` request header, a key is generated once per
+  attempt and reused only on a confirmed resend of the same payload; an
+  undeclared key is never sent. A rejected send keeps the draft for editing. An
+  unknown outcome, a transport failure, or cancellation after the request may
+  have left keeps the draft and shows the recorded attempt as evidence. The composer then runs the operation's declared
+  recovery read with the same bindings: a status that names a sent state, or
+  a record holding exactly the attempted body and subject, closes the draft as
+  sent; a queued state or a failed read keeps sending again unavailable and
+  offers Check status; any other answer, or an operation without a recovery
+  read, allows another attempt after an explicit confirmation.
+- Drafts and running sends belong to a per-account owner outside every screen,
+  so leaving the composer or recreating the activity does not cancel a send.
+  The draft is saved shortly after each edit to the encrypted, account-scoped
+  text draft storage, and an attempt is recorded before its request starts, so
+  after process death the draft returns with its unconfirmed outcome. If the
+  attempt cannot be recorded, nothing is sent.
+
+`NativeMailSemanticPatternTest`, `NativeMailComposerStateTest`, and
+`NativeMailComposeTest` cover the same contracts under several app IDs and
+versions, a synchronous send reserved for the exactly-once composer, a missing send, an unknown required
+input, a missing account,
+a contract that only mentions mail in a field, sender identity roles,
+contacts that are not senders, threading and References chains, every send
+outcome and status read, and draft save, restore, and removal after a
+confirmed send. `NativeMailComposerRegistryTest` covers the encrypted text
+draft binding and account retirement.
+
+### Feed readers
+
+[`DynamicFeedSemantics.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicFeedSemantics.kt)
+marks an article collection as a `feedReader` view, and
+[`NativeFeedReader.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFeedReader.kt)
+renders it, whatever the app identifier or version.
+
+- An article collection has a title, a link, content, and a publication
+  marker or feed reference. When a sparse contract declares no response
+  fields, an `items`, `articles`, or `entries` collection beside a feed or
+  subscription collection qualifies, and the records are checked again when
+  they arrive. A titled link list without content or publication markers is
+  not a feed.
+- The reader opens on articles, ahead of the subscription list. Parameter-free
+  verified feed and folder reads load beside it through the bounded relation
+  cache. Articles are grouped by feed only through their feed reference and a
+  loaded feed record; this is display only.
+- Unread, Starred, and feed filters work on loaded pages and say so in a
+  caption above the list. Reaching the end of a filtered list loads further
+  pages automatically until three pages in a row add nothing visible; Load
+  more stays available. Article links other than HTTP(S) are dropped, and
+  bodies use the mail HTML sanitizer. An integer publication time is shown
+  only when its field's format declares epoch seconds; other integers are not
+  guessed.
+- [`NativeFeedItemActions.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFeedItemActions.kt)
+  offers read, unread, star, and unstar for verified writes on an article
+  with a contract-declared identity: a body-free route ending in the state
+  word, or a write whose only non-identity body field is one boolean state
+  field. The route must take the article's identity as a required path
+  parameter, named for the article resource or placed after the article
+  collection; a route without one (`POST /items/read`) or bound to a feed
+  marks many articles and is never used. Changes apply optimistically and roll
+  back for that article alone; an unknown result also reads the articles
+  again. A pending or unconfirmed change survives loading another page. Opening
+  an unread article marks it read when that per-article change is available.
+
+`NativeFeedSemanticPatternTest` covers the same contract under two app IDs and
+versions, the entry point, observed identities, missing state routes, bulk and
+feed-wide routes, declared epoch dates, bookmark lists, and unsafe links.
+`NativeFeedReaderSessionTest` covers local state across page appends and
+refreshes, automatic loading under a filter, and the filter caption.
 
 ### Pantry timestamps and cards
 

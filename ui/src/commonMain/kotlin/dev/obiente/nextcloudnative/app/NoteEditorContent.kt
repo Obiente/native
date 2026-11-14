@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import dev.obiente.nextcloudnative.app.design.NextcloudFilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -27,8 +30,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import com.mikepenz.markdown.m3.Markdown
 
@@ -56,9 +62,15 @@ internal fun NoteEditorContent(
     onViewModeChange: (NoteViewMode) -> Unit,
     onSave: () -> Unit,
     titleSharedKey: String? = null,
+    /** False when the app's contract takes no title on an update; the field is then read-only. */
+    canRename: Boolean = true,
+    /** False when the app's contract takes no folder on an update. */
+    canCategorize: Boolean = true,
 ) {
     var showDetails by remember { mutableStateOf(false) }
     val editable = !readOnly && !mutationInProgress
+    val titleEditable = editable && canRename
+    val folderEditable = editable && canCategorize
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxHeight < 480.dp
         Column(
@@ -77,7 +89,7 @@ internal fun NoteEditorContent(
                 }
                 Button(enabled = canSave, onClick = onSave) { Text(if (saving) "Saving..." else "Save") }
             }
-            if (!compact) NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange, titleSharedKey)
+            if (!compact) NoteEditorMetadata(title, category, folderOptions, titleEditable, folderEditable, onTitleChange, onCategoryChange, titleSharedKey)
             if (viewMode == NoteViewMode.Edit) {
                 MarkdownFormattingToolbar(content, onContentChange, editable)
                 OutlinedTextField(value = content, onValueChange = onContentChange,
@@ -112,7 +124,7 @@ internal fun NoteEditorContent(
             onDismissRequest = { showDetails = false },
             title = { Text("Note details") },
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                NoteEditorMetadata(title, category, folderOptions, editable, onTitleChange, onCategoryChange)
+                NoteEditorMetadata(title, category, folderOptions, titleEditable, folderEditable, onTitleChange, onCategoryChange)
             } },
             confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Done") } },
         )
@@ -121,18 +133,69 @@ internal fun NoteEditorContent(
 
 @Composable
 private fun NoteEditorMetadata(
-    title: String, category: String, folderOptions: List<String>, editable: Boolean,
+    title: String, category: String, folderOptions: List<String>, titleEditable: Boolean, folderEditable: Boolean,
     onTitleChange: (String) -> Unit, onCategoryChange: (String) -> Unit, titleSharedKey: String? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth().sharedElement(titleSharedKey), label = { Text("Title") }, singleLine = true, enabled = editable)
-        OutlinedTextField(category, onCategoryChange, Modifier.fillMaxWidth(), label = { Text("Folder") }, singleLine = true, enabled = editable)
+        OutlinedTextField(title, onTitleChange, Modifier.fillMaxWidth().sharedElement(titleSharedKey), label = { Text("Title") }, singleLine = true, enabled = titleEditable)
+        OutlinedTextField(category, onCategoryChange, Modifier.fillMaxWidth(), label = { Text("Folder") }, singleLine = true, enabled = folderEditable)
         if (folderOptions.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-            NextcloudFilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = editable)
+            NextcloudFilterChip(category.isBlank(), { onCategoryChange("") }, label = { Text("Uncategorized") }, enabled = folderEditable)
             folderOptions.forEach { path ->
-                NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = editable)
+                NextcloudFilterChip(category == path, { onCategoryChange(path) }, label = { Text(path) }, enabled = folderEditable)
             }
         }
+    }
+}
+
+@Composable
+internal fun MarkdownFormattingToolbar(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Medium),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MarkdownToolbarButton(NextcloudIcons.FormatHeading, "Heading", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Heading))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatBold, "Bold", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Bold))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatItalic, "Italic", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Italic))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatChecklist, "Checklist item", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Checklist))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatQuote, "Quote", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Quote))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatCode, "Inline code", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.InlineCode))
+            }
+            MarkdownToolbarButton(NextcloudIcons.FormatLink, "Link", enabled) {
+                onValueChange(applyMarkdownEdit(value, MarkdownEditAction.Link))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownToolbarButton(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(icon, contentDescription = description)
     }
 }

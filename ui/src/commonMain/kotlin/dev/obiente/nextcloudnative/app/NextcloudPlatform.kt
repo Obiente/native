@@ -223,7 +223,17 @@ data class NextcloudApiRequest(
     val maximumResponseBytes: Long = DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES,
     val cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
     val multipartBody: NextcloudMultipartBody? = null,
-)
+    /** An entity-tag precondition sent as If-Match, so a stale write is rejected by the server. */
+    val ifMatch: String? = null,
+    /** A cached representation's validator sent as If-None-Match on a GET; 304 means it is current. */
+    val ifNoneMatch: String? = null,
+    /** A contract-declared Idempotency-Key, created once per send attempt and reused only on a confirmed resend. */
+    val idempotencyKey: String? = null,
+) {
+    /** The only headers a caller can influence: the bounded preconditions and a declared idempotency key. */
+    val preconditionHeaders: Map<String, String>
+        get() = listOfNotNull(ifMatch?.let { "If-Match" to it }, ifNoneMatch?.let { "If-None-Match" to it }, idempotencyKey?.let { "Idempotency-Key" to it }).toMap()
+}
 
 data class NextcloudApiResponse(
     val status: Int,
@@ -348,13 +358,6 @@ data class TalkReaction(
     }
 }
 
-data class TalkMessagePage(
-    val messages: List<TalkMessage>,
-    /** Opaque history position returned by Talk for the next older-page request. */
-    val olderCursor: Long?,
-    val hasMoreHistory: Boolean,
-)
-
 data class NextcloudActivity(
     val id: Long,
     val app: String,
@@ -423,7 +426,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices {
+interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices, DynamicWriteSafetyPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -657,9 +660,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         actionId: String,
         targetRecordId: String,
         values: Map<String, String>,
-    ): Unit = throw UnsupportedOperationException(
-        "Crash-safe dynamic mutation staging is not supported on this platform.",
-    )
+    ): Unit = throw UnsupportedOperationException("Crash-safe dynamic mutation staging is not supported on this platform.")
 
     /** Clears a staged mutation only after success or an authoritative rejected outcome. */
     suspend fun clearPendingDynamicMutation(
@@ -1438,8 +1439,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
 
     suspend fun listActivities(session: NextcloudSession, limit: Int = DEFAULT_ACTIVITY_LIMIT): List<NextcloudActivity>
 
-    suspend fun listNotes(session: NextcloudSession): List<NextcloudNote>
-
     /**
      * Reads the server-wide direct-editing inventory without creating an edit token.
      *
@@ -1476,107 +1475,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         request: NextcloudDocumentEditSessionRequest,
     ): NextcloudDocumentEditSession = error("Document direct editing is not supported on this platform.")
 
-    suspend fun listNotesConditionally(
-        session: NextcloudSession,
-        expectedEtag: String?,
-    ): NextcloudConditionalRead<List<NextcloudNote>> =
-        NextcloudConditionalRead.Modified(listNotes(session), responseEtag = null)
-
-    suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote
-
-    /** Returns [Absent] only when an authoritative detail request answers 404 or 410. */
-    suspend fun inspectNotePresence(
-        session: NextcloudSession,
-        noteId: Long,
-    ): NextcloudNotePresence = NextcloudNotePresence.Present(loadNote(session, noteId))
-
-    suspend fun loadNoteConditionally(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String?,
-    ): NextcloudConditionalRead<NextcloudNote> =
-        NextcloudConditionalRead.Modified(loadNote(session, noteId), responseEtag = null)
-
-    suspend fun updateNote(
-        session: NextcloudSession,
-        noteId: Long,
-        content: String,
-        category: String,
-        favorite: Boolean,
-        expectedEtag: String?,
-        title: String? = null,
-    ): NextcloudNote
-
-    suspend fun createNote(
-        session: NextcloudSession,
-        title: String,
-        content: String,
-        category: String,
-    ): NextcloudNote = error("Creating notes is not supported on this platform.")
-
-    suspend fun deleteNote(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String? = null,
-    ) {
-        error("Deleting notes is not supported on this platform.")
-    }
-
-    suspend fun renameNoteCategory(
-        session: NextcloudSession,
-        oldCategory: String,
-        newCategory: String,
-    ) {
-        val source = normalizeNoteCategory(oldCategory)
-        val destination = normalizeNoteCategory(newCategory)
-        require(source.isNotEmpty() && destination.isNotEmpty() && source != destination) {
-            "Choose a valid destination folder."
-        }
-        require(!destination.startsWith("$source/")) { "A folder cannot be moved inside itself." }
-        val summaries = listNotes(session)
-        executeNoteFolderRename(
-            summaries = summaries,
-            oldCategory = source,
-            newCategory = destination,
-            loadNote = { noteId -> loadNote(session, noteId) },
-            updateNote = { mutation ->
-                val note = mutation.note
-                updateNote(
-                    session = session,
-                    noteId = note.id,
-                    content = requireNotNull(note.content),
-                    category = requireNotNull(mutation.destinationCategory),
-                    favorite = note.favorite,
-                    expectedEtag = requireNotNull(note.etag),
-                    title = note.title,
-                )
-            },
-            reloadSummaries = { listNotes(session) },
-        )
-    }
-
-    suspend fun deleteNoteCategory(
-        session: NextcloudSession,
-        category: String,
-    ) {
-        val path = normalizeNoteCategory(category)
-        require(path.isNotEmpty()) { "The root note folder cannot be deleted." }
-        val summaries = listNotes(session)
-        executeNoteFolderDelete(
-            summaries = summaries,
-            category = path,
-            loadNote = { noteId -> loadNote(session, noteId) },
-            deleteNote = { mutation ->
-                deleteNote(
-                    session = session,
-                    noteId = mutation.note.id,
-                    expectedEtag = requireNotNull(mutation.note.etag),
-                )
-            },
-            reloadSummaries = { listNotes(session) },
-        )
-    }
-
     suspend fun listPeople(session: NextcloudSession, backend: String = "recognize"): List<NextcloudPerson>
 
     suspend fun loadPersonCover(session: NextcloudSession, person: NextcloudPerson): ByteArray
@@ -1585,20 +1483,19 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
 
     suspend fun listTalkRooms(session: NextcloudSession): List<TalkRoom>
 
-    suspend fun listTalkMessages(session: NextcloudSession, token: String): List<TalkMessage>
-
-    suspend fun listTalkMessagePage(
+    /**
+     * Dedicated same-origin transport for reviewed Talk chat requests.
+     *
+     * Implementations reject redirects that leave the account, bound the response, cancel the
+     * network call with the coroutine, and keep a long poll open for at least
+     * [TalkTransportRequest.serverWaitSeconds]. Writes use the account mutation path.
+     */
+    suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-        olderCursor: Long? = null,
-        limit: Int = DEFAULT_TALK_MESSAGE_PAGE_SIZE,
-    ): TalkMessagePage = TalkMessagePage(
-        messages = listTalkMessages(session, token),
-        olderCursor = null,
-        hasMoreHistory = false,
-    )
-
-    suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String)
+        request: TalkTransportRequest,
+    ): TalkTransportResponse {
+        error("Talk transport is unavailable on this platform.")
+    }
 
     suspend fun revokeSession(session: NextcloudSession)
 }
@@ -1616,53 +1513,6 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
-fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
-    require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {
-        "Dynamic API paths must be relative to the connected Nextcloud server."
-    }
-    require(relativePath.none { it == '\\' || it == '?' || it == '#' || it.isWhitespace() }) {
-        "Dynamic API paths cannot contain a query, fragment, backslash, or whitespace."
-    }
-    require(relativePath.split('/').none { segment ->
-        val decodedDots = segment.replace("%2e", ".", ignoreCase = true)
-        decodedDots == "." || decodedDots == ".."
-    }) { "Dynamic API paths cannot traverse directories." }
-    require(queryParameters.keys.all { key ->
-        key.isNotBlank() && key.none { it.isWhitespace() || it == '&' || it == '=' || it == '#' }
-    }) { "Dynamic API query parameter names are invalid." }
-    val maximumAllowedResponse = if (
-        relativePath.matches(Regex("^/index\\.php/apps/memories/api/image/decodable/[1-9][0-9]*$"))
-    ) {
-        MAX_IN_MEMORY_FILE_CONTENT_BYTES
-    } else {
-        MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES
-    }
-    require(maximumResponseBytes in 1..maximumAllowedResponse) {
-        "Dynamic API response limit is outside the allowed range."
-    }
-    require(contentType == null || contentType.length <= 160) { "Dynamic API content type is invalid." }
-    multipartBody?.let { multipart ->
-        require(method in setOf(NextcloudApiMethod.POST, NextcloudApiMethod.PUT, NextcloudApiMethod.PATCH)) {
-            "Multipart uploads require POST, PUT, or PATCH."
-        }
-        require(body == null && contentType == null) {
-            "A typed multipart body cannot be combined with a raw request body or content type."
-        }
-        multipart.requireSafe()
-    }
-    return this
-}
-
-fun buildNextcloudApiUrl(serverUrl: String, request: NextcloudApiRequest): String {
-    request.requireSafe()
-    val base = serverUrl.trimEnd('/') + request.relativePath
-    if (request.queryParameters.isEmpty()) return base
-    val query = request.queryParameters.toSortedMap().entries.joinToString("&") { (key, value) ->
-        "${encodeUrlComponent(key)}=${encodeUrlComponent(value)}"
-    }
-    return "$base?$query"
-}
-
 fun boundedActivityLimit(value: Int): Int = value.coerceIn(1, MAX_ACTIVITY_LIMIT)
 
 fun boundedPreviewDimension(value: Int): Int = value.coerceIn(MIN_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION)
@@ -1687,7 +1537,7 @@ fun buildNextcloudChunkUploadUrl(serverUrl: String, userId: String, uploadId: St
 
 private fun encodeUrlPathSegment(value: String): String = encodeUrlComponent(value)
 
-private fun encodeUrlComponent(value: String): String = buildString {
+internal fun encodeUrlComponent(value: String): String = buildString {
     for (byte in value.encodeToByteArray()) {
         val unsigned = byte.toInt() and 0xff
         val isUnreserved = unsigned in 'a'.code..'z'.code ||

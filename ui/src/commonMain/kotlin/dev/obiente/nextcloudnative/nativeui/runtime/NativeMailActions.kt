@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import dev.obiente.nextcloudnative.nativeui.rules.requiresPatternRulePlan
 
 internal enum class NativeMailMessageActionKind {
     MarkRead,
@@ -59,7 +60,7 @@ internal fun nativeMailMessageActionPlan(
         action.resourceId.sameMailActionResource(target.resource.id) &&
             action.risk in setOf(ActionRisk.mutating, ActionRisk.destructive) &&
             action.binding.method in MAIL_MUTATION_METHODS &&
-            action.intent in MAIL_MUTATION_INTENTS
+            action.intent in MAIL_MUTATION_INTENTS && !schema.requiresPatternRulePlan(action)
     }
     val read = candidates.mapNotNull { action ->
         val bindingValues = target.record.mailActionBindingValues(action) ?: return@mapNotNull null

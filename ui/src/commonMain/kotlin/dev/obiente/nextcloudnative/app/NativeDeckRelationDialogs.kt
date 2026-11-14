@@ -169,84 +169,6 @@ fun DeckUiMoveCardDialog(
 }
 
 @Composable
-fun DeckUiLabelPickerDialog(
-    card: DeckCard,
-    availableLabels: List<DeckLabel>,
-    busy: Boolean,
-    errorMessage: String?,
-    onDismiss: () -> Unit,
-    onSubmit: (List<DeckLabel>) -> Unit,
-    onManageLabels: (() -> Unit)? = null,
-) {
-    var selectedKeys by remember(card) {
-        mutableStateOf(card.labels.map(DeckLabel::id).toSet())
-    }
-    DeckUiAdaptiveDialog(
-        title = "Labels",
-        supportingText = card.title,
-        onDismiss = onDismiss,
-        dismissLabel = "Cancel",
-        confirmLabel = "Save labels",
-        confirmEnabled = !busy,
-        busy = busy,
-        onConfirm = {
-            onSubmit(availableLabels.filter { it.id in selectedKeys })
-        },
-    ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
-            contentPadding = PaddingValues(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            onManageLabels?.let { manageLabels ->
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = manageLabels, enabled = !busy) {
-                            Text("Manage board labels")
-                        }
-                    }
-                }
-            }
-            if (availableLabels.isEmpty()) {
-                item {
-                    DeckUiEmptyRelationState(
-                        title = "No labels available",
-                        message = "Create a board label, then assign it to this card.",
-                    )
-                }
-            }
-            items(availableLabels, key = DeckLabel::id) { label ->
-                val selected = label.id in selectedKeys
-                DeckUiCheckboxRow(
-                    title = label.title,
-                    selected = selected,
-                    enabled = !busy,
-                    leading = {
-                        Box(
-                            modifier = Modifier.size(18.dp).background(
-                                color = label.color.toDeckUiColor(
-                                    MaterialTheme.colorScheme.primary,
-                                ),
-                                shape = RoundedCornerShape(5.dp),
-                            ),
-                        )
-                    },
-                    onClick = {
-                        selectedKeys = selectedKeys.toggle(label.id)
-                    },
-                )
-            }
-            errorMessage?.let { message ->
-                item { DeckUiInlineError(message) }
-            }
-        }
-    }
-}
-
-@Composable
 fun DeckUiLabelManagerDialog(
     board: DeckBoard,
     availableLabels: List<DeckLabel>,
@@ -942,7 +864,7 @@ private fun DeckUiSelectionRow(
 }
 
 @Composable
-private fun DeckUiCheckboxRow(
+internal fun DeckUiCheckboxRow(
     title: String,
     selected: Boolean,
     enabled: Boolean,
@@ -1116,7 +1038,7 @@ private fun DeckUiAttachmentItem(
 }
 
 @Composable
-private fun DeckUiEmptyRelationState(
+internal fun DeckUiEmptyRelationState(
     title: String,
     message: String,
 ) {
@@ -1213,7 +1135,7 @@ private fun DeckUser.deckUiInitials(): String = displayName.split(' ')
     .uppercase()
     .ifBlank { "?" }
 
-private fun String?.toDeckUiColor(fallback: Color): Color {
+internal fun String?.toDeckUiColor(fallback: Color): Color {
     val normalized = this?.trim()?.removePrefix("#") ?: return fallback
     if (normalized.length !in setOf(3, 6, 8) ||
         normalized.any { !it.isDigit() && it.lowercaseChar() !in 'a'..'f' }

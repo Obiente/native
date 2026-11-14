@@ -1270,7 +1270,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun `generic discovery withholds ambiguous result mutations from every semantic source`() {
+    fun `send share and merge operations are retained for dedicated surfaces only`() {
         val document = """
             {
               "openapi":"3.0.3",
@@ -1314,14 +1314,13 @@ class DynamicAppDescriptorCompilerTest {
 
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
 
-        assertEquals(listOf("records-list"), descriptor.actions.map(DynamicAction::id))
-        assertEquals(
-            3,
-            descriptor.warnings.count { warning ->
-                warning.code == "ignored-ambiguous-result-write"
-            },
-        )
-        assertTrue(descriptor.forms.isEmpty())
+        val effect = DynamicOperationRiskClass.externalEffect
+        val expected = mapOf("messages-sendnow" to effect, "collaboration-create" to DynamicOperationRiskClass.sharing, "records-combine" to effect)
+        assertEquals(expected, descriptor.actions.filter { it.id != "records-list" }.associate { it.id to it.riskClass })
+        assertTrue(descriptor.forms.isEmpty(), "No generic form may offer them.")
+        val schema = descriptor.toNativeAppSchema()
+        assertEquals(listOf("records-list"), schema.actions.map(ActionSpec::id))
+        assertEquals(setOf("messages-sendnow", "collaboration-create", "records-combine"), schema.dedicatedActions.map(ActionSpec::id).toSet())
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
@@ -1387,12 +1386,14 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun `signed idempotent ambiguous replacement uses exact read recovery and typed object rows`() {
+    fun `a share with a declared permission field uses exact read recovery and typed object rows`() {
         val document = """
             {
               "openapi":"3.0.3",
               "info":{"title":"Generic shares","version":"1"},
               "paths":{
+                "/apps/example/api/entities/{entityId}":{"parameters":[{"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "get":{"operationId":"entity-read","responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"type":"object","properties":{"id":{"type":"integer"},"canShare":{"type":"boolean"}}}}}}}}},
                 "/apps/example/api/entities/{entityId}/share":{
                   "parameters":[
                     {"name":"entityId","in":"path","required":true,"schema":{"type":"integer"}}
@@ -1447,17 +1448,14 @@ class DynamicAppDescriptorCompilerTest {
             ),
         )
 
-        val actionEvidence = "actions=${descriptor.actions.map(DynamicAction::id)}; " +
-            "warnings=${descriptor.warnings}"
-        val read = assertNotNull(
-            descriptor.actions.singleOrNull { it.id == "entity-shares-read" },
-            actionEvidence,
-        )
+        val actionEvidence = "actions=${descriptor.actions.map(DynamicAction::id)}; warnings=${descriptor.warnings}"
+        val read = assertNotNull(descriptor.actions.singleOrNull { it.id == "entity-shares-read" }, actionEvidence)
         val replacement = assertNotNull(
             descriptor.actions.singleOrNull { it.id == "entity-share" },
             actionEvidence,
         )
-        assertEquals(read.id, replacement.resultRecoveryActionId)
+        assertEquals(Triple(read.id, "canShare", "entity-read"), Triple(replacement.resultRecoveryActionId, replacement.sharePermissionFieldId, replacement.readBackActionId))
+        assertTrue(replacement.requiresConfirmation)
         val form = assertNotNull(
             descriptor.forms.singleOrNull { it.actionId == replacement.id },
             "Missing replacement form; $actionEvidence; forms=${descriptor.forms.map(DynamicForm::actionId)}",
@@ -1634,7 +1632,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun `ambiguous replacement remains withheld without exact trusted get recovery`() {
+    fun `a share without a declared permission field is retained but never offered generically`() {
         val document = """
             {
               "openapi":"3.0.3",
@@ -1670,9 +1668,9 @@ class DynamicAppDescriptorCompilerTest {
             ),
         )
 
-        assertTrue(descriptor.actions.isEmpty())
+        assertEquals(DynamicOperationRiskClass.sharing, descriptor.actions.single().riskClass)
         assertTrue(descriptor.forms.isEmpty())
-        assertTrue(descriptor.warnings.any { it.code == "ignored-ambiguous-result-write" })
+        assertTrue(descriptor.toNativeAppSchema().actions.isEmpty())
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 

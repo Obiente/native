@@ -21,6 +21,12 @@ data class GroupwareCalendar(
     val displayName: String,
     val color: String? = null,
     val writable: Boolean = false,
+    /** Whose calendar this is: the user's own, shared with them, or a subscribed feed. */
+    val kind: GroupwareCalendarKind = GroupwareCalendarKind.Owned,
+    val ownerName: String? = null,
+    /** The feed address of a subscription. */
+    val sourceUrl: String? = null,
+    val supportsTasks: Boolean = false,
 )
 
 data class GroupwareAddressBook(
@@ -61,6 +67,9 @@ data class GroupwareCalendarEvent(
     val excludedStarts: Set<String> = emptySet(),
     val isGeneratedOccurrence: Boolean = false,
     val rawCalendar: String,
+    /** The TZID of DTSTART and DTEND, when they name one; see [inDeviceTime]. */
+    val startZone: String? = null,
+    val endZone: String? = null,
 ) {
     /** Stable across sorting and refreshes, including multiple visible instances of one DAV object. */
     val instanceId: String get() = "$href#${recurrenceId ?: start}"
@@ -278,32 +287,6 @@ fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalen
 fun parseGroupwareTaskCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
     parseGroupwareCalendarsForComponent(response, "VTODO")
 
-private fun parseGroupwareCalendarsForComponent(
-    response: NextcloudApiResponse,
-    componentName: String,
-): List<GroupwareCalendar> {
-    require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
-    val xml = response.body.decodeToString()
-    return xml.xmlElements("response").mapNotNull { block ->
-        val href = block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
-            ?: return@mapNotNull null
-        if (!block.containsXmlElement("calendar")) return@mapNotNull null
-        val supportsComponent = block.xmlOpeningTags("comp").any { component ->
-            component.xmlAttribute("name")?.equals(componentName, ignoreCase = true) == true
-        }
-        if (!supportsComponent) return@mapNotNull null
-        val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
-        GroupwareCalendar(
-            href = href.requireSafeDavHref(),
-            displayName = block.xmlText("displayname")?.decodeXmlEntities()?.trim()
-                ?.takeIf(String::isNotBlank)
-                ?: href.trimEnd('/').substringAfterLast('/').decodePercentEncoding(),
-            color = block.xmlText("calendar-color")?.trim()?.takeIf(String::isNotBlank),
-            writable = privileges.any { it == "write" || it == "write-content" },
-        )
-    }.distinctBy(GroupwareCalendar::href)
-}
-
 fun parseGroupwareAddressBooks(response: NextcloudApiResponse): List<GroupwareAddressBook> {
     require(response.status in 200..299) { "Address-book discovery failed (HTTP ${response.status})." }
     return response.body.decodeToString().xmlElements("response").mapNotNull { block ->
@@ -518,15 +501,8 @@ private fun parseGroupwareCalendarEventComponent(
     content: String,
     eventLines: List<String>,
 ): GroupwareCalendarEvent? {
-    fun property(name: String): CalendarProperty? = eventLines.firstNotNullOfOrNull { line ->
-        val separator = line.indexOf(':')
-        if (separator <= 0) return@firstNotNullOfOrNull null
-        val declaration = line.substring(0, separator)
-        if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
-            return@firstNotNullOfOrNull null
-        }
-        CalendarProperty(declaration, line.substring(separator + 1))
-    }
+    // Nested components such as VALARM have their own DESCRIPTION and must not be read as the event's.
+    fun property(name: String): CalendarProperty? = eventLines.calendarProperty(name)
     val start = property("DTSTART") ?: return null
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
@@ -559,6 +535,8 @@ private fun parseGroupwareCalendarEventComponent(
         }.flatten().toSet(),
         isGeneratedOccurrence = recurrenceId != null,
         rawCalendar = content,
+        startZone = start.declaration.calendarTimeZoneId(),
+        endZone = property("DTEND")?.declaration?.calendarTimeZoneId(),
     )
 }
 
@@ -822,39 +800,6 @@ private val CALENDAR_WEEK_DAY_INDEX = mapOf(
     "MO" to 0, "TU" to 1, "WE" to 2, "TH" to 3, "FR" to 4, "SA" to 5, "SU" to 6,
 )
 
-fun createGroupwareCalendarEventContent(
-    uid: String,
-    title: String,
-    start: String,
-    end: String?,
-    allDay: Boolean,
-    location: String? = null,
-    description: String? = null,
-    recurrenceRule: String? = null,
-): String {
-    require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The event id is invalid." }
-    require(title.isNotBlank()) { "An event title is required." }
-    require(start.isCalendarDateValue(allDay)) { "The event start is invalid." }
-    require(end == null || end.isCalendarDateValue(allDay)) { "The event end is invalid." }
-    recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
-    val dateParameter = if (allDay) ";VALUE=DATE" else ""
-    return buildList {
-        add("BEGIN:VCALENDAR")
-        add("VERSION:2.0")
-        add("PRODID:-//Obiente//Nextcloud Native//EN")
-        add("BEGIN:VEVENT")
-        add("UID:${uid.escapeCalendarText()}")
-        add("DTSTART$dateParameter:$start")
-        end?.let { add("DTEND$dateParameter:$it") }
-        add("SUMMARY:${title.escapeCalendarText()}")
-        location?.takeIf(String::isNotBlank)?.let { add("LOCATION:${it.escapeCalendarText()}") }
-        description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
-        recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { add("RRULE:$it") }
-        add("END:VEVENT")
-        add("END:VCALENDAR")
-    }.joinToString("\r\n", postfix = "\r\n")
-}
-
 fun updateGroupwareCalendarEventContent(
     event: GroupwareCalendarEvent,
     title: String,
@@ -864,6 +809,7 @@ fun updateGroupwareCalendarEventContent(
     location: String?,
     description: String?,
     recurrenceRule: String? = event.recurrenceRule,
+    timeZone: String? = null,
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
@@ -877,8 +823,8 @@ fun updateGroupwareCalendarEventContent(
     val eventStart = eventRange.first
     var eventEnd = eventRange.last
     val replacements = linkedMapOf(
-        "DTSTART" to "DTSTART${if (allDay) ";VALUE=DATE" else ""}:$start",
-        "DTEND" to end?.let { "DTEND${if (allDay) ";VALUE=DATE" else ""}:$it" },
+        "DTSTART" to "DTSTART${calendarTimeParameter(allDay, timeZone)}:$start",
+        "DTEND" to end?.let { "DTEND${calendarTimeParameter(allDay, timeZone)}:$it" },
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
         "LOCATION" to location?.takeIf(String::isNotBlank)?.let { "LOCATION:${it.escapeCalendarText()}" },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let { "DESCRIPTION:${it.escapeCalendarText()}" },
@@ -901,7 +847,7 @@ fun updateGroupwareCalendarEventContent(
     return original.joinToString("\r\n", postfix = "\r\n")
 }
 
-private fun requireValidCalendarRecurrenceRule(value: String) {
+internal fun requireValidCalendarRecurrenceRule(value: String) {
     require(isSupportedCalendarRecurrenceRuleForWrite(value)) {
         "Use a supported daily, weekly, or monthly recurrence rule."
     }
@@ -1038,7 +984,7 @@ private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<Strin
     return components
 }
 
-private fun String.isCalendarDateValue(allDay: Boolean): Boolean =
+internal fun String.isCalendarDateValue(allDay: Boolean): Boolean =
     if (allDay) length == 8 && all(Char::isDigit)
     else length in 15..20 && take(8).all(Char::isDigit) && getOrNull(8) == 'T'
 
@@ -1049,7 +995,7 @@ private fun String.encodeDavPathSegment(): String = encodeToByteArray().joinToSt
     else "%${unsigned.toString(16).uppercase().padStart(2, '0')}"
 }
 
-private fun String.decodePercentEncoding(): String {
+internal fun String.decodePercentEncoding(): String {
     val bytes = mutableListOf<Byte>()
     var index = 0
     while (index < length) {
@@ -1138,11 +1084,13 @@ private val COLLECTION_DISCOVERY_BODY = """
     <d:propfind xmlns:d="DAV:"
         xmlns:c="urn:ietf:params:xml:ns:caldav"
         xmlns:card="urn:ietf:params:xml:ns:carddav"
-        xmlns:cs="http://calendarserver.org/ns/">
+        xmlns:cs="http://calendarserver.org/ns/" xmlns:x1="http://apple.com/ns/ical/"
+        xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.com/ns">
       <d:prop>
         <d:displayname /><d:resourcetype /><d:getetag /><d:sync-token />
         <cs:getctag /><d:current-user-privilege-set />
-        <c:supported-calendar-component-set />
+        <c:supported-calendar-component-set /><x1:calendar-color /><cs:source />
+        <oc:owner-principal /><nc:owner-displayname /><nc:deleted-at />
       </d:prop>
     </d:propfind>
 """.trimIndent()

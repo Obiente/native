@@ -86,8 +86,22 @@ internal fun TaskEditorDialog(
     error: String?,
     onDismiss: () -> Unit,
     onSave: (TaskDraft, GroupwareCalendar, String?) -> Unit,
+    /** Every loaded task, for choosing a parent and suggesting tags. */
+    tasks: List<GroupwareTask> = emptyList(),
+    /** Set when adding a subtask: the new task's parent. */
+    initialParentUid: String? = null,
 ) {
-    val editorKey = task?.instanceId ?: "new-task"
+    val editorKey = task?.instanceId ?: "new-task:${initialParentUid.orEmpty()}"
+    val initialExtras = remember(editorKey) { task?.extras() ?: TaskExtras(parentUid = initialParentUid.orEmpty()) }
+    var extrasText by rememberSaveable(editorKey) { mutableStateOf(TaskExtrasJson.encodeToString(TaskExtras.serializer(), initialExtras)) }
+    val extras = remember(extrasText) {
+        try {
+            TaskExtrasJson.decodeFromString(TaskExtras.serializer(), extrasText)
+        } catch (_: IllegalArgumentException) {
+            initialExtras
+        }
+    }
+    val knownTags = remember(tasks) { tasks.flatMap(GroupwareTask::categories).distinctBy(String::lowercase).sorted().take(100) }
     val initialState = remember(editorKey) {
         GroupwareTaskEditorState(
             title = task?.title.orEmpty(),
@@ -148,14 +162,13 @@ internal fun TaskEditorDialog(
                     )
                 }
                 item {
-                    OutlinedTextField(
+                    CalendarDateField(
                         editorState.dueDate,
                         { updateEditorState(editorState.copy(dueDate = it)) },
-                        label = { Text("Due date") },
-                        placeholder = { Text("YYYY-MM-DD") },
-                        modifier = Modifier.fillMaxWidth(),
-                        isError = !dateValid,
                         enabled = !mutationInProgress,
+                        label = "Due date",
+                        chooseLabel = "Choose due date",
+                        optional = true,
                     )
                 }
                 item {
@@ -167,6 +180,17 @@ internal fun TaskEditorDialog(
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !mutationInProgress,
                     )
+                }
+                item {
+                    TaskExtrasEditor(
+                        extras = extras,
+                        completed = editorState.completed,
+                        parentCandidates = calendar?.href?.let { taskParentCandidates(task, it, tasks) }.orEmpty(),
+                        knownTags = knownTags,
+                        enabled = !mutationInProgress,
+                        onChange = { extrasText = TaskExtrasJson.encodeToString(TaskExtras.serializer(), it) },
+                    )
+                    extras.validationMessage()?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -208,7 +232,8 @@ internal fun TaskEditorDialog(
         },
         confirmButton = {
             Button(
-                enabled = !mutationInProgress && editorState.title.isNotBlank() && dateValid && calendar != null,
+                enabled = !mutationInProgress && editorState.title.isNotBlank() && dateValid && calendar != null &&
+                    extras.validationMessage() == null,
                 onClick = {
                     onSave(
                         TaskDraft(
@@ -216,6 +241,8 @@ internal fun TaskEditorDialog(
                             editorState.dueDate,
                             editorState.description,
                             editorState.completed,
+                            // A new task always carries its fields; an edit writes them only when they changed.
+                            extras = extras.takeIf { task == null || it.normalized() != initialExtras.normalized() },
                         ),
                         requireNotNull(calendar),
                         editorState.editStartEtag,
@@ -225,6 +252,8 @@ internal fun TaskEditorDialog(
         },
     )
 }
+
+private val TaskExtrasJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
 internal fun selectedGroupwareTaskCalendar(
     calendars: List<GroupwareCalendar>,

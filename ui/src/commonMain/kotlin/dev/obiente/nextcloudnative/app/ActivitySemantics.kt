@@ -40,11 +40,6 @@ enum class ActivityNotificationDestination {
     Activity,
 }
 
-enum class ActivitySettingsDestination {
-    Notifications,
-    RssFeed,
-}
-
 data class DynamicActivityNotificationPlan(
     val notificationId: Int,
     val semantic: NextcloudActivitySemantic,
@@ -220,16 +215,6 @@ private fun safeActivityFilesParentPath(objectName: String?): String? {
         }
     ) return null
     return segments.dropLast(1).joinToString("/")
-}
-
-fun activitySettingsUrl(serverUrl: String, destination: ActivitySettingsDestination): String {
-    val path = when (destination) {
-        ActivitySettingsDestination.Notifications -> "/index.php/settings/user/notifications"
-        ActivitySettingsDestination.RssFeed -> "/index.php/apps/activity"
-    }
-    return requireNotNull(sameOriginActivityUrl(serverUrl, path)) {
-        "The Activity settings URL is invalid."
-    }
 }
 
 fun buildNextcloudActivityPageRequest(

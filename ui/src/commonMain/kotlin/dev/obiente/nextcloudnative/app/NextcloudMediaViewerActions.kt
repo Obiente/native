@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 internal enum class MediaViewerAction(val label: String) {
     SendCopy("Send a copy..."),
     ShareNextcloud("Manage Nextcloud sharing"),
+    Favorite("Favorite"),
     AddToAlbum("Add to album"),
     Move("Move"),
     Copy("Copy"),
@@ -65,6 +66,7 @@ internal fun availableMediaViewerActions(
         if (authoritativeDavAccess && sharingCapabilities.supportsAnyCreation) {
             add(MediaViewerAction.ShareNextcloud)
         }
+        if (authoritativeDavAccess && !file.etag.isNullOrBlank()) add(MediaViewerAction.Favorite)
         if (
             authoritativeDavAccess &&
             taggingAvailable &&
@@ -138,6 +140,7 @@ internal fun MediaViewerActionDialog(
             services = services,
             onDismiss = onDismiss,
         )
+        MediaViewerAction.Favorite -> MediaFavoriteDialog(file, session, userId, services, writeFence, onDismiss, onMutationRunningChanged)
         MediaViewerAction.SendCopy, MediaViewerAction.OpenWith -> Unit
     }
 }
@@ -343,6 +346,7 @@ private val mediaWriteActions = setOf(
     MediaViewerAction.Copy,
     MediaViewerAction.ShareNextcloud,
     MediaViewerAction.AddToAlbum,
+    MediaViewerAction.Favorite,
 )
 
 /** A media change refused by the account's write fence, with its typed reason. */
@@ -498,7 +502,7 @@ private fun MediaAlbumDialog(
 }
 
 @Composable
-private fun MediaShareDialog(
+internal fun MediaShareDialog(
     file: NextcloudFile,
     session: NextcloudSession,
     services: NextcloudPlatformServices,

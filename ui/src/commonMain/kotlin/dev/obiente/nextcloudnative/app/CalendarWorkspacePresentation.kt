@@ -3,7 +3,15 @@ package dev.obiente.nextcloudnative.app
 internal enum class CalendarWorkspaceView {
     Month,
     Week,
+    Day,
     Agenda,
+}
+
+/** Week and Day move by days; Month and Agenda move by months. */
+internal fun CalendarWorkspaceView.navigationDays(): Int? = when (this) {
+    CalendarWorkspaceView.Week -> 7
+    CalendarWorkspaceView.Day -> 1
+    CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> null
 }
 
 internal data class CalendarWorkspacePresentation(
@@ -88,7 +96,8 @@ internal fun calendarWorkspaceQueryWindow(
     month: CalendarMonth,
     selectedDate: String,
 ): GroupwareDavTimeWindow {
-    if (view != CalendarWorkspaceView.Week) {
+    // A day reads its whole week, so moving between neighboring days paints from the same load.
+    if (view != CalendarWorkspaceView.Week && view != CalendarWorkspaceView.Day) {
         return GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
     }
     val week = calendarWeekDates(selectedDate)

@@ -70,6 +70,7 @@ fun AdaptiveNativeScreen(
                 NativeComponent.mediaLibrary,
                 NativeComponent.recipeList,
                 NativeComponent.conversationList,
+                NativeComponent.feedReader,
                 -> RecordList(resource, state.records)
 
                 NativeComponent.mediaGrid -> MediaGrid(resource, state.records)

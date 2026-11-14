@@ -1,269 +1,175 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.runtime.boardRoutes
+import dev.obiente.nextcloudnative.nativeui.runtime.forApp
+import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
+import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/**
+ * Typed board safety rules: identities, permissions, comment authorship, archived boards, and
+ * response parsers. Requests come from a synthetic board-shaped contract, not a known app route.
+ */
 class DeckNativeActionsTest {
-    private val routes = DeckWriteRoutePlan(DeckApiVersion("1.1"))
+    private val routes = SemanticBoardRoutes(
+        requireNotNull(
+            resolveSemanticBoardContract(
+                semanticDescriptor(
+                    "planner",
+                    "9.0.0",
+                    boardRoutes(lane = "stacks", laneId = "stackId").forApp("planner"),
+                ),
+                writesAuthorized = true,
+            ),
+        ),
+    )
     private val boardId = DeckBoardId(7)
     private val sourceStack = DeckStackContext(boardId, stackId = 11)
     private val destinationStack = DeckStackContext(boardId, stackId = 12)
     private val card = DeckCardContext(sourceStack, cardId = 42)
+    private val activeCard = editableCard()
     private val access = DeckBoardAccess.from(editableBoard())
-    private val capabilities = DeckCapabilities(
-        appVersion = "1.18.2",
-        apiVersions = listOf("1.1"),
-        canCreateBoards = true,
-    )
+    private val base = "/apps/planner/api/v2"
 
     @Test
     fun `board stack and card writes use typed nested parent paths`() {
-        val createBoard = routes.createBoard(
-            capabilities,
-            DeckBoardDraft(title = "  Product  ", color = "#A970FF"),
-        )
-        val createStack = routes.createStack(access, DeckStackDraft(title = "Ready", order = 2))
-        val createCard = routes.createCard(
-            access,
-            sourceStack,
-            DeckCardDraft(
-                title = "Native card",
-                descriptionMarkdown = "A **useful** description",
-                dueAt = "2026-08-01T10:30:00Z",
-            ),
-        )
+        val createStack = routes.createStack(access, DeckStackDraft("Doing", 2))
+        val createCard = routes.createCard(access, sourceStack, DeckCardDraft("Write tests", order = 3))
+        val updateStack = routes.updateStack(access, sourceStack, DeckStackDraft("Renamed", 4))
 
-        assertEquals("/index.php/apps/deck/api/v1.1/boards", createBoard.relativePath)
-        assertEquals(NextcloudApiMethod.POST, createBoard.method)
-        assertEquals("Product", createBoard.jsonBody().string("title"))
-        assertEquals("a970ff", createBoard.jsonBody().string("color"))
-
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks", createStack.relativePath)
-        assertEquals(2L, createStack.jsonBody().long("order"))
-
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards", createCard.relativePath)
-        assertEquals("plain", createCard.jsonBody().string("type"))
-        assertEquals("2026-08-01T10:30:00Z", createCard.jsonBody().string("duedate"))
-        assertTrue(createCard.ocsApiRequest)
-        assertEquals("application/json", createCard.contentType)
-    }
-
-    @Test
-    fun `card update sends the complete documented representation`() {
-        val request = routes.updateCard(
-            access,
-            card,
-            DeckCardUpdate(
-                original = editableCard(),
-                title = "Updated",
-                order = 15,
-                descriptionMarkdown = "Details",
-                dueAt = null,
-                startAt = "2026-07-30T08:00:00Z",
-                archived = false,
-                completedAt = null,
-            ),
-        )
-        val body = request.jsonBody()
-
-        assertEquals(NextcloudApiMethod.PUT, request.method)
-        assertEquals("/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42", request.relativePath)
-        assertEquals("card-owner", body.string("owner"))
-        assertEquals(15L, body.long("order"))
-        assertFalse(body.boolean("archived"))
-        assertEquals(JsonNull, body["duedate"])
-        assertEquals(JsonNull, body["done"])
-        assertEquals("2026-07-30T08:00:00Z", body.string("startdate"))
-        assertEquals("a970ff", body.string("color"))
-
-        assertFailsWith<IllegalArgumentException> {
-            routes.updateCard(
-                access,
-                card,
-                DeckCardUpdate(
-                    original = editableCard(id = 99),
-                    title = "Wrong card",
-                    order = 15,
-                    descriptionMarkdown = "Details",
-                    dueAt = null,
-                    startAt = null,
-                    archived = false,
-                    completedAt = null,
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun `card update preserves every color format accepted from Deck`() {
-        mapOf(
-            "#abc" to "abc",
-            "A970FF" to "a970ff",
-            "#A970FF80" to "a970ff80",
-        ).forEach { (serverColor, expectedColor) ->
-            val request = routes.updateCard(
-                access,
-                card,
-                DeckCardUpdate(
-                    original = editableCard().copy(color = serverColor),
-                    title = "Updated",
-                    order = 15,
-                    descriptionMarkdown = "Details",
-                    dueAt = null,
-                    startAt = null,
-                    archived = false,
-                    completedAt = null,
-                ),
-            )
-
-            assertEquals(expectedColor, request.jsonBody().string("color"))
-        }
+        assertEquals("$base/boards/7/stacks", createStack.relativePath)
+        assertEquals("$base/boards/7/stacks/11/cards", createCard.relativePath)
+        assertEquals("$base/boards/7/stacks/11", updateStack.relativePath)
+        assertEquals("Write tests", createCard.jsonBody().string("title"))
+        assertEquals(4L, updateStack.jsonBody().getValue("order").jsonPrimitive.content.toLong())
     }
 
     @Test
     fun `move keeps source context in path and destination stack only in body`() {
-        val move = DeckCardMove(
-            source = card,
-            destinationStack = destinationStack,
-            order = 4,
-        )
-        val request = routes.moveCard(access, move)
+        val request = routes.moveCard(access, activeCard, DeckCardMove(card, destinationStack, order = 1))
 
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/reorder",
-            request.relativePath,
-        )
-        assertEquals(12L, request.jsonBody().long("stackId"))
-        assertEquals(4L, request.jsonBody().long("order"))
+        assertEquals("$base/cards/42/reorder", request.relativePath)
+        assertEquals("12", request.jsonBody().string("stackId"))
+        assertEquals("1", request.jsonBody().string("order"))
     }
 
     @Test
     fun `move rejects a destination stack from another board`() {
         assertFailsWith<IllegalArgumentException> {
-            DeckCardMove(
-                source = card,
-                destinationStack = DeckStackContext(DeckBoardId(99), stackId = 12),
-                order = 0,
-            )
+            DeckCardMove(card, DeckStackContext(DeckBoardId(8), 12), order = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            routes.moveCard(access, activeCard.copy(id = 41), DeckCardMove(card, destinationStack, order = 0))
         }
     }
 
     @Test
-    fun `labels and assignees bind to the active card without typed ids in paths`() {
-        val assignLabel = routes.assignLabel(access, card, labelId = 5)
-        val assignUser = routes.assignUser(access, card, userId = "participant")
-
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/assignLabel",
-            assignLabel.relativePath,
-        )
-        assertEquals(5L, assignLabel.jsonBody().long("labelId"))
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/assignUser",
-            assignUser.relativePath,
-        )
-        assertEquals("participant", assignUser.jsonBody().string("userId"))
+    fun `labels and assignees bind to the active card and board members`() {
+        assertEquals("$base/cards/42/assignLabel", routes.assignLabel(access, activeCard, 5).relativePath)
+        assertEquals("5", routes.removeLabel(access, activeCard, 5).jsonBody().string("labelId"))
+        assertEquals("participant", routes.assignUser(access, activeCard, "participant").jsonBody().string("userId"))
+        assertEquals("$base/cards/42/unassignUser", routes.unassignUser(access, activeCard, "participant").relativePath)
     }
 
     @Test
     fun `destructive and archive actions stay bound to their typed resources`() {
-        val deleteBoard = routes.deleteBoard(access)
-        val restoreBoard = routes.restoreBoard(access)
-        val deleteStack = routes.deleteStack(access, sourceStack)
-        val deleteCard = routes.deleteCard(access, card)
-        val archiveCard = routes.archiveCard(access, card)
-        val unarchiveCard = routes.unarchiveCard(access, card)
-
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7",
-            deleteBoard.relativePath,
-        )
-        assertEquals(NextcloudApiMethod.DELETE, deleteBoard.method)
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/undo_delete",
-            restoreBoard.relativePath,
-        )
-        assertEquals(NextcloudApiMethod.POST, restoreBoard.method)
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11",
-            deleteStack.relativePath,
-        )
-        assertEquals(NextcloudApiMethod.DELETE, deleteStack.method)
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42",
-            deleteCard.relativePath,
-        )
-        assertEquals(NextcloudApiMethod.DELETE, deleteCard.method)
-        assertEquals("${deleteCard.relativePath}/archive", archiveCard.relativePath)
-        assertEquals("${deleteCard.relativePath}/unarchive", unarchiveCard.relativePath)
-        assertEquals(NextcloudApiMethod.PUT, archiveCard.method)
-        assertEquals(NextcloudApiMethod.PUT, unarchiveCard.method)
+        assertEquals(NextcloudApiMethod.DELETE, routes.deleteCard(access, activeCard).method)
+        assertEquals("$base/boards/7/stacks/11/cards/42", routes.deleteCard(access, activeCard).relativePath)
+        assertEquals("$base/boards/7/stacks/11/cards/42/archive", routes.archiveCard(access, activeCard).relativePath)
+        assertEquals("$base/boards/7/stacks/11/cards/42/unarchive", routes.unarchiveCard(access, activeCard).relativePath)
+        assertEquals("$base/boards/7/stacks/11", routes.deleteStack(access, sourceStack).relativePath)
+        assertEquals("$base/boards/7", routes.deleteBoard(access).relativePath)
+        assertEquals("$base/boards/7/undo_delete", routes.restoreBoard(access).relativePath)
     }
 
     @Test
     fun `label management uses the board resource and normalized fields`() {
-        val create = routes.createLabel(
-            access,
-            DeckLabelDraft(title = "  Needs review  ", color = "#A970FF"),
-        )
-        val update = routes.updateLabel(
-            access,
-            labelId = 5,
-            draft = DeckLabelDraft(title = "Approved", color = "42b983"),
-        )
-        val delete = routes.deleteLabel(access, labelId = 5)
+        val create = routes.createLabel(access, DeckLabelDraft(" Needs review ", "#A970FF"))
+        val update = routes.updateLabel(access, 5, DeckLabelDraft("Reviewed", "a970ff"))
 
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/labels",
-            create.relativePath,
-        )
-        assertEquals(NextcloudApiMethod.POST, create.method)
+        assertEquals("$base/boards/7/labels", create.relativePath)
         assertEquals("Needs review", create.jsonBody().string("title"))
         assertEquals("a970ff", create.jsonBody().string("color"))
-        assertEquals("${create.relativePath}/5", update.relativePath)
-        assertEquals(NextcloudApiMethod.PUT, update.method)
-        assertEquals("Approved", update.jsonBody().string("title"))
-        assertEquals("42b983", update.jsonBody().string("color"))
+        assertEquals("$base/boards/7/labels/5", update.relativePath)
+        assertEquals("$base/boards/7/labels/5", routes.deleteLabel(access, 5).relativePath)
+        assertFailsWith<IllegalArgumentException> { routes.deleteLabel(access, 99) }
+    }
+
+    @Test
+    fun `comments use the contract route and bounded pagination`() {
+        val list = routes.comments(access, activeCard, limit = 25, offset = 50)
+        val create = routes.createComment(access, activeCard, DeckCommentDraft("A useful comment"))
+
+        assertEquals("$base/cards/42/comments", list.relativePath)
+        assertEquals(mapOf("limit" to "25", "offset" to "50"), list.queryParameters)
+        assertEquals(list.relativePath, create.relativePath)
+        assertEquals("A useful comment", create.jsonBody().string("message"))
+        assertTrue("parentId" !in create.jsonBody())
+
+        assertFailsWith<IllegalArgumentException> { routes.comments(access, activeCard, limit = 101, offset = 0) }
+        assertFailsWith<IllegalArgumentException> { routes.comments(access, activeCard, limit = 20, offset = -1) }
+    }
+
+    @Test
+    fun `comment mutations require the parsed author and active card`() {
+        val comment = comment()
+        val update = routes.updateComment(access, activeCard, comment, "reviewer", DeckCommentUpdate("Updated"))
+        val delete = routes.deleteComment(access, activeCard, comment, currentUserId = "reviewer")
+
+        assertEquals("$base/cards/42/comments/18", update.relativePath)
         assertEquals(update.relativePath, delete.relativePath)
-        assertEquals(NextcloudApiMethod.DELETE, delete.method)
         assertFailsWith<IllegalArgumentException> {
-            routes.updateLabel(
-                access,
-                labelId = 99,
-                draft = DeckLabelDraft(title = "Unknown", color = "42b983"),
-            )
+            routes.updateComment(access, activeCard, comment, "another-user", DeckCommentUpdate("Not allowed"))
         }
         assertFailsWith<IllegalArgumentException> {
-            routes.deleteLabel(access, labelId = 99)
+            routes.deleteComment(access, activeCard, comment.copy(cardId = 99), currentUserId = "reviewer")
         }
     }
 
     @Test
-    fun `comments use the official OCS endpoint and bounded pagination`() {
-        val list = routes.comments(access, card, limit = 25, offset = 50)
-        val create = routes.createComment(access, card, DeckCommentDraft("A useful comment"))
+    fun `active readers may comment while archived boards reject comment writes`() {
+        val readerAccess = DeckBoardAccess.from(editableBoard(permissions = readOnlyPermissions()))
+        val archivedAccess = DeckBoardAccess.from(editableBoard(archived = true))
 
-        assertEquals(
-            "/ocs/v2.php/apps/deck/api/v1.1/cards/42/comments",
-            list.relativePath,
-        )
-        assertEquals(mapOf("limit" to "25", "offset" to "50"), list.queryParameters)
-        assertEquals(list.relativePath, create.relativePath)
-        assertEquals("A useful comment", create.jsonBody().string("message"))
-        assertEquals(JsonNull, create.jsonBody()["parentId"])
+        assertEquals(NextcloudApiMethod.POST, routes.createComment(readerAccess, activeCard, DeckCommentDraft("Reader")).method)
+        assertEquals(NextcloudApiMethod.GET, routes.comments(archivedAccess, activeCard, 20, 0).method)
+        assertFailsWith<IllegalArgumentException> {
+            routes.createComment(archivedAccess, activeCard, DeckCommentDraft("Blocked"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            routes.deleteComment(archivedAccess, activeCard, comment(), currentUserId = "reviewer")
+        }
+    }
 
-        assertFailsWith<IllegalArgumentException> { routes.comments(access, card, limit = 101) }
-        assertFailsWith<IllegalArgumentException> { routes.comments(access, card, offset = -1) }
+    @Test
+    fun `attachment routes carry the server-reported attachment type`() {
+        val attachment = DeckAttachment(9, 42, DeckAttachmentType("file"), "Doc.pdf", null, null, null, null, null)
+        val open = routes.openAttachment(access, activeCard, attachment)
+        val delete = routes.deleteAttachment(access, activeCard, attachment)
+
+        assertEquals("$base/boards/7/stacks/11/cards/42/attachments/file/9", open.relativePath)
+        assertEquals(open.relativePath, delete.relativePath)
+        assertEquals(NextcloudApiMethod.DELETE, delete.method)
+        assertFailsWith<IllegalArgumentException> {
+            routes.openAttachment(access, activeCard, attachment.copy(cardId = 99))
+        }
+        assertFailsWith<IllegalArgumentException> { DeckAttachmentType("../files") }
+    }
+
+    @Test
+    fun `attachment open target rejects writes and traversal paths`() {
+        assertFailsWith<IllegalArgumentException> { DeckAttachmentOpenTarget(NextcloudApiMethod.POST, "$base/cards") }
+        assertFailsWith<IllegalArgumentException> {
+            DeckAttachmentOpenTarget(NextcloudApiMethod.GET, "$base/boards/7/stacks/11/cards/42/attachments/../../files")
+        }
+        assertFailsWith<IllegalArgumentException> { DeckAttachmentOpenTarget(NextcloudApiMethod.GET, "//evil.example") }
     }
 
     @Test
@@ -304,107 +210,6 @@ class DeckNativeActionsTest {
                 card,
                 jsonResponse("""{"ocs":{"data":{"id":18,"objectId":99,"message":"Wrong"}}}"""),
             )
-        }
-    }
-
-    @Test
-    fun `comment mutations require the parsed author and active card`() {
-        val comment = DeckComment(
-            id = 18,
-            cardId = 42,
-            message = "Original",
-            authorId = "reviewer",
-            authorDisplayName = "Reviewer",
-            createdAt = null,
-            mentions = emptyList(),
-            replyToId = null,
-        )
-
-        val update = routes.updateComment(
-            access = access,
-            context = card,
-            comment = comment,
-            currentUserId = "reviewer",
-            update = DeckCommentUpdate("Updated"),
-        )
-        val delete = routes.deleteComment(access, card, comment, currentUserId = "reviewer")
-
-        assertEquals(
-            "/ocs/v2.php/apps/deck/api/v1.1/cards/42/comments/18",
-            update.relativePath,
-        )
-        assertEquals(update.relativePath, delete.relativePath)
-        assertFailsWith<IllegalArgumentException> {
-            routes.updateComment(
-                access,
-                card,
-                comment,
-                currentUserId = "another-user",
-                update = DeckCommentUpdate("Not allowed"),
-            )
-        }
-    }
-
-    @Test
-    fun `active readers may comment while archived boards reject comment writes`() {
-        val readerAccess = DeckBoardAccess.from(
-            editableBoard(
-                permissions = DeckPermissions(
-                    canRead = true,
-                    canEdit = false,
-                    canManage = false,
-                    canShare = false,
-                ),
-            ),
-        )
-        val archivedAccess = DeckBoardAccess.from(editableBoard(archived = true))
-        val comment = DeckComment(
-            id = 18,
-            cardId = 42,
-            message = "Original",
-            authorId = "reviewer",
-            authorDisplayName = "Reviewer",
-            createdAt = null,
-            mentions = emptyList(),
-            replyToId = null,
-        )
-
-        assertEquals(
-            NextcloudApiMethod.POST,
-            routes.createComment(readerAccess, card, DeckCommentDraft("Reader comment")).method,
-        )
-        assertEquals(
-            NextcloudApiMethod.PUT,
-            routes.updateComment(
-                readerAccess,
-                card,
-                comment,
-                currentUserId = "reviewer",
-                update = DeckCommentUpdate("Reader update"),
-            ).method,
-        )
-        assertEquals(
-            NextcloudApiMethod.DELETE,
-            routes.deleteComment(readerAccess, card, comment, currentUserId = "reviewer").method,
-        )
-        assertEquals(
-            NextcloudApiMethod.GET,
-            routes.comments(archivedAccess, card).method,
-        )
-        assertFailsWith<IllegalArgumentException> {
-            routes.createComment(archivedAccess, card, DeckCommentDraft("Blocked"))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.updateComment(
-                archivedAccess,
-                card,
-                comment,
-                currentUserId = "reviewer",
-                update = DeckCommentUpdate("Blocked"),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.deleteComment(archivedAccess, card, comment, currentUserId = "reviewer")
         }
     }
 
@@ -467,56 +272,6 @@ class DeckNativeActionsTest {
                 jsonResponse(
                     """{"id":8,"cardId":99,"participant":{"uid":"participant"}}""",
                 ),
-            )
-        }
-    }
-
-    @Test
-    fun `attachment routes preserve API version type semantics`() {
-        val reference = DeckAttachmentReference(card, DeckAttachmentType.File, attachmentId = 9)
-        val open = routes.openAttachment(access, reference)
-        val delete = routes.deleteAttachment(access, reference)
-        val restore = routes.restoreAttachment(access, reference)
-        val upload = routes.attachmentUploadTarget(access, card)
-
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/attachments/file/9",
-            open.relativePath,
-        )
-        assertEquals(open.relativePath, delete.relativePath)
-        assertEquals(NextcloudApiMethod.DELETE, delete.method)
-        assertEquals("${open.relativePath}/restore", restore.relativePath)
-        assertEquals(NextcloudApiMethod.PUT, restore.method)
-        assertEquals(
-            "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/attachments",
-            upload.relativePath,
-        )
-        assertTrue(upload.requiresRfc7578Multipart)
-        assertEquals("type", upload.typeFieldName)
-        assertEquals("file", upload.fileFieldName)
-
-        val v10 = DeckWriteRoutePlan(DeckApiVersion("1.0"))
-        assertFailsWith<IllegalArgumentException> { v10.openAttachment(access, reference) }
-        assertFailsWith<IllegalArgumentException> {
-            v10.attachmentUploadTarget(access, card, DeckAttachmentType.File)
-        }
-    }
-
-    @Test
-    fun `attachment open target rejects non Deck and traversal paths`() {
-        assertFailsWith<IllegalArgumentException> {
-            DeckAttachmentOpenTarget(NextcloudApiMethod.POST, "/index.php/apps/deck/api/v1.1")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            DeckAttachmentOpenTarget(
-                NextcloudApiMethod.GET,
-                "/index.php/apps/deck/api/v1.1/boards/7/stacks/11/cards/42/attachments/../../files",
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            DeckAttachmentOpenTarget(
-                NextcloudApiMethod.GET,
-                "/ocs/v2.php/apps/files/api/v1/directEditing",
             )
         }
     }
@@ -598,63 +353,44 @@ class DeckNativeActionsTest {
     fun `draft validation rejects invalid values before transport`() {
         assertFailsWith<IllegalArgumentException> { DeckBoardId(0) }
         assertFailsWith<IllegalArgumentException> { DeckBoardDraft("Board", "12345") }
-        assertFailsWith<IllegalArgumentException> {
-            DeckCardDraft(title = "Card", dueAt = "not-a-date")
-        }
+        assertFailsWith<IllegalArgumentException> { DeckCardDraft(title = "Card", dueAt = "not-a-date") }
         assertFailsWith<IllegalArgumentException> { DeckCommentDraft(" ".repeat(10)) }
-        assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, card, labelId = -1) }
-        assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, card, labelId = 99) }
-        assertFailsWith<IllegalArgumentException> {
-            routes.assignUser(access, card, userId = "not-a-board-member")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.assignUser(access, card, userId = "participant\u0000other")
-        }
+        assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, activeCard, labelId = -1) }
+        assertFailsWith<IllegalArgumentException> { routes.assignLabel(access, activeCard, labelId = 99) }
+        assertFailsWith<IllegalArgumentException> { routes.assignUser(access, activeCard, userId = "not-a-board-member") }
+        assertFailsWith<IllegalArgumentException> { routes.assignUser(access, activeCard, userId = "participant\u0000other") }
         assertNull(DeckCardDraft("Card").normalizedDueAt)
     }
 
     @Test
     fun `permission and board identity gates reject unavailable writes`() {
-        val readOnly = DeckBoardAccess.from(
-            editableBoard(
-                permissions = DeckPermissions(
-                    canRead = true,
-                    canEdit = false,
-                    canManage = false,
-                    canShare = false,
-                ),
-            ),
-        )
+        val readOnly = DeckBoardAccess.from(editableBoard(permissions = readOnlyPermissions()))
         val otherBoard = DeckBoardAccess.from(editableBoard(id = 99))
         val archivedBoard = DeckBoardAccess.from(editableBoard(archived = true))
 
-        assertFailsWith<IllegalArgumentException> {
-            routes.createBoard(capabilities.copy(canCreateBoards = false), DeckBoardDraft("Board", "a970ff"))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.createStack(readOnly, DeckStackDraft("Stack", 0))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.createCard(readOnly, sourceStack, DeckCardDraft("Card"))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.createCard(otherBoard, sourceStack, DeckCardDraft("Card"))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            routes.createStack(archivedBoard, DeckStackDraft("Stack", 0))
-        }
+        assertFailsWith<IllegalArgumentException> { routes.createStack(readOnly, DeckStackDraft("Stack", 0)) }
+        assertFailsWith<IllegalArgumentException> { routes.createCard(readOnly, sourceStack, DeckCardDraft("Card")) }
+        assertFailsWith<IllegalArgumentException> { routes.createCard(otherBoard, sourceStack, DeckCardDraft("Card")) }
+        assertFailsWith<IllegalArgumentException> { routes.createStack(archivedBoard, DeckStackDraft("Stack", 0)) }
         assertEquals(
             NextcloudApiMethod.PUT,
-            routes.updateBoard(
-                archivedBoard,
-                DeckBoardUpdate("Restored", "a970ff", archived = false),
-            ).method,
+            routes.updateBoard(archivedBoard, editableBoard(archived = true), DeckBoardUpdate("Restored", "a970ff", false)).method,
         )
-        assertEquals(
-            "/ocs/v2.php/apps/deck/api/v1.1/cards/42/comments",
-            routes.comments(readOnly, card).relativePath,
-        )
+        assertEquals("$base/cards/42/comments", routes.comments(readOnly, activeCard, 20, 0).relativePath)
     }
+
+    private fun comment() = DeckComment(
+        id = 18,
+        cardId = 42,
+        message = "Original",
+        authorId = "reviewer",
+        authorDisplayName = "Reviewer",
+        createdAt = null,
+        mentions = emptyList(),
+        replyToId = null,
+    )
+
+    private fun readOnlyPermissions() = DeckPermissions(canRead = true, canEdit = false, canManage = false, canShare = false)
 
     private fun NextcloudApiRequest.jsonBody(): JsonObject {
         val bytes = body ?: error("Expected a JSON body.")
@@ -662,8 +398,6 @@ class DeckNativeActionsTest {
     }
 
     private fun JsonObject.string(key: String): String = getValue(key).jsonPrimitive.content
-    private fun JsonObject.long(key: String): Long = getValue(key).jsonPrimitive.long
-    private fun JsonObject.boolean(key: String): Boolean = getValue(key).jsonPrimitive.boolean
 
     private fun jsonResponse(
         json: String,
@@ -679,12 +413,7 @@ class DeckNativeActionsTest {
     private fun editableBoard(
         id: Long = 7,
         archived: Boolean = false,
-        permissions: DeckPermissions = DeckPermissions(
-            canRead = true,
-            canEdit = true,
-            canManage = true,
-            canShare = true,
-        ),
+        permissions: DeckPermissions = DeckPermissions(canRead = true, canEdit = true, canManage = true, canShare = true),
     ) = DeckBoard(
         id = id,
         title = "Product",
@@ -722,5 +451,6 @@ class DeckNativeActionsTest {
         attachmentCount = 0,
         unreadCommentCount = 0,
         etag = "card-etag",
+        rawFields = mapOf("type" to "plain"),
     )
 }

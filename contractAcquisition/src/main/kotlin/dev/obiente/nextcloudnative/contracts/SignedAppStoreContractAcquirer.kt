@@ -621,7 +621,8 @@ internal fun extractOpenApiContract(
     archive: ByteArray,
     release: AppStoreRelease,
 ): VerifiedPackageContract {
-    val files = readSelectedTarFiles(archive)
+    val selection = readSelectedTarFileSet(archive)
+    val files = selection.files
     val info = files.entries.firstOrNull { (name, _) -> name.endsWith("/appinfo/info.xml") }
         ?: error("The signed app package does not contain appinfo/info.xml.")
     val root = info.key.substringBefore('/')
@@ -647,7 +648,12 @@ internal fun extractOpenApiContract(
     val selected = selectOpenApiCandidate(candidates, release.appId)?.let { candidate ->
         VerifiedPackageContract(release.appId, release.version, candidate.path, candidate.document)
     }
-    val verifiedReadRoutes = synthesizeReadOnlyRouteContract(release.appId, release.version, files)
+    val verifiedReadRoutes = synthesizeReadOnlyRouteContract(
+        appId = release.appId,
+        appVersion = release.version,
+        files = files,
+        supplementaryTruncated = selection.supplementaryTruncated,
+    )
     if (selected != null) {
         return verifiedReadRoutes?.let { routes ->
             mergeOpenApiWithVerifiedReadRoutes(selected, routes)

@@ -17,7 +17,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
  * magnitude is not allowed, so it is not summary material.
  */
 internal fun FieldSpec.isUndeclaredTimestampInteger(): Boolean {
-    if (kind != FieldKind.integer || format == "unix-seconds") return false
+    if (kind != FieldKind.integer || declaresEpochSeconds()) return false
     val words = id.summaryWords()
     val last = words.lastOrNull() ?: return false
     return last in TIMESTAMP_FINAL_WORDS || words.joinToString("") in TIMESTAMP_COMPOUND_IDS

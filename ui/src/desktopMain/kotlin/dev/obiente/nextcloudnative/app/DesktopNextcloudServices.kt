@@ -706,20 +706,18 @@ class DesktopNextcloudServices(
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
-    private val noRedirectHttpClient = httpClient.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val noRedirectHttpClient = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val dynamicApiClients = JvmDynamicApiClients(noRedirectHttpClient)
     private val noRedirectFileMutationHttpExecutor = DesktopHttpMutationExecutor(noRedirectHttpClient)
+    private val talkReadHttpClient = httpClient.forTalkReads()
     private val projectContentHttpClient = buildDesktopProjectContentHttpClient()
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
-    private val dynamicDiscoveryCache = DesktopDynamicDiscoveryCacheCoordinator.get(
-        desktopContractCacheDirectory("discoveries-v1"),
-    )
+    private val dynamicDiscoveryCache = DesktopDynamicDiscoveryCacheCoordinator.get(desktopContractCacheDirectory("discoveries-v1"))
     private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
+    private val writeQuarantine = FileDynamicWriteQuarantineStore(File(pendingDynamicMutationDirectory.parentFile, "write-safety-v1"))
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
@@ -747,9 +745,8 @@ class DesktopNextcloudServices(
     private var windowsCloudFilesIdentity: String? = null
     @Volatile
     private var windowsCloudFilesFailure: String? = null
-    private val dynamicApiReadCache = DynamicApiResponseCache(
-        desktopContractCacheDirectory("responses"),
-    )
+    private val dynamicApiReadCache = DynamicApiResponseCache(desktopContractCacheDirectory("responses"))
+    override fun dynamicWriteQuarantineStore(): DynamicWriteQuarantineStore = writeQuarantine
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
@@ -3821,6 +3818,7 @@ class DesktopNextcloudServices(
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         cleanup.accountStorageKey?.let(textEditorDrafts::removeAccount)
+        cleanup.accountStorageKey?.let { writeQuarantine.removeAccount(it) }
         cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
         cleanup.accountStorageKey?.let(sharedJvmAuthenticatedAppReadSessions::retireAccount)
         cleanup.accountStorageKey?.let { accountStorageKey ->
@@ -4691,8 +4689,9 @@ class DesktopNextcloudServices(
                     contentType = safeRequest.contentType,
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
+                    headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, dynamicApiClients.forMethod(safeRequest.method)) {
                         recordDesktopRequestDiagnostic(session, it)
                     },
                     onFailurePhase = { phase ->
@@ -4766,7 +4765,7 @@ class DesktopNextcloudServices(
                 ocsRequest = safeRequest.ocsApiRequest,
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
+                client = dynamicApiClients.write,
             )
             NextcloudApiResponse(
                 response.status,
@@ -4798,7 +4797,7 @@ class DesktopNextcloudServices(
             rawBody = request.body,
             headers = headers,
             maxResponseBytes = request.maximumResponseBytes,
-            client = noRedirectHttpClient,
+            client = if (request.method.equals("POST", ignoreCase = true)) dynamicApiClients.write else noRedirectHttpClient,
         )
         NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
     }
@@ -4997,151 +4996,6 @@ class DesktopNextcloudServices(
         parseDesktopDocumentTemplates(fallback.text, creatorId)
     }
 
-    override suspend fun listNotes(session: NextcloudSession): List<NextcloudNote> =
-        when (val result = listNotesConditionally(session, expectedEtag = null)) {
-            is NextcloudConditionalRead.Modified -> result.value
-            NextcloudConditionalRead.NotModified -> error("An unconditional Notes list read returned not modified.")
-        }
-
-    override suspend fun listNotesConditionally(
-        session: NextcloudSession,
-        expectedEtag: String?,
-    ): NextcloudConditionalRead<List<NextcloudNote>> =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                "GET",
-                session.serverUrl + NOTES_LIST_RELATIVE_PATH,
-                session,
-                headers = notesConditionalHeaders(expectedEtag),
-            )
-            if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-            check(response.status in 200..299) { "Loading Notes failed (HTTP ${response.status})." }
-            val data = JSONArray(response.text)
-            val notes = buildList {
-                for (index in 0 until data.length()) {
-                    data.optJSONObject(index)?.toNextcloudNote()?.let(::add)
-                }
-            }.sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
-            NextcloudConditionalRead.Modified(notes, response.etag)
-        }
-
-    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val presence = inspectNotePresence(session, noteId)) {
-            NextcloudNotePresence.Absent -> error("The note no longer exists.")
-            is NextcloudNotePresence.Present -> presence.note
-        }
-
-    override suspend fun inspectNotePresence(
-        session: NextcloudSession,
-        noteId: Long,
-    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
-        require(noteId >= 0L) { "The note ID is invalid." }
-        val response = request(
-            "GET",
-            session.serverUrl + notesDetailRelativePath(noteId),
-            session,
-        )
-        if (response.status == 404 || response.status == 410) {
-            return@withContext NextcloudNotePresence.Absent
-        }
-        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-        val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-            "The note response is invalid."
-        }
-        NextcloudNotePresence.Present(note)
-    }
-
-    override suspend fun loadNoteConditionally(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String?,
-    ): NextcloudConditionalRead<NextcloudNote> =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                "GET",
-                session.serverUrl + notesDetailRelativePath(noteId),
-                session,
-                headers = notesConditionalHeaders(expectedEtag),
-            )
-            if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-            check(response.status != 404) { "The note no longer exists." }
-            check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-            val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-                "The note response is invalid."
-            }
-            NextcloudConditionalRead.Modified(note, response.etag)
-        }
-
-    override suspend fun updateNote(
-        session: NextcloudSession,
-        noteId: Long,
-        content: String,
-        category: String,
-        favorite: Boolean,
-        expectedEtag: String?,
-        title: String?,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        require(content.encodeToByteArray().size.toLong() <= MAX_NOTE_BYTES) {
-            "Notes larger than ${MAX_NOTE_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        val body = JSONObject()
-            .put("content", content)
-            .put("category", category)
-            .put("favorite", favorite)
-            .apply { title?.let { put("title", it) } }
-            .toString()
-        val response = request(
-            "PUT",
-            session.serverUrl + notesDetailRelativePath(noteId),
-            session,
-            body,
-            "application/json; charset=utf-8",
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Saving the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) { "The saved note response is invalid." }
-    }
-
-    override suspend fun createNote(
-        session: NextcloudSession,
-        title: String,
-        content: String,
-        category: String,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        val plan = createNoteRequest(title, content, category)
-        val response = request(
-            plan.method.name,
-            session.serverUrl + plan.relativePath,
-            session,
-            requireNotNull(plan.body).decodeToString(),
-            plan.contentType,
-        )
-        check(response.status in 200..299) { "Creating the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-            "The created note response is invalid."
-        }
-    }
-
-    override suspend fun deleteNote(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String?,
-    ) = withContext(Dispatchers.IO) {
-        val plan = deleteNoteRequest(noteId)
-        val response = request(
-            plan.method.name,
-            session.serverUrl + plan.relativePath,
-            session,
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 404) { "The note no longer exists." }
-        check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Deleting the note failed (HTTP ${response.status})." }
-    }
-
     override suspend fun listPeople(session: NextcloudSession, backend: String): List<NextcloudPerson> =
         withContext(Dispatchers.IO) {
             require(backend in setOf("recognize", "facerecognition")) { "Unsupported people backend." }
@@ -5249,56 +5103,28 @@ class DesktopNextcloudServices(
             }
         }
 
-    override suspend fun listTalkMessages(session: NextcloudSession, token: String): List<TalkMessage> =
-        listTalkMessagePage(session, token).messages
-
-    override suspend fun listTalkMessagePage(
+    override suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-        olderCursor: Long?,
-        limit: Int,
-    ): TalkMessagePage =
+        request: TalkTransportRequest,
+    ): TalkTransportResponse = if (request.isRead) {
+        executeJvmTalkRead(talkReadHttpClient, session, request, USER_AGENT)
+    } else {
         withContext(Dispatchers.IO) {
+            val formBody = request.encodedFormBody()
             val response = request(
-                "GET",
-                session.serverUrl + talkMessageHistoryPath(token, olderCursor, limit),
-                session,
+                method = request.method.name,
+                url = request.url(session.serverUrl),
+                session = session,
+                contentType = formBody?.let { "application/x-www-form-urlencoded; charset=utf-8" },
+                rawBody = formBody,
                 ocsRequest = true,
+                maxResponseBytes = request.maximumResponseBytes,
+                client = noRedirectHttpClient,
             )
-            val data = if (response.status == 304) {
-                JSONArray()
-            } else {
-                check(response.status in 200..299) {
-                    "Loading Talk history failed (HTTP ${response.status})."
-                }
-                JSONObject(response.text).getJSONObject("ocs").getJSONArray("data")
-            }
-            val messages = buildList {
-                for (index in 0 until data.length()) {
-                    val message = data.optJSONObject(index) ?: continue
-                    parseTalkMessageJson(message.toString())?.let(::add)
-                }
-            }
-            val nextCursor = response.chatLastGiven?.toLongOrNull()
-            TalkMessagePage(
-                messages = messages,
-                olderCursor = nextCursor,
-                hasMoreHistory = response.status != 304 && nextCursor != null,
-            )
+            TalkTransportResponse(response.status, response.body, response.chatLastGiven?.toLongOrNull())
         }
-    override suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String) =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                "POST",
-                session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/${encodePath(token)}?format=json",
-                session,
-                "message=" + encodeForm(message),
-                "application/x-www-form-urlencoded",
-                true,
-            )
-            check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
-            Unit
-        }
+    }
+
     override suspend fun revokeSession(session: NextcloudSession): Unit = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize {
             clearSessionForAccountOperation(expectedSession = session) { current ->
@@ -5643,22 +5469,6 @@ class DesktopNextcloudServices(
 
     private fun readableName(id: String): String = id.replace('_', ' ').split(' ')
         .joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
-
-    private fun JSONObject.toNextcloudNote(responseEtag: String? = null): NextcloudNote? {
-        val id = optLong("id", -1L).takeIf { it >= 0L } ?: return null
-        return NextcloudNote(
-            id = id,
-            title = optString("title").ifBlank { "Untitled note" },
-            modified = optLong("modified", 0L),
-            category = optString("category"),
-            favorite = optBoolean("favorite", false),
-            readOnly = optBoolean("readonly", false),
-            content = if (has("content")) optString("content") else null,
-            etag = resolvedNoteEtag(responseEtag, optString("etag")),
-            internalPath = optString("internalPath").takeIf(String::isNotBlank),
-            isShared = optBoolean("isShared", false),
-        )
-    }
 
     private fun JSONArray.appendMemoryFiles(person: NextcloudPerson, target: MutableMap<Long, NextcloudFile>) {
         for (index in 0 until length()) {

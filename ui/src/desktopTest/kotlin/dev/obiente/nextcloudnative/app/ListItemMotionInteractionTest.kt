@@ -39,8 +39,17 @@ class ListItemMotionInteractionTest {
             }) {
                 val gammaRest = top("gamma")
                 order.value = listOf("gamma", "alpha", "beta")
-                scene.render(System.nanoTime()).close()
-                scene.render(System.nanoTime() + 16_000_000L).close()
+                // One clock reading for both frames: a slow first frame must not let the second land
+                // after the animation has already finished.
+                val firstFrame = System.nanoTime()
+                scene.render(firstFrame).close()
+                scene.render(firstFrame + 16_000_000L).close()
+                if (reduced) {
+                    // The placement is applied by a coroutine the two frames above only scheduled.
+                    // Let it run, then draw one more frame, still far inside any glide's duration.
+                    kotlinx.coroutines.delay(1)
+                    scene.render(firstFrame + 32_000_000L).close()
+                }
                 val firstFrames = top("gamma")
                 if (reduced) {
                     assertEquals(0f, firstFrames, "Reduced motion places a moved item at once")

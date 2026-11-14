@@ -116,6 +116,8 @@ fun NativeDeckBoardSurface(
     boardRecovery: DeckUiBoardRecovery? = null,
     onRestoreBoard: ((DeckBoard) -> Unit)? = null,
     onDismissBoardRecovery: (() -> Unit)? = null,
+    statusMessage: String? = null,
+    onDismissStatus: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val presentation = resolveDeckWorkspacePresentation(state, boardContext)
@@ -126,7 +128,7 @@ fun NativeDeckBoardSurface(
     var boardMenuExpanded by remember(activeBoard?.id) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxSize()) {
         ScreenHeader(
-            title = activeBoard?.title ?: "Deck",
+            title = activeBoard?.title ?: "Boards",
             subtitle = (visibleState as? DeckWorkspaceState.Board)?.let { boardState ->
                 "${boardState.stacks.size} lists - " +
                     "${boardState.stacks.sumOf { it.cards.size }} cards"
@@ -162,6 +164,13 @@ fun NativeDeckBoardSurface(
         }
         presentation.cachedError?.let { error ->
             DeckCachedErrorBanner(error, onRetry)
+        }
+        statusMessage?.let { message ->
+            DeckCachedErrorBanner(
+                DeckWorkspaceState.Error("The app did not finish that action", message),
+                onRetry = onDismissStatus,
+                retryLabel = "Dismiss",
+            )
         }
         when (visibleState) {
             DeckWorkspaceState.Loading -> NativeDeckCenteredState(Modifier.weight(1f)) {
@@ -287,6 +296,7 @@ private fun DeckBoardRecoveryBanner(
 private fun DeckCachedErrorBanner(
     error: DeckWorkspaceState.Error,
     onRetry: () -> Unit,
+    retryLabel: String = "Try again",
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(
@@ -313,7 +323,7 @@ private fun DeckCachedErrorBanner(
                 )
             }
             if (error.canRetry) {
-                TextButton(onClick = onRetry) { Text("Try again") }
+                TextButton(onClick = onRetry) { Text(retryLabel) }
             }
         }
     }
@@ -333,103 +343,6 @@ private fun NativeDeckCenteredState(
         ),
         content = content,
     )
-}
-
-@Composable
-private fun DeckBoardPicker(
-    state: DeckWorkspaceState.BoardPicker,
-    onSelectBoard: (DeckBoard) -> Unit,
-    onCreateBoard: (() -> Unit)?,
-    boardActions: (DeckBoard) -> List<NextcloudCardAction>,
-    modifier: Modifier,
-) {
-    Column(
-        modifier = modifier.fillMaxSize().padding(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "${state.boards.size} boards",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.canCreateBoards && onCreateBoard != null) {
-                Button(onClick = onCreateBoard) {
-                    Icon(NextcloudIcons.Add, contentDescription = null)
-                    Spacer(Modifier.width(NextcloudSpacing.Small))
-                    Text("New board")
-                }
-            }
-        }
-        LazyColumn(
-            contentPadding = PaddingValues(bottom = NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            items(state.boards, key = DeckBoard::id) { board ->
-                val actions = boardActions(board)
-                var menuExpanded by remember(board.id) { mutableStateOf(false) }
-                Card(
-                    modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
-                        onOpen = { onSelectBoard(board) },
-                        onShowActions = actions.takeIf { it.isNotEmpty() }?.let {
-                            { menuExpanded = true }
-                        },
-                        openLabel = "Open ${board.title}",
-                        actionsLabel = "Actions for ${board.title}",
-                    ),
-                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(NextcloudRadii.Small),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.size(42.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(NextcloudIcons.app("deck"), contentDescription = null)
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                board.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                listOfNotNull(
-                                    board.owner?.displayName,
-                                    "Shared".takeIf { board.shared },
-                                    "Read only".takeIf { !board.permissions.canEdit },
-                                ).joinToString(" - ").ifBlank { "Private board" },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (actions.isEmpty()) {
-                            Icon(NextcloudIcons.ChevronRight, contentDescription = null)
-                        } else {
-                            NextcloudCardOverflow(
-                                itemLabel = board.title,
-                                actions = actions,
-                                expanded = menuExpanded,
-                                onExpandedChange = { menuExpanded = it },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -482,7 +395,7 @@ private fun DeckLanes(
         NativeDeckCenteredState(modifier) {
             Text("No lists", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "Add a list in Deck to start organizing cards.",
+                "Add a list to start organizing cards.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -683,7 +596,7 @@ private fun DeckLanes(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stack.title, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${stack.cards.size} cards",
+                            if (stack.cardsLoaded) "${stack.cards.size} cards" else "Cards not loaded",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -781,7 +694,7 @@ private fun DeckLanes(
                     if (stack.cards.isEmpty()) {
                         item {
                             Text(
-                                "No cards",
+                                if (stack.cardsLoaded) "No cards" else DECK_UNLOADED_LIST_MESSAGE,
                                 modifier = Modifier.padding(NextcloudSpacing.Medium),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

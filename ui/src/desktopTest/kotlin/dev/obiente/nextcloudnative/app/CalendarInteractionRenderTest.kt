@@ -346,6 +346,8 @@ class CalendarInteractionRenderTest {
     @Test
     fun desktopPaneControlsReturnSpaceWithoutMutatingTheEventOrItsCalendar() {
         var mutations = 0
+        var editRequests = 0
+        var deleteRequests = 0
         val occurrence = event().copy(recurrenceRule = "FREQ=WEEKLY", isGeneratedOccurrence = true)
         nativeSceneTest(1440, 900, content = {
             DesktopGroupwareCalendarWorkspace(
@@ -354,19 +356,22 @@ class CalendarInteractionRenderTest {
                 query = "", selectedEvent = occurrence, onPrevious = {}, onNext = {}, onToday = {},
                 onViewChanged = {}, onQueryChanged = {}, onCalendarVisibilityChanged = { _, _ -> mutations++ },
                 onSelectDate = {}, onSelectEvent = {}, onCreateEvent = { mutations++ }, onRefresh = {},
-                onEditEvent = { mutations++ }, onDeleteEvent = { mutations++ },
+                onEditEvent = { editRequests++ }, onDeleteEvent = { deleteRequests++ },
             )
         }) {
             assertTrue(has("My calendars"))
-            assertTrue(has("Edit series"))
-            click("Edit series")
-            click("Delete series")
-            assertEquals(0, mutations, "Generated occurrences must stay read-only")
+            assertTrue(has("Edit event"))
+            // An occurrence only asks to be edited or deleted; the screen then asks for its scope.
+            click("Edit event")
+            click("Delete event")
+            assertEquals(1, editRequests)
+            assertEquals(1, deleteRequests)
+            assertEquals(0, mutations, "Asking to edit must not change calendar visibility or create events")
             val originalDayWidth = assertNotNull(node("Mon")).boundsInRoot.width
             click("Details")
             // The inspector slides out, so wait for its exit before checking the freed space.
-            settleUntil { !has("Edit series") }
-            assertFalse(has("Edit series"))
+            settleUntil { !has("Edit event") }
+            assertFalse(has("Edit event"))
             click("Calendars")
             assertFalse(has("My calendars"))
             settleUntil { assertNotNull(node("Mon")).boundsInRoot.width > originalDayWidth + 30f }

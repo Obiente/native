@@ -43,7 +43,6 @@ import dev.obiente.nextcloudnative.app.textFileDavSaveRequest
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
-import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
 import dev.obiente.nextcloudnative.app.NextcloudApiReadFailure
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
@@ -122,11 +121,6 @@ import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
 import dev.obiente.nextcloudnative.app.NativeMediaCollectionTransportRequest
-import dev.obiente.nextcloudnative.app.NextcloudNote
-import dev.obiente.nextcloudnative.app.NextcloudNotePresence
-import dev.obiente.nextcloudnative.app.createNoteRequest
-import dev.obiente.nextcloudnative.app.deleteNoteRequest
-import dev.obiente.nextcloudnative.app.notesMutationHeaders
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.loginPollPendingDiagnostic
 import dev.obiente.nextcloudnative.app.shouldRecordHttpStatusDiagnostic
@@ -138,8 +132,10 @@ import dev.obiente.nextcloudnative.app.TextEditorDraftStore
 import dev.obiente.nextcloudnative.app.NextcloudSystemTag
 import dev.obiente.nextcloudnative.app.SavedTextFile
 import dev.obiente.nextcloudnative.app.SystemTagDavRecord
-import dev.obiente.nextcloudnative.app.TalkMessage
-import dev.obiente.nextcloudnative.app.TalkMessagePage
+import dev.obiente.nextcloudnative.app.TalkTransportRequest
+import dev.obiente.nextcloudnative.app.TalkTransportResponse
+import dev.obiente.nextcloudnative.app.executeJvmTalkRead
+import dev.obiente.nextcloudnative.app.forTalkReads
 import dev.obiente.nextcloudnative.app.TalkRoom
 import dev.obiente.nextcloudnative.app.ThemePreference
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
@@ -152,6 +148,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions
+import dev.obiente.nextcloudnative.app.JvmDynamicApiClients
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkFailurePhase
@@ -349,10 +346,9 @@ internal class AndroidNextcloudServices(
         .build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
-    private val noRedirectHttpClient = httpClient.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val noRedirectHttpClient = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val dynamicApiClients = JvmDynamicApiClients(noRedirectHttpClient)
+    private val talkReadHttpClient = httpClient.forTalkReads()
     private val documentEditingTransport = AndroidDocumentEditingTransport { session, specification ->
         val response = request(
             method = specification.method,
@@ -376,10 +372,9 @@ internal class AndroidNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
-    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(
-        File(appContext.filesDir, "contracts/discoveries-v1"),
-    )
+    private val dynamicDiscoveryCache = AndroidDynamicDiscoveryCacheCoordinator.get(File(appContext.filesDir, "contracts/discoveries-v1"))
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
+    private val writeQuarantine = dev.obiente.nextcloudnative.app.FileDynamicWriteQuarantineStore(File(appContext.filesDir, ANDROID_WRITE_SAFETY_DIRECTORY))
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
@@ -905,6 +900,7 @@ internal class AndroidNextcloudServices(
     override suspend fun selectAccount(accountId: NextcloudAccountId) = accountCredentials.selectAccount(accountId)
 
     override suspend fun removeAccount(accountId: NextcloudAccountId) = accountCredentials.removeAccount(accountId)
+    override fun dynamicWriteQuarantineStore(): dev.obiente.nextcloudnative.app.DynamicWriteQuarantineStore = writeQuarantine
 
     override fun textEditorDraftStore(session: NextcloudSession, path: String): TextEditorDraftStore =
         textEditorDrafts.bind(session, path, accountCredentials)
@@ -2757,8 +2753,9 @@ internal class AndroidNextcloudServices(
                     contentType = safeRequest.contentType,
                     rawBody = safeRequest.body,
                     ocsRequest = safeRequest.ocsApiRequest,
+                    headers = safeRequest.preconditionHeaders,
                     maxResponseBytes = safeRequest.maximumResponseBytes,
-                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, noRedirectHttpClient) {
+                    client = sharedJvmAuthenticatedAppReadSessions.clientForRead(session, safeRequest, dynamicApiClients.forMethod(safeRequest.method)) {
                         recordRequestDiagnostic(session, it)
                     },
                     onFailurePhase = { phase ->
@@ -2837,7 +2834,7 @@ internal class AndroidNextcloudServices(
                 ocsRequest = safeRequest.ocsApiRequest,
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
+                client = dynamicApiClients.write,
                 accountMutationSerialized = accountMutationLeaseHeld,
             )
             NextcloudApiResponse(
@@ -2900,7 +2897,7 @@ internal class AndroidNextcloudServices(
             rawBody = request.body,
             headers = headers,
             maxResponseBytes = request.maximumResponseBytes,
-            client = noRedirectHttpClient,
+            client = if (request.method.equals("POST", ignoreCase = true)) dynamicApiClients.write else noRedirectHttpClient,
         )
         NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
     }
@@ -3001,118 +2998,6 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         request: NextcloudDocumentEditSessionRequest,
     ): NextcloudDocumentEditSession = documentEditingTransport.beginSession(session, request)
-
-    override suspend fun listNotes(session: NextcloudSession): List<NextcloudNote> =
-        withContext(Dispatchers.IO) {
-            val response = request(
-                method = "GET",
-                url = session.serverUrl + "/index.php/apps/notes/api/v1/notes?exclude=content",
-                session = session,
-            )
-            check(response.status in 200..299) { "Loading Notes failed (HTTP ${response.status})." }
-            val data = JSONArray(response.text)
-            buildList {
-                for (index in 0 until data.length()) {
-                    data.optJSONObject(index)?.toNextcloudNote()?.let(::add)
-                }
-            }.sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
-        }
-
-    override suspend fun inspectNotePresence(
-        session: NextcloudSession,
-        noteId: Long,
-    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
-            require(noteId >= 0L) { "The note ID is invalid." }
-            val response = request(
-                method = "GET",
-                url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
-                session = session,
-            )
-            if (response.status == 404 || response.status == 410) {
-                return@withContext NextcloudNotePresence.Absent
-            }
-            check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-            val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-                "The note response is invalid."
-            }
-            NextcloudNotePresence.Present(note)
-        }
-
-    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val presence = inspectNotePresence(session, noteId)) {
-            NextcloudNotePresence.Absent -> error("The note no longer exists.")
-            is NextcloudNotePresence.Present -> presence.note
-        }
-
-    override suspend fun updateNote(
-        session: NextcloudSession,
-        noteId: Long,
-        content: String,
-        category: String,
-        favorite: Boolean,
-        expectedEtag: String?,
-        title: String?,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        require(content.encodeToByteArray().size.toLong() <= MAX_NOTE_BYTES) {
-            "Notes larger than ${MAX_NOTE_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        val body = JSONObject()
-            .put("content", content)
-            .put("category", category)
-            .put("favorite", favorite)
-            .apply { title?.let { put("title", it) } }
-            .toString()
-        val response = request(
-            method = "PUT",
-            url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
-            session = session,
-            body = body,
-            contentType = "application/json; charset=utf-8",
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Saving the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) { "The saved note response is invalid." }
-    }
-
-    override suspend fun createNote(
-        session: NextcloudSession,
-        title: String,
-        content: String,
-        category: String,
-    ): NextcloudNote = withContext(Dispatchers.IO) {
-        val plan = createNoteRequest(title, content, category)
-        val response = request(
-            method = plan.method.name,
-            url = session.serverUrl + plan.relativePath,
-            session = session,
-            body = requireNotNull(plan.body).decodeToString(),
-            contentType = plan.contentType,
-        )
-        check(response.status in 200..299) { "Creating the note failed (HTTP ${response.status})." }
-        requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
-            "The created note response is invalid."
-        }
-    }
-
-    override suspend fun deleteNote(
-        session: NextcloudSession,
-        noteId: Long,
-        expectedEtag: String?,
-    ) = withContext(Dispatchers.IO) {
-        val plan = deleteNoteRequest(noteId)
-        val response = request(
-            method = plan.method.name,
-            url = session.serverUrl + plan.relativePath,
-            session = session,
-            headers = notesMutationHeaders(expectedEtag),
-        )
-        check(response.status != 404) { "The note no longer exists." }
-        check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }
-        check(response.status != 423) { "This note is temporarily locked on the server." }
-        check(response.status in 200..299) { "Deleting the note failed (HTTP ${response.status})." }
-    }
 
     override suspend fun listPeople(session: NextcloudSession, backend: String): List<NextcloudPerson> =
         withContext(Dispatchers.IO) {
@@ -3243,90 +3128,28 @@ internal class AndroidNextcloudServices(
             }
         }
 
-    override suspend fun listTalkMessages(
+    override suspend fun executeTalkRequest(
         session: NextcloudSession,
-        token: String,
-    ): List<TalkMessage> = listTalkMessagePage(session, token).messages
-
-    override suspend fun listTalkMessagePage(
-        session: NextcloudSession,
-        token: String,
-        olderCursor: Long?,
-        limit: Int,
-    ): TalkMessagePage = withContext(Dispatchers.IO) {
-        require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-            "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-        }
-        require(olderCursor == null || olderCursor >= 0L) {
-            "Talk history cursor must not be negative."
-        }
-        try {
-            val encodedToken = encodePathSegment(token)
+        request: TalkTransportRequest,
+    ): TalkTransportResponse = if (request.isRead) {
+        executeJvmTalkRead(talkReadHttpClient, session, request, USER_AGENT)
+    } else {
+        withContext(Dispatchers.IO) {
+            val formBody = request.encodedFormBody()
             val response = request(
-                method = "GET",
-                url = session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-                    "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-                    "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1",
+                method = request.method.name,
+                url = request.url(session.serverUrl),
                 session = session,
+                contentType = formBody?.let { "application/x-www-form-urlencoded; charset=utf-8" },
+                rawBody = formBody,
                 ocsRequest = true,
+                maxResponseBytes = request.maximumResponseBytes,
+                client = noRedirectHttpClient,
             )
-            val data = if (response.status == 304) {
-                JSONArray()
-            } else {
-                check(response.status in 200..299) {
-                    "Loading Talk history failed (HTTP ${response.status})."
-                }
-                JSONObject(response.text).getJSONObject("ocs").getJSONArray("data")
-            }
-            buildList {
-                for (index in 0 until data.length()) {
-                    val message = data.optJSONObject(index) ?: continue
-                    parseTalkMessageJson(message.toString())?.let(::add)
-                }
-            }.let { messages ->
-                val nextCursor = response.chatLastGiven?.toLongOrNull()
-                TalkMessagePage(
-                    messages = messages,
-                    olderCursor = nextCursor,
-                    hasMoreHistory = response.status != 304 && nextCursor != null,
-                )
-            }
-        } catch (failure: Throwable) {
-            Log.e(LOG_TAG, "Loading Talk messages failed", failure)
-            recordRequestDiagnostic(
-                session,
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Talk,
-                    operation = "talk.messages-load",
-                    outcome = "failed",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("room", token, SupportDiagnosticValuePrivacy.Identifier),
-                    ),
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
+            TalkTransportResponse(response.status, response.body, response.chatLastGiven?.toLongOrNull())
         }
     }
 
-    override suspend fun sendTalkMessage(
-        session: NextcloudSession,
-        token: String,
-        message: String,
-    ) = withContext(Dispatchers.IO) {
-        val encodedToken = encodePathSegment(token)
-        val response = request(
-            method = "POST",
-            url = session.serverUrl + "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken?format=json",
-            session = session,
-            body = "message=" + URLEncoder.encode(message, StandardCharsets.UTF_8.name()),
-            contentType = "application/x-www-form-urlencoded",
-            ocsRequest = true,
-        )
-        check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
-        Unit
-    }
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         accountCredentials.revokeSession(session) {
             request(
@@ -3717,22 +3540,6 @@ internal class AndroidNextcloudServices(
         .replace('_', ' ')
         .split(' ')
         .joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }
-
-    private fun JSONObject.toNextcloudNote(responseEtag: String? = null): NextcloudNote? {
-        val id = optLong("id", -1L).takeIf { it >= 0L } ?: return null
-        return NextcloudNote(
-            id = id,
-            title = optString("title").ifBlank { "Untitled note" },
-            modified = optLong("modified", 0L),
-            category = optString("category"),
-            favorite = optBoolean("favorite", false),
-            readOnly = optBoolean("readonly", false),
-            content = if (has("content")) optString("content") else null,
-            etag = optString("etag").takeIf(String::isNotBlank) ?: responseEtag,
-            internalPath = optString("internalPath").takeIf(String::isNotBlank),
-            isShared = optBoolean("isShared", false),
-        )
-    }
 
     private fun JSONArray.appendMemoryFiles(person: NextcloudPerson, target: MutableMap<Long, NextcloudFile>) {
         for (index in 0 until length()) {

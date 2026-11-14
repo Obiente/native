@@ -74,18 +74,22 @@ date.
 **Already shared.** All Compose UI, the sync domain model (planning,
 conflicts, checkpoints), groupware and media DAV models, virtual-file eviction
 policy, and the `NextcloudPlatformServices` interface live in `commonMain`.
-Both service containers implement that interface. `jvmMain` shares login and
+Both service containers implement that interface. Talk chat requests, response
+parsing, capability gating, and write recovery live in `commonMain`
+(`TalkChatProtocol.kt`, `TalkChatController.kt`); each platform only forwards a
+reviewed `TalkTransportRequest` to `executeTalkRequest`. `jvmMain` shares login and
 authenticated request policy, application read sessions, App Store contract
-acquisition results and failures, detached downloads, the resumable
-chunk-upload state machine, staging-space reservations, support diagnostics and
-intake, text-draft encryption, and WebDAV href decoding.
+acquisition results and failures, cancellable Talk reads and long polls
+(`JvmTalkTransport.kt`), detached downloads,
+the resumable chunk-upload state machine, staging-space reservations, support
+diagnostics and intake, text-draft encryption, and WebDAV href decoding.
 
 **Still duplicated.** The gap is below the shared interface: each platform has
 its own HTTP request code, protocol adapters, XML parsers, and sync executor.
 
 | Priority | Area | Android | Desktop | Shared owner to aim for |
 | --- | --- | --- | --- | --- |
-| High | Protocol adapters and HTTP request code. About 57 functions are at least 90% similar; desktop has notes and template functions Android lacks | `AndroidNextcloudServices.kt` | `DesktopNextcloudServices.kt` | One `jvmMain` HTTP gateway plus typed per-domain adapters in `commonMain` |
+| High | Protocol adapters and HTTP request code. About 57 functions are at least 90% similar; desktop has template functions Android lacks | `AndroidNextcloudServices.kt` | `DesktopNextcloudServices.kt` | One `jvmMain` HTTP gateway plus typed per-domain adapters in `commonMain` |
 | High | WebDAV and XML parsing, written four ways with different hardening | `SafeXmlParser.kt`, `NextcloudDocumentWebDav.kt` | `DocumentBuilderFactory` setups in `DesktopNextcloudServices.kt` and `DesktopFileVersionDav.kt`, `DesktopFileSyncDavParser.kt` | One hardened parser and typed multistatus parsers in `jvmMain`, with Android runtime tests |
 | High | Same-origin redirect rule, written three times | `AndroidNextcloudRedirect.kt` | `DesktopNextcloudServices.kt` | `NextcloudAuthenticatedRequestPolicy` in `jvmMain` |
 | High | Folder sync execution and owned-upload reconciliation. Behavior differs: when a folder replaces a remote file, desktop keeps a backup and Android does not; desktop records the uploaded ETag and Android rescans | `AndroidFileSyncEngine.kt`, `AndroidFileSyncRemoteTree.kt`, `NextcloudChunkUploadWebDav.kt` | `DesktopFileSyncEngine.kt`, `DesktopFileSyncRemoteTree.kt`, `DesktopFileSyncChunkUploadRemote.kt` | Step by step: a `jvmMain` owned-stage reconciler, then one WebDAV file client, then a `commonMain` orchestrator. Each step needs restart, conflict, cancellation, and ambiguous-result tests |
@@ -123,7 +127,7 @@ acceptance tests pass and its limitations are recorded in
 
 | Platform | Runtime | State in source and packaging | Platform-specific direction |
 | --- | --- | --- | --- |
-| Android | Compose Multiplatform | Active launcher; signed alpha APK and AAB. Source includes Keystore-backed credentials, WorkManager workers, a `DocumentsProvider`, selected-folder sync, media backup, Media3 playback sessions, and share targets. | Notifications and push, calls, and the platform acceptance gates in the roadmap |
+| Android | Compose Multiplatform | Active launcher; signed alpha APK and AAB. Source includes Keystore-backed credentials, WorkManager workers, a `DocumentsProvider`, selected-folder sync, media backup, Media3 playback sessions, and share targets. | System notifications and push, calls, and the platform acceptance gates in the roadmap |
 | Linux | Compose Desktop | Primary interactive desktop target; alpha RPM and DEB. Source includes Secret Service storage through `secret-tool`, a StatusNotifier tray, selected-folder sync, and a FUSE virtual filesystem (`LinuxVirtualFileSystem.kt`). | Portals, notifications, media keys, and conventional sync roots |
 | Windows | Compose Desktop | Unsigned x86-64 MSI with Credential Manager storage, build provenance, and a Cloud Files provider (`WindowsCloudFilesProvider.kt`) under prerelease qualification. | Explorer validation, trusted signing when available, notifications, media controls, and updates |
 | macOS | Compose Desktop | Early DMG packaging artifact. Keychain storage (`MacOsKeychainSecretStore`) is present in source and unit-tested, but authenticated use has not been live-validated or qualified. | Keychain, File Provider and Finder integration, notifications, media controls, and updates |
@@ -221,14 +225,15 @@ interaction validation is still required.
   follows the system "Remove animations" setting through
   `LocalNextcloudReducedMotion`, which turns these animations off. Desktop has
   no reduced-motion source yet and keeps full motion.
-- Desktop detail panes for Files, Calendar, and Deck slide in from the side
-  when they open and out when they close. Choosing another item in an open
-  pane, including the always-visible Folder sync inspector, slides its details
-  in from the side. On phones, Deck card details and Folder sync pair details
-  open in `NextcloudDetailSheet`, a bottom sheet over the board or list that
-  closes with Back, Escape, Close, or a tap outside, and reopens after
-  recreation from the saved selection. Narrow desktop windows keep the Deck
-  card dialog and the full Folder sync page. File info stays a full page
+- Desktop detail panes for Files, Calendar, Deck, Contacts, and Tasks slide in
+  from the side when they open and out when they close. Choosing another item
+  in an open pane, including the always-visible Folder sync inspector, slides
+  its details in from the side. On phones, Deck card, Folder sync pair,
+  contact, and task details open in `NextcloudDetailSheet`, a bottom sheet
+  over the board or list that closes with Back, Escape, Close, or a tap
+  outside, and reopens after recreation from the saved selection. Narrow
+  desktop windows keep the Deck card, contact, and task dialogs and the full
+  Folder sync page. File info stays a full page
   because of its version history and restore flow, and Calendar event details
   stay in place because Edit continues in the same page with keyboard input
   and draft guards.
@@ -251,7 +256,7 @@ interaction validation is still required.
   A refresh failure over content that is still shown uses
   `RetainedContentNotice` instead of a full error state.
 - In-app section switches ease in the new content: Photos destinations,
-  desktop Settings sections, Calendar Month, Week, and Agenda views, and
+  desktop Settings sections, Calendar Month, Week, Day, and Agenda views, and
   dynamic app views, record details, the inline editor, and content that
   finished loading. Segmented controls spring a shared selection pill between
   options. Details, insights, and inventory disclosures in dynamic apps unfold
@@ -276,10 +281,42 @@ interaction validation is still required.
   open, the screen below takes no pointer input, keyboard focus cannot move into
   it, and it is hidden from accessibility services. Reduced motion opens and
   closes the viewer at once.
-- News moves like other workspaces: on one pane the reader slides in over the
-  article list and back, two panes fade between articles, and an article's
-  title carries from its row into the reader. Rows ease in, and their
-  selection, unread dot, and star fade or pop instead of switching.
+- Feed readers (any app whose contract exposes feeds and articles) show
+  filters and feeds in a rail beside the article list and reader from 980dp,
+  a rail beside the list or reader from 680dp, and filter chips above the list
+  on narrower screens, where system back closes the open article. A filtered
+  list says in one line that it covers only the loaded articles. The selected
+  filter and feed survive recreation; the open article does not. Item-state
+  rule recovery uses encrypted account-scoped draft storage on Android and
+  desktop, with a shared JVM safety-store owner. Pending operations survive
+  restart and remain separate from optimistic UI state. This source slice has
+  synthetic shared/JVM coverage. On an isolated API 36 emulator,
+  `TextEditorDraftStorageInstrumentedTest` also verified encrypted store
+  recreation, orphan recovery cleanup, pending and other-account draft
+  retention, and account retirement using Android Keystore and app-private
+  storage. That storage test does not qualify feed UI lifecycle or live servers
+  (Last reviewed: 2026-11-06; see [the implementation boundary](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification), which may change).
+- Managed board LABEL commands use the same encrypted draft and safety stores
+  as feed rules, with shared typed membership postconditions. Synthetic planner,
+  executor, recovery and board-controller tests cover this source slice. No new
+  emulator/device, live Deck or packaged-artifact qualification is claimed.
+  Existing API 36 Boolean/storage evidence does not qualify label picker lifecycle
+  or the new recovery envelope on a device (Last reviewed: 2026-11-07; may change;
+  see [the implementation boundary](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)).
+- Mailboxes (any app whose contract exposes accounts, mailboxes, and
+  messages) use the shared mailbox workspace. When the contract describes a
+  send operation, a Compose button opens a composer that fills the screen on
+  compact layouts and is a dialog on wider ones; Reply, Reply all, and Forward
+  sit with the opened message. Closing a draft with content needs a separate
+  discard confirmation, and sending again after an unconfirmed result needs
+  its own confirmation. The draft and any running send belong to a per-account
+  owner outside every screen, so closing the composer, leaving the workspace,
+  or recreating the activity neither cancels a send nor loses the draft. The
+  draft is saved shortly after each edit to the encrypted, account-scoped text
+  draft storage that the text editor uses, and restored after process death;
+  an attempt is recorded before its request starts, so a send interrupted by
+  process death comes back as unconfirmed. Drafts are never written to saved
+  instance state, and removing the account deletes them.
 - Text shown on both sides of a navigation carries across it
   (`NextcloudSharedElements`). A conversation's name flies from the Talk list
   into the chat header, a file's name from the Files list into file details,
@@ -334,6 +371,12 @@ interaction validation is still required.
 - Photos places the date scrubber over edge-to-edge timeline content. The thumb
   and narrow rail keep date navigation while the surrounding area still accepts
   photo taps.
+- An open album has an actions menu in its header. Owners can rename or delete
+  the album; collaborators can leave a shared album. Each change is confirmed
+  separately, never addresses the original files, and is followed by a fresh
+  read of the album list. The viewer's actions include Favorite, which sets
+  the Files favorite explicitly instead of toggling a possibly stale value.
+  `NativeMediaAlbumManagementTest` covers the album plans.
 
 **Files, Activity, and Folder sync**
 
@@ -341,6 +384,41 @@ interaction validation is still required.
   only one secondary pane is shown, so the file list stays usable.
 - Activity separates actionable notices from the rest of the event history.
   Settings opens account details on demand.
+- The Activity destination opens on a Notifications inbox when the server
+  advertises the Notifications app, with a switch to the Activity history.
+  Phone layouts show the list with pull-to-refresh and replace it with the
+  selected notification, returning on system back. Windows 840dp and wider,
+  including desktop, keep the list beside a detail pane. Inline action buttons
+  appear only for actions the server advertised; DELETE actions and Dismiss
+  all need a separate confirmation. The bottom bar, navigation rail, and
+  desktop sidebar badge Activity with the number of notifications the server
+  still lists. That count is read when the account opens, when the inbox
+  opens, and on refresh; there is no background polling, push, or system
+  notification yet. The settings buttons in the inbox and in Activity open a
+  native Notification settings screen instead of the browser. It lists what
+  this app does with the server and describes the Notifications and Activity
+  settings read-only, because neither app offers an API to read them.
+  `NotificationsInboxScreenTest` covers the phone and desktop layouts, the
+  settings screen, and the badge semantics.
+- Files has a Deleted files view, opened from the desktop library pane or the
+  phone Files menu, when the server advertises `files.undelete`. Items can be
+  restored to their original folder one at a time or as a selection. Delete
+  permanently and Empty ask for a separate confirmation and are hidden when
+  the server sets `files.delete_from_trash` to false. Every batch is verified
+  with a fresh listing, and an item whose result could not be checked stays
+  locked until the next listing.
+- Select items in the Files menu opens a multi-select list for the visible
+  items with Favorite, Move, Copy, and Delete. Moves and copies keep the item's
+  ETag precondition and never overwrite; deletes use the same per-item fence
+  and verified outcome as a single delete. A result card lists what completed,
+  what failed, and what is safe to try again.
+- File details on phones and the desktop inspector show tags and comments.
+  Tags marked assignable can be added or removed and new public tags created;
+  comments can be posted, and your own comments edited or deleted after a
+  confirmation. A post with an unknown result is checked against a fresh read
+  before it can be sent again. These Files additions are covered by
+  deterministic tests (`FileTrashbin*Test`, `FileBulkOperationsTest`,
+  `FileCommentsTest`, `FileSystemTagAssignmentsTest`).
 - Folder sync shows queue state and last scan time separately. A completed scan
   is never presented as a completed sync. Phone pair rows open dedicated
   details; desktop keeps a pair table and inspector. Conflict choices explain
@@ -359,16 +437,116 @@ interaction validation is still required.
 - Notes uses an editor toolbar with Save outside the scrolling content. In
   short windows, title and folder controls move into an accessible Details
   dialog. Shared Markdown typography uses content-sized headings in Notes,
-  Files, Deck, Talk, and news. `NoteEditorContentTest` covers the short-window
+  Files, Deck, and Talk. `NoteEditorContentTest` covers the short-window
   controls and preservation of temporary form values.
 - Contact detail bodies scroll independently of their Edit and Delete buttons.
+  Email addresses and phone numbers open the system mail or phone app with one
+  tap, and an address can be copied.
+- Tasks can be completed or reopened from the list's checkbox, through the
+  same ETag-guarded update as the editor. The editor's due date has a date
+  picker and a clear action.
+
+**Notes, Contacts, and Tasks**
+
+- At 840dp and wider (`NextcloudWorkspaceBreakpoints.TwoPaneDp`), these apps show the selected item beside the list on Android and
+  desktop. Narrower phone layouts keep their single list.
+- Notes opens the editor beside the folder and note list on wide layouts and
+  in every desktop window. Narrow windows and phones show the editor alone
+  with Back to the list, inside the notes app's own screen. A note opened
+  beside the list stays open when the window narrows, so its draft is kept,
+  and the open note is saved selection that reopens after recreation. The
+  open note is also the notes app's saved location, so it reopens after a
+  relaunch, and a note editor saved by an earlier version reopens that note
+  when it still exists.
+- The in-place note editor registers with the shell's edit guard
+  (`NativeInlineEditorNavigation`): choosing another note, creating a note,
+  renaming or deleting a folder, switching apps, following a link, and Back
+  all ask before a dirty draft is discarded and wait for a running save.
+- Create note adds a note titled "New note" in the current folder and opens
+  it in the editor, on phones as well, instead of asking for a title and
+  Markdown in a dialog first.
+- Contacts shows address books as list filters when there is more than one:
+  tabs on phones, a rail on tablets and narrow desktop windows, and a sidebar
+  on wide desktop windows. New contacts default to the filtered address book
+  when it is writable. Tasks does the same with task lists, which show their
+  open-task counts and mark read-only lists.
+- Contact and task editors remain dialogs on every layout. A to Z contact
+  sections, task grouping, and note sorting are not implemented.
+- Contacts edit several labelled (home, work, mobile, other) emails, phone
+  numbers, postal addresses, and websites, plus groups (vCard `CATEGORIES`),
+  job title, and birthday. Properties the editor does not show, such as
+  photos and fields written by other apps, are kept, and unchanged entries keep
+  their original vCard lines. "Manage address books" creates (`MKCOL`),
+  renames (`PROPPATCH`), shares, and deletes address books; server-generated
+  address books stay read-only. Contact photos are not shown and cannot be
+  changed yet.
+- Tasks edit priority, progress, start date, tags, and the parent task
+  (`RELATED-TO;RELTYPE=PARENT`, as Nextcloud Tasks writes it). Subtasks follow
+  their parent in the list, indented, and task details list them with "Add
+  subtask". A task cannot be moved under its own subtasks. The header menu
+  creates, edits, shares, and deletes task lists and opens the trash bin.
+- The Notes list has All notes and Favorites filters. Favorites lists favorite
+  notes from every folder. Each note card has a menu, also reachable by long
+  press, to add or remove a favorite and to share the note's file. The header
+  opens the app's settings when its contract describes them; a folder-valued
+  setting uses the native remote folder browser. Actions the app's contract
+  does not describe are not shown.
+- `NotesWorkspaceLayoutTest`, `ContactsWorkspaceLayoutTest`, and
+  `TasksWorkspaceLayoutTest` cover phone, tablet, and desktop widths,
+  recreation, and the dirty-draft guard against synthetic servers. They do not
+  establish behavior on a device or against a live server.
 
 **Calendar and Talk**
 
 - Calendar shares view selection, time-first event rows, named calendar
-  checkboxes, and event detail facts. Phone Month shows a compact date grid
-  above the selected day's events, and Week uses a day strip. Desktop has a
-  continuous month grid with event overflow and scrollable week columns.
+  checkboxes, and event detail facts. Phone Month is a full-screen grid whose
+  days show their events as colored chips with a "+N" count; tapping a day
+  opens its Day view. Week and Day are a shared time grid (`CalendarTimeGrid`)
+  on phone and desktop: hour lines, timed events placed by start and length,
+  overlapping events side by side, all-day and day-spanning events in a row
+  above, and a current-time line on today. Tapping empty time starts a new
+  event at that half hour. On phones, swiping sideways moves to the previous
+  or next period. Desktop keeps its continuous month grid with event overflow.
+- Calendar colors come from the color set on the server, with a theme color
+  as the fallback, so events match the web calendar. "Today" follows the
+  device's local date. Event times are shown and edited in the device's time
+  zone: UTC times and times with a `TZID` are converted once after recurrences
+  are expanded, while floating times stay as written. Saving keeps an event's
+  own `TZID`, so a repeating event keeps its wall time across daylight-saving
+  changes; events without one are stored in UTC. Unknown zones are shown as
+  written rather than guessed.
+- The calendar list manages calendars as the web calendar does: "New
+  calendar" creates a calendar (optionally also holding tasks) with CalDAV
+  `MKCALENDAR`, or subscribes to an iCalendar link (`https`, `http`, or
+  `webcal`, never with credentials) the way Nextcloud stores subscriptions.
+  Each calendar's menu renames or recolors it (`PROPPATCH`), deletes it, ends a
+  subscription, or removes a calendar shared with the user, after a
+  confirmation. Shared calendars name their owner and subscriptions are always
+  read-only. Every change is confirmed against a fresh calendar list, so a
+  lost response is reported as unknown rather than as success or failure, and
+  retrying a new calendar reuses its address instead of creating a second one.
+  Calendars in Nextcloud's trash bin are not listed as calendars; the "Trash
+  bin" below the calendar list restores deleted calendars, events, and tasks
+  (`MOVE` into `trashbin/restore/`) or deletes them for good, one at a time or
+  all at once with a report of any that failed. Owned calendars can be shared
+  with people and groups, read-only or with edit rights, and published as a
+  public read-only link, through Nextcloud's DAV sharing and publishing
+  `POST`s; people and groups are found with a DAV principal search. "Show
+  contact birthdays" turns the birthdays calendar back on. Importing and
+  exporting `.ics` files, free/busy lookup, and the web calendar's own
+  settings (such as a default reminder) are not available.
+- Events carry reminders (`VALARM`) and guests. Reminders set relative to the
+  start can be added and removed; others are kept as stored. The organizer,
+  or anyone on an event without guests, can invite people by email, which
+  makes them the organizer; the server then sends invitations, updates, and
+  cancellations, and Save says so. An invited user answers Going, Maybe, or
+  Not going from the event details. Editing or deleting a repeating event asks
+  whether the change is for this occurrence (an exception with
+  `RECURRENCE-ID`, or an `EXDATE`) or for every occurrence. "This and following
+  occurrences" is not offered.
+- Time-grid events show only the lines that fit: short events keep one
+  readable line, and narrow overlapping lanes wrap at words rather than inside
+  them.
 - Shared date grouping includes multi-day events within a bounded window and
   respects exclusive all-day end dates. The editor puts title and schedule
   first, with compact recurrence and calendar selectors.
@@ -376,6 +554,54 @@ interaction validation is still required.
   the draft. Refresh only reads the conversation, and an uncertain resend needs
   explicit confirmation. Timestamps show UTC and do not imply delivery or read
   state.
+- An open conversation waits for new messages with Talk's long-polling chat
+  API while the app is visible. Hiding the app, leaving the conversation, or
+  switching rooms cancels the waiting request. Polling never sets the read
+  marker, clears notifications, or updates presence. Offline and server errors
+  back off and retry; a removed conversation, an active lobby, or an expired
+  sign-in stops polling and says why.
+- Reply, react, edit, and delete appear only when the server advertises the
+  matching Talk feature and the conversation and attendee permissions allow
+  the write. Edit and delete are limited to this account's own plain-text
+  messages within Talk's documented time windows. Delete needs a separate
+  confirmation. Message actions open with a long press on touch, and with a
+  right click or the overflow button on desktop; all are also exposed as
+  accessibility actions. A send carries a Talk reference ID when supported, so
+  an unconfirmed send is checked against the conversation before the user may
+  send it again. An unconfirmed edit, delete, or reaction is read back before
+  its result is shown.
+- Windows at least 840 dp wide show the conversation list beside the open
+  conversation. Up and Down move through the list, Alt+Up and Alt+Down switch
+  conversations from anywhere in the workspace, Enter sends, Shift+Enter adds a
+  line, and Escape cancels a reply or edit. Compact windows show one pane and
+  use system back. `TalkWorkspaceInteractionTest` covers both layouts.
+- The settings button in a conversation header opens a conversation settings
+  sheet: name, description, notification level, and, for moderators,
+  read-only, lobby, guest access, moderator roles, and participant removal.
+  Controls are shown only for the participant and conversation types that
+  Talk allows, removal and guest-access changes need a separate confirmation,
+  and every change is read back before it is reported as done. Read receipt
+  and typing privacy live in Settings. `TalkConversationSettingsTest` covers
+  the protocol and verification; there is no device evidence yet.
+
+**Settings and administration**
+
+- Settings adds Personal info, App settings, and (when Talk is installed) Talk
+  sections. Personal info shows the profile with each field's visibility and
+  links to the online status screen. App settings lists every installed app
+  and opens its workspace, or the matching Settings section for Talk and
+  status. These sections use the same phone and two-pane layouts as the rest
+  of Settings.
+- Administration opens one screen with Apps, Accounts, Groups, and Server tabs.
+  Accounts use a searchable, paged list beside the selected account on windows
+  720 dp and wider, and a list that opens the account on phones, returning on
+  system back.
+- Profile and administration are read-only. Nextcloud requires a password
+  confirmation for those changes that the app-password sign-in cannot provide,
+  so each screen explains that the change waits for an explicit authenticated
+  handoff. Nothing opens the browser, and the app never asks for the account
+  password. `NativeSettingsScreensSceneTest` covers the phone and desktop
+  layouts; there is no device or live-server evidence yet.
 
 **Office**
 
