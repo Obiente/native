@@ -27,8 +27,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -79,6 +81,8 @@ internal fun CalendarTimeGrid(
     }
     val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
     val scroll = rememberScrollState()
+    // Dates whose all-day events are all shown instead of the first few.
+    var expandedAllDay by remember(dates) { mutableStateOf(emptySet<String>()) }
     val density = LocalDensity.current
     val firstHour = if (todayDate in dates && nowMinute != null) (nowMinute / 60 - 1).coerceAtLeast(0) else DefaultFirstHour
     LaunchedEffect(dates.firstOrNull(), dates.size) {
@@ -100,11 +104,17 @@ internal fun CalendarTimeGrid(
                 dates.forEach { date ->
                     Column(Modifier.weight(1f).padding(horizontal = 1.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         val allDay = layouts[date]?.allDay.orEmpty()
-                        allDay.take(MaxAllDayChips).forEach { event ->
+                        val expanded = date in expandedAllDay
+                        (if (expanded) allDay else allDay.take(MaxAllDayChips)).forEach { event ->
                             CalendarEventChip(event, calendarByHref[event.calendarHref], dense = dates.size > 1) { onSelectEvent(date, event) }
                         }
-                        if (allDay.size > MaxAllDayChips) Text("+${allDay.size - MaxAllDayChips}",
-                            Modifier.clickable(role = Role.Button) { onSelectDate(date) }.padding(horizontal = 4.dp),
+                        // The control shows the hidden events in place; no other view lists them on a phone.
+                        if (allDay.size > MaxAllDayChips) Text(
+                            if (expanded) "Show fewer" else "+${allDay.size - MaxAllDayChips}",
+                            Modifier.clickable(
+                                role = Role.Button,
+                                onClickLabel = if (expanded) "Show fewer all-day events" else "Show all all-day events",
+                            ) { expandedAllDay = if (expanded) expandedAllDay - date else expandedAllDay + date }.padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
