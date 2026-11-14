@@ -124,7 +124,8 @@ internal data class NativeMailSendCapability(
             put(bodyField, nativeMailComposedBody(draft))
             htmlFlagField?.let { put(it, "false") }
             senderIdentityFields.forEach { field -> put(field, requireNotNull(sender.id)) }
-            senderAddressField?.let { put(it, requireNotNull(sender.email)) }
+            // Senders without an address are offered only when the contract does not require one.
+            senderAddressField?.let { field -> sender.email?.let { put(field, it) } }
             inReplyToField?.let { field -> draft.inReplyTo?.let { put(field, it) } }
             referencesField?.let { field -> (draft.references ?: draft.inReplyTo)?.let { put(field, it) } }
         }

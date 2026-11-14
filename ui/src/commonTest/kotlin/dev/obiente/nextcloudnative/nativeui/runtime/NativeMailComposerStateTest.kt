@@ -559,6 +559,15 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `an optional sender address the account does not have is left out`() {
+        val base = capability()
+        val withAddress = base.copy(senderAddressField = "fromEmail")
+        assertEquals("ada@example.test", withAddress.request(readyDraft()).values["fromEmail"])
+        val withoutEmail = withAddress.copy(senders = listOf(NativeMailSender(id = "7", email = null, label = "Ada")))
+        assertFalse("fromEmail" in withoutEmail.request(readyDraft()).values, "The server chooses the address for this identity.")
+    }
+
+    @Test
     fun `a draft whose chosen sender is gone is not sent from the remaining account`() {
         val capability = capability()
         assertEquals("7", capability.senderFor(readyDraft())?.id)
