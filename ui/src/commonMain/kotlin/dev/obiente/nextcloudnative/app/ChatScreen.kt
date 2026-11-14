@@ -30,10 +30,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -60,8 +58,9 @@ import kotlinx.coroutines.cancel
 /**
  * Owns a [TalkChatController] for one account and conversation.
  *
- * The draft and an unconfirmed send are saved across recreation; both are small user text that
- * recovery needs. Reply and edit targets are ordinary remembered state.
+ * The draft is saved across recreation. An unconfirmed send is not screen state: it goes to
+ * [unconfirmedStore] before its request leaves the device and is read back before sending is
+ * offered again. Reply and edit targets are ordinary remembered state.
  */
 @Composable
 internal fun rememberTalkChatController(
@@ -69,28 +68,23 @@ internal fun rememberTalkChatController(
     room: TalkRoom,
     userId: String,
     execute: suspend (TalkTransportRequest) -> TalkTransportResponse,
-    unconfirmed: TalkUnconfirmedSend?,
-    onUnconfirmedChanged: (TalkUnconfirmedSend?) -> Unit,
+    unconfirmedStore: TalkUnconfirmedSendStore?,
 ): TalkChatController {
     val currentExecute by rememberUpdatedState(execute)
-    val currentUnconfirmedChanged by rememberUpdatedState(onUnconfirmedChanged)
     val parent = rememberCoroutineScope()
     val scope = remember(session.accountId, room.token) {
         CoroutineScope(parent.coroutineContext + SupervisorJob(parent.coroutineContext[Job]))
     }
     DisposableEffect(scope) { onDispose { scope.cancel() } }
-    val controller = remember(scope, userId) {
+    val controller = remember(scope, userId, unconfirmedStore) {
         TalkChatController(
             scope = scope,
             token = room.token,
             ownActorId = userId,
             execute = { request -> currentExecute(request) },
             memory = talkChatWorkspaceMemory(session, room.token),
-            initialUnconfirmed = unconfirmed,
+            unconfirmedStore = unconfirmedStore,
         )
-    }
-    LaunchedEffect(controller) {
-        snapshotFlow { controller.state.unconfirmed }.collect { currentUnconfirmedChanged(it) }
     }
     return controller
 }
@@ -106,16 +100,13 @@ internal fun ChatScreen(
     execute: suspend (TalkTransportRequest) -> TalkTransportResponse = { services.executeTalkRequest(session, it) },
 ) {
     var draft by rememberSaveable(session.accountId, room.token) { mutableStateOf("") }
-    var savedUnconfirmed by rememberSaveable(session.accountId, room.token, stateSaver = TalkUnconfirmedSendSaver) {
-        mutableStateOf<TalkUnconfirmedSend?>(null)
-    }
+    val unconfirmedStore = remember(services, session.accountId, room.token) { talkUnconfirmedSendStore(services, session, room.token) }
     val controller = rememberTalkChatController(
         session = session,
         room = room,
         userId = userId,
         execute = execute,
-        unconfirmed = savedUnconfirmed,
-        onUnconfirmedChanged = { savedUnconfirmed = it },
+        unconfirmedStore = unconfirmedStore,
     )
     DisposableEffect(controller) {
         // The draft is read through its state, so a send confirmed later clears the current text.
@@ -462,19 +453,3 @@ internal fun talkLiveStatusLabel(live: TalkLiveState): String = when (live) {
 
 internal fun talkLastMessageListIndex(messageCount: Int, hasHistoryHeader: Boolean): Int? =
     if (messageCount <= 0) null else messageCount - 1 + if (hasHistoryHeader) 1 else 0
-
-private val TalkUnconfirmedSendSaver: Saver<TalkUnconfirmedSend?, Any> = Saver(
-    save = { value -> value?.let { listOf(it.text, it.referenceId.orEmpty(), it.replyTo?.toString().orEmpty()) } ?: emptyList<String>() },
-    restore = { saved ->
-        val fields = (saved as? List<*>)?.filterIsInstance<String>()
-        if (fields?.size != 3 || fields[0].isBlank()) {
-            null
-        } else {
-            TalkUnconfirmedSend(
-                text = fields[0],
-                referenceId = fields[1].takeIf(String::isTalkReferenceId),
-                replyTo = fields[2].toLongOrNull()?.takeIf { it > 0L },
-            )
-        }
-    },
-)

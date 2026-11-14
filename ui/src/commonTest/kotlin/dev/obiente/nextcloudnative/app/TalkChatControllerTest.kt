@@ -29,6 +29,7 @@ class TalkChatControllerTest {
         server: FakeTalkServer,
         unconfirmed: TalkUnconfirmedSend? = null,
         memory: TalkChatMemory? = null,
+        store: TalkUnconfirmedSendStore? = null,
     ) = TalkChatController(
         scope = scope,
         token = TOKEN,
@@ -36,6 +37,7 @@ class TalkChatControllerTest {
         execute = server::execute,
         memory = memory,
         initialUnconfirmed = unconfirmed,
+        unconfirmedStore = store,
         parseDispatcher = Dispatchers.Unconfined,
         nowSeconds = { server.nowSeconds },
         newReferenceId = { REFERENCE_ID },
@@ -290,6 +292,67 @@ class TalkChatControllerTest {
         controller.send("Shorter synthetic message", confirmedResend = true)
         assertEquals(2, server.writes().size)
         assertEquals(TalkSendState.Idle, controller.state.send)
+    }
+
+    @Test
+    fun `an unconfirmed send is recorded before it leaves and survives leaving the conversation`() {
+        val server = serverWithHistory().apply { writeFault = WriteFault.LostBeforeApplying }
+        val store = MemoryUnconfirmedSends(writes = { server.writes().size })
+        val first = controller(server, store = store).apply { start() }
+        first.send("Synthetic message")
+        val recorded = assertNotNull(store.value, "The attempt is stored, not only kept by the screen.")
+        assertEquals(0, store.writesAtSave.first(), "The record exists before the request is sent.")
+
+        // Another conversation was opened and this one reopened: a new controller, the same store.
+        server.writeFault = WriteFault.None
+        val reopened = controller(server, store = store).apply { start() }
+        assertEquals(recorded, reopened.state.unconfirmed)
+        reopened.send("Synthetic message")
+        assertEquals(1, server.writes().size, "Sending again still needs confirmation.")
+        reopened.send("Synthetic message", confirmedResend = true)
+        assertEquals(2, server.writes().size)
+        assertNull(store.value, "A confirmed send resolves the record.")
+    }
+
+    @Test
+    fun `nothing is sent when the attempt cannot be recorded or an earlier record cannot be read`() {
+        val server = serverWithHistory()
+        val unwritable = controller(server, store = MemoryUnconfirmedSends(failSave = true)).apply { start() }
+        unwritable.send("Synthetic message")
+        assertEquals(0, server.writes().size)
+        assertNull(unwritable.state.unconfirmed)
+        assertNotNull(unwritable.state.notice)
+
+        val unreadable = controller(server, store = MemoryUnconfirmedSends(failLoad = true)).apply { start() }
+        unreadable.send("Synthetic message")
+        assertEquals(0, server.writes().size)
+        assertNotNull(unreadable.state.notice)
+    }
+
+    private class MemoryUnconfirmedSends(
+        private val failSave: Boolean = false,
+        private val failLoad: Boolean = false,
+        private val writes: () -> Int = { 0 },
+    ) : TalkUnconfirmedSendStore {
+        var value: TalkUnconfirmedSend? = null
+
+        /** How many writes the server had received each time an attempt was stored. */
+        val writesAtSave = mutableListOf<Int>()
+
+        override suspend fun load(): TalkUnconfirmedSend? {
+            check(!failLoad) { "Synthetic storage is unreadable." }
+            return value
+        }
+
+        override suspend fun save(attempt: TalkUnconfirmedSend) {
+            check(!failSave) { "Synthetic storage is full." }
+            writesAtSave += writes()
+            value = attempt
+        }
+
+        override suspend fun clear() {
+            value = null
+        }
     }
 
     @Test

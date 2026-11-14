@@ -14,6 +14,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 
 internal sealed interface TalkLiveState {
     /** Not waiting for messages: the app is hidden or the conversation has not loaded. */
@@ -25,10 +26,25 @@ internal sealed interface TalkLiveState {
 }
 
 /**
- * A send whose result has not been confirmed. It is kept with the draft across recreation so the
- * conversation can be checked for [referenceId] before the user is offered to send again.
+ * A send whose result has not been confirmed. It is recorded before its request leaves the device
+ * and kept until it is resolved, so the conversation can be checked for [referenceId] before the
+ * user is offered to send again.
  */
+@Serializable
 data class TalkUnconfirmedSend(val text: String, val referenceId: String?, val replyTo: Long?)
+
+/**
+ * Durable, account- and conversation-scoped storage for the one unresolved send of a
+ * conversation. It outlives the chat screen, so leaving a conversation or restarting the app
+ * cannot turn "may have been sent" into "never sent".
+ */
+interface TalkUnconfirmedSendStore {
+    suspend fun load(): TalkUnconfirmedSend?
+
+    suspend fun save(attempt: TalkUnconfirmedSend)
+
+    suspend fun clear()
+}
 
 internal sealed interface TalkSendState {
     data object Idle : TalkSendState
@@ -87,6 +103,8 @@ internal class TalkChatController(
     private val execute: suspend (TalkTransportRequest) -> TalkTransportResponse,
     private val memory: TalkChatMemory? = null,
     initialUnconfirmed: TalkUnconfirmedSend? = null,
+    /** Without a store the unresolved send lives only as long as this controller. */
+    private val unconfirmedStore: TalkUnconfirmedSendStore? = null,
     private val parseDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     private val newReferenceId: () -> String = { newTalkReferenceId() },
@@ -111,9 +129,33 @@ internal class TalkChatController(
     private var pollJob: Job? = null
     private var historyJob: Job? = null
     private var liveRequested = false
+    private var restoreJob: Job? = null
+
+    /** False until the stored unresolved send has been read; nothing is sent before that. */
+    private var storedSendRead = unconfirmedStore == null
 
     fun start() {
-        if (loadJob == null) refresh()
+        if (loadJob != null || restoreJob != null) return
+        val store = unconfirmedStore
+        if (store == null) {
+            refresh()
+            return
+        }
+        restoreJob = scope.launch {
+            try {
+                val stored = store.load()
+                if (stored != null && state.unconfirmed == null) {
+                    state = state.copy(unconfirmed = stored, send = TalkSendState.Unconfirmed(checked = false))
+                }
+                storedSendRead = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Persistence fault boundary: an unreadable record may be a message already sent.
+                state = state.copy(notice = "An earlier message saved on this device could not be read, so nothing can be sent in this conversation.")
+            }
+            refresh()
+        }
     }
 
     /** Reloads access and the latest page; an unconfirmed send is checked against the result. */
@@ -227,7 +269,7 @@ internal class TalkChatController(
     fun send(text: String, confirmedResend: Boolean = false) {
         val message = text.trim()
         val current = state
-        if (message.isBlank() || current.send == TalkSendState.Sending || !current.abilities.canPost) return
+        if (message.isBlank() || current.send == TalkSendState.Sending || !current.abilities.canPost || !storedSendRead) return
         if (current.unconfirmed != null) {
             val checked = (current.send as? TalkSendState.Unconfirmed)?.checked == true
             if (!confirmedResend || !checked) return
@@ -245,16 +287,27 @@ internal class TalkChatController(
         // Recorded before the request, so leaving the screen mid-send keeps the recovery path.
         state = current.copy(send = TalkSendState.Sending, unconfirmed = attempt)
         scope.launch {
+            if (!recordUnconfirmed(attempt)) {
+                state = state.copy(
+                    send = if (earlier != null) TalkSendState.Unconfirmed(checked = true) else TalkSendState.Idle,
+                    unconfirmed = earlier,
+                    notice = "This device could not keep a record of the message, so it was not sent.",
+                )
+                return@launch
+            }
             when (val outcome = write(TalkChatRequests.send(token, message, replyTo, referenceId), ::parseTalkWrittenEntry)) {
                 is TalkWriteOutcome.Confirmed -> {
                     outcome.value?.let { entry -> updateTimeline { it.applying(listOf(entry), advanceCursor = false) } }
                     confirmSent(attempt)
                 }
-                is TalkWriteOutcome.Rejected -> state = if (earlier != null) {
-                    // The refusal answers only this request; the earlier message may still have been sent.
-                    state.copy(send = TalkSendState.Unconfirmed(checked = true), unconfirmed = earlier, notice = outcome.failure.message)
-                } else {
-                    state.copy(send = TalkSendState.Rejected(outcome.failure), unconfirmed = null)
+                is TalkWriteOutcome.Rejected -> {
+                    state = if (earlier != null) {
+                        // The refusal answers only this request; the earlier message may still have been sent.
+                        state.copy(send = TalkSendState.Unconfirmed(checked = true), unconfirmed = earlier, notice = outcome.failure.message)
+                    } else {
+                        state.copy(send = TalkSendState.Rejected(outcome.failure), unconfirmed = null)
+                    }
+                    storeUnconfirmed()
                 }
                 TalkWriteOutcome.Unknown -> {
                     state = state.copy(send = TalkSendState.Unconfirmed(checked = false))
@@ -461,7 +514,36 @@ internal class TalkChatController(
             unconfirmed = state.unconfirmed?.takeIf { it != attempt },
             replyTo = state.replyTo?.takeIf { it.id != attempt.replyTo },
         )
+        storeUnconfirmed()
         onSent(attempt)
+    }
+
+    /** Makes [attempt] durable before its request can leave the device, or reports that it could not. */
+    private suspend fun recordUnconfirmed(attempt: TalkUnconfirmedSend): Boolean {
+        val store = unconfirmedStore ?: return true
+        return try {
+            store.save(attempt)
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Brings the stored record in line with the unresolved send after it was resolved or replaced. */
+    private fun storeUnconfirmed() {
+        val store = unconfirmedStore ?: return
+        val remaining = state.unconfirmed
+        scope.launch {
+            try {
+                if (remaining == null) store.clear() else store.save(remaining)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A record left behind only makes the conversation be checked once more.
+            }
+        }
     }
 
     private fun publish(timeline: TalkTimeline, olderCursor: Long?) {

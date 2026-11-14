@@ -36,6 +36,8 @@ internal fun networkInertMarketingServices(
             }
             "loadFileOfflineAvailability" -> marketingHomepageFileOfflineAvailability
             "listTalkRooms" -> listOf(marketingHomepageTalkRoom)
+            // The capture keeps no drafts; the conversation only reads.
+            "textEditorDraftStore" -> null
             "getSupportsFileOfflineStorage" -> true
             "getExternalFileHandoffSupport" -> ExternalFileHandoffSupport.Unsupported(
                 "Synthetic capture does not launch other applications.",

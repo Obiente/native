@@ -49,6 +49,8 @@ class TalkWorkspaceInteractionTest {
             "hashCode" -> System.identityHashCode(proxy)
             "equals" -> proxy === arguments?.singleOrNull()
             "listTalkRooms" -> rooms
+            // No draft storage: an unresolved send lives only as long as the open conversation.
+            "textEditorDraftStore" -> null
             else -> error("Unexpected synthetic Talk operation: ${method.name}")
         }
     } as NextcloudPlatformServices
