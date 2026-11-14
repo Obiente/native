@@ -39,6 +39,9 @@ internal class SemanticSettings(
     private val descriptor: DynamicAppDescriptor,
     val contract: SemanticSettingsContract,
 ) {
+    /** Identifies this settings route of this app version; a new version is a new route. */
+    val routeKey: String get() = "${descriptor.app.id}\u0000${descriptor.app.version}\u0000${contract.read.id}"
+
     fun readRequest(): NextcloudApiRequest =
         buildDynamicApiRequest(descriptor, contract.read, emptyMap())
             .copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork, maximumResponseBytes = SETTINGS_RESPONSE_BYTES)
@@ -181,6 +184,8 @@ internal class SemanticSettingsController(
     private val execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     private val settings: SemanticSettings,
     private val onChanged: (key: String) -> Unit = {},
+    /** Without a store, the pause after a drifted replacement lasts only as long as this controller. */
+    private val pauses: SemanticSettingsPauseStore? = null,
 ) {
     var state: SemanticSettingsUiState by mutableStateOf(SemanticSettingsUiState())
         private set
@@ -193,6 +198,22 @@ internal class SemanticSettingsController(
             throw cancelled
         } catch (failure: Exception) {
             state.copy(loading = false, errorMessage = failure.message ?: "Settings could not be loaded.")
+        }
+        if (state.changesPaused) return
+        val paused = try {
+            pauses?.isPaused() == true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Persistence fault boundary: an unreadable record may be a pause, so it counts as one.
+            true
+        }
+        if (paused) {
+            state = state.copy(
+                changesPaused = true,
+                errorMessage = state.errorMessage
+                    ?: "Changes are paused here: saving a setting earlier also changed others. Set these in the app's own settings.",
+            )
         }
     }
 
@@ -263,6 +284,13 @@ internal class SemanticSettingsController(
                 errorMessage = "Saving ${entry.label} also changed ${drifted.joinToString { it.label }}. " +
                     "The current values are shown. Changes are paused here; set these in the app's own settings.",
             )
+            try {
+                pauses?.pause()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The pause still holds for this controller; only its durability is lost.
+            }
             onChanged(entry.key)
             return
         }
@@ -297,3 +325,36 @@ private const val SETTINGS_RESPONSE_BYTES = 256L * 1024L
 private const val MAX_SETTINGS = 64
 private const val MAX_SETTING_KEY_CHARS = 128
 private const val MAX_SETTING_VALUE_CHARS = 1_024
+
+/**
+ * Durable record that a settings route of one app version changed settings it was not asked to
+ * change. The route is not written through again until the app's version changes.
+ */
+internal interface SemanticSettingsPauseStore {
+    suspend fun isPaused(): Boolean
+
+    suspend fun pause()
+}
+
+/**
+ * Keeps the pause in the platform's encrypted text draft storage, bound to the account. Null when
+ * the platform keeps no draft storage.
+ */
+internal fun semanticSettingsPauseStore(
+    services: TextEditorDraftPlatformServices,
+    session: NextcloudSession,
+    settings: SemanticSettings,
+): SemanticSettingsPauseStore? {
+    val path = SETTINGS_PAUSE_PATH_PREFIX + publicContentSha256(settings.routeKey.encodeToByteArray())
+    if (services.textEditorDraftStore(session, path) == null) return null
+    return object : SemanticSettingsPauseStore {
+        override suspend fun isPaused(): Boolean = services.textEditorDraftStore(session, path)?.load() != null
+
+        override suspend fun pause() {
+            checkNotNull(services.textEditorDraftStore(session, path)) { "Settings pause storage is unavailable." }
+                .save(TextEditorDraft(originalText = "", text = "paused", etag = null))
+        }
+    }
+}
+
+private const val SETTINGS_PAUSE_PATH_PREFIX = "nextcloud-native:settings-route-paused:"

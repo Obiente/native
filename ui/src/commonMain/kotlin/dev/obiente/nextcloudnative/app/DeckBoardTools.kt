@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 internal class DeckBoardTools(
     private val context: DeckBoardToolContext,
     private val appSettings: SemanticSettings?,
+    private val settingsPauses: SemanticSettingsPauseStore? = null,
 ) {
     val sharing = DeckBoardSharingController(context)
     val archive = DeckArchivedCardsController(context)
@@ -24,7 +25,7 @@ internal class DeckBoardTools(
     var settingsBoard: DeckBoard? by mutableStateOf(null)
         private set
     val settingsController: SemanticSettingsController? = appSettings?.let { settings ->
-        SemanticSettingsController(context.execute, settings)
+        SemanticSettingsController(context.execute, settings, pauses = settingsPauses)
     }
 
     fun closeSettings() {

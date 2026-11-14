@@ -119,6 +119,34 @@ class SemanticSettingsTest {
     }
 
     @Test
+    fun `the pause after a drifted replacement outlives the settings sheet`() = runBlocking<Unit> {
+        var written = false
+        val execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse = { request ->
+            if (request.method == NextcloudApiMethod.GET) {
+                response(if (written) """{"notesPath":"Journal","fileSuffix":".txt"}""" else """{"notesPath":"Notes","fileSuffix":".md"}""")
+            } else {
+                written = true
+                response("{}")
+            }
+        }
+        val pauses = object : SemanticSettingsPauseStore {
+            var paused = false
+            override suspend fun isPaused() = paused
+            override suspend fun pause() { paused = true }
+        }
+        val first = SemanticSettingsController(execute, notesSettings(), pauses = pauses)
+        first.load()
+        first.change(first.state.entries.single { it.key == "notesPath" }, "Journal")
+        assertTrue(pauses.paused)
+
+        // The sheet was closed and opened again: a new controller, the same device record.
+        val reopened = SemanticSettingsController(execute, notesSettings(), pauses = pauses)
+        reopened.load()
+        assertFalse(reopened.state.canChange, "The route that altered another setting stays off.")
+        assertTrue(reopened.state.errorMessage.orEmpty().contains("paused"))
+    }
+
+    @Test
     fun `the controller reports a value the server did not keep`() = runBlocking<Unit> {
         val controller = SemanticSettingsController(
             execute = { request ->

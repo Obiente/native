@@ -39,11 +39,12 @@ internal fun NotesSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val currentOnSettingChanged by rememberUpdatedState(onSettingChanged)
-    val controller = remember(access) {
+    val controller = remember(access, services, session.accountId) {
         SemanticSettingsController(
             execute = access.execute,
             settings = access.settings,
             onChanged = { currentOnSettingChanged() },
+            pauses = semanticSettingsPauseStore(services, session, access.settings),
         )
     }
     val folderPicker = remember(services, session, filesAccess?.userId) {

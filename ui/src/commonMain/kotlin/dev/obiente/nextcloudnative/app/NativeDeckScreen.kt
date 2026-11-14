@@ -802,7 +802,7 @@ internal fun NativeDeckScreen(
                 onBoardRefreshed = ::adoptBoard,
                 onBoardContentChanged = ::refreshBoard,
             ),
-            appSettings,
+            appSettings, appSettings?.let { semanticSettingsPauseStore(services, session, it) },
         )
     }
 
