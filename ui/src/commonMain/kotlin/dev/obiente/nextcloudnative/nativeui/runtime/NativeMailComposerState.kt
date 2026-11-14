@@ -348,7 +348,16 @@ internal class NativeMailComposerState(
         if (phase !== checking) return
         when (val verdict = capability.recoveryVerdict(unknown.attempt, read)) {
             is NativeMailSendRecovery.ShownAsSent -> {
-                complete(verdict.description())
+                if (draft != null && draft != unknown.attempt) {
+                    // The earlier message is resolved. What was written since was never sent.
+                    attemptRecord = null
+                    phase = NativeMailSendPhase.Editing
+                    notice = "${verdict.description()} Your changes since then are kept as a new draft."
+                    pendingSave?.cancel()
+                    persistNow()
+                } else {
+                    complete(verdict.description())
+                }
                 onSent()
             }
             else -> phase = unknown.copy(recovery = verdict)

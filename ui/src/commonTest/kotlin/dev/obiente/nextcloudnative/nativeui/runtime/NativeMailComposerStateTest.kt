@@ -526,6 +526,25 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `edits made after an unconfirmed send survive learning that it was sent`() = runBlocking<Unit> {
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
+        var answer: NativeResultRecoveryRead = NativeResultRecoveryRead.Failed("offline")
+        val executor = RecoveringExecutor(
+            send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+            read = { answer },
+        )
+        state.send(recoverableCapability(), executor)
+        assertIs<NativeMailSendPhase.Unknown>(state.phase)
+        state.update { it.copy(body = "A different message") }
+
+        answer = NativeResultRecoveryRead.Read(mapOf("subject" to "Hello", "body" to "Text", "to" to "grace@example.test"))
+        state.checkOutcome(recoverableCapability(), executor)
+        assertEquals("A different message", state.draft?.body, "What was written after the send was never sent.")
+        assertIs<NativeMailSendPhase.Editing>(state.phase)
+        assertFalse(state.resendNeedsConfirmation)
+    }
+
+    @Test
     fun `a draft whose chosen sender is gone is not sent from the remaining account`() {
         val capability = capability()
         assertEquals("7", capability.senderFor(readyDraft())?.id)
