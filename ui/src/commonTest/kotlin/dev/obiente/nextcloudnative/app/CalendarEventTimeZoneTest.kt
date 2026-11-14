@@ -79,6 +79,15 @@ class CalendarEventTimeZoneTest {
     }
 
     @Test
+    fun anEndTimeBeforeTheStartTimeIsOnTheFollowingDay() {
+        // 23:30 to 00:00 in Amsterdam (UTC+1 in November) is 22:30 to 23:00 UTC on the same day.
+        val stored = draft("2026-11-14", "23:30", "00:00").inDavFrame(null, Amsterdam)
+        assertEquals("2026-11-14" to "22:30", stored.date to stored.startTime)
+        assertEquals("23:00", stored.endTime)
+        assertNull(stored.endDate, "The end stays after the start, on the same UTC day.")
+    }
+
+    @Test
     fun malformedZonesAreNeverWrittenIntoAPropertyLine() {
         assertEquals(";TZID=Europe/Paris", calendarTimeParameter(false, "Europe/Paris"))
         assertEquals("", calendarTimeParameter(false, "Europe/Paris:20991231T000000"))

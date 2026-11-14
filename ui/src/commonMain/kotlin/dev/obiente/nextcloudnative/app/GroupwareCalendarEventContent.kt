@@ -88,7 +88,7 @@ internal fun EventDraft.inDavFrame(eventZone: String?, deviceZone: String? = nul
     if (allDay) return copy(zone = null, endDate = null)
     val zone = eventZone?.takeIf { calendarTimeParameter(false, it).isNotEmpty() }
     val start = calendarConvertWallTime(wallTime(startTime), deviceZone, zone ?: CALENDAR_UTC_ZONE)
-    val end = calendarConvertWallTime(wallTime(endTime), deviceZone, zone ?: CALENDAR_UTC_ZONE)
+    val end = calendarConvertWallTime(endWallTime(), deviceZone, zone ?: CALENDAR_UTC_ZONE)
     if (start == null || end == null) {
         return if (zone != null) inDavFrame(null, deviceZone) else copy(zone = null, endDate = null)
     }
@@ -104,6 +104,12 @@ internal fun EventDraft.inDavFrame(eventZone: String?, deviceZone: String? = nul
 }
 
 private fun EventDraft.wallTime(time: String): String = "${date.isoDateToCompact()}T${time.timeToCompact()}00"
+
+/** The editor has one date. An end time before the start time is on the following day. */
+private fun EventDraft.endWallTime(): String {
+    val day = if (endTime.timeToCompact() < startTime.timeToCompact()) nextIsoDate(date) ?: date else date
+    return "${day.isoDateToCompact()}T${endTime.timeToCompact()}00"
+}
 
 /** The parameters for a DTSTART or DTEND line: a date, a zone, or nothing for UTC and floating. */
 internal fun calendarTimeParameter(allDay: Boolean, zone: String?): String = when {
