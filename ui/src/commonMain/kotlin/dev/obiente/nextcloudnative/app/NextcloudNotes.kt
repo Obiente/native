@@ -79,9 +79,12 @@ internal fun decodeNoteDeletionRecoveryState(
 ): NoteDeletionRecoveryState? = runCatching {
     noteDeletionRecoveryJson.decodeFromString<NoteDeletionRecoveryState>(encoded)
 }.getOrNull()?.takeIf { recovery ->
+    // A record written before app scoping can only be a deletion in the Notes app itself.
     recovery.accountScope == expectedAccountScope &&
-        (recovery.appId == null || expectedAppId == null || recovery.appId == expectedAppId)
+        (expectedAppId == null || (recovery.appId ?: LEGACY_NOTE_DELETION_APP_ID) == expectedAppId)
 }
+
+private const val LEGACY_NOTE_DELETION_APP_ID = "notes"
 
 @Composable
 internal fun NextcloudNoteEditor(
