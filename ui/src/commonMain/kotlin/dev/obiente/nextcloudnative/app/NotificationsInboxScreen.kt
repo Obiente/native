@@ -50,8 +50,9 @@ import kotlinx.coroutines.cancel
 /**
  * Retains the account's notifications outside the Activity destination, so the shell badge stays
  * current while other workspaces are open and writes keep running when the inbox is closed. Call
- * it from the account shell. Nothing is saved for process recreation; the account cache paints
- * the last list again and the next read replaces it.
+ * it from the account shell. The list is not saved for process recreation; the account cache
+ * paints the last one again and the next read replaces it. Actions whose result is unknown are
+ * recorded on the device and stay off after a restart.
  */
 @Composable
 internal fun rememberNotificationsInboxController(
@@ -72,6 +73,7 @@ internal fun rememberNotificationsInboxController(
             serverUrl = session.serverUrl,
             execute = { request -> currentServices.executeNextcloudApi(currentSession, request) },
             cache = sharedNotificationsInboxMemoryCache,
+            actionAttempts = notificationActionAttemptStore(services, session),
         )
     }
     LaunchedEffect(controller) { controller.start() }

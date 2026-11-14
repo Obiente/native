@@ -95,6 +95,7 @@ class NotificationsInboxControllerTest {
         server: FakeNotificationsServer,
         cache: NotificationsInboxMemoryCache? = null,
         accountId: NextcloudAccountId = account,
+        attempts: NotificationActionAttemptStore? = null,
     ) = NotificationsInboxController(
         scope = scope,
         accountId = accountId,
@@ -102,7 +103,63 @@ class NotificationsInboxControllerTest {
         execute = server::execute,
         cache = cache,
         parseDispatcher = Dispatchers.Unconfined,
+        actionAttempts = attempts,
     )
+
+    private class MemoryActionAttempts(private val failSave: Boolean = false) : NotificationActionAttemptStore {
+        var ids = emptySet<Long>()
+        val savedWhile = mutableListOf<Int>()
+        var writes: () -> Int = { 0 }
+
+        override suspend fun load(): Set<Long> = ids
+
+        override suspend fun save(notificationIds: Set<Long>) {
+            check(!failSave) { "Synthetic storage is full." }
+            savedWhile += writes()
+            ids = notificationIds
+        }
+    }
+
+    @Test
+    fun `an action with an unknown result stays off after the inbox is recreated`() {
+        val actions = """[{"label":"Accept","link":"$SERVER/ocs/v2.php/apps/sample/api/v1/invites/4","type":"POST","primary":true}]"""
+        val server = FakeNotificationsServer().apply {
+            listed[4] = FakeNotificationsServer.notification(4, actions)
+            actionFailure = IllegalStateException("synthetic reset")
+        }
+        val store = MemoryActionAttempts().apply { writes = { server.count(NextcloudApiMethod.POST) } }
+        val first = controller(server, attempts = store).apply { start() }
+        first.runAction(4, first.state.notification(4)!!.actions.single())
+        assertEquals(setOf(4L), store.ids)
+        assertEquals(0, store.savedWhile.first(), "The attempt is on record before the request leaves.")
+
+        // The activity was recreated or the app relaunched: a new controller, the same device record.
+        server.actionFailure = null
+        val later = controller(server, attempts = store).apply { start() }
+        assertEquals(setOf(4L), later.state.ambiguousActionIds)
+        later.runAction(4, later.state.notification(4)!!.actions.single())
+        assertEquals(1, server.count(NextcloudApiMethod.POST), "The action is not repeated.")
+
+        server.listed.remove(4)
+        later.refresh()
+        assertTrue(store.ids.isEmpty(), "A notification that is gone no longer needs its record.")
+    }
+
+    @Test
+    fun `a definite answer closes the record and an unrecorded action is not sent`() {
+        val actions = """[{"label":"Accept","link":"$SERVER/ocs/v2.php/apps/sample/api/v1/invites/4","type":"POST","primary":true}]"""
+        val server = FakeNotificationsServer().apply { listed[4] = FakeNotificationsServer.notification(4, actions) }
+        val store = MemoryActionAttempts()
+        val controller = controller(server, attempts = store).apply { start() }
+        controller.runAction(4, controller.state.notification(4)!!.actions.single())
+        assertEquals(1, server.count(NextcloudApiMethod.POST))
+        assertTrue(store.ids.isEmpty())
+
+        val unwritable = controller(server, attempts = MemoryActionAttempts(failSave = true)).apply { start() }
+        unwritable.runAction(4, unwritable.state.notification(4)!!.actions.single())
+        assertEquals(1, server.count(NextcloudApiMethod.POST), "Nothing is sent without a record.")
+        assertTrue(unwritable.state.notice.orEmpty().contains("could not keep a record"))
+    }
 
     private fun ids(controller: NotificationsInboxController) = controller.state.notifications.orEmpty().map { it.id }
 

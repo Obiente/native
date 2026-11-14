@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal enum class NotificationsFailureKind {
@@ -132,6 +134,8 @@ internal class NotificationsInboxController(
     private val execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     private val cache: NotificationsInboxMemoryCache? = null,
     private val parseDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** Without a store, an action with an unknown result is remembered only by this controller. */
+    private val actionAttempts: NotificationActionAttemptStore? = null,
 ) {
     private val cacheProducer = cache?.producer(accountId)
 
@@ -154,9 +158,72 @@ internal class NotificationsInboxController(
     private val unconfirmedSince = mutableMapOf<Long, Long>()
     private var allUnconfirmedSince: Long? = null
 
+    /** Notifications with an action on record as started and not known to have finished. */
+    private var recordedAttempts = emptySet<Long>()
+
+    /** False until the stored attempts were read; no action runs before that. */
+    private var attemptsRead = actionAttempts == null
+    private val attemptsGate = Mutex()
+    private var restoreJob: Job? = null
+
     fun start() {
-        if (refreshJob == null) refresh()
+        if (refreshJob != null || restoreJob != null) return
+        val store = actionAttempts
+        if (store == null) {
+            refresh()
+            return
+        }
+        restoreJob = scope.launch {
+            try {
+                recordedAttempts = attemptsGate.withLock { store.load() }
+                state = state.copy(ambiguousActionIds = state.ambiguousActionIds + recordedAttempts)
+                attemptsRead = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Persistence fault boundary: an unreadable record may name an action already done.
+                state = state.copy(notice = "Earlier notification actions saved on this device could not be read, so actions are off here.")
+            }
+            refresh()
+        }
     }
+
+    /** Records that an action on [id] is about to be sent, or reports that it could not be recorded. */
+    private suspend fun recordAttempt(id: Long): Boolean {
+        val store = actionAttempts ?: return true
+        return try {
+            attemptsGate.withLock {
+                val next = (recordedAttempts + id).takeLastIds()
+                store.save(next)
+                recordedAttempts = next
+            }
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Drops records the server answered definitely, or whose notifications are no longer listed. */
+    private suspend fun settleAttempts(resolved: Set<Long>) {
+        val store = actionAttempts ?: return
+        try {
+            attemptsGate.withLock {
+                val next = recordedAttempts - resolved
+                if (next != recordedAttempts) {
+                    store.save(next)
+                    recordedAttempts = next
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A record left behind only keeps one action off; it never repeats anything.
+        }
+    }
+
+    private fun Set<Long>.takeLastIds(): Set<Long> = if (size <= MAX_RECORDED_ACTION_ATTEMPTS) this else toList().takeLast(MAX_RECORDED_ACTION_ATTEMPTS).toSet()
 
     fun refresh() {
         val generation = ++refreshGeneration
@@ -253,9 +320,20 @@ internal class NotificationsInboxController(
             return
         }
         val id = notification.id
+        if (!attemptsRead) return
         state = state.copy(pendingIds = state.pendingIds + id, notice = null)
         scope.launch {
-            val notice = when (val outcome = write(request)) {
+            if (!recordAttempt(id)) {
+                state = state.copy(
+                    pendingIds = state.pendingIds - id,
+                    notice = "This device could not keep a record of \"${action.label}\", so it was not done.",
+                )
+                return@launch
+            }
+            val outcome = write(request)
+            // A definite answer closes the record; an unknown one keeps the action off after a restart too.
+            if (outcome != WriteOutcome.Unknown) settleAttempts(setOf(id))
+            val notice = when (outcome) {
                 WriteOutcome.Confirmed -> when (val read = verificationRead()) {
                     is InboxRead.Loaded -> if (read.ids.contains(id)) {
                         "The server accepted \"${action.label}\"."
@@ -378,7 +456,10 @@ internal class NotificationsInboxController(
             )
             storeInCache(notifications, truncated)
         }
-        return InboxRead.Loaded(notifications.mapTo(HashSet(), NextcloudNotification::id))
+        val listed = notifications.mapTo(HashSet(), NextcloudNotification::id)
+        // A notification that is gone can no longer have its action repeated.
+        if ((result as? NotificationsListResult.Loaded)?.truncated == false) settleAttempts(recordedAttempts - listed)
+        return InboxRead.Loaded(listed)
     }
 
     private suspend fun readCapabilities(): CapabilitiesRead = try {
