@@ -545,6 +545,20 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `a status read that leaves out the subject does not confirm the send`() = runBlocking<Unit> {
+        val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
+        state.send(
+            recoverableCapability(),
+            RecoveringExecutor(
+                send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+                read = { NativeResultRecoveryRead.Read(mapOf("body" to "Text", "to" to "grace@example.test")) },
+            ),
+        )
+        assertEquals(NativeMailSendRecovery.Unavailable, assertIs<NativeMailSendPhase.Unknown>(state.phase).recovery)
+        assertNotNull(state.draft)
+    }
+
+    @Test
     fun `a draft whose chosen sender is gone is not sent from the remaining account`() {
         val capability = capability()
         assertEquals("7", capability.senderFor(readyDraft())?.id)

@@ -92,6 +92,11 @@ private fun NativeMailSendCapability.attemptEvidence(
     if (!listOfNotNull(bodyField, subjectField).filter { it in fields }.all { fields[it] == sent[it] }) {
         return NativeMailAttemptEvidence.Differs
     }
+    // A subject that was sent must be shown too: the same text to the same people under another
+    // subject is a different message.
+    if (subjectField != null && subjectField !in fields && !sent[subjectField].isNullOrEmpty()) {
+        return NativeMailAttemptEvidence.RecipientsNotShown
+    }
     val shownTo = fields[to.name] ?: return NativeMailAttemptEvidence.RecipientsNotShown
     // Every recipient field the attempt filled in must be shown too; a read that leaves one out
     // could be an earlier message with the same text to fewer people.
