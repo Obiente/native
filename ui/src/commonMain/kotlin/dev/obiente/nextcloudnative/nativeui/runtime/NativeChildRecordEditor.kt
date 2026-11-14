@@ -28,7 +28,7 @@ internal sealed interface NativeChildRecordTarget {
  * the collection it was added to.
  */
 @Stable
-internal class NativeChildRecordEditing {
+internal class NativeChildRecordEditing(private val creates: NativeCreateAttemptGuard = NativeCreateAttemptGuard()) {
     var target by mutableStateOf<NativeChildRecordTarget?>(null)
         private set
     var draft by mutableStateOf<Map<String, String>>(emptyMap())
@@ -66,6 +66,7 @@ internal class NativeChildRecordEditing {
     }
 
     suspend fun submit(plan: NativeChildRecordWritePlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
+        val creating = target == NativeChildRecordTarget.Create
         val (result, retry) = when (val current = target ?: return) {
             NativeChildRecordTarget.Create -> plan.createRequest(draft) to NativeEditorWriteRetry.NonIdempotent
             is NativeChildRecordTarget.Edit -> plan.updateRequest(current.record, draft) to plan.updateRetry
@@ -75,8 +76,14 @@ internal class NativeChildRecordEditing {
             is NativeChildRecordRequestResult.Invalid -> errors = result.errors
             NativeChildRecordRequestResult.NoChanges -> notice = "Nothing has changed."
             is NativeChildRecordRequestResult.Unavailable -> notice = result.reason
-            is NativeChildRecordRequestResult.Ready ->
-                if (session.submit(executor, result.request, retry, onRefreshRequested)) target = null
+            is NativeChildRecordRequestResult.Ready -> if (creating) {
+                when (val outcome = creates.submit(result.request, session, executor, onRefreshRequested)) {
+                    is NativeCreateOutcome.Ran -> if (outcome.confirmed) target = null
+                    is NativeCreateOutcome.NotSent -> outcome.message?.let { notice = it }
+                }
+            } else if (session.submit(executor, result.request, retry, onRefreshRequested)) {
+                target = null
+            }
         }
     }
 }

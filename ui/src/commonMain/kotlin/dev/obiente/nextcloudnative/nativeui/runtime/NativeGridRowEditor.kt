@@ -27,7 +27,7 @@ internal sealed interface NativeGridRowEditorTarget {
  * server data. Durable state stays with the server and the authoritative refresh.
  */
 @Stable
-internal class NativeGridRowEditing {
+internal class NativeGridRowEditing(private val creates: NativeCreateAttemptGuard = NativeCreateAttemptGuard()) {
     var target by mutableStateOf<NativeGridRowEditorTarget?>(null)
         private set
     var drafts by mutableStateOf<Map<String, String>>(emptyMap())
@@ -83,8 +83,13 @@ internal class NativeGridRowEditing {
             is NativeGridRowRequestResult.Invalid -> errors = result.fieldErrors
             NativeGridRowRequestResult.NoChanges -> notice = "Nothing has changed."
             is NativeGridRowRequestResult.Unavailable -> notice = result.reason
-            is NativeGridRowRequestResult.Ready -> {
-                if (session.submit(executor, result.request, retry, onRefreshRequested)) target = null
+            is NativeGridRowRequestResult.Ready -> if (current == NativeGridRowEditorTarget.Create) {
+                when (val outcome = creates.submit(result.request, session, executor, onRefreshRequested)) {
+                    is NativeCreateOutcome.Ran -> if (outcome.confirmed) target = null
+                    is NativeCreateOutcome.NotSent -> outcome.message?.let { notice = it }
+                }
+            } else if (session.submit(executor, result.request, retry, onRefreshRequested)) {
+                target = null
             }
         }
     }
