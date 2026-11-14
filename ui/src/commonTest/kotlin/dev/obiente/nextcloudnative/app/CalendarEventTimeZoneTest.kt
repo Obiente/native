@@ -65,6 +65,20 @@ class CalendarEventTimeZoneTest {
     }
 
     @Test
+    fun anUnchangedScheduleInADaylightSavingOverlapIsWrittenBackAsStored() {
+        // 01:30 UTC on this day is the second 02:30 in Amsterdam; converting 02:30 back picks the first.
+        val event = parse("DTSTART:20261025T013000Z", "DTEND:20261025T020000Z").inDeviceTime(Amsterdam)
+        assertEquals("20261025T023000", event.start.take(15))
+        val opened = draft("2026-10-25", "02:30", "03:00")
+        val titleOnly = opened.copy(title = "Renamed").inDavFrame(event, opened, Amsterdam)
+        assertEquals("2026-10-25" to "01:30", titleOnly.date to titleOnly.startTime, "An edit that leaves the schedule alone does not move the event.")
+        assertEquals("02:00", titleOnly.endTime)
+
+        val moved = opened.copy(startTime = "04:30", endTime = "05:00").inDavFrame(event, opened, Amsterdam)
+        assertEquals("03:30", moved.startTime, "A changed schedule is converted from device time as before.")
+    }
+
+    @Test
     fun malformedZonesAreNeverWrittenIntoAPropertyLine() {
         assertEquals(";TZID=Europe/Paris", calendarTimeParameter(false, "Europe/Paris"))
         assertEquals("", calendarTimeParameter(false, "Europe/Paris:20991231T000000"))

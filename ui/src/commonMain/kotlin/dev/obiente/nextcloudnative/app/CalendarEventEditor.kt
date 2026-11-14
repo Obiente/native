@@ -333,7 +333,7 @@ internal fun EventEditorDialog(
                         reminderMinutes = reminders.sorted().takeIf { it != initialReminders },
                         attendees = guests.takeIf { guestsChanged },
                     )
-                    onSave(changes.inDavFrame(event?.startZone), requireNotNull(calendar))
+                    onSave(changes.inDavFrame(event, initialDraft), requireNotNull(calendar))
                 },
             ) { Text(if (guestsChanged) "Save and notify guests" else "Save") }
         },

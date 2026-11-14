@@ -69,7 +69,7 @@ data class GroupwareCalendarEvent(
     val rawCalendar: String,
     /** The TZID of DTSTART and DTEND, when they name one; see [inDeviceTime]. */
     val startZone: String? = null,
-    val endZone: String? = null,
+    val endZone: String? = null, /** The stored times before [inDeviceTime]. */ val storedStart: String? = null, val storedEnd: String? = null,
 ) {
     /** Stable across sorting and refreshes, including multiple visible instances of one DAV object. */
     val instanceId: String get() = "$href#${recurrenceId ?: start}"
@@ -969,7 +969,7 @@ internal fun String.decodeCalendarText(): String = buildString(length) {
     }
 }
 
-private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
+internal fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
     val components = mutableListOf<String>()
     var componentStart = 0
     var precedingBackslashes = 0

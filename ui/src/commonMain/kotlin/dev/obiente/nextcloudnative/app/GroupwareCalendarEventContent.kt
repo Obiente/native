@@ -44,7 +44,31 @@ fun GroupwareCalendarEvent.inDeviceTime(deviceZone: String? = null): GroupwareCa
     if (allDay) return this
     val localStart = start.calendarDeviceWallTime(startZone, deviceZone)
     val localEnd = end?.calendarDeviceWallTime(endZone ?: startZone, deviceZone)
-    return if (localStart == start && localEnd == end) this else copy(start = localStart, end = localEnd)
+    return if (localStart == start && localEnd == end) this else copy(start = localStart, end = localEnd, storedStart = start, storedEnd = end)
+}
+
+/**
+ * [inDavFrame] for an edit of [event], whose editor opened with [initial]. A schedule the person
+ * did not change is written back exactly as stored. Converting it through device time and back
+ * cannot tell the two hours of a daylight-saving overlap apart and would move the event.
+ */
+internal fun EventDraft.inDavFrame(event: GroupwareCalendarEvent?, initial: EventDraft, deviceZone: String? = null): EventDraft {
+    val converted = inDavFrame(event?.startZone, deviceZone)
+    val storedStart = event?.storedStart?.takeIf { it.length >= 15 && it[8] == 'T' } ?: return converted
+    val storedEnd = event.storedEnd?.takeIf { it.length >= 15 && it[8] == 'T' } ?: return converted
+    val scheduleChanged = allDay || initial.allDay || date != initial.date || startTime != initial.startTime || endTime != initial.endTime
+    // The stored values must be in the frame the draft is written in: UTC, or the event's one zone.
+    val sameFrame = storedStart.endsWith('Z') == (converted.zone == null) && storedEnd.endsWith('Z') == (converted.zone == null) &&
+        (event.endZone == null || event.endZone == event.startZone)
+    if (scheduleChanged || !sameFrame) return converted
+    val startDate = storedStart.take(8).compactDateToIso()
+    val endDate = storedEnd.take(8).compactDateToIso()
+    return converted.copy(
+        date = startDate,
+        startTime = storedStart.compactTime(),
+        endDate = endDate.takeIf { it != startDate },
+        endTime = storedEnd.compactTime(),
+    )
 }
 
 private fun String.calendarDeviceWallTime(zone: String?, deviceZone: String?): String {
