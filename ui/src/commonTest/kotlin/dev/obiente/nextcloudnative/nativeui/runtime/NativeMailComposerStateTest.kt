@@ -507,6 +507,17 @@ class NativeMailComposerStateTest {
         }
     }
 
+    @Test
+    fun `a draft whose chosen sender is gone is not sent from the remaining account`() {
+        val capability = capability()
+        assertEquals("7", capability.senderFor(readyDraft())?.id)
+        assertEquals("7", capability.senderFor(readyDraft().copy(senderId = null))?.id, "A draft that names no sender uses the only one.")
+
+        val moved = readyDraft().copy(senderId = "3")
+        assertNull(capability.senderFor(moved), "The only remaining account is not substituted for the chosen one.")
+        assertTrue(capability.problems(moved).any { it.contains("account to send from") })
+    }
+
     private fun readyDraft() = NativeMailComposeDraft(
         mode = NativeMailComposeMode.New,
         senderId = "7",

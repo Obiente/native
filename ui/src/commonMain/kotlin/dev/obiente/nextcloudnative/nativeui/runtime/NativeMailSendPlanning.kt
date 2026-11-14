@@ -98,8 +98,12 @@ internal data class NativeMailSendCapability(
         if (subjectField == null && draft.subject.isNotBlank()) add("This app does not accept a subject.")
     }.distinct()
 
+    /**
+     * The sender the draft names. Only a draft that names none falls back to the sole sender: a
+     * chosen sender that is no longer offered is never replaced by another account silently.
+     */
     fun senderFor(draft: NativeMailComposeDraft): NativeMailSender? =
-        senders.firstOrNull { it.key == draft.senderId } ?: senders.singleOrNull()
+        senders.firstOrNull { it.key == draft.senderId } ?: senders.singleOrNull()?.takeIf { draft.senderId == null }
 
     /** Builds the exact contract request. Throws [IllegalArgumentException] when [problems] is not empty. */
     fun request(draft: NativeMailComposeDraft): NativeActionRequest.Submit {

@@ -225,7 +225,7 @@ private fun NativeMailComposerDialog(host: NativeMailComposerHost, draft: Native
                         state.storageProblem?.let { problem ->
                             Text(problem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         }
-                        if (capability.senders.size > 1) {
+                        if (capability.senders.size > 1 || capability.senderFor(draft) == null) {
                             NativeMailSenderPicker(capability, draft, enabled = editable) { id ->
                                 state.update { it.copy(senderId = id) }
                             }
