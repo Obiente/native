@@ -93,6 +93,12 @@ private fun NativeMailSendCapability.attemptEvidence(
         return NativeMailAttemptEvidence.Differs
     }
     val shownTo = fields[to.name] ?: return NativeMailAttemptEvidence.RecipientsNotShown
+    // Every recipient field the attempt filled in must be shown too; a read that leaves one out
+    // could be an earlier message with the same text to fewer people.
+    val unshown = listOfNotNull(cc?.let { it to attempt.cc }, bcc?.let { it to attempt.bcc }).any { (field, drafted) ->
+        field.name !in fields && parseNativeMailRecipients(drafted).first.isNotEmpty()
+    }
+    if (unshown) return NativeMailAttemptEvidence.RecipientsNotShown
     val recipients = listOfNotNull(
         shownTo to attempt.to,
         cc?.name?.let(fields::get)?.let { it to attempt.cc },
