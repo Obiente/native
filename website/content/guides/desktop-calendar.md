@@ -58,7 +58,7 @@ Choose **Edit event** in the event details to edit within the workspace. The sha
 
 The phone and desktop editor share validation, recurrence and calendar selectors, and date/time fields. Save and Cancel remain outside the scrolling form. When you edit a repeating event, the editor states whether changes apply to this occurrence only or to every occurrence.
 
-## 4. Guests, reminders, sharing, and the trash bin
+### Guests, reminders, sharing, and the trash bin
 
 **Reminders** in the editor add on-screen reminders before the start, such as 15 minutes or 1 day. Reminders set another way, for example at a fixed time, are kept as they are and listed as kept.
 
