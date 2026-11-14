@@ -153,6 +153,15 @@ internal fun parseTalkConversationSettings(response: TalkTransportResponse): Tal
     )
 }
 
+/** Whether every participant entry of [response] can be decoded, so absence from the list means absence. */
+internal fun talkParticipantsDecodeCompletely(response: TalkTransportResponse): Boolean {
+    if (response.status !in 200..299) return false
+    val entries = response.talkSettingsData() as? JsonArray ?: return false
+    return entries.all { element ->
+        ((element as? JsonObject)?.get("attendeeId") as? JsonPrimitive)?.longOrNull?.let { it > 0L } == true
+    }
+}
+
 internal fun parseTalkParticipants(response: TalkTransportResponse): List<TalkParticipant>? {
     if (response.status !in 200..299) return null
     val entries = response.talkSettingsData() as? JsonArray ?: return null

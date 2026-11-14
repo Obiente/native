@@ -60,8 +60,12 @@ internal class TalkConversationSettingsController(
                 TalkWriteOutcome.Unknown
             }
             val fresh = readSettings()
+            participantsComplete = true
             val participants = if (change.isMembershipChange()) readParticipants() else state.participants
-            val verified = fresh?.reflects(change) == true && (participants?.reflects(change) ?: !change.isMembershipChange())
+            // A removal is shown by absence, which only a completely decoded list can show.
+            val absenceProven = change !is TalkConversationChange.RemoveParticipant || participantsComplete
+            val verified = fresh?.reflects(change) == true && absenceProven &&
+                (participants?.reflects(change) ?: !change.isMembershipChange())
             val (message, isError) = when {
                 outcome is TalkWriteOutcome.Rejected -> outcome.failure.message to true
                 verified -> change.successMessage() to false
@@ -81,8 +85,13 @@ internal class TalkConversationSettingsController(
         parseTalkConversationSettings(execute(TalkChatRequests.conversation(token)))
     }
 
+    /** False when the last participant read held an entry that could not be decoded. */
+    private var participantsComplete = true
+
     private suspend fun readParticipants(): List<TalkParticipant>? = readOrNull {
-        parseTalkParticipants(execute(TalkSettingsRequests.participants(token)))
+        val response = execute(TalkSettingsRequests.participants(token))
+        participantsComplete = talkParticipantsDecodeCompletely(response)
+        parseTalkParticipants(response)
     }
 }
 

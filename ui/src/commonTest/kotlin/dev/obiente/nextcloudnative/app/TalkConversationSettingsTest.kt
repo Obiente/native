@@ -77,6 +77,12 @@ class TalkConversationSettingsTest {
         ]"""))))
         assertEquals(listOf("Alice", "Bob"), participants.map { it.displayName })
         assertTrue(participants.reflects(TalkConversationChange.RemoveParticipant(9, "x")))
+        assertTrue(talkParticipantsDecodeCompletely(response(200, ocs("""[{"attendeeId":1,"actorType":"users","actorId":"alice"}]"""))))
+        assertFalse(
+            talkParticipantsDecodeCompletely(response(200, ocs("""[{"attendeeId":1,"actorId":"alice"},{"actorId":"bob"}]"""))),
+            "An entry without a usable id may be the participant being removed.",
+        )
+        assertFalse(talkParticipantsDecodeCompletely(response(500, "")))
         assertFalse(participants.reflects(TalkConversationChange.Moderator(2, promote = true)))
 
         val privacy = assertNotNull(parseTalkUserPrivacy(response(200, ocs("""{"capabilities":{"spreed":{
