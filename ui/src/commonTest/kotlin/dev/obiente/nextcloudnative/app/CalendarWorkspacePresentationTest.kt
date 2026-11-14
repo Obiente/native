@@ -51,10 +51,23 @@ class CalendarWorkspacePresentationTest {
             view = CalendarWorkspaceView.Week,
             month = CalendarMonth(2026, 8),
             selectedDate = "20260801",
+            deviceZone = "UTC",
         )
 
         assertEquals("20260727T000000Z", window.startUtc)
         assertEquals("20260803T000000Z", window.endUtc)
+    }
+
+    @Test
+    fun `the query runs between midnights on the device`() {
+        // Monday 9 November 2026 starts at 23:00 UTC on Sunday in Amsterdam, so an event at
+        // 23:30 UTC on Sunday, shown on Monday at 00:30, is inside the week that is read.
+        val week = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Week, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        assertEquals("20261108T230000Z", week.startUtc)
+        assertEquals("20261115T230000Z", week.endUtc)
+        val month = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        assertEquals("20261031T230000Z", month.startUtc)
+        assertEquals("20261130T230000Z", month.endUtc)
     }
 
     @Test

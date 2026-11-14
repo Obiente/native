@@ -91,7 +91,25 @@ internal fun calendarWeekDates(selectedDate: String): List<String> {
     return (0..6).map { offset -> monday.plusDays(offset).compactValue }
 }
 
+/**
+ * The time range to read for what [view] shows. The views show days on the device, so the range
+ * runs between midnights there, not midnights in UTC: an event at 00:30 local time on the first
+ * day would otherwise fall just outside it. [deviceZone] is null for the device's own zone.
+ */
 internal fun calendarWorkspaceQueryWindow(
+    view: CalendarWorkspaceView,
+    month: CalendarMonth,
+    selectedDate: String,
+    deviceZone: String? = null,
+): GroupwareDavTimeWindow {
+    val dates = calendarWorkspaceDateWindow(view, month, selectedDate)
+    fun String.atDeviceMidnight() = calendarConvertWallTime(take(15), deviceZone, CALENDAR_UTC_ZONE)?.let { "${it}Z" }
+    val start = dates.startUtc.atDeviceMidnight() ?: return dates
+    val end = dates.endUtc.atDeviceMidnight() ?: return dates
+    return if (start < end) GroupwareDavTimeWindow(start, end) else dates
+}
+
+private fun calendarWorkspaceDateWindow(
     view: CalendarWorkspaceView,
     month: CalendarMonth,
     selectedDate: String,
