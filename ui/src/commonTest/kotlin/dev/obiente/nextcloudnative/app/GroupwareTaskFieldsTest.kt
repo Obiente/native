@@ -25,6 +25,8 @@ class GroupwareTaskFieldsTest {
         assertEquals(TaskPriority.High, TaskPriority.of(task.priority))
         assertEquals(TaskExtras(1, 40, "2026-11-01", listOf("home", "urgent,ish"), "parent"), task.extras())
         assertEquals("parent", task("UID:x", "SUMMARY:x", "RELATED-TO:parent").parentUid, "RELTYPE defaults to PARENT.")
+        // An escaped backslash ends the first tag; the comma after it still separates the two.
+        assertEquals(listOf("path\\", "next"), task("UID:x", "SUMMARY:x", "CATEGORIES:path\\\\,next").categories)
         assertNull(task("UID:x", "SUMMARY:x", "RELATED-TO;RELTYPE=CHILD:kid").parentUid)
     }
 

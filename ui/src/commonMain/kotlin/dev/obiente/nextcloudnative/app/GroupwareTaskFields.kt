@@ -79,7 +79,7 @@ internal fun List<ICalendarContentLine>.taskParentUid(): String? = firstOrNull {
 
 internal fun List<ICalendarContentLine>.taskCategories(): List<String> =
     filter { it.name.equals("CATEGORIES", true) }
-        .flatMap { it.value.split(Regex("(?<!\\\\),")) }
+        .flatMap { it.value.splitUnescapedCalendarComponents(',') }
         .map { it.decodeCalendarText().trim() }
         .filter(String::isNotEmpty)
         .distinct()
