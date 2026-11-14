@@ -146,6 +146,20 @@ class NotificationsInboxControllerTest {
     }
 
     @Test
+    fun `a full record refuses a new action instead of forgetting an unresolved one`() {
+        val actions = """[{"label":"Accept","link":"$SERVER/ocs/v2.php/apps/sample/api/v1/invites/4","type":"POST","primary":true}]"""
+        val server = FakeNotificationsServer().apply { listed[4] = FakeNotificationsServer.notification(4, actions) }
+        val full = (1000L until 1000L + MAX_RECORDED_ACTION_ATTEMPTS).toSet()
+        val store = MemoryActionAttempts().apply { ids = full }
+        // Their notifications are still listed, so none of the stored attempts is resolved.
+        full.forEach { id -> server.listed[id] = FakeNotificationsServer.notification(id, "[]") }
+        val controller = controller(server, attempts = store).apply { start() }
+        controller.runAction(4, controller.state.notification(4)!!.actions.single())
+        assertEquals(0, server.count(NextcloudApiMethod.POST))
+        assertEquals(full, store.ids, "No unresolved attempt is dropped to make room.")
+    }
+
+    @Test
     fun `a definite answer closes the record and an unrecorded action is not sent`() {
         val actions = """[{"label":"Accept","link":"$SERVER/ocs/v2.php/apps/sample/api/v1/invites/4","type":"POST","primary":true}]"""
         val server = FakeNotificationsServer().apply { listed[4] = FakeNotificationsServer.notification(4, actions) }

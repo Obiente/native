@@ -193,7 +193,10 @@ internal class NotificationsInboxController(
         val store = actionAttempts ?: return true
         return try {
             attemptsGate.withLock {
-                val next = (recordedAttempts + id).takeLastIds()
+                val next = recordedAttempts + id
+                // A full record is never thinned out to make room: that would forget an action
+                // that may already have happened. The new action waits instead.
+                if (next.size > MAX_RECORDED_ACTION_ATTEMPTS) return false
                 store.save(next)
                 recordedAttempts = next
             }
@@ -222,8 +225,6 @@ internal class NotificationsInboxController(
             // A record left behind only keeps one action off; it never repeats anything.
         }
     }
-
-    private fun Set<Long>.takeLastIds(): Set<Long> = if (size <= MAX_RECORDED_ACTION_ATTEMPTS) this else toList().takeLast(MAX_RECORDED_ACTION_ATTEMPTS).toSet()
 
     fun refresh() {
         val generation = ++refreshGeneration
@@ -439,7 +440,8 @@ internal class NotificationsInboxController(
             return InboxRead.Failed(NotificationsFailure(NotificationsFailureKind.Offline))
         }
         val notifications = (result as? NotificationsListResult.Loaded)?.notifications.orEmpty()
-        if (sequence > appliedSequence) {
+        val newest = sequence > appliedSequence
+        if (newest) {
             appliedSequence = sequence
             unconfirmedSince.entries.removeAll { (_, since) -> since < sequence }
             if (allUnconfirmedSince?.let { it < sequence } == true) allUnconfirmedSince = null
@@ -458,7 +460,9 @@ internal class NotificationsInboxController(
         }
         val listed = notifications.mapTo(HashSet(), NextcloudNotification::id)
         // A notification that is gone can no longer have its action repeated.
-        if ((result as? NotificationsListResult.Loaded)?.truncated == false) settleAttempts(recordedAttempts - listed)
+        // Only the newest complete list may say so; an older read can miss a notification that
+        // arrived since, and with it the action that was started on it.
+        if (newest && (result as? NotificationsListResult.Loaded)?.truncated == false) settleAttempts(recordedAttempts - listed)
         return InboxRead.Loaded(listed)
     }
 
