@@ -96,6 +96,8 @@ class DeckLabelMembershipDialogTest {
                 assertEquals(2, f.transport.writes)
                 f.transport.onSend = {}
                 f.transport.writeStatus = 200
+                // The result arrives before the dialog has drawn its controls again.
+                settleUntil(10_000) { has("Save labels") }
                 if (restore) { click("New"); click("Later") }
                 f.transport.afterWrite = if (restore) MembershipExecutionFixture.body() else MembershipExecutionFixture.body(
                     """[{"id":3,"title":"Kept"},{"id":5,"title":"New"},{"id":8,"title":"Later"}]""")
