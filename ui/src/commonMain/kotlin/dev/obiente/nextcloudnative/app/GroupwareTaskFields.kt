@@ -127,10 +127,19 @@ internal fun applyGroupwareTaskExtras(
     }
     val start = wanted.startDate.taskCompactDate()
     val existingStart = lines.icalendarDirectProperties(ICalendarComponentRange(range.begin, end))
-        .firstOrNull { it.second.name.equals("DTSTART", true) }?.second
-    // A start that only moved its date keeps its time and zone.
-    if (existingStart?.value?.take(8) != start) {
-        replace("DTSTART", listOfNotNull(start?.let { "DTSTART;VALUE=DATE:$it" }))
+        .firstOrNull { it.second.name.equals("DTSTART", true) }
+    val storedStart = existingStart?.second?.value?.trim().orEmpty()
+    if (storedStart.take(8) != start) {
+        val storedLine = existingStart?.let { lines[it.first] }
+        // The editor holds only the date. A timed start keeps its parameters, time, and zone.
+        val moved = if (start != null && storedLine != null && storedStart.length > 8 && storedStart[8] == 'T' &&
+            storedLine.trimEnd().endsWith(storedStart)
+        ) {
+            storedLine.trimEnd().dropLast(storedStart.length) + start + storedStart.drop(8)
+        } else {
+            start?.let { "DTSTART;VALUE=DATE:$it" }
+        }
+        replace("DTSTART", listOfNotNull(moved))
     }
     replace("CATEGORIES", listOfNotNull(wanted.categories.takeIf(List<String>::isNotEmpty)?.let { tags ->
         "CATEGORIES:" + tags.joinToString(",") { it.escapeCalendarText() }

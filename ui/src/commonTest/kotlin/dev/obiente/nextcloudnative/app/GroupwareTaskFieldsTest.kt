@@ -60,6 +60,11 @@ class GroupwareTaskFieldsTest {
         val content = applyGroupwareTaskExtras(original.rawCalendar, "t", null, original.extras(), completed = false)
         assertEquals(original.rawCalendar.unfoldCalendarLines(), content.unfoldCalendarLines())
         assertTrue("DTSTART:20261101T080000Z" in content, "A start whose date is unchanged keeps its time.")
+        val zoned = task("UID:t", "SUMMARY:T", "DTSTART;TZID=Europe/Paris:20261101T080000")
+        val moved = applyGroupwareTaskExtras(zoned.rawCalendar, "t", null, zoned.extras().copy(startDate = "2026-11-02"), completed = false)
+        assertTrue("DTSTART;TZID=Europe/Paris:20261102T080000" in moved, "A moved start keeps its time and time zone: $moved")
+        val cleared = applyGroupwareTaskExtras(zoned.rawCalendar, "t", null, zoned.extras().copy(startDate = ""), completed = false)
+        assertTrue("DTSTART" !in cleared)
     }
 
     @Test
