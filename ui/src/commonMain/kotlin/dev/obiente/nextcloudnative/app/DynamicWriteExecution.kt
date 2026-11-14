@@ -281,6 +281,11 @@ private suspend fun executeVerified(
     // Context inputs travel in the body but are not edits. An edited field can be absent from
     // the original read, so membership cannot be inferred from the previous-value map.
     val submitted = prepared.submittedBody.filterKeys { it in readBack.editedFields && it !in readBack.customFields }
+    // Every edited field must be readable from the body that will be sent. A form-encoded body
+    // carries none as typed values, and checking nothing would report an ignored edit as saved.
+    if (readBack.editedFields.any { it !in readBack.customFields && it !in submitted }) {
+        return refusal("This app takes this change in a form whose result cannot be checked, so it was not sent.")
+    }
     val outcome = runNativeVerifiedWrite(
         actionLabel = context.action.label,
         preRead = request.precondition?.let { precondition ->

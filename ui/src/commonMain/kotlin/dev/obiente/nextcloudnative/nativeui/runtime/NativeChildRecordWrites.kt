@@ -126,6 +126,9 @@ internal fun NativeChildRecordWritePlan.record(record: NativeRecord): NativeChil
         namesParent = record.valueNamed(route.parentReferenceKey) == parentId,
         editUnavailableReason = operation?.unavailableReason
             ?: (echo as? NativeFullEchoUpdatePlan.ReadOnly)?.message
+            // A merge edit is checked by comparing the typed values sent with the record read back.
+            ?: "This app takes edits as a form body, whose result cannot be checked, so editing is not offered here."
+                .takeIf { operation != null && updateRoute?.write?.action?.takesJsonBody == false }
             ?: "Editing here would send an incomplete copy of this record.".takeIf { replace && unreadable.isNotEmpty() },
         snapshot = operation?.fields.orEmpty().storedSnapshot(record),
         wire = updateRoute?.write?.echoSource(record) ?: record.wireValues,
@@ -149,6 +152,9 @@ private fun NativeContractAction.echoSource(record: NativeRecord): Map<String, J
     }
     return record.wireValues + aliases
 }
+
+private val dev.obiente.nextcloudnative.nativeui.model.ActionSpec.takesJsonBody: Boolean
+    get() = binding.bodyContentType?.let { it.substringBefore(';').trim().lowercase() == "application/json" } != false
 
 /** Every value [record] stores under the names of these fields, keyed by normalized name. */
 private fun List<NativeRecordField>.storedSnapshot(record: NativeRecord): Map<String, String?> {

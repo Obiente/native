@@ -366,6 +366,14 @@ class NativeChildRecordWritesTest {
         val planned = assertIs<NativeFullEchoUpdatePlan.ReadOnly>(nativeFullEchoUpdatePlan(update, stored, setOf("amount")))
         assertEquals(NativeFullEchoRefusal.NonJsonBody, planned.reason)
 
+        val formPatch = schema().let { base ->
+            base.copy(actions = base.actions.map { action ->
+                if (action.id == "expenses.update") action.copy(binding = action.binding.copy(bodyContentType = "application/x-www-form-urlencoded")) else action
+            })
+        }
+        val merged = assertNotNull(assertNotNull(plan(schema = formPatch)).record(expenseRecord()))
+        assertTrue(merged.editUnavailableReason.orEmpty().contains("cannot be checked"), "A form-encoded merge edit could not be verified either.")
+
         val json = assertNotNull(plan(schema = withBody("application/json; charset=utf-8")))
         val editable = assertNotNull(json.record(expenseRecord()))
         assertNull(editable.editUnavailableReason)
