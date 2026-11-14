@@ -304,12 +304,13 @@ class FileTrashbinController(
                 emptyUnconfirmed = emptyUnconfirmedSince != null,
             )
         }
-        return TrashRead.Loaded(keys, complete = !listing.truncated)
+        // An entry that could not be read may be the item being checked, so it proves nothing either.
+        return TrashRead.Loaded(keys, complete = !listing.truncated && listing.skippedEntries == 0)
     }
 }
 
 private sealed interface TrashRead {
-    /** [complete] is false when the server listed more items than are kept, so absence proves nothing. */
+    /** [complete] is false when the server listed more items than are kept or readable, so absence proves nothing. */
     data class Loaded(val keys: Set<String>, val complete: Boolean) : TrashRead
     data class Failed(val kind: FilesDavFailureKind) : TrashRead
 }

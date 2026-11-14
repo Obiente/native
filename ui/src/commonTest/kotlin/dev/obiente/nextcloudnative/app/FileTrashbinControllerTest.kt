@@ -30,6 +30,8 @@ class FileTrashbinControllerTest {
         /** Keys whose write throws after the server already applied it. */
         val appliedThenThrows = mutableSetOf<String>()
         var listFails = false
+        /** Keys the listing returns without a readable file name. */
+        val unreadable = mutableSetOf<String>()
         val requests = mutableListOf<FilesDavRequest>()
 
         suspend fun execute(request: FilesDavRequest): NextcloudApiResponse {
@@ -39,7 +41,8 @@ class FileTrashbinControllerTest {
                 return multistatus(
                     entry("/remote.php/dav/trashbin/alice/trash/", folder = true),
                     *items.entries.mapIndexed { index, (key, name) ->
-                        entry("/remote.php/dav/trashbin/alice/trash/$key", name = name, time = index.toLong())
+                        if (key in unreadable) entry("/remote.php/dav/trashbin/alice/trash/$key", name = null, time = index.toLong())
+                        else entry("/remote.php/dav/trashbin/alice/trash/$key", name = name, time = index.toLong())
                     }.toTypedArray(),
                 )
             }
@@ -156,6 +159,19 @@ class FileTrashbinControllerTest {
         val result = assertIs<BulkOperationReport>(controller.state.report).results.single()
         assertEquals(BulkItemOutcome.Unconfirmed, result.outcome)
         assertTrue(restored.isEmpty(), "A restore that never happened is not announced as done.")
+    }
+
+    @Test
+    fun unknownResultIsNotResolvedByAListingWithAnUnreadableEntry() {
+        val fake = FakeTrash().apply { writeThrows += "a.d1" }
+        val restored = mutableListOf<String>()
+        val controller = controller(fake, restored).also { it.start() }
+        // The item is still in the trash bin, but the verification listing cannot name it.
+        fake.unreadable += "a.d1"
+        controller.restore(setOf("a.d1"))
+        val result = assertIs<BulkOperationReport>(controller.state.report).results.single()
+        assertEquals(BulkItemOutcome.Unconfirmed, result.outcome)
+        assertTrue(restored.isEmpty(), "An entry that could not be read is not proof the item left the trash bin.")
     }
 
     @Test
