@@ -13,7 +13,8 @@ import kotlin.random.Random
  * - the request is sent once and never retried automatically;
  * - 2xx is sent; 4xx is rejected and the draft stays; anything else is "may have been sent", with
  *   the recorded evidence shown;
- * - sending again after that needs the person's explicit confirmation naming the risk;
+ * - sending again after that needs the person's explicit confirmation naming the risk, and a
+ *   refusal of that resend leaves the earlier attempt unresolved;
  * - a declared Idempotency-Key is generated once per attempt and reused on a confirmed resend of
  *   the same payload, so a server that honours it can drop the duplicate.
  */
@@ -71,8 +72,12 @@ interface NativeSendAttemptStore {
 sealed interface NativeExactlyOnceSendOutcome {
     data class Sent(val message: String?) : NativeExactlyOnceSendOutcome
 
-    /** The server refused; nothing was sent and sending again is safe after a correction. */
-    data class Rejected(val message: String) : NativeExactlyOnceSendOutcome
+    /**
+     * The server refused this request. With no [earlier] attempt nothing was sent and sending
+     * again is safe after a correction. A refused resend says nothing about the attempt before
+     * it: [earlier] is that attempt, still unresolved and still stored.
+     */
+    data class Rejected(val message: String, val earlier: NativeSendAttempt? = null) : NativeExactlyOnceSendOutcome
 
     /** The send may have been delivered. Only a confirmed resend may follow. */
     data class MaybeSent(val attempt: NativeSendAttempt) : NativeExactlyOnceSendOutcome
@@ -155,8 +160,20 @@ class NativeExactlyOnceSend(
                 NativeExactlyOnceSendOutcome.Sent(result.message)
             }
             result is NativeActionExecutionResult.Failure && result.outcome == NativeActionFailureOutcome.Rejected -> {
-                clearQuietly()
-                NativeExactlyOnceSendOutcome.Rejected(result.message.ifBlank { "The server did not send this." })
+                val message = result.message.ifBlank { "The server did not send this." }
+                val earlier = previous?.afterRestart()
+                if (earlier == null) {
+                    clearQuietly()
+                } else {
+                    try {
+                        store.save(earlier)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // The refused attempt's record remains and still asks for a confirmation.
+                    }
+                }
+                NativeExactlyOnceSendOutcome.Rejected(message, earlier)
             }
             else -> {
                 val maybe = attempt.copy(state = NativeSendAttemptState.MaybeSent, unknownReason = NativeSendUnknownReason.Unconfirmed)

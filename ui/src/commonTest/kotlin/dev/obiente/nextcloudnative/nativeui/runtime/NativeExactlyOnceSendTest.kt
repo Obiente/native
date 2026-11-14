@@ -43,6 +43,25 @@ class NativeExactlyOnceSendTest {
     }
 
     @Test
+    fun `a refused resend leaves the earlier unconfirmed attempt open`() = runBlocking<Unit> {
+        val store = MemoryAttempts()
+        val sender = sender(store)
+        val first = assertIs<NativeExactlyOnceSendOutcome.MaybeSent>(
+            sender.send(request(), { NativeActionExecutionResult.Failure("Timed out.", NativeActionFailureOutcome.Unknown) }, "1 recipient", false, false),
+        )
+        val refused = assertIs<NativeExactlyOnceSendOutcome.Rejected>(
+            sender.send(request(), { NativeActionExecutionResult.Failure("Invalid address.", NativeActionFailureOutcome.Rejected) },
+                "1 recipient", confirmedResend = true, declaresIdempotencyKey = false),
+        )
+        assertEquals(first.attempt, refused.earlier, "The refusal answers only the resend.")
+        assertEquals(first.attempt, store.value, "The earlier attempt is still stored for a restart.")
+        var calls = 0
+        val blocked = sender.send(request(), { calls++; NativeActionExecutionResult.Success() }, "1 recipient", false, false)
+        assertEquals(NativeExactlyOnceSendOutcome.NotSent(NativeSendRefusal.ResendNeedsConfirmation), blocked)
+        assertEquals(0, calls)
+    }
+
+    @Test
     fun `an unknown result is may-have-been-sent and blocks an unconfirmed resend`() = runBlocking<Unit> {
         val store = MemoryAttempts()
         var calls = 0

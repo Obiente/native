@@ -286,7 +286,14 @@ internal class NativeMailComposerState(
                 onSent()
             }
             is NativeExactlyOnceSendOutcome.Rejected -> {
-                phase = NativeMailSendPhase.Rejected(outcome.message)
+                val earlier = outcome.earlier
+                if (unknown != null && earlier != null) {
+                    // Only the resend was refused; the earlier message may still have been sent.
+                    phase = unknown.copy(record = earlier)
+                    notice = "The server refused sending again: ${outcome.message} The earlier message may still have been sent."
+                } else {
+                    phase = NativeMailSendPhase.Rejected(outcome.message)
+                }
                 persistSoon(immediately = true)
             }
             is NativeExactlyOnceSendOutcome.MaybeSent -> {
