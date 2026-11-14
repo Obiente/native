@@ -192,15 +192,9 @@ internal class SemanticSettingsController(
 
     suspend fun load() {
         state = state.copy(loading = true, errorMessage = null)
-        state = try {
-            state.copy(loading = false, entries = settings.parse(execute(settings.readRequest())), outcomeUnknown = false)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            state.copy(loading = false, errorMessage = failure.message ?: "Settings could not be loaded.")
-        }
-        if (state.changesPaused) return
-        val paused = try {
+        // The pause is read while the sheet still shows as loading, so no change can be made
+        // between the settings appearing and the pause being known.
+        val paused = state.changesPaused || try {
             pauses?.isPaused() == true
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -208,12 +202,20 @@ internal class SemanticSettingsController(
             // Persistence fault boundary: an unreadable record may be a pause, so it counts as one.
             true
         }
-        if (paused) {
-            state = state.copy(
-                changesPaused = true,
-                errorMessage = state.errorMessage
-                    ?: "Changes are paused here: saving a setting earlier also changed others. Set these in the app's own settings.",
+        val pausedMessage = "Changes are paused here: saving a setting earlier also changed others. Set these in the app's own settings."
+            .takeIf { paused && !state.changesPaused }
+        state = try {
+            state.copy(
+                loading = false,
+                entries = settings.parse(execute(settings.readRequest())),
+                outcomeUnknown = false,
+                changesPaused = paused,
+                errorMessage = pausedMessage,
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            state.copy(loading = false, changesPaused = paused, errorMessage = failure.message ?: "Settings could not be loaded.")
         }
     }
 

@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.notesRoutes
 import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticBoardContract
 import dev.obiente.nextcloudnative.nativeui.runtime.resolveSemanticNotesContract
 import dev.obiente.nextcloudnative.nativeui.runtime.semanticDescriptor
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -140,6 +141,18 @@ class SemanticSettingsTest {
         assertTrue(pauses.paused)
 
         // The sheet was closed and opened again: a new controller, the same device record.
+        val slowRead = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val slowPauses = object : SemanticSettingsPauseStore {
+            override suspend fun isPaused(): Boolean { slowRead.await(); return true }
+            override suspend fun pause() = Unit
+        }
+        val opening = SemanticSettingsController(execute, notesSettings(), pauses = slowPauses)
+        val loading = launch(kotlinx.coroutines.Dispatchers.Unconfined) { opening.load() }
+        assertFalse(opening.state.canChange, "Nothing can be changed while the pause is still being read.")
+        slowRead.complete(Unit)
+        loading.join()
+        assertFalse(opening.state.canChange)
+
         val reopened = SemanticSettingsController(execute, notesSettings(), pauses = pauses)
         reopened.load()
         assertFalse(reopened.state.canChange, "The route that altered another setting stays off.")
