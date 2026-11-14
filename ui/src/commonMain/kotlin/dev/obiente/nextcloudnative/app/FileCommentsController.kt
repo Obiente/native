@@ -56,6 +56,9 @@ class FileCommentsController(
     /** The post found on record when this thread opened; its result was never learned. */
     private var restoredPost: String? = null
 
+    /** Counts posts, so a read that began before one cannot settle it. */
+    private var postEpoch = 0L
+
     fun start() {
         if (loadJob != null || state.comments != null) return
         val store = postAttempts
@@ -90,12 +93,15 @@ class FileCommentsController(
 
     private suspend fun load(byRequest: Boolean) {
         try {
+            val epoch = postEpoch
             val read = readFirstPage()
             state = state.copy(failure = (read as? CommentsRead.Failed)?.kind)
             if (read is CommentsRead.Loaded) {
                 val restored = restoredPost
                 val found = restored != null && read.page.comments.any { it.isAuthoredBy(userId) && it.message.trim() == restored }
-                if (byRequest || restored == null || found) {
+                if (epoch != postEpoch || state.posting) {
+                    // A post started since this read began. Only that post's own check may settle it.
+                } else if (byRequest || restored == null || found) {
                     restoredPost = null
                     state = state.copy(postUnconfirmed = false, unconfirmedIds = emptySet())
                     settlePost()
@@ -169,6 +175,7 @@ class FileCommentsController(
         if (!state.canPost || fileCommentDraftProblem(draft) != null) return
         val message = draft.trim()
         val knownIds = state.comments.orEmpty().mapTo(HashSet()) { it.id }
+        postEpoch++
         state = state.copy(posting = true, notice = null)
         scope.launch {
             if (!recordPost(message)) {

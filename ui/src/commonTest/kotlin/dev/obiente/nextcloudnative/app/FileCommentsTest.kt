@@ -158,6 +158,32 @@ class FileCommentsTest {
     }
 
     @Test
+    fun aRefreshThatBeganBeforeAPostDoesNotSettleIt() {
+        val fake = FakeComments()
+        val store = MemoryPostAttempts()
+        val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var holdRead = false
+        val controller = FileCommentsController(scope, "alice", 42L, { request ->
+            val held = request.method == FilesDavMethod.REPORT && holdRead
+            if (held) holdRead = false
+            val answer = fake.execute(request)
+            if (held) hold.await()
+            answer
+        }, store)
+        controller.start()
+        // The refresh reads the thread, then the post is lost and cannot be verified.
+        holdRead = true
+        controller.refresh()
+        fake.postThrowsBeforeApply = true
+        fake.listFails = true
+        controller.post("Hello") {}
+        assertTrue(controller.state.postUnconfirmed)
+        hold.complete(Unit)
+        assertTrue(controller.state.postUnconfirmed, "A read from before the post says nothing about it.")
+        assertEquals("Hello", store.value, "The record survives for a later reopening.")
+    }
+
+    @Test
     fun anOlderPageThatARefreshOvertookIsNotAppended() {
         val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
         val fake = FakeComments().apply {
