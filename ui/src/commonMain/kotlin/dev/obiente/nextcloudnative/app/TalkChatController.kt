@@ -302,8 +302,16 @@ internal class TalkChatController(
             }
             when (val outcome = write(TalkChatRequests.send(token, message, replyTo, referenceId), ::parseTalkWrittenEntry)) {
                 is TalkWriteOutcome.Confirmed -> {
-                    outcome.value?.let { entry -> updateTimeline { it.applying(listOf(entry), advanceCursor = false) } }
-                    confirmSent(attempt)
+                    val entry = outcome.value
+                    if (entry != null) {
+                        updateTimeline { it.applying(listOf(entry), advanceCursor = false) }
+                        confirmSent(attempt)
+                    } else {
+                        // A success without the stored message does not show that it was sent; the
+                        // conversation is checked, as after any answer that could not be read.
+                        state = state.copy(send = TalkSendState.Unconfirmed(checked = false))
+                        refresh()
+                    }
                 }
                 is TalkWriteOutcome.Rejected -> {
                     state = if (earlier != null) {
@@ -477,6 +485,11 @@ internal class TalkChatController(
                 is TalkChatRead.Messages -> {
                     failures = 0
                     updateTimeline { it.applying(read.entries, read.lastGiven) }
+                    if (read.entries.any { it.message.systemMessage == TalkSystemMessageType.HistoryCleared }) {
+                        // An older page still on its way holds messages from before the clearing.
+                        historyJob?.cancel()
+                        state = state.copy(loadingEarlier = false, hasMoreHistory = false, olderCursor = null)
+                    }
                     state = state.copy(live = TalkLiveState.Connected)
                     reconcileUnconfirmed(read, checkedConversation = false)
                     // A reply that does not move the cursor would otherwise be requested again at once.
