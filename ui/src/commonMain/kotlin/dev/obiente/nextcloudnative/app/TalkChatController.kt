@@ -13,6 +13,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
@@ -130,6 +132,9 @@ internal class TalkChatController(
     private var historyJob: Job? = null
     private var liveRequested = false
     private var restoreJob: Job? = null
+
+    /** Orders every write to [unconfirmedStore], so a late cleanup cannot erase a newer attempt. */
+    private val storeGate = Mutex()
 
     /** False until the stored unresolved send has been read; nothing is sent before that. */
     private var storedSendRead = unconfirmedStore == null
@@ -522,7 +527,7 @@ internal class TalkChatController(
     private suspend fun recordUnconfirmed(attempt: TalkUnconfirmedSend): Boolean {
         val store = unconfirmedStore ?: return true
         return try {
-            store.save(attempt)
+            storeGate.withLock { store.save(attempt) }
             true
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -534,10 +539,13 @@ internal class TalkChatController(
     /** Brings the stored record in line with the unresolved send after it was resolved or replaced. */
     private fun storeUnconfirmed() {
         val store = unconfirmedStore ?: return
-        val remaining = state.unconfirmed
         scope.launch {
             try {
-                if (remaining == null) store.clear() else store.save(remaining)
+                storeGate.withLock {
+                    // Read when the write runs: a send started meanwhile is the one to keep.
+                    val remaining = state.unconfirmed
+                    if (remaining == null) store.clear() else store.save(remaining)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

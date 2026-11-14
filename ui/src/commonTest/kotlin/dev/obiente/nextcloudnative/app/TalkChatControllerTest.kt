@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.app.FakeTalkServer.Companion.REFERENCE_ID
 import dev.obiente.nextcloudnative.app.FakeTalkServer.Companion.SELF
 import dev.obiente.nextcloudnative.app.FakeTalkServer.Companion.TOKEN
 import dev.obiente.nextcloudnative.app.FakeTalkServer.WriteFault
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -329,12 +330,34 @@ class TalkChatControllerTest {
         assertNotNull(unreadable.state.notice)
     }
 
+    @Test
+    fun `a slow cleanup of the previous send cannot erase the record of the next one`() {
+        val server = serverWithHistory()
+        val store = MemoryUnconfirmedSends(writes = { server.writes().size })
+        val controller = controller(server, store = store).apply { start() }
+        store.holdClear = CompletableDeferred()
+        controller.send("First synthetic message")
+        assertEquals(TalkSendState.Idle, controller.state.send)
+
+        // The conversation cannot be read afterwards, so only the stored record remembers the send.
+        server.writeFault = WriteFault.LostBeforeApplying
+        server.historyStatus = 503
+        controller.send("Second synthetic message")
+        assertEquals(1, server.writes().size, "The next send waits for the earlier cleanup instead of racing it.")
+        store.holdClear!!.complete(Unit)
+        assertEquals(2, server.writes().size)
+        assertEquals("Second synthetic message", store.value?.text, "The unresolved send is still on record.")
+    }
+
     private class MemoryUnconfirmedSends(
         private val failSave: Boolean = false,
         private val failLoad: Boolean = false,
         private val writes: () -> Int = { 0 },
     ) : TalkUnconfirmedSendStore {
         var value: TalkUnconfirmedSend? = null
+
+        /** While set, a cleanup waits here, as a slow disk would make it. */
+        var holdClear: CompletableDeferred<Unit>? = null
 
         /** How many writes the server had received each time an attempt was stored. */
         val writesAtSave = mutableListOf<Int>()
@@ -351,6 +374,8 @@ class TalkChatControllerTest {
         }
 
         override suspend fun clear() {
+            holdClear?.await()
+            holdClear = null
             value = null
         }
     }
