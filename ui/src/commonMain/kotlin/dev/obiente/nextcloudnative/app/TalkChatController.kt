@@ -484,6 +484,15 @@ internal class TalkChatController(
             when (read) {
                 is TalkChatRead.Messages -> {
                     failures = 0
+                    // An edit or delete of a message that is not loaded yet cannot be applied, and an
+                    // older page still on its way may hold that message from before the change.
+                    val changesUnloaded = read.entries.any { entry ->
+                        entry.isTimelineUpdate && entry.updatedParent?.let { state.timeline?.message(it.id) } == null
+                    }
+                    if (changesUnloaded && state.loadingEarlier) {
+                        historyJob?.cancel()
+                        state = state.copy(loadingEarlier = false)
+                    }
                     updateTimeline { it.applying(read.entries, read.lastGiven) }
                     if (read.entries.any { it.message.systemMessage == TalkSystemMessageType.HistoryCleared }) {
                         // An older page still on its way holds messages from before the clearing.
