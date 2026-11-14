@@ -173,6 +173,8 @@ internal class SemanticNotesRepository(
         require(content.encodeToByteArray().size.toLong() <= MAX_NOTE_BYTES) {
             "Notes larger than ${MAX_NOTE_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
         }
+        // Without a version the save could not be refused when the note changed elsewhere.
+        check(notesMutationHeaders(expectedEtag).isNotEmpty()) { NOTE_WITHOUT_VERSION }
         val response = execute(
             write(
                 NoteOperation.UpdateNote,
@@ -281,6 +283,7 @@ private fun JsonObject.toNote(responseEtag: String?): NextcloudNote? {
     }
     fun text(field: NoteField): String? = field(field)?.scalar()
     val contentPresent = field(NoteField.Content) != null
+    val etag = responseEtag?.takeIf(String::isNotBlank) ?: (this["etag"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
     return NextcloudNote(
         id = id,
         title = text(NoteField.Title)?.takeIf(String::isNotBlank) ?: "Untitled note",
@@ -289,11 +292,13 @@ private fun JsonObject.toNote(responseEtag: String?): NextcloudNote? {
         favorite = (field(NoteField.Favorite) as? JsonPrimitive)?.let { value ->
             value.booleanOrNull ?: (value.contentOrNull == "1")
         } ?: false,
-        readOnly = entries.firstNotNullOfOrNull { (name, value) ->
+        // A note the app reports without a version stays read only: nothing could stop a save
+        // from overwriting a change made elsewhere.
+        readOnly = etag == null || entries.firstNotNullOfOrNull { (name, value) ->
             (value as? JsonPrimitive)?.booleanOrNull?.takeIf { name.semanticRouteId() in READ_ONLY_FIELDS }
         } ?: false,
         content = if (contentPresent) text(NoteField.Content).orEmpty() else null,
-        etag = responseEtag?.takeIf(String::isNotBlank) ?: (this["etag"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank),
+        etag = etag,
         internalPath = (this["internalPath"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank),
         isShared = (this["isShared"] as? JsonPrimitive)?.booleanOrNull ?: false,
     )
@@ -302,5 +307,7 @@ private fun JsonObject.toNote(responseEtag: String?): NextcloudNote? {
 private fun JsonElement.scalar(): String? = (this as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
 
 private val READ_ONLY_FIELDS = setOf("readonly", "isreadonly")
+private const val NOTE_WITHOUT_VERSION = "This app does not report a version for this note, so it cannot be saved safely from here."
+
 private val notesJson = Json { ignoreUnknownKeys = true }
 private const val NOTES_RESPONSE_BYTES = 16L * 1024L * 1024L
