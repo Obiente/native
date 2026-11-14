@@ -125,9 +125,9 @@ class NativeGridRowWritesTest {
             patchReadBack.editedBaselineHolds(row(ROW_DATA.replace("\"value\":12", "\"value\":13"))),
             "The edited cell changed elsewhere, so the edit stops.",
         )
-        assertTrue(
+        assertFalse(
             patchReadBack.editedBaselineHolds(row(ROW_DATA.replace("Synthetic item", "Renamed elsewhere"))),
-            "A change to a cell this edit does not send does not stop it.",
+            "Another cell changed elsewhere stops the edit too, so that change is never read back as drift from this one.",
         )
     }
 
