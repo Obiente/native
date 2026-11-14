@@ -233,17 +233,21 @@ class FileTrashbinController(
             val outcome = sendFilesDavWrite(execute, trashbinEmptyRequest(userId))
             val verificationStart = readSequence + 1
             val verification = read()
-            val remaining = (verification as? TrashRead.Loaded)?.keys
+            val loaded = verification as? TrashRead.Loaded
+            val remaining = loaded?.keys
+            // Entries that could not be read may be files that are still there.
+            val shownEmpty = loaded != null && loaded.keys.isEmpty() && loaded.complete
             val notice = when (outcome) {
                 is FilesDavWriteOutcome.Confirmed -> when {
                     remaining == null -> "The trash bin was emptied. Refresh to update the list."
-                    remaining.isEmpty() -> "The trash bin is empty."
+                    shownEmpty -> "The trash bin is empty."
+                    remaining.isEmpty() -> "The server emptied the trash bin, but some entries could not be read. Refresh to check."
                     else -> "The server emptied the trash bin, but ${itemCount(remaining.size)} are still listed."
                 }
                 is FilesDavWriteOutcome.Rejected -> "Couldn't empty the trash bin. ${trashFailureReason(TrashbinAction.DeletePermanently, outcome.kind)}"
                 FilesDavWriteOutcome.Unknown -> when {
-                    remaining?.isEmpty() == true -> "The trash bin is empty."
-                    remaining != null -> "The trash bin was not emptied. You can try again."
+                    shownEmpty -> "The trash bin is empty."
+                    remaining?.isNotEmpty() == true -> "The trash bin was not emptied. You can try again."
                     else -> {
                         emptyUnconfirmedSince = verificationStart
                         "Couldn't confirm whether the trash bin was emptied. Refresh before trying again."

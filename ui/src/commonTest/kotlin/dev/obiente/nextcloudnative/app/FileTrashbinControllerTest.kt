@@ -30,6 +30,7 @@ class FileTrashbinControllerTest {
         /** Keys whose write throws after the server already applied it. */
         val appliedThenThrows = mutableSetOf<String>()
         var listFails = false
+        var emptyThrowsBeforeApplying = false
         /** Keys the listing returns without a readable file name. */
         val unreadable = mutableSetOf<String>()
         val requests = mutableListOf<FilesDavRequest>()
@@ -48,6 +49,7 @@ class FileTrashbinControllerTest {
             }
             val key = request.relativePath.substringAfterLast('/')
             if (request.relativePath.endsWith("/trash")) {
+                if (emptyThrowsBeforeApplying) throw IllegalStateException("reset")
                 items.clear()
                 return response(204)
             }
@@ -201,6 +203,19 @@ class FileTrashbinControllerTest {
         controller.confirm()
         assertEquals("The trash bin is empty.", controller.state.notice)
         assertTrue(controller.state.items!!.isEmpty())
+    }
+
+    @Test
+    fun emptyingIsNotConfirmedByAListingOfUnreadableEntries() {
+        val fake = FakeTrash()
+        val controller = controller(fake).also { it.start() }
+        // The request is lost, and the listing afterwards cannot name what is still there.
+        fake.emptyThrowsBeforeApplying = true
+        fake.unreadable += fake.items.keys
+        controller.requestEmpty()
+        controller.confirm()
+        assertTrue(controller.state.notice.orEmpty().startsWith("Couldn't confirm"), controller.state.notice)
+        assertTrue(controller.state.emptyUnconfirmed)
     }
 
     @Test
