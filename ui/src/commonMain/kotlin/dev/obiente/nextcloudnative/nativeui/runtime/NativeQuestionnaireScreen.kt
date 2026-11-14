@@ -72,7 +72,11 @@ internal class NativeQuestionnaireDraft(
         private set
     private var resendConfirmed = false
 
-    val canStart: Boolean get() = session.canSubmit && !restoring
+    /** True from before the attempt is recorded until its outcome is settled. */
+    var sending by mutableStateOf(false)
+        private set
+
+    val canStart: Boolean get() = session.canSubmit && !restoring && !sending
 
     /** Reads the attempt recorded before this screen existed. An unreadable record keeps sending off. */
     suspend fun restore() {
@@ -111,6 +115,18 @@ internal class NativeQuestionnaireDraft(
     }
 
     suspend fun send(plan: NativeQuestionnairePlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
+        if (sending) return
+        // Taken before the record is written: storage suspends, and a second press must not start
+        // another attempt while this one is still on its way.
+        sending = true
+        try {
+            sendOnce(plan, executor, onRefreshRequested)
+        } finally {
+            sending = false
+        }
+    }
+
+    private suspend fun sendOnce(plan: NativeQuestionnairePlan, executor: NativeActionExecutor, onRefreshRequested: () -> Unit) {
         when (val result = plan.submitRequest(answers)) {
             is NativeQuestionnaireResult.Invalid -> errors = result.errors
             NativeQuestionnaireResult.Unavailable -> open = false
@@ -231,7 +247,7 @@ internal fun NativeQuestionnaireDetail(
         }
     }
     if (draft.open && plan.submit != null) {
-        val enabled = !draft.session.submitting
+        val enabled = !draft.session.submitting && !draft.sending
         NativeEditorDialog(
             title = plan.title,
             session = draft.session,

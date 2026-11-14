@@ -13,6 +13,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -141,6 +142,31 @@ class NativeQuestionnaireSubmissionTest {
         later.send(plan, { calls++; NativeActionExecutionResult.Success() }) {}
         assertTrue(later.sent)
         assertNull(store.value)
+    }
+
+    @Test
+    fun aSecondPressWhileTheAttemptIsBeingRecordedDoesNotSendTwice() = runBlocking<Unit> {
+        val plan = assertNotNull(plan())
+        val slowDisk = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val store = object : NativeSendAttemptStore {
+            var value: NativeSendAttempt? = null
+            override suspend fun load(): NativeSendAttempt? = value
+            override suspend fun save(attempt: NativeSendAttempt) {
+                slowDisk.await()
+                value = attempt
+            }
+            override suspend fun clear() { value = null }
+        }
+        var calls = 0
+        val executor = NativeActionExecutor { calls++; NativeActionExecutionResult.Success() }
+        val draft = NativeQuestionnaireDraft(store).apply { restore(); start(); answer("1", "Synthetic name") }
+        val first = launch(kotlinx.coroutines.Dispatchers.Unconfined) { draft.send(plan, executor) {} }
+        val second = launch(kotlinx.coroutines.Dispatchers.Unconfined) { draft.send(plan, executor) {} }
+        slowDisk.complete(Unit)
+        first.join()
+        second.join()
+        assertEquals(1, calls, "One press, one response.")
+        assertTrue(draft.sent)
     }
 
     @Test
