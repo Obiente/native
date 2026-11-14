@@ -56,6 +56,9 @@ class FileCommentsController(
     /** The post found on record when this thread opened; its result was never learned. */
     private var restoredPost: String? = null
 
+    /** The record could not be read on opening. It may hold a post, so only a refresh lifts the block. */
+    private var restoreFailed = false
+
     /** Counts posts, so a read that began before one cannot settle it. */
     private var postEpoch = 0L
 
@@ -75,6 +78,7 @@ class FileCommentsController(
                 throw cancelled
             } catch (_: Exception) {
                 // Persistence fault boundary: an unreadable record may be a comment already posted.
+                restoreFailed = true
                 state = state.copy(
                     postUnconfirmed = true,
                     notice = "An earlier comment saved on this device could not be read. Check the comments, then refresh before posting.",
@@ -101,15 +105,17 @@ class FileCommentsController(
                 val found = restored != null && read.page.comments.any { it.isAuthoredBy(userId) && it.message.trim() == restored }
                 if (epoch != postEpoch || state.posting) {
                     // A post started since this read began. Only that post's own check may settle it.
-                } else if (byRequest || restored == null || found) {
+                } else if (byRequest || found || restored == null && !restoreFailed) {
                     restoredPost = null
+                    restoreFailed = false
                     state = state.copy(postUnconfirmed = false, unconfirmedIds = emptySet())
                     settlePost()
                 } else {
                     // Opening the thread is not that decision: the earlier post stays unresolved.
                     state = state.copy(
                         unconfirmedIds = emptySet(),
-                        notice = "An earlier comment may already have been posted. Check the comments, then refresh before posting again.",
+                        notice = state.notice?.takeIf { restoreFailed }
+                            ?: "An earlier comment may already have been posted. Check the comments, then refresh before posting again.",
                     )
                 }
                 if (read.page.comments.any(NextcloudFileComment::unread)) markRead()
@@ -232,6 +238,7 @@ class FileCommentsController(
                 outcome is FilesDavWriteOutcome.Confirmed && filesDavPropertyUpdateApplied(outcome.response) -> {
                     // The saved text is shown as written; the next read brings back mention names.
                     replace(comment.copy(message = message, displayMessage = message))
+                    supersedePendingReads()
                     onSaved()
                     null
                 }
@@ -276,6 +283,7 @@ class FileCommentsController(
                 outcome is FilesDavWriteOutcome.Confirmed ||
                     (outcome as? FilesDavWriteOutcome.Rejected)?.kind == FilesDavFailureKind.NotFound -> {
                     state = state.copy(comments = state.comments?.filterNot { it.id == id })
+                    supersedePendingReads()
                     null
                 }
                 outcome is FilesDavWriteOutcome.Rejected -> "Couldn't delete the comment. ${commentFailureReason(outcome.kind)}"
@@ -306,6 +314,11 @@ class FileCommentsController(
     private suspend fun markRead() {
         // Best effort: an unread marker that fails to update changes nothing else.
         sendFilesDavWrite(execute, fileCommentsMarkReadRequest(fileId))
+    }
+
+    /** A read that began before a confirmed edit or delete shows the thread from before it; drop it. */
+    private fun supersedePendingReads() {
+        appliedSequence = ++readSequence
     }
 
     private fun replace(comment: NextcloudFileComment) {

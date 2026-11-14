@@ -184,6 +184,45 @@ class FileCommentsTest {
     }
 
     @Test
+    fun anUnreadableRecordKeepsPostingOffUntilARefresh() {
+        val fake = FakeComments()
+        val unreadable = object : FileCommentPostAttemptStore {
+            var cleared = false
+            override suspend fun load(): String? = error("Synthetic storage is unreadable.")
+            override suspend fun save(message: String) = Unit
+            override suspend fun clear() { cleared = true }
+        }
+        val controller = controller(fake, unreadable).also { it.start() }
+        assertTrue(controller.state.postUnconfirmed, "Loading the thread does not prove nothing was posted.")
+        assertFalse(unreadable.cleared, "The unreadable record is not deleted on opening.")
+        controller.post("Hello") {}
+        assertEquals(0, fake.posts())
+        controller.refresh()
+        assertTrue(controller.state.canPost)
+    }
+
+    @Test
+    fun aRefreshThatBeganBeforeAnEditDoesNotBringBackTheOldText() {
+        val fake = FakeComments()
+        val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var holdRead = false
+        val controller = FileCommentsController(scope, "alice", 42L, { request ->
+            val held = request.method == FilesDavMethod.REPORT && holdRead
+            if (held) holdRead = false
+            val answer = fake.execute(request)
+            if (held) hold.await()
+            answer
+        })
+        controller.start()
+        val own = controller.state.comments!!.first { it.actorId == "alice" }
+        holdRead = true
+        controller.refresh()
+        controller.edit(own, "Second draft") {}
+        hold.complete(Unit)
+        assertEquals("Second draft", controller.state.comments!!.first { it.id == own.id }.message)
+    }
+
+    @Test
     fun anOlderPageThatARefreshOvertookIsNotAppended() {
         val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
         val fake = FakeComments().apply {
