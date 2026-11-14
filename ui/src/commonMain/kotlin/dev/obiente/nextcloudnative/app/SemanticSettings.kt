@@ -77,6 +77,17 @@ internal class SemanticSettings(
         return baseline.replaced() == current.replaced()
     }
 
+    /** The other replaced settings whose stored value no longer matches [baseline] after a write. */
+    fun replacementDrift(
+        baseline: List<SemanticSettingEntry>,
+        stored: List<SemanticSettingEntry>,
+        editedKey: String,
+    ): List<SemanticSettingEntry> {
+        val properties = replacementProperties() ?: return emptyList()
+        val after = stored.associate { it.key to it.value }
+        return baseline.filter { it.key in properties && it.key != editedKey && after[it.key] != it.value }
+    }
+
     /** The declared settings a document replacement must carry, or null for a keyed or merge write. */
     private fun replacementProperties(): Set<String>? =
         (contract.write as? SemanticSettingsWrite.Document)
@@ -153,8 +164,13 @@ internal data class SemanticSettingsUiState(
     val notice: String? = null,
     /** A write could not be confirmed. Changes stay blocked until settings load again. */
     val outcomeUnknown: Boolean = false,
+    /**
+     * A replacement changed settings it was not asked to change. The route cannot be trusted to
+     * keep the rest of the document, so changes stay off here even after a reload.
+     */
+    val changesPaused: Boolean = false,
 ) {
-    val canChange: Boolean get() = !loading && busyKey == null && !outcomeUnknown
+    val canChange: Boolean get() = !loading && busyKey == null && !outcomeUnknown && !changesPaused
 }
 
 /**
@@ -236,6 +252,20 @@ internal class SemanticSettingsController(
             return
         }
         val storedValue = stored.firstOrNull { it.key == entry.key }?.value
+        val drifted = settings.replacementDrift(current.entries, stored, entry.key)
+        if (drifted.isNotEmpty()) {
+            // The values on screen are the stored ones; nothing is written over them from here.
+            state = state.copy(
+                busyKey = null,
+                entries = stored,
+                changesPaused = true,
+                notice = null,
+                errorMessage = "Saving ${entry.label} also changed ${drifted.joinToString { it.label }}. " +
+                    "The current values are shown. Changes are paused here; set these in the app's own settings.",
+            )
+            onChanged(entry.key)
+            return
+        }
         state = state.copy(
             busyKey = null,
             entries = stored,

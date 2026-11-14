@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SemanticSettingsTest {
@@ -88,6 +89,33 @@ class SemanticSettingsTest {
         assertEquals(".txt", controller.state.entries.single { it.key == "fileSuffix" }.value)
         assertTrue(controller.state.errorMessage.orEmpty().contains("changed elsewhere"))
         assertTrue(controller.state.canChange)
+    }
+
+    @Test
+    fun `a replacement that changes another setting is reported and pauses further changes`() = runBlocking<Unit> {
+        var written = false
+        val changed = mutableListOf<String>()
+        val controller = SemanticSettingsController(
+            execute = { request ->
+                if (request.method == NextcloudApiMethod.GET) {
+                    response(if (written) """{"notesPath":"Journal","fileSuffix":".txt"}""" else """{"notesPath":"Notes","fileSuffix":".md"}""")
+                } else {
+                    written = true
+                    response("{}")
+                }
+            },
+            settings = notesSettings(),
+            onChanged = { changed += it },
+        )
+        controller.load()
+        controller.change(controller.state.entries.single { it.key == "notesPath" }, "Journal")
+
+        assertNull(controller.state.notice, "A write that reset another setting is not reported as saved.")
+        assertTrue(controller.state.errorMessage.orEmpty().contains("also changed"), controller.state.errorMessage)
+        assertEquals(".txt", controller.state.entries.single { it.key == "fileSuffix" }.value)
+        assertFalse(controller.state.canChange)
+        controller.load()
+        assertFalse(controller.state.canChange, "Reloading does not make the route trustworthy again.")
     }
 
     @Test
