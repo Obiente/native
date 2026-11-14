@@ -228,12 +228,12 @@ fun verifyDeckAclUpdated(
     }
 }
 
-fun verifyDeckAclRemoved(board: DeckBoard, aclId: Long): DeckWriteVerification =
-    if (board.acl.none { it.id == aclId }) {
-        DeckWriteVerification.Confirmed
-    } else {
-        DeckWriteVerification.NotApplied("The app did not remove this share.")
-    }
+fun verifyDeckAclRemoved(board: DeckBoard, aclId: Long): DeckWriteVerification = when {
+    board.acl.any { it.id == aclId } -> DeckWriteVerification.NotApplied("The app did not remove this share.")
+    // An unreadable share list is shown as empty; it does not show that this share is gone.
+    !board.aclReadable -> DeckWriteVerification.NotApplied("The app's share list could not be read, so the removal is not confirmed.")
+    else -> DeckWriteVerification.Confirmed
+}
 
 private fun JsonObject.text(name: String): String? = this[name]?.let { value ->
     if (value is JsonNull) null else runCatching { value.jsonPrimitive.contentOrNull }.getOrNull()

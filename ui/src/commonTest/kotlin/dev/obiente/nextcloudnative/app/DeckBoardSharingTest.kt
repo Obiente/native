@@ -193,6 +193,10 @@ class DeckBoardSharingTest {
         assertIs<DeckWriteVerification.Confirmed>(verifyDeckAclRemoved(board(acl = emptyList()), alice.id))
         assertIs<DeckWriteVerification.NotApplied>(verifyDeckAclRemoved(board(), alice.id))
         assertIs<DeckWriteVerification.NotApplied>(
+            verifyDeckAclRemoved(board(acl = emptyList()).copy(aclReadable = false), alice.id),
+            "A share list that could not be read does not show the share is gone.",
+        )
+        assertIs<DeckWriteVerification.NotApplied>(
             verifyDeckAclAdded(board(), DeckSharee("bob", "Bob", DeckAclType.User)),
         )
     }
