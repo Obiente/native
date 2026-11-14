@@ -82,6 +82,25 @@ class GroupwareDavSharingTest {
     }
 
     @Test
+    fun anInviteThatCannotBeIdentifiedLeavesTheShareListIncomplete() {
+        fun answer(secondHref: String) = ok(
+            """
+            <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:cs="http://calendarserver.org/ns/">
+            <d:response><d:href>$calendar</d:href>
+              <d:propstat><d:prop><oc:invite>
+                <oc:user><d:href>principal:principals/users/bob</d:href><oc:access><oc:read/></oc:access></oc:user>
+                <oc:user><d:href>$secondHref</d:href><oc:access><oc:read/></oc:access></oc:user>
+              </oc:invite></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+            </d:response></d:multistatus>
+            """.trimIndent(),
+        )
+        assertTrue(parseDavSharingState(answer("principal:principals/users/carol")).sharesComplete)
+        val partial = parseDavSharingState(answer("mailto:carol@example.test"))
+        assertEquals(1, partial.shares.size)
+        assertFalse(partial.sharesComplete, "The unidentified entry may be the share whose removal is being checked.")
+    }
+
+    @Test
     fun shareRequestsUseTheOwncloudShareDocument() {
         val bob = DavSharee("principals/users/bob", "Bob", DavShareeKind.User)
         val team = DavSharee("principals/groups/team", "Team", DavShareeKind.Group)

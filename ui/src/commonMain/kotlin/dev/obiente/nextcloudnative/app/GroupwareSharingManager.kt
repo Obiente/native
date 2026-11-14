@@ -121,7 +121,8 @@ internal class GroupwareSharingManager(
         }
 
     fun unshare(sharee: DavSharee) = change({ davShareUpdateRequest(it, remove = listOf(sharee)) }) { state ->
-        state.shares.none { it.sharee.principal == sharee.principal }
+        // An entry that could not be identified may be this share, so absence shows nothing then.
+        state.sharesComplete && state.shares.none { it.sharee.principal == sharee.principal }
     }
 
     fun setPublished(published: Boolean) = change({ calendarPublishRequest(it, published) }) { state ->

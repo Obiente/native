@@ -32,6 +32,8 @@ internal data class DavSharingState(
     val publishUrl: String?,
     /** Whether the server offers public links for this collection. */
     val canPublish: Boolean,
+    /** False when an invite entry could not be identified; a share missing from [shares] may then still exist. */
+    val sharesComplete: Boolean = true,
 )
 
 internal fun davSharingStateRequest(collectionHref: String): GroupwareDavRequest = GroupwareDavRequest(
@@ -58,7 +60,8 @@ internal fun parseDavSharingState(response: NextcloudApiResponse): DavSharingSta
     require(!unread.containsXmlElement("invite") && !unread.containsXmlElement("publish-url")) {
         "Sharing details could not be read completely."
     }
-    val shares = okProperties.xmlElements("invite").flatMap { it.xmlElements("user") }.mapNotNull { user ->
+    val invited = okProperties.xmlElements("invite").flatMap { it.xmlElements("user") }
+    val shares = invited.mapNotNull { user ->
         val href = user.xmlText("href")?.decodeXmlEntities()?.trim() ?: return@mapNotNull null
         val principal = href.removePrefix("principal:").trim('/').takeIf { href.startsWith("principal:") && it.isSafeDavPrincipal() }
             ?: return@mapNotNull null
@@ -72,11 +75,11 @@ internal fun parseDavSharingState(response: NextcloudApiResponse): DavSharingSta
             ),
             writable = access.containsXmlElement("read-write"),
         )
-    }.distinctBy { it.sharee.principal }
+    }
     val publishUrl = okProperties.xmlElements("publish-url").firstOrNull()?.xmlText("href")
         ?.decodeXmlEntities()?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
     val canPublish = publishUrl != null || okProperties.xmlElements("allowed-sharing-modes").any { it.containsXmlElement("can-be-published") }
-    return DavSharingState(shares, publishUrl, canPublish)
+    return DavSharingState(shares.distinctBy { it.sharee.principal }, publishUrl, canPublish, sharesComplete = shares.size == invited.size)
 }
 
 /** Adds or changes ([set]) and removes shares. The server accepts at most 10 entries per request. */
