@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 data class NextcloudFileComment(
     val id: Long,
+    /** The message exactly as stored, with mentions as account ids; edits start from this. */
     val message: String,
     val actorType: String,
     val actorId: String,
@@ -28,6 +29,8 @@ data class NextcloudFileComment(
     val createdAt: String?,
     val createdAtEpochSeconds: Long?,
     val unread: Boolean,
+    /** [message] with each mention shown by its display name. Presentation only; never written back. */
+    val displayMessage: String = message,
 ) {
     fun isAuthoredBy(userId: String): Boolean = actorType == "users" && actorId == userId
 }
@@ -164,7 +167,8 @@ private fun FilesDavResponseRecord.toCommentOrNull(hrefId: String?): NextcloudFi
     val created = text("creationDateTime")?.takeIf { it.length <= 64 }
     return NextcloudFileComment(
         id = id,
-        message = message.withMentionDisplayNames(properties["mentions"]),
+        message = message,
+        displayMessage = message.withMentionDisplayNames(properties["mentions"]),
         actorType = text("actorType") ?: "users",
         actorId = actorId,
         actorDisplayName = text("actorDisplayName")?.takeIf { it.length <= 255 } ?: actorId,

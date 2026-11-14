@@ -153,7 +153,7 @@ private fun CommentRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(comment.message, style = MaterialTheme.typography.bodyMedium)
+            Text(comment.displayMessage, style = MaterialTheme.typography.bodyMedium)
         }
         if (comment.isAuthoredBy(userId)) {
             val enabled = state.canChange(comment, userId)
