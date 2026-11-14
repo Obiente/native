@@ -141,7 +141,8 @@ class FileCommentsController(
             val outcome = sendFilesDavWrite(execute, fileCommentEditRequest(fileId, comment.id, message))
             val notice = when {
                 outcome is FilesDavWriteOutcome.Confirmed && filesDavPropertyUpdateApplied(outcome.response) -> {
-                    replace(comment.copy(message = message))
+                    // The saved text is shown as written; the next read brings back mention names.
+                    replace(comment.copy(message = message, displayMessage = message))
                     onSaved()
                     null
                 }

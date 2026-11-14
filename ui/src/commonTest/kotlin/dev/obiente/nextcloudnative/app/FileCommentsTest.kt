@@ -195,6 +195,7 @@ class FileCommentsTest {
         controller.edit(own, "Second draft") { saved = true }
         assertTrue(saved)
         assertEquals("Second draft", controller.state.comments!!.first { it.id == own.id }.message)
+        assertEquals("Second draft", controller.state.comments!!.first { it.id == own.id }.displayMessage, "The saved text is what is shown.")
         controller.requestDelete(own)
         assertEquals(own.id, controller.state.confirmDeleteId)
         controller.confirmDelete()
