@@ -207,7 +207,11 @@ class FileTagsController(
         }
     }
 
+    private var assignmentReads = 0L
+
     private suspend fun readAssigned(): TagsRead {
+        // Two changes may read at once. Only the read that started last may replace what is shown.
+        val number = ++assignmentReads
         val read = try {
             val response = execute(fileTagAssignmentsRequest(fileId))
             filesDavFailureForStatus(response.status)?.let { TagsRead.Failed(it) }
@@ -219,6 +223,7 @@ class FileTagsController(
         } catch (_: Exception) {
             TagsRead.Failed(FilesDavFailureKind.Offline)
         }
+        if (number != assignmentReads) return read
         when (read) {
             is TagsRead.Loaded -> state = state.copy(assigned = read.tags, unavailable = false)
             is TagsRead.Failed -> if (state.assigned == null && read.kind in TAGS_UNAVAILABLE) {
