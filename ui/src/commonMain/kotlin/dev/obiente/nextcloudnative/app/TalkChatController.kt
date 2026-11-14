@@ -232,8 +232,11 @@ internal class TalkChatController(
             val checked = (current.send as? TalkSendState.Unconfirmed)?.checked == true
             if (!confirmedResend || !checked) return
         }
+        val earlier = current.unconfirmed
         if (talkMessageLength(message) > current.abilities.capabilities.maxMessageLength) {
-            state = current.copy(send = TalkSendState.Rejected(TalkFailure(TalkFailureKind.TooLong)))
+            val tooLong = TalkFailure(TalkFailureKind.TooLong)
+            // With an earlier send unresolved its phase stays, so a shortened text can still be sent.
+            state = if (earlier != null) current.copy(notice = tooLong.message) else current.copy(send = TalkSendState.Rejected(tooLong))
             return
         }
         val replyTo = current.replyTo?.takeIf(current.abilities::canReply)?.id
@@ -247,8 +250,12 @@ internal class TalkChatController(
                     outcome.value?.let { entry -> updateTimeline { it.applying(listOf(entry), advanceCursor = false) } }
                     confirmSent(attempt)
                 }
-                is TalkWriteOutcome.Rejected ->
-                    state = state.copy(send = TalkSendState.Rejected(outcome.failure), unconfirmed = null)
+                is TalkWriteOutcome.Rejected -> state = if (earlier != null) {
+                    // The refusal answers only this request; the earlier message may still have been sent.
+                    state.copy(send = TalkSendState.Unconfirmed(checked = true), unconfirmed = earlier, notice = outcome.failure.message)
+                } else {
+                    state.copy(send = TalkSendState.Rejected(outcome.failure), unconfirmed = null)
+                }
                 TalkWriteOutcome.Unknown -> {
                     state = state.copy(send = TalkSendState.Unconfirmed(checked = false))
                     refresh()

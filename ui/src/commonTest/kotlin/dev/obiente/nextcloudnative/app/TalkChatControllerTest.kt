@@ -260,6 +260,39 @@ class TalkChatControllerTest {
     }
 
     @Test
+    fun `a refused resend keeps the earlier send unconfirmed`() {
+        val server = serverWithHistory().apply { writeFault = WriteFault.LostBeforeApplying }
+        val controller = controller(server).apply { start() }
+        controller.send("Synthetic message")
+        val earlier = assertNotNull(controller.state.unconfirmed)
+
+        server.writeFault = WriteFault.None
+        server.writeStatus = 413
+        controller.send("Synthetic message", confirmedResend = true)
+        assertEquals(2, server.writes().size)
+        assertEquals(TalkSendState.Unconfirmed(checked = true), controller.state.send, "The refusal answers only the resend.")
+        assertEquals(earlier, controller.state.unconfirmed)
+        assertNotNull(controller.state.notice)
+        controller.send("Synthetic message")
+        assertEquals(2, server.writes().size, "Another send still needs confirmation.")
+    }
+
+    @Test
+    fun `a text that is too long does not strand an unconfirmed send`() {
+        val server = serverWithHistory().apply { writeFault = WriteFault.LostBeforeApplying }
+        val controller = controller(server).apply { start() }
+        controller.send("Synthetic message")
+        server.writeFault = WriteFault.None
+        controller.send("x".repeat(controller.state.abilities.capabilities.maxMessageLength + 1), confirmedResend = true)
+        assertEquals(1, server.writes().size)
+        assertEquals(TalkSendState.Unconfirmed(checked = true), controller.state.send)
+        assertNotNull(controller.state.notice)
+        controller.send("Shorter synthetic message", confirmedResend = true)
+        assertEquals(2, server.writes().size)
+        assertEquals(TalkSendState.Idle, controller.state.send)
+    }
+
+    @Test
     fun `an unchecked unconfirmed send cannot be resent`() {
         val server = serverWithHistory().apply { writeFault = WriteFault.LostBeforeApplying; historyStatus = 503 }
         val controller = controller(server).apply { start() }
