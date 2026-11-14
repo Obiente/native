@@ -142,7 +142,10 @@ private suspend fun executeDeclaredDynamicWrite(
         // Persistence fault boundary: an unreadable quarantine must not be forgotten silently.
         return refusal("This app's write safety state on this device could not be read, so nothing was changed.")
     }
-    if (DynamicUnstoredQuarantines.blocks(context.ruleKey)) {
+    // The restore that was offered for exactly this drift is the way out of the pause; it keeps its
+    // own pre-read and verification. Every other write stays blocked.
+    val offeredRestore = request.baselineRestore && DynamicBaselineRestores.isOffered(context.ruleKey, request)
+    if (DynamicUnstoredQuarantines.blocks(context.ruleKey) && !offeredRestore) {
         return refusal("Changes here are paused because an earlier change was not applied as sent, and that could not be saved on this device.")
     }
     if (request.baselineRestore && !DynamicBaselineRestores.isOffered(context.ruleKey, request)) {
