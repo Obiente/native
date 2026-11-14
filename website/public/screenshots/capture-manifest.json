@@ -1085,7 +1085,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationSettings.kt": "654d8f035347a8b060ac23b7519295dc187187c2f118fc55d4d35609c86a2201",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationSettingsScreen.kt": "9d96eafb2dd0e6c87a3a88dffea2940f52081a5d1dfa681fbcaf61151b526c07",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsApi.kt": "cd8cdbd017de8348acae83434f3266f31496e9299e79aa6f35da1a9df567dea7",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsInbox.kt": "1dcf6effcef2619aec24f940a2be656d532c8d17175eccc8e2573c71ee438f34",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsInbox.kt": "332c429bc5a435429bab6361c1ef9ac4c96922392a04b7f2371f7cc1587c3b2d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsInboxComponents.kt": "4e839f108d3a3d6c2584a7a63ded047286f6cb3ca28cea8d44bf77a5768ade7d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsInboxMemoryCache.kt": "668e984eb6c684bf8e531f0a9f0d15bd50978ab697ef8b63e1dd35257fc37060",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotificationsInboxScreen.kt": "3a8c222da09855be6cfa8d9bc005dc35d9f3d9670b187a3c0b5eeaf461b2f012",
