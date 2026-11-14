@@ -13,12 +13,14 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -96,6 +98,81 @@ class NativeQuestionnaireSubmissionTest {
     fun theSameShapeUnderAnotherAppIdentityAndVersionIsSubmittable() {
         val plan = assertNotNull(plan(app = AppIdentity("polling", "Polling", "0.1.0")))
         assertNotNull(plan.submit)
+    }
+
+    @Test
+    fun anUnconfirmedResponseIsRecordedBeforeSendingAndNeedsADecisionEvenAfterARestart() = runBlocking<Unit> {
+        val plan = assertNotNull(plan())
+        val store = MemoryAttempts()
+        var calls = 0
+        var recordedWhenSent: NativeSendAttempt? = null
+        val lost = NativeActionExecutor {
+            calls++
+            recordedWhenSent = store.value
+            NativeActionExecutionResult.Failure("Timed out.", NativeActionFailureOutcome.Unknown)
+        }
+        val draft = NativeQuestionnaireDraft(store, clock = { 1L }).apply { restore(); start(); answer("1", "Synthetic name") }
+        draft.send(plan, lost) {}
+        assertEquals(NativeSendAttemptState.Prepared, recordedWhenSent?.state, "The attempt is on record before the request leaves.")
+        assertEquals(NativeSendAttemptState.MaybeSent, store.value?.state)
+        assertNotNull(draft.unconfirmed)
+
+        // A new screen, or the app after a restart, finds the same record.
+        val later = NativeQuestionnaireDraft(store, clock = { 2L })
+        assertFalse(later.canStart, "Nothing is offered until the stored record has been read.")
+        later.restore()
+        assertNotNull(later.unconfirmed)
+        later.start()
+        assertFalse(later.open, "Another response needs an explicit decision.")
+        later.answer("1", "Synthetic name")
+        later.send(plan, lost) {}
+        assertEquals(1, calls)
+
+        later.start(confirmedResend = true)
+        assertTrue(later.open)
+        later.send(plan, { calls++; NativeActionExecutionResult.Failure("Closed.", NativeActionFailureOutcome.Rejected) }) {}
+        assertEquals(2, calls)
+        assertNotNull(later.unconfirmed, "A refused second response says nothing about the first.")
+        assertNotNull(store.value)
+
+        later.dismissUnconfirmed()
+        assertNull(store.value)
+        later.start()
+        later.send(plan, { calls++; NativeActionExecutionResult.Success() }) {}
+        assertTrue(later.sent)
+        assertNull(store.value)
+    }
+
+    @Test
+    fun aResponseIsNotSentWhenItsAttemptCannotBeRecordedOrAnEarlierRecordCannotBeRead() = runBlocking<Unit> {
+        val plan = assertNotNull(plan())
+        var calls = 0
+        val executor = NativeActionExecutor { calls++; NativeActionExecutionResult.Success() }
+        val unwritable = NativeQuestionnaireDraft(MemoryAttempts(failSave = true)).apply { restore(); start(); answer("1", "Synthetic name") }
+        unwritable.send(plan, executor) {}
+        assertNotNull(unwritable.storageProblem)
+        val unreadable = NativeQuestionnaireDraft(MemoryAttempts(failLoad = true)).apply { restore(); start(); answer("1", "Synthetic name") }
+        assertFalse(unreadable.open)
+        unreadable.send(plan, executor) {}
+        assertEquals(0, calls)
+    }
+
+    private class MemoryAttempts(private val failSave: Boolean = false, private val failLoad: Boolean = false) : NativeSendAttemptStore {
+        var value: NativeSendAttempt? = null
+
+        override suspend fun load(): NativeSendAttempt? {
+            check(!failLoad) { "Synthetic storage is unreadable." }
+            return value
+        }
+
+        override suspend fun save(attempt: NativeSendAttempt) {
+            check(!failSave) { "Synthetic storage is full." }
+            value = attempt
+        }
+
+        override suspend fun clear() {
+            value = null
+        }
     }
 
     private fun plan(

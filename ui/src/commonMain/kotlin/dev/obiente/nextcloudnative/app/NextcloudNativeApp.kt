@@ -4593,7 +4593,7 @@ private fun DynamicDiscoveredAppScreen(
                     LocalNativeFinanceCurrency provides buildNativeBudgetDashboardModel(
                         dashboardReads = nativeBudgetDashboardReads(descriptor.app.id, descriptor.actions),
                         dashboardRecordsByActionId = budgetDashboardRecordsByActionId,
-                    ).currency,
+                    ).currency, dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeSendAttemptStores provides remember(services, session, descriptor.app.id) { nativeSendAttemptStores(services, session, descriptor.app.id) },
                 ) {
                     GenericNativeAppScreen(
                     schema = schema,
