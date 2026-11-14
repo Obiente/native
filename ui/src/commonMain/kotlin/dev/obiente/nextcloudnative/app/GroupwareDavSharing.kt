@@ -50,9 +50,14 @@ internal fun davSharingStateRequest(collectionHref: String): GroupwareDavRequest
 internal fun parseDavSharingState(response: NextcloudApiResponse): DavSharingState {
     require(response.status in 200..299) { "Sharing details could not be read (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
-    val okProperties = xml.xmlElements("propstat")
-        .filter { it.xmlText("status")?.split(' ')?.getOrNull(1)?.toIntOrNull() in 200..299 }
-        .joinToString("")
+    val propstats = xml.xmlElements("propstat").map { it to it.xmlText("status")?.split(' ')?.getOrNull(1)?.toIntOrNull() }
+    val okProperties = propstats.filter { (_, status) -> status in 200..299 }.joinToString("") { it.first }
+    // 404 is how the server says a property is not set. Any other failure means its value is
+    // unknown, which must never read as "not shared" or "not published".
+    val unread = propstats.filter { (_, status) -> status !in 200..299 && status != 404 }.joinToString("") { it.first }
+    require(!unread.containsXmlElement("invite") && !unread.containsXmlElement("publish-url")) {
+        "Sharing details could not be read completely."
+    }
     val shares = okProperties.xmlElements("invite").flatMap { it.xmlElements("user") }.mapNotNull { user ->
         val href = user.xmlText("href")?.decodeXmlEntities()?.trim() ?: return@mapNotNull null
         val principal = href.removePrefix("principal:").trim('/').takeIf { href.startsWith("principal:") && it.isSafeDavPrincipal() }

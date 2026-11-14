@@ -62,6 +62,26 @@ class GroupwareDavSharingTest {
     }
 
     @Test
+    fun aSharingPropertyThatFailedToReadIsNotReadAsAbsent() {
+        fun answer(inviteStatus: String, publishStatus: String) = ok(
+            """
+            <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:cs="http://calendarserver.org/ns/">
+            <d:response><d:href>$calendar</d:href>
+              <d:propstat><d:prop><oc:invite/></d:prop><d:status>HTTP/1.1 $inviteStatus</d:status></d:propstat>
+              <d:propstat><d:prop><cs:publish-url/></d:prop><d:status>HTTP/1.1 $publishStatus</d:status></d:propstat>
+            </d:response></d:multistatus>
+            """.trimIndent(),
+        )
+        assertNull(parseDavSharingState(answer("200 OK", "404 Not Found")).publishUrl)
+        assertFailsWith<IllegalArgumentException>("A failed read does not prove the link is gone.") {
+            parseDavSharingState(answer("200 OK", "500 Internal Server Error"))
+        }
+        assertFailsWith<IllegalArgumentException>("A failed read does not prove nobody has access.") {
+            parseDavSharingState(answer("503 Service Unavailable", "404 Not Found"))
+        }
+    }
+
+    @Test
     fun shareRequestsUseTheOwncloudShareDocument() {
         val bob = DavSharee("principals/users/bob", "Bob", DavShareeKind.User)
         val team = DavSharee("principals/groups/team", "Team", DavShareeKind.Group)
