@@ -47,6 +47,9 @@ internal class GroupwareSharingManager(
         private set
     private var generation = 0
 
+    /** Counts refreshes and changes, so a refresh a change overtook cannot replace its result. */
+    private var readEpoch = 0
+
     fun open(value: GroupwareShareTarget) {
         if (busy) return
         generation++
@@ -70,15 +73,16 @@ internal class GroupwareSharingManager(
     fun refresh() {
         val current = target ?: return
         val expected = generation
+        val epoch = ++readEpoch
         loading = true
         scope.launch {
             try {
                 val loaded = readState(current.href)
-                if (expected != generation) return@launch
+                if (expected != generation || epoch != readEpoch) return@launch
                 if (loaded == null) error = "Sharing details could not be loaded. Check your connection and try again."
                 else state = loaded
             } finally {
-                if (expected == generation) loading = false
+                if (expected == generation && epoch == readEpoch) loading = false
             }
         }
     }
@@ -136,6 +140,9 @@ internal class GroupwareSharingManager(
             return
         }
         val expected = generation
+        // A refresh still in flight read the state from before this change; its answer is dropped.
+        readEpoch++
+        loading = false
         busy = true
         error = null
         scope.launch {

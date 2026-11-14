@@ -11,6 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.yield
 
 class GroupwareSharingAndTrashManagerTest {
@@ -29,6 +30,27 @@ class GroupwareSharingAndTrashManagerTest {
         assertNull(manager.error)
         assertEquals(listOf("principals/users/bob"), manager.state?.shares?.map { it.sharee.principal })
         assertEquals(listOf("PROPFIND", "POST", "PROPFIND"), server.methods)
+    }
+
+    @Test
+    fun aRefreshOvertakenByAChangeDoesNotReplaceItsResult() = runBlocking<Unit> {
+        val server = FakeGroupware()
+        val manager = GroupwareSharingManager(server.services, session, this)
+        manager.open(GroupwareShareTarget(calendar, "Personal", publishable = true))
+        settle { !manager.loading }
+        // The refresh reads the unpublished state and is still on its way when the link is created.
+        val slowRead = CompletableDeferred<Unit>()
+        server.holdNextRead = slowRead
+        manager.refresh()
+        yield()
+        manager.setPublished(true)
+        settle { !manager.busy }
+        assertNotNull(manager.state?.publishUrl)
+
+        slowRead.complete(Unit)
+        repeat(20) { yield() }
+        assertNotNull(manager.state?.publishUrl, "The older answer does not hide the link that was just created.")
+        assertEquals(false, manager.loading)
     }
 
     @Test
@@ -138,6 +160,8 @@ class GroupwareSharingAndTrashManagerTest {
         val trash = mutableListOf<String>()
         var refuseDeleteOf: String? = null
         var loseNextMove = false
+        /** While set, the next sharing read answers with what it saw only after this completes. */
+        var holdNextRead: CompletableDeferred<Unit>? = null
         val destinations = mutableListOf<String>()
 
         @Suppress("UNCHECKED_CAST")
@@ -155,7 +179,7 @@ class GroupwareSharingAndTrashManagerTest {
             }
         } as NextcloudPlatformServices
 
-        private fun execute(request: GroupwareDavRequest): NextcloudApiResponse {
+        private suspend fun execute(request: GroupwareDavRequest): NextcloudApiResponse {
             methods += request.method
             val body = request.body?.decodeToString().orEmpty()
             return when (request.method) {
@@ -165,7 +189,14 @@ class GroupwareSharingAndTrashManagerTest {
                             "<nc:trash-bin-retention-duration>2592000</nc:trash-bin-retention-duration></d:prop></d:propstat></d:response></d:multistatus>",
                     )
                     request.relativePath == "/remote.php/dav/calendars/alice/" -> xml("<d:multistatus xmlns:d=\"DAV:\"/>")
-                    else -> xml(sharingState())
+                    else -> {
+                        val seen = sharingState()
+                        holdNextRead?.let { hold ->
+                            holdNextRead = null
+                            hold.await()
+                        }
+                        xml(seen)
+                    }
                 }
                 "POST" -> {
                     refusePost?.let { return status(it) }
