@@ -108,6 +108,19 @@ class FileSystemTagAssignmentsTest {
     }
 
     @Test
+    fun aConfirmedChangeIsShownEvenWhenTheListCannotBeReadAgain() {
+        val fake = FakeTags()
+        val controller = controller(fake).also { it.start() }
+        val invoices = controller.state.offered.first { it.id == 1L }
+        fake.listFails = true
+        controller.toggle(invoices)
+        assertTrue(1L in controller.state.assignedIds, "The server confirmed the tag, so it is shown as assigned.")
+        controller.toggle(invoices)
+        assertEquals(FilesDavMethod.DELETE, fake.requests.last { it.method != FilesDavMethod.PROPFIND }.method, "The next press reverses the change.")
+        assertTrue(1L !in controller.state.assignedIds)
+    }
+
+    @Test
     fun alreadyAssignedConflictCountsAsDone() {
         val fake = FakeTags()
         val controller = controller(fake).also { it.start() }

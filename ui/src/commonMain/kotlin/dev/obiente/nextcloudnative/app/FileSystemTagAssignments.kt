@@ -162,7 +162,12 @@ class FileTagsController(
             } == true
             val notice = when {
                 outcome is FilesDavWriteOutcome.Confirmed || alreadyDone -> {
-                    readAssigned()
+                    // The server answered definitely. When the list cannot be read again, show that
+                    // answer, so the next press reverses this change instead of repeating it.
+                    if (readAssigned() is TagsRead.Failed) {
+                        val shown = state.assigned.orEmpty()
+                        state = state.copy(assigned = if (assign) (shown + tag).distinctBy { it.id } else shown.filterNot { it.id == tag.id })
+                    }
                     null
                 }
                 outcome is FilesDavWriteOutcome.Rejected -> "Couldn't ${if (assign) "add" else "remove"} ${tag.name}. ${tagFailureReason(outcome.kind)}"
