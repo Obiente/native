@@ -33,7 +33,9 @@ internal sealed interface CalendarCollectionEdit {
  * Every change is confirmed against a fresh read of the calendar list, so a lost response never
  * looks like a success or a failure: the result is reported as unknown until the list shows it.
  * A new calendar keeps its address while its dialog is open, so retrying after an unknown result
- * finds the calendar the first attempt made instead of creating a second one.
+ * finds the calendar the first attempt made instead of creating a second one. The address is also
+ * recorded on the device before the request leaves, so the same holds after the dialog was closed
+ * or the app restarted: the next creation first checks whether the earlier one arrived.
  */
 @Stable
 internal class CalendarCollectionManager(
@@ -101,23 +103,7 @@ internal class CalendarCollectionManager(
         val target = edit ?: return
         draft.validationMessage()?.let { error = it; return }
         when (target) {
-            is CalendarCollectionEdit.New -> {
-                val href = newHref ?: try {
-                    newCalendarCollectionHref(groupwareCalendarHomeHref(userId), draft.name).also { newHref = it }
-                } catch (_: IllegalArgumentException) {
-                    error = "This account's calendar home is not available."
-                    return
-                }
-                val request = if (target.subscription) calendarSubscriptionCreateRequest(href, draft)
-                    else calendarCollectionCreateRequest(href, draft.copy(tasksOnly = forTasks))
-                change(
-                    request,
-                    // An address that already exists may be this dialog's earlier attempt; the list decides.
-                    provesRejection = { status -> status != 405 && groupwareMutationResponseProvesRejection(status) },
-                    applied = { true },
-                    confirmed = { calendars -> calendars.any { it.href == href && it.displayName == draft.name.trim() } },
-                )
-            }
+            is CalendarCollectionEdit.New -> create(target, draft)
             is CalendarCollectionEdit.Existing -> {
                 val href = target.calendar.href
                 change(
@@ -131,6 +117,104 @@ internal class CalendarCollectionManager(
             }
         }
     }
+
+    private fun create(target: CalendarCollectionEdit.New, draft: CalendarCollectionDraft) {
+        if (busy) return
+        busy = true
+        error = null
+        scope.launch {
+            var handedOver = false
+            try {
+                val href = creationHref(draft) ?: return@launch
+                val request = if (target.subscription) calendarSubscriptionCreateRequest(href, draft)
+                    else calendarCollectionCreateRequest(href, draft.copy(tasksOnly = forTasks))
+                busy = false
+                handedOver = true
+                change(
+                    request,
+                    // An address that already exists may be this dialog's earlier attempt; the list decides.
+                    provesRejection = { status -> status != 405 && groupwareMutationResponseProvesRejection(status) },
+                    applied = { true },
+                    confirmed = { calendars -> calendars.any { it.href == href && it.displayName == draft.name.trim() } },
+                    onSettled = { forgetCreation() },
+                )
+            } finally {
+                if (!handedOver) busy = false
+            }
+        }
+    }
+
+    /**
+     * The address to create at, recorded on the device before it is used. Null, with [error] set,
+     * when nothing may be sent: an earlier creation turned out to exist, or could not be checked.
+     */
+    private suspend fun creationHref(draft: CalendarCollectionDraft): String? {
+        newHref?.let { return it }
+        val home = try {
+            groupwareCalendarHomeHref(userId)
+        } catch (_: IllegalArgumentException) {
+            error = "This account's calendar home is not available."
+            return null
+        }
+        val store = services.textEditorDraftStore(session, pendingCreationPath)
+        val earlier = try {
+            store?.load()?.text?.takeIf { it.startsWith(home) && it.length <= MAX_PENDING_CREATION_HREF }
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Persistence fault boundary: an unreadable record may be a calendar already created.
+            error = "An earlier attempt saved on this device could not be read. Refresh your calendars before creating another."
+            return null
+        }
+        if (earlier != null) {
+            val listed = try {
+                parseGroupwareCalendarsForComponent(
+                    services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(home)),
+                    componentName = null,
+                )
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                error = "An earlier attempt could not be checked. Refresh your calendars before trying again."
+                return null
+            }
+            if (listed.any { it.href == earlier }) {
+                forgetCreation()
+                onChanged()
+                error = "An earlier attempt was created after all and is now in your list. Check it before creating another."
+                return null
+            }
+        }
+        val href = try {
+            newCalendarCollectionHref(home, draft.name)
+        } catch (_: IllegalArgumentException) {
+            error = "This account's calendar home is not available."
+            return null
+        }
+        try {
+            store?.save(TextEditorDraft(originalText = "", text = href, etag = null))
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            error = "This device could not keep a record of the new calendar, so it was not created."
+            return null
+        }
+        newHref = href
+        return href
+    }
+
+    /** The creation was confirmed or refused; its record is dropped. */
+    private suspend fun forgetCreation() {
+        try {
+            services.textEditorDraftStore(session, pendingCreationPath)?.remove()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // A record left behind only causes one more check of the calendar list.
+        }
+    }
+
+    private val pendingCreationPath: String get() = PENDING_CREATION_PATH_PREFIX + if (forTasks) "tasks" else "calendar"
 
     fun confirmDelete() {
         val calendar = deleting ?: return
@@ -155,6 +239,8 @@ internal class CalendarCollectionManager(
         applied: (NextcloudApiResponse) -> Boolean,
         confirmed: (List<GroupwareCalendar>) -> Boolean,
         onFailure: (String) -> Unit = { error = it },
+        /** Runs once the server answered definitely: the change was refused or is confirmed. */
+        onSettled: suspend () -> Unit = {},
     ) {
         if (busy) return
         busy = true
@@ -170,6 +256,7 @@ internal class CalendarCollectionManager(
                     null
                 }
                 if (response != null && provesRejection(response.status)) {
+                    onSettled()
                     onFailure(calendarCollectionRejectionMessage(response.status))
                     return@launch
                 }
@@ -188,6 +275,7 @@ internal class CalendarCollectionManager(
                     null
                 }
                 if (listed != null && confirmed(listed)) {
+                    onSettled()
                     edit = null
                     deleting = null
                     newHref = null
@@ -234,3 +322,6 @@ internal fun calendarCollectionRejectionMessage(status: Int): String = when (sta
 
 private fun String?.sameCalendarColor(color: String): Boolean =
     this != null && take(7).equals(color.take(7), ignoreCase = true)
+
+private const val PENDING_CREATION_PATH_PREFIX = "nextcloud-native:calendar-pending-creation:"
+private const val MAX_PENDING_CREATION_HREF = 2048

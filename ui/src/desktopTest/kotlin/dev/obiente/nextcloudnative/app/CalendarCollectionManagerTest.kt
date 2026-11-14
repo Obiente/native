@@ -148,6 +148,51 @@ class CalendarCollectionManagerTest {
         assertEquals(shared, manager.deleting)
     }
 
+    private class MemoryDraft : TextEditorDraftStore {
+        var value: TextEditorDraft? = null
+
+        override suspend fun load(): TextEditorDraft? = value
+
+        override suspend fun save(draft: TextEditorDraft) {
+            value = draft
+        }
+
+        override suspend fun remove() {
+            value = null
+        }
+    }
+
+    @Test
+    fun aCreationWhoseResultWasLostIsFoundAgainAfterTheDialogAndTheScreenAreGone() = runBlocking<Unit> {
+        val record = MemoryDraft()
+        val server = FakeCalendarHome(loseNextResponse = true).apply { drafts = record; listingFails = true }
+        val first = manager(server)
+        first.actions.onCreate(false)
+        first.save(CalendarCollectionDraft("Family", "#2E9E5B"))
+        settle(first)
+        assertNotNull(first.error, "The calendar was created, but neither the answer nor the list arrived.")
+        val address = assertNotNull(record.value?.text, "The address is on record before the request leaves.")
+        first.dismiss()
+
+        // The screen was recreated: a new manager, the same device record.
+        server.listingFails = false
+        val later = manager(server)
+        var changes = 0
+        later.onChanged = { changes++ }
+        later.actions.onCreate(false)
+        later.save(CalendarCollectionDraft("Family", "#2E9E5B"))
+        settle(later)
+        assertEquals(listOf(address), server.calendars.keys.toList(), "No second calendar is created.")
+        assertTrue(later.error.orEmpty().contains("created after all"))
+        assertEquals(1, changes)
+        assertNull(record.value)
+
+        later.save(CalendarCollectionDraft("Work", "#2E9E5B"))
+        settle(later)
+        assertEquals(2, server.calendars.size, "With the earlier attempt resolved, a new calendar can be created.")
+        assertNull(record.value, "A confirmed creation leaves no record.")
+    }
+
     private fun CoroutineScope.manager(server: FakeCalendarHome) =
         CalendarCollectionManager(server.services, NextcloudSession("https://calendar.invalid", "alice", "synthetic"), "alice", this)
 
@@ -162,6 +207,9 @@ class CalendarCollectionManagerTest {
         var listingFails = false
         var refuseWrites: Int? = null
 
+        /** Device draft storage; null as on a platform that keeps none. */
+        var drafts: TextEditorDraftStore? = null
+
         @Suppress("UNCHECKED_CAST")
         val services = Proxy.newProxyInstance(NextcloudPlatformServices::class.java.classLoader,
             arrayOf(NextcloudPlatformServices::class.java)) { proxy, method, args ->
@@ -169,6 +217,7 @@ class CalendarCollectionManagerTest {
                 "toString" -> "FakeCalendarHome"
                 "hashCode" -> System.identityHashCode(proxy)
                 "equals" -> proxy === args?.singleOrNull()
+                "textEditorDraftStore" -> drafts
                 "executeGroupwareDav" -> {
                     val operation: suspend () -> Any? = { execute(args!![1] as GroupwareDavRequest) }
                     operation.startCoroutineUninterceptedOrReturn(args!!.last() as Continuation<Any?>)
