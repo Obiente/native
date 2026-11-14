@@ -43,6 +43,8 @@ class FileCommentsController(
     private val userId: String,
     private val fileId: Long,
     private val execute: suspend (FilesDavRequest) -> NextcloudApiResponse,
+    /** Without a store, a post with an unknown result is remembered only by this controller. */
+    private val postAttempts: FileCommentPostAttemptStore? = null,
 ) {
     var state by mutableStateOf(FileCommentsState())
         private set
@@ -51,24 +53,88 @@ class FileCommentsController(
     private var readSequence = 0L
     private var appliedSequence = 0L
 
-    fun start() {
-        if (loadJob == null && state.comments == null) refresh()
-    }
+    /** The post found on record when this thread opened; its result was never learned. */
+    private var restoredPost: String? = null
 
-    fun refresh() {
-        loadJob?.cancel()
+    fun start() {
+        if (loadJob != null || state.comments != null) return
+        val store = postAttempts
+        if (store == null) {
+            refresh()
+            return
+        }
         state = state.copy(loading = true)
         loadJob = scope.launch {
             try {
-                val read = readFirstPage()
-                state = state.copy(failure = (read as? CommentsRead.Failed)?.kind)
-                if (read is CommentsRead.Loaded) {
-                    state = state.copy(postUnconfirmed = false, unconfirmedIds = emptySet())
-                    if (read.page.comments.any(NextcloudFileComment::unread)) markRead()
-                }
-            } finally {
-                state = state.copy(loading = false)
+                restoredPost = store.load()
+                if (restoredPost != null) state = state.copy(postUnconfirmed = true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Persistence fault boundary: an unreadable record may be a comment already posted.
+                state = state.copy(
+                    postUnconfirmed = true,
+                    notice = "An earlier comment saved on this device could not be read. Check the comments, then refresh before posting.",
+                )
             }
+            load(byRequest = false)
+        }
+    }
+
+    /** Reads the thread again. Asking for it is also the decision to post again after an unknown result. */
+    fun refresh() {
+        loadJob?.cancel()
+        state = state.copy(loading = true)
+        loadJob = scope.launch { load(byRequest = true) }
+    }
+
+    private suspend fun load(byRequest: Boolean) {
+        try {
+            val read = readFirstPage()
+            state = state.copy(failure = (read as? CommentsRead.Failed)?.kind)
+            if (read is CommentsRead.Loaded) {
+                val restored = restoredPost
+                val found = restored != null && read.page.comments.any { it.isAuthoredBy(userId) && it.message.trim() == restored }
+                if (byRequest || restored == null || found) {
+                    restoredPost = null
+                    state = state.copy(postUnconfirmed = false, unconfirmedIds = emptySet())
+                    settlePost()
+                } else {
+                    // Opening the thread is not that decision: the earlier post stays unresolved.
+                    state = state.copy(
+                        unconfirmedIds = emptySet(),
+                        notice = "An earlier comment may already have been posted. Check the comments, then refresh before posting again.",
+                    )
+                }
+                if (read.page.comments.any(NextcloudFileComment::unread)) markRead()
+            }
+        } finally {
+            state = state.copy(loading = false)
+        }
+    }
+
+    /** Makes the post durable before its request can leave the device, or reports that it could not. */
+    private suspend fun recordPost(message: String): Boolean {
+        val store = postAttempts ?: return true
+        return try {
+            store.save(message)
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** The post was confirmed, refused, or shown not to exist; its record is dropped. */
+    private suspend fun settlePost() {
+        val store = postAttempts ?: return
+        try {
+            store.clear()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A record left behind only asks for one more refresh; it never posts anything.
         }
     }
 
@@ -76,11 +142,13 @@ class FileCommentsController(
         if (state.comments == null) return
         if (!state.mayHaveMore || state.loadingMore) return
         val offset = state.serverOffset
+        // The first page this offset continues. A refresh replaces it, and with it this offset.
+        val firstPage = appliedSequence
         state = state.copy(loadingMore = true)
         scope.launch {
             try {
                 when (val read = read(fileCommentsListRequest(fileId, offset = offset))) {
-                    is CommentsRead.Loaded -> {
+                    is CommentsRead.Loaded -> if (firstPage == appliedSequence) {
                         val known = state.comments.orEmpty().mapTo(HashSet()) { it.id }
                         state = state.copy(
                             comments = state.comments.orEmpty() + read.page.comments.filterNot { it.id in known },
@@ -103,16 +171,25 @@ class FileCommentsController(
         val knownIds = state.comments.orEmpty().mapTo(HashSet()) { it.id }
         state = state.copy(posting = true, notice = null)
         scope.launch {
+            if (!recordPost(message)) {
+                state = state.copy(posting = false, notice = "This device could not keep a record of the comment, so it was not posted.")
+                return@launch
+            }
             val outcome = sendFilesDavWrite(execute, fileCommentCreateRequest(fileId, message))
             val notice = when (outcome) {
                 is FilesDavWriteOutcome.Confirmed -> {
+                    settlePost()
                     readFirstPage()
                     onPosted()
                     null
                 }
-                is FilesDavWriteOutcome.Rejected -> "Couldn't post the comment. ${commentFailureReason(outcome.kind)}"
+                is FilesDavWriteOutcome.Rejected -> {
+                    settlePost()
+                    "Couldn't post the comment. ${commentFailureReason(outcome.kind)}"
+                }
                 FilesDavWriteOutcome.Unknown -> when (val read = readFirstPage()) {
                     is CommentsRead.Loaded -> if (read.page.comments.any { it.id !in knownIds && it.isAuthoredBy(userId) && it.message.trim() == message }) {
+                        settlePost()
                         onPosted()
                         null
                     } else if (read.page.mayHaveMore || read.page.skippedEntries > 0) {
@@ -120,6 +197,7 @@ class FileCommentsController(
                         state = state.copy(postUnconfirmed = true)
                         "Couldn't confirm whether the comment was posted. Refresh before sending it again."
                     } else {
+                        settlePost()
                         "The comment was not posted. Your draft is kept; you can send it again."
                     }
                     is CommentsRead.Failed -> {

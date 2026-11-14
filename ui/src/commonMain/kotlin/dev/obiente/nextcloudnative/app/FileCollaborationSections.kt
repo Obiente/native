@@ -44,7 +44,11 @@ internal fun FileCommentsSection(
 ) {
     val scope = rememberCoroutineScope()
     val controller = remember(services, session, userId, fileId, scope) {
-        FileCommentsController(scope, userId, fileId) { request -> services.executeFilesDav(session, request) }
+        FileCommentsController(
+            scope, userId, fileId,
+            execute = { request -> services.executeFilesDav(session, request) },
+            postAttempts = fileCommentPostAttemptStore(services, session, fileId),
+        )
     }
     LaunchedEffect(controller) { controller.start() }
     val state = controller.state

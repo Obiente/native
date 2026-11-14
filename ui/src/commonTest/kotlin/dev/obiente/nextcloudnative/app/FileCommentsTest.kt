@@ -92,7 +92,94 @@ class FileCommentsTest {
         fun posts() = requests.count { it.method == FilesDavMethod.POST }
     }
 
-    private fun controller(fake: FakeComments) = FileCommentsController(scope, "alice", 42L, fake::execute)
+    private fun controller(fake: FakeComments, attempts: FileCommentPostAttemptStore? = null) =
+        FileCommentsController(scope, "alice", 42L, fake::execute, attempts)
+
+    private class MemoryPostAttempts(private val failSave: Boolean = false) : FileCommentPostAttemptStore {
+        var value: String? = null
+        val postsAtSave = mutableListOf<Int>()
+        var posts: () -> Int = { 0 }
+
+        override suspend fun load(): String? = value
+
+        override suspend fun save(message: String) {
+            check(!failSave) { "Synthetic storage is full." }
+            postsAtSave += posts()
+            value = message
+        }
+
+        override suspend fun clear() {
+            value = null
+        }
+    }
+
+    @Test
+    fun anUnknownPostIsOnRecordBeforeItLeavesAndStillBlocksAfterTheFileIsReopened() {
+        val fake = FakeComments().apply {
+            comments.clear()
+            repeat(FILE_COMMENTS_PAGE_SIZE + 50) { index -> comments += Comment(1_000L + index, "bob", "Comment $index") }
+            pageLimit = FILE_COMMENTS_PAGE_SIZE
+            postThrowsBeforeApply = true
+        }
+        val store = MemoryPostAttempts().apply { posts = { fake.posts() } }
+        controller(fake, store).also { it.start() }.post("Hello") {}
+        assertEquals("Hello", store.value)
+        assertEquals(0, store.postsAtSave.first(), "The comment is on record before the request is sent.")
+
+        // The file was closed and opened again: a new controller, the same device record.
+        val reopened = controller(fake, store).also { it.start() }
+        assertTrue(reopened.state.postUnconfirmed, "Opening the thread again does not make the earlier post safe to repeat.")
+        reopened.post("Hello") {}
+        assertEquals(1, fake.posts())
+        reopened.refresh()
+        assertTrue(reopened.state.canPost, "Refreshing after checking the comments is the decision to post again.")
+        assertNull(store.value)
+    }
+
+    @Test
+    fun aRecordedPostThatIsFoundOnReopeningIsResolvedAndAnUnrecordedOneIsNotSent() {
+        val fake = FakeComments().apply { postThrowsAfterApply = true }
+        val store = MemoryPostAttempts()
+        val first = controller(fake, store).also { it.start() }
+        fake.listFails = true
+        first.post("Hello") {}
+        assertEquals("Hello", store.value, "The post reached the server but could not be verified.")
+
+        fake.listFails = false
+        val reopened = controller(fake, store).also { it.start() }
+        assertFalse(reopened.state.postUnconfirmed, "The comment is in the thread, so nothing is unresolved.")
+        assertNull(store.value)
+
+        val unwritable = controller(fake, MemoryPostAttempts(failSave = true)).also { it.start() }
+        val before = fake.posts()
+        unwritable.post("Another") {}
+        assertEquals(before, fake.posts(), "Nothing is posted without a record.")
+        assertTrue(unwritable.state.notice.orEmpty().contains("could not keep a record"))
+    }
+
+    @Test
+    fun anOlderPageThatARefreshOvertookIsNotAppended() {
+        val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val fake = FakeComments().apply {
+            comments.clear()
+            repeat(FILE_COMMENTS_PAGE_SIZE * 3) { index -> comments += Comment(1_000L + index, "bob", "Comment $index") }
+            pageLimit = FILE_COMMENTS_PAGE_SIZE
+        }
+        var holdOlder = false
+        val controller = FileCommentsController(scope, "alice", 42L, { request ->
+            val older = request.method == FilesDavMethod.REPORT && holdOlder
+            val answer = fake.execute(request)
+            if (older) { holdOlder = false; hold.await() }
+            answer
+        })
+        controller.start()
+        holdOlder = true
+        controller.loadMore()
+        controller.refresh()
+        hold.complete(Unit)
+        assertEquals(FILE_COMMENTS_PAGE_SIZE, controller.state.serverOffset, "The overtaken page does not move the offset past a page that was never shown.")
+        assertFalse(controller.state.loadingMore)
+    }
 
     @Test
     fun requestsAreBoundToTheFileAndValidated() {
@@ -246,7 +333,7 @@ class FileCommentsTest {
 
     @Test
     fun missingCommentsEndpointShowsUnavailable() {
-        val controller = FileCommentsController(scope, "alice", 42L) { response(404) }
+        val controller = FileCommentsController(scope, "alice", 42L, { response(404) })
         controller.start()
         assertTrue(controller.state.unavailable)
         assertFalse(controller.state.canPost)
