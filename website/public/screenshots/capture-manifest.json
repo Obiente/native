@@ -1335,7 +1335,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailDraftCodec.kt": "33e15490f939c3df46efb852db365a61f7e4302e7d893d58bfb8d5fc427c31da",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailMarkup.kt": "607a51b042821788d611065a8c96c1372e0d0cf462b6b5b2cbc3ab45bc1a4062",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailSendPlanning.kt": "61c58b45d09a249ae13a8da19d3e87cf1427119c4114f0be378cdd0698263a4d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailSendRecovery.kt": "b9696421f901101b06a942d5f9b85b3a7ac9117f75b6b50c584b33e9fc3b44bb",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailSendRecovery.kt": "b12fa96ffb197cd78592de396d5f2c145488030c05e0f27d71d7649b5f14ea6f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailWorkspace.kt": "b9cc7bde1771ee2680716a0c8f1d521be210fd12bf5a1916c8ac56e34727a036",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailWorkspaceLayout.kt": "38d778ee5e5b278dfc30feb05c10a246eccf5094a30d1d33a8a65422a0520d49",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMembershipRulePlan.kt": "28d46bfd8c64f42404be0f5b60c55a644848b1d0b415b532b0773275052c9b11",
