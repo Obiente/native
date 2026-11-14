@@ -4797,7 +4797,7 @@ class DesktopNextcloudServices(
             rawBody = request.body,
             headers = headers,
             maxResponseBytes = request.maximumResponseBytes,
-            client = noRedirectHttpClient,
+            client = if (request.method.equals("POST", ignoreCase = true)) dynamicApiClients.write else noRedirectHttpClient,
         )
         NextcloudApiResponse(response.status, response.body, response.contentType, response.etag, response.location)
     }
