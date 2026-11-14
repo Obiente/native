@@ -181,6 +181,8 @@ class NativeWriteExpectation(
     val previous: Map<String, JsonElement>,
     private val verifyTarget: ((NativeRecord) -> NativeWriteVerification)? = null,
     private val absentPrevious: Set<String> = emptySet(),
+    /** The read-back record under the body's own field names; see [NativeWriteReadBack.storedValues]. */
+    private val storedValues: ((NativeRecord) -> Map<String, JsonElement>)? = null,
 ) {
     /**
      * Verifies [records] read back after the write. Exactly one record must carry [targetId]. A
@@ -196,14 +198,15 @@ class NativeWriteExpectation(
     }
 
     private fun verifyFields(target: NativeRecord): NativeWriteVerification {
-        val changed = submitted.filterKeys { field -> !sameWireValue(target.wireValue(field), submitted.getValue(field)) }
+        val stored = storedValues?.invoke(target) ?: target.wireValues
+        val changed = submitted.filterKeys { field -> !sameWireValue(stored.valueNamed(field), submitted.getValue(field)) }
         val drifted = untouchedBaseline.keys.filterTo(linkedSetOf()) { field ->
             field.lowercase().filter(Char::isLetterOrDigit) !in SERVER_BOOKKEEPING_FIELDS &&
-                !sameWireValue(target.wireValue(field), untouchedBaseline.getValue(field))
+                !sameWireValue(stored.valueNamed(field), untouchedBaseline.getValue(field))
         }
         val reverted = changed.isNotEmpty() && changed.keys.all { field ->
-            if (field in absentPrevious) target.wireValue(field) == null
-            else previous[field]?.let { before -> sameWireValue(target.wireValue(field), before) } == true
+            if (field in absentPrevious) stored.valueNamed(field) == null
+            else previous[field]?.let { before -> sameWireValue(stored.valueNamed(field), before) } == true
         }
         return when {
             reverted && changed.size == submitted.size && drifted.isEmpty() ->
@@ -213,9 +216,6 @@ class NativeWriteExpectation(
         }
     }
 }
-
-/** The exact wire value of [field], with a field the read did not return treated as absent. */
-private fun NativeRecord.wireValue(field: String): JsonElement? = wireValues.valueNamed(field)
 
 /**
  * Bookkeeping the server maintains on every write. A changed modification time or revision is the
@@ -270,10 +270,12 @@ private fun String.wireWholeNumberOrNull(): Long? {
 }
 
 /** Whether [record] still holds every edited field exactly as the editor read it. */
-internal fun NativeWriteReadBack.editedBaselineHolds(record: NativeRecord): Boolean =
-    previous.all { (field, value) -> field in customFields || sameWireValue(record.wireValues.valueNamed(field), value) } &&
-        absentPrevious.all { field -> field in customFields || record.wireValues.valueNamed(field) == null } &&
+internal fun NativeWriteReadBack.editedBaselineHolds(record: NativeRecord): Boolean {
+    val stored = storedValues?.invoke(record) ?: record.wireValues
+    return previous.all { (field, value) -> field in customFields || sameWireValue(stored.valueNamed(field), value) } &&
+        absentPrevious.all { field -> field in customFields || stored.valueNamed(field) == null } &&
         customBaselineHolds?.invoke(record) != false
+}
 
 /**
  * Asks the executor to verify a record write by reading [targetId] back through the contract's
@@ -304,4 +306,11 @@ class NativeWriteReadBack(
     val preReadBaseline: Boolean = false,
     /** The pre-read comparison for custom-shaped fields, such as the edited cells of a grid row. */
     val customBaselineHolds: ((NativeRecord) -> Boolean)? = null,
+    /**
+     * How a freshly read record is seen under the body's field names when the read names a field
+     * differently than the write does (`payer` stored as `payer_id`). [previous] and [untouched]
+     * were taken through the same projection, so every comparison uses it; null means the read's
+     * own names.
+     */
+    val storedValues: ((NativeRecord) -> Map<String, JsonElement>)? = null,
 )

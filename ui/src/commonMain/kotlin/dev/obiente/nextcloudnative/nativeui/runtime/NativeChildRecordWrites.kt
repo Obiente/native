@@ -232,6 +232,7 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
             record.id, previous, untouched, echoUntouched = false,
             editedFields = editedNames, absentPrevious = editedNames - previous.keys,
             preReadBaseline = true,
+            storedValues = route.write::echoSource,
         ))
     }
     val echo = when (val plan = nativeFullEchoUpdatePlan(route.write.action, record.wire, editedNames, route.contextInputs)) {
@@ -250,6 +251,7 @@ internal fun NativeChildRecordWritePlan.updateRequest(record: NativeChildRecord,
     return ready(route.write, identities + values, precondition, NativeWriteReadBack(
         record.id, previous, echo, echoUntouched = true,
         editedFields = editedNames, absentPrevious = editedNames - previous.keys,
+        storedValues = route.write::echoSource,
     ))
 }
 

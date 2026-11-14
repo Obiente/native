@@ -325,6 +325,7 @@ private suspend fun executeVerified(
             val untouched = readBack.untouched.filterKeys { it !in readBack.customFields }
             val verification = NativeWriteExpectation(
                 readBack.targetId, submitted, untouched, readBack.previous, readBack.verifyTarget, readBack.absentPrevious,
+                readBack.storedValues,
             ).verify(records)
             if (request.baselineRestore && verification is NativeWriteVerification.Adjusted) {
                 NativeWriteVerification.NotApplied("The previous values were not fully restored.")
@@ -429,6 +430,7 @@ private fun NativeActionRequest.Submit.baselineRestore(
         readBack = NativeWriteReadBack(
             readBack.targetId, emptyMap(), baseline, echoUntouched = true,
             verifyTarget = readBack.verifyRestoreTarget, customFields = readBack.customFields,
+            storedValues = readBack.storedValues,
         ),
         baselineRestore = true,
     ).also { DynamicBaselineRestores.issue(ruleKey, it) }

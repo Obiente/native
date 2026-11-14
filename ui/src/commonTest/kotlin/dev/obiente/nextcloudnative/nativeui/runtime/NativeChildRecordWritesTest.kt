@@ -316,6 +316,40 @@ class NativeChildRecordWritesTest {
     }
 
     @Test
+    fun aReferenceStoredUnderAnAliasIsComparedUnderTheBodyNameBeforeAndAfterAMergeEdit() {
+        val patch = assertNotNull(plan())
+        val expense = assertNotNull(patch.record(expenseRecord(payer = "3")))
+        val amount = assertNotNull(
+            assertIs<NativeChildRecordRequestResult.Ready>(patch.updateRequest(expense, expense.draft + ("amount" to "20"))).request.readBack,
+        )
+        assertEquals(JsonPrimitive(3), amount.untouched["payer"], "The untouched payer is the value read as payer_id.")
+        fun verify(readBack: NativeWriteReadBack, submitted: Map<String, JsonElement>, stored: NativeRecord) = NativeWriteExpectation(
+            readBack.targetId, submitted, readBack.untouched, readBack.previous, readBack.verifyTarget, readBack.absentPrevious,
+            readBack.storedValues,
+        ).verify(listOf(stored))
+        val applied = expenseRecord(payer = "3").stored("amount", JsonPrimitive(20))
+        assertEquals(
+            NativeWriteVerification.Confirmed,
+            verify(amount, mapOf("amount" to JsonPrimitive(20)), applied),
+            "The unchanged payer_id is the payer the baseline holds, not a missing field.",
+        )
+        val moved = assertIs<NativeWriteVerification.Adjusted>(
+            verify(amount, mapOf("amount" to JsonPrimitive(20)), applied.stored("payer_id", JsonPrimitive(1))),
+        )
+        assertEquals(setOf("payer"), moved.drifted)
+
+        val payer = assertNotNull(
+            assertIs<NativeChildRecordRequestResult.Ready>(patch.updateRequest(expense, expense.draft + ("payer" to "1"))).request.readBack,
+        )
+        assertTrue(payer.editedBaselineHolds(expenseRecord(payer = "3")), "The payer read as payer_id still holds the edited baseline.")
+        assertFalse(payer.editedBaselineHolds(expenseRecord(payer = "1")), "A payer changed elsewhere stops the edit.")
+        assertEquals(
+            NativeWriteVerification.Confirmed,
+            verify(payer, mapOf("payer" to JsonPrimitive(1)), expenseRecord(payer = "1")),
+        )
+    }
+
+    @Test
     fun aFormEncodedReplacementStaysReadOnlyInsteadOfFailingAtSubmit() {
         fun withBody(contentType: String): NativeAppSchema = schema(updateMethod = HttpMethod.PUT, recovery = "expenses.read").let { base ->
             base.copy(actions = base.actions.map { action ->
