@@ -59,6 +59,13 @@ class DeckBoardToolsTest {
             listOf(1L to 1L, 3L to 2L),
             planDeckStackMove(tied, 2, DeckStackMoveDirection.Earlier).map { it.stack.id to it.order },
         )
+        // A (id 3, order 0), B (id 1, order 1), C (id 2, order 1) sort as A, B, C. Swapping A and B
+        // would leave A tied with C and sorted after it, so the board is renumbered to B, A, C.
+        val tiedAround = listOf(stack(3, 0), stack(1, 1), stack(2, 1))
+        assertEquals(
+            listOf(1L to 0L, 3L to 1L, 2L to 2L),
+            planDeckStackMove(tiedAround, 3, DeckStackMoveDirection.Later).map { it.stack.id to it.order },
+        )
         assertFailsWith<IllegalArgumentException> { planDeckStackMove(stacks, 99, DeckStackMoveDirection.Later) }
         assertFalse(stack(3, 9).canMove(stacks, DeckStackMoveDirection.Later))
     }

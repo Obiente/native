@@ -42,7 +42,8 @@ data class DeckStackOrderUpdate(
  * Plans the smallest set of idempotent stack updates that moves one list by one position.
  *
  * Deck stores an independent `order` per stack and the documented REST update changes only the
- * named stack. When the neighbors have distinct orders the two values are swapped. Otherwise the
+ * named stack. When the neighbors have distinct orders that no other list shares, the two values
+ * are swapped. Otherwise the
  * board is renumbered in its intended sequence and only the stacks whose value changes are sent.
  * Every update sets an absolute value, so repeating a plan after an unknown result is safe.
  */
@@ -61,7 +62,10 @@ fun planDeckStackMove(
     if (target !in ordered.indices) return emptyList()
     val moving = ordered[index]
     val neighbor = ordered[target]
-    if (moving.order != neighbor.order) {
+    // A swap keeps the sequence only when no other list shares either value; with a tie around
+    // the pair, the swapped lists would sort past their neighbors.
+    val untied = ordered.count { it.order == moving.order } == 1 && ordered.count { it.order == neighbor.order } == 1
+    if (moving.order != neighbor.order && untied) {
         return listOf(
             DeckStackOrderUpdate(moving, neighbor.order),
             DeckStackOrderUpdate(neighbor, moving.order),
