@@ -214,6 +214,16 @@ class NotificationsApiTest {
         assertFalse(notificationWriteSucceeded(response("", status = 403)))
     }
 
+    @Test
+    fun `an embedded OCS server error is ambiguous and an embedded refusal is not`() {
+        assertTrue(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":996},"data":[]}}""")))
+        assertTrue(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":500},"data":[]}}""")))
+        assertFalse(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":404},"data":[]}}""")))
+        assertFalse(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":997},"data":[]}}""")))
+        assertFalse(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":100},"data":[]}}""")))
+        assertFalse(notificationWriteFailedAmbiguously(response("", status = 403)))
+    }
+
     private fun assertNotNullRequest(request: NextcloudApiRequest?): NextcloudApiRequest =
         kotlin.test.assertNotNull(request, "The same-account action should become a request.")
 

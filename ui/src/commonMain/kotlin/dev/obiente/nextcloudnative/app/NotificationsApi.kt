@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
 import kotlin.time.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -214,15 +215,30 @@ internal fun parseNotificationsList(response: NextcloudApiResponse): Notificatio
  */
 internal fun notificationWriteSucceeded(response: NextcloudApiResponse): Boolean {
     if (response.status !in 200..299) return false
-    if (response.body.isEmpty()) return true
+    val statusCode = notificationOcsStatusCode(response) ?: return true
+    return statusCode == 100L || statusCode in 200L..299L
+}
+
+/**
+ * Whether a 2xx answer carries an OCS envelope that reports a failure other than a refusal. Such
+ * a server error may come after the request took effect, so the result is unknown, not rejected.
+ */
+internal fun notificationWriteFailedAmbiguously(response: NextcloudApiResponse): Boolean {
+    if (response.status !in 200..299 || notificationWriteSucceeded(response)) return false
+    val statusCode = notificationOcsStatusCode(response) ?: return false
+    return dynamicOcsFailureOutcome(statusCode) == NativeActionFailureOutcome.Unknown
+}
+
+/** The status code of the OCS envelope, or null when the body has none. */
+private fun notificationOcsStatusCode(response: NextcloudApiResponse): Long? {
+    if (response.body.isEmpty()) return null
     val root = try {
         notificationsJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
     } catch (_: IllegalArgumentException) {
         null
-    } ?: return true
-    val meta = (root["ocs"] as? JsonObject)?.get("meta") as? JsonObject ?: return true
-    val statusCode = (meta["statuscode"] as? JsonPrimitive)?.longOrNull ?: return true
-    return statusCode == 100L || statusCode in 200L..299L
+    } ?: return null
+    val meta = (root["ocs"] as? JsonObject)?.get("meta") as? JsonObject ?: return null
+    return (meta["statuscode"] as? JsonPrimitive)?.longOrNull
 }
 
 private fun parseNotification(entry: JsonObject): NextcloudNotification? {

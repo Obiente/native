@@ -408,6 +408,8 @@ internal class NotificationsInboxController(
             response.status == 404 -> WriteOutcome.NotFound
             // A gateway or server failure may come after the request took effect.
             response.status >= 500 -> WriteOutcome.Unknown
+            // So may a server error reported inside a 2xx OCS envelope.
+            notificationWriteFailedAmbiguously(response) -> WriteOutcome.Unknown
             else -> WriteOutcome.Rejected(
                 notificationsFailureForStatus(response.status) ?: NotificationsFailure(NotificationsFailureKind.Server),
             )

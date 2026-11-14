@@ -31,6 +31,7 @@ class NotificationsInboxControllerTest {
         var deleteStatus = 200
         var deleteFailure: Exception? = null
         var actionStatus = 200
+        var actionOcsStatus = 100
         var actionFailure: Exception? = null
         /** Applies a successful DELETE to the listed notifications. */
         var deleteTakesEffect = true
@@ -70,7 +71,7 @@ class NotificationsInboxControllerTest {
                 }
                 else -> {
                     actionFailure?.let { throw it }
-                    response(actionStatus, """{"ocs":{"meta":{"statuscode":100},"data":[]}}""")
+                    response(actionStatus, """{"ocs":{"meta":{"statuscode":$actionOcsStatus},"data":[]}}""")
                 }
             }
         }
@@ -354,6 +355,22 @@ class NotificationsInboxControllerTest {
         controller.runAction(4, decline)
         controller.confirm()
         assertEquals(1, server.count(NextcloudApiMethod.DELETE, "/ocs/v2.php/apps/sample/api/v1/invites/4"))
+    }
+
+    @Test
+    fun `a server error inside a successful answer is an unknown result`() {
+        val actions = """[{"label":"Accept","link":"$SERVER/ocs/v2.php/apps/sample/api/v1/invites/4","type":"POST","primary":true}]"""
+        val server = FakeNotificationsServer().apply {
+            listed[4] = FakeNotificationsServer.notification(4, actions)
+            actionOcsStatus = 996
+        }
+        val controller = controller(server)
+        controller.start()
+        val accept = controller.state.notification(4)!!.actions.single()
+        controller.runAction(4, accept)
+        controller.runAction(4, accept)
+        assertEquals(1, server.count(NextcloudApiMethod.POST), "An action that may have taken effect is not repeated.")
+        assertEquals(setOf(4L), controller.state.ambiguousActionIds)
     }
 
     @Test
