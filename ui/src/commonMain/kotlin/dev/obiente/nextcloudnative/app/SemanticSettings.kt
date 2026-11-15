@@ -27,6 +27,8 @@ internal data class SemanticSettingEntry(
     val value: String,
     val options: List<String> = emptyList(),
     val writable: Boolean,
+    /** The value exactly as the server returned it; a replacement sends untouched settings back as this. */
+    val stored: JsonPrimitive? = null,
 )
 
 /**
@@ -111,11 +113,18 @@ internal class SemanticSettings(
             is SemanticSettingsWrite.Document -> {
                 // A replacement keeps every other declared setting at the value the server returned.
                 val unchanged = if (write.action.binding.method == HttpMethod.PATCH) {
-                    emptyMap()
+                    emptyList()
                 } else {
-                    current.filter { it.key in write.properties && it.key != entry.key }.associate { it.key to it.value }
+                    current.filter { it.key in write.properties && it.key != entry.key }
                 }
-                buildDynamicApiRequest(descriptor, write.action, unchanged + (entry.key to value))
+                // Untouched settings travel as the exact JSON the server returned. Going through
+                // their text could change them, such as a number too large to convert exactly.
+                buildDynamicApiRequest(
+                    descriptor,
+                    write.action,
+                    unchanged.associate { it.key to it.value } + (entry.key to value),
+                    exactBodyValues = unchanged.mapNotNull { other -> other.stored?.let { other.key to it } }.toMap(),
+                )
             }
         }
         return request.copy(maximumResponseBytes = SETTINGS_RESPONSE_BYTES)
@@ -147,6 +156,7 @@ internal class SemanticSettings(
             value = value,
             options = if (kind == SemanticSettingKind.Choice) options else emptyList(),
             writable = writable,
+            stored = primitive,
         )
     }
 

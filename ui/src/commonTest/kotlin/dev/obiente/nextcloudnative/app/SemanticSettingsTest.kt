@@ -160,6 +160,19 @@ class SemanticSettingsTest {
     }
 
     @Test
+    fun `a replacement sends untouched settings back exactly as the server returned them`() {
+        val settings = notesSettings()
+        val entries = settings.parse(response("""{"notesPath":"Notes","fileSuffix":".md"}"""))
+        val suffix = entries.single { it.key == "fileSuffix" }
+        assertEquals(JsonPrimitive(".md"), suffix.stored)
+        val body = Json.parseToJsonElement(
+            settings.writeRequest(entries.single { it.key == "notesPath" }, "Journal", entries).body!!.decodeToString(),
+        ).jsonObject
+        assertEquals(JsonPrimitive("Journal"), body["notesPath"])
+        assertEquals(suffix.stored, body["fileSuffix"], "The untouched setting is the stored JSON value, not a re-encoded copy.")
+    }
+
+    @Test
     fun `the controller reports a value the server did not keep`() = runBlocking<Unit> {
         val controller = SemanticSettingsController(
             execute = { request ->
