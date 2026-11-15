@@ -30,6 +30,10 @@ internal fun FileSyncPairDetailSheet(
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
     onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
+    mutationsEnabled: Boolean = true,
+    onEdit: ((FileSyncPairSummary) -> Unit)? = null,
+    selectedTabName: String? = null,
+    onTabSelected: ((String) -> Unit)? = null,
 ) {
     NextcloudDetailSheet(
         title = null,
@@ -40,7 +44,9 @@ internal fun FileSyncPairDetailSheet(
         FileSyncPairInspector(
             pair = pair,
             busy = pair.id in busyPairIds,
-            actionsEnabled = pair.id !in busyPairIds,
+            actionsEnabled = mutationsEnabled && pair.id !in busyPairIds,
+            onEdit = onEdit?.let { edit -> { edit(pair) } },
+            selectedTabName = selectedTabName, onTabSelected = onTabSelected,
             onRun = { onRun(pair) },
             onRemove = { onRemove(pair) },
             onResolve = onResolve,
@@ -64,6 +70,10 @@ internal fun FileSyncPairDetailPage(
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
     onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
+    mutationsEnabled: Boolean = true,
+    onEdit: ((FileSyncPairSummary) -> Unit)? = null,
+    selectedTabName: String? = null,
+    onTabSelected: ((String) -> Unit)? = null,
 ) {
     PlatformBackHandler(enabled = true, onBack = onClose)
     Column(modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
@@ -75,7 +85,9 @@ internal fun FileSyncPairDetailPage(
         FileSyncPairInspector(
             pair = pair,
             busy = pair.id in busyPairIds,
-            actionsEnabled = pair.id !in busyPairIds,
+            actionsEnabled = mutationsEnabled && pair.id !in busyPairIds,
+            onEdit = onEdit?.let { edit -> { edit(pair) } },
+            selectedTabName = selectedTabName, onTabSelected = onTabSelected,
             onRun = { onRun(pair) },
             onRemove = { onRemove(pair) },
             onResolve = onResolve,

@@ -89,9 +89,9 @@ internal fun FileOfflineCenterScreen(
     var actionKey by remember(session, userId) { mutableStateOf<FileOfflineKey?>(null) }
     var actionMessage by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
-    var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
+    var syncSnapshot by remember(session) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
     val incomingShareRecoveryPager = rememberIncomingShareRecoveryPager(services, session, userId, refreshAttempt)
-    var syncLoading by remember(session, userId) { mutableStateOf(false) }
+    var syncLoading by remember(session, services) { mutableStateOf(services.supportsBidirectionalFileSync) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
     var syncBusyPairIds by remember(session, userId) { mutableStateOf<Set<String>>(emptySet()) }
@@ -118,6 +118,9 @@ internal fun FileOfflineCenterScreen(
     var pendingMediaPreview by remember(session, userId) { mutableStateOf<MediaSyncFolderPreview?>(null) }
     var mediaPreviewLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaPreviewError by remember(session, userId) { mutableStateOf<String?>(null) }
+    var editingSyncPairId by rememberSaveable(session.accountId.storageKey) { mutableStateOf<String?>(null) }
+    val editingSyncPair = syncSnapshot?.pairs?.firstOrNull { it.id == editingSyncPairId }
+    val syncSelection = rememberFileSyncWorkspaceSelection(session.accountId.storageKey)
     var removeSyncPair by remember(session, userId) { mutableStateOf<FileSyncPairSummary?>(null) }
     var pendingSyncDecision by remember(session, userId) {
         mutableStateOf<PendingFileSyncDecision?>(null)
@@ -170,26 +173,27 @@ internal fun FileOfflineCenterScreen(
         }
     }
     fun runSyncAction(pairId: String, remove: Boolean) {
-        if (pairId in syncBusyPairIds) return
+        if (pairId in syncBusyPairIds || userId.isBlank()) return
         syncBusyPairIds += pairId
         actionMessage = null
         scope.launch {
-            runCatching {
-                if (remove) {
-                    services.removeFileSyncPair(session, userId, pairId)
-                } else {
-                    services.runFileSyncPair(session, userId, pairId)
-                }
-            }.onSuccess { result ->
+            try {
+                val result = if (remove) services.removeFileSyncPair(session, userId, pairId)
+                    else services.runFileSyncPair(session, userId, pairId)
                 actionMessage = result.fileSyncCenterMessage()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                actionMessage = if (remove) "Could not remove this sync. Check its details before trying again."
+                    else "This sync could not finish. Open its details for recovery steps."
+            } finally {
+                syncBusyPairIds -= pairId
                 refreshAttempt += 1
-            }.onFailure { failure ->
-                actionMessage = failure.message ?: "Could not update this folder sync pair."
             }
-            syncBusyPairIds -= pairId
         }
     }
     fun beginAddFolderSync() {
+        if (userId.isBlank()) return
         if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return
         if (pendingLocalRoot != null && !abandonPendingFolderSync()) return
         syncBusyPairIds += ADD_PAIR_BUSY_ID
@@ -232,12 +236,12 @@ internal fun FileOfflineCenterScreen(
         syncSelectionPickerVisible = false
     }
     fun resolveSyncConflict(target: PendingFileSyncDecision) {
-        if (target.pair.id in syncBusyPairIds) return
+        if (target.pair.id in syncBusyPairIds || userId.isBlank()) return
         syncBusyPairIds += target.pair.id
         actionMessage = null
         scope.launch {
-            runCatching {
-                services.resolveFileSyncConflicts(
+            try {
+                val result = services.resolveFileSyncConflicts(
                     session,
                     userId,
                     target.pair.id,
@@ -245,13 +249,15 @@ internal fun FileOfflineCenterScreen(
                         FileSyncConflictResolution(conflict.workId, target.choice)
                     },
                 )
-            }.onSuccess { result ->
                 actionMessage = result.fileSyncCenterMessage()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                actionMessage = "Could not apply this conflict decision. Check the sync before trying again."
+            } finally {
                 refreshAttempt += 1
-            }.onFailure { failure ->
-                actionMessage = failure.message ?: "Could not apply this conflict decision."
+                syncBusyPairIds -= target.pair.id
             }
-            syncBusyPairIds -= target.pair.id
         }
     }
     fun saveVirtualStoragePolicy(policy: VirtualFileCachePolicy) {
@@ -425,42 +431,39 @@ internal fun FileOfflineCenterScreen(
         }
     }
 
-    LaunchedEffect(session, userId, refreshAttempt) {
-        if (userId.isBlank()) {
-            loading = false
-            loadError = "Account details are still loading."
-            return@LaunchedEffect
-        }
+    LaunchedEffect(services, session, userId, refreshAttempt) {
         loading = true
         loadError = null
-        runCatching { services.loadFileOfflineCenter(session, userId) }
-            .onSuccess { snapshot = it }
-            .onFailure { failure ->
-                loadError = failure.message ?: "Could not load offline file status."
-            }
-        loading = false
+        try {
+            snapshot = services.loadFileOfflineCenter(session, userId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            loadError = "Could not load offline file status."
+        } finally { loading = false }
     }
 
-    LaunchedEffect(session, userId, refreshAttempt) {
-        if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
+    LaunchedEffect(services, session, userId, refreshAttempt) {
+        if (!services.supportsBidirectionalFileSync) return@LaunchedEffect
         syncLoading = true
         try {
+            syncSnapshot = services.loadFileSyncCenter(session, userId)
+            syncLoading = false
             if (!restoreAndReconcileFileSyncRootSetup(services, session, setupDraft)) {
                 setupDraft.clear()
                 actionMessage = "Select the local folder again to restore folder access."
             }
-            syncSnapshot = services.loadFileSyncCenter(session, userId)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (failure: Throwable) {
-            actionMessage = failure.message ?: "Could not load folder sync pairs."
+        } catch (_: Exception) {
+            actionMessage = "Could not load saved syncs. Try opening this screen again."
         } finally {
             syncLoading = false
         }
     }
 
     LaunchedEffect(session, userId, refreshAttempt) {
-        if (userId.isBlank() || !services.supportsBidirectionalFileSync) return@LaunchedEffect
+        if (!services.supportsBidirectionalFileSync) return@LaunchedEffect
         mediaDiscoveryLoading = true
         try {
             mediaFolderDiscovery = services.discoverMediaSyncFolders()
@@ -542,6 +545,10 @@ internal fun FileOfflineCenterScreen(
                                 busyPairId = syncBusyPairIds.firstOrNull(),
                                 busyPairIds = syncBusyPairIds,
                                 onAdd = ::beginAddFolderSync,
+                                mutationsEnabled = userId.isNotBlank(),
+                                onEdit = if (services.supportsFileSyncSettingsEditing) ({ pair -> editingSyncPairId = pair.id }) else null,
+                                detailSheetVisible = editingSyncPair == null,
+                                selection = syncSelection,
                                 onOpenMediaSuggestion = ::openMediaSuggestion,
                                 onRequestMediaPermission = {
                                     if (services.requestPlatformCapability(PlatformCapability.MediaLibrary)) {
@@ -681,7 +688,7 @@ internal fun FileOfflineCenterScreen(
                         }
                     }
                     actionMessage?.let { message ->
-                        item { OfflineCenterMessageCard(message, errorTone = false) }
+                        item(key = "action-message") { OfflineCenterMessageCard(message, errorTone = false) }
                     }
                     if (incomingShareRecoveryPager.isVisible) {
                         item {
@@ -697,7 +704,7 @@ internal fun FileOfflineCenterScreen(
                     when (selectedWorkspaceSection) {
                         FileOfflineWorkspaceSection.FolderSync -> {
                             if (services.supportsBidirectionalFileSync) {
-                                item {
+                                item(key = "folder-sync-workspace") {
                                     FolderSyncSection(
                                         snapshot = syncSnapshot,
                                         loading = syncLoading,
@@ -706,6 +713,10 @@ internal fun FileOfflineCenterScreen(
                                         busyPairId = syncBusyPairIds.firstOrNull(),
                                         busyPairIds = syncBusyPairIds,
                                         onAdd = ::beginAddFolderSync,
+                                        mutationsEnabled = userId.isNotBlank(),
+                                        onEdit = if (services.supportsFileSyncSettingsEditing) ({ pair -> editingSyncPairId = pair.id }) else null,
+                                        detailSheetVisible = editingSyncPair == null,
+                                        selection = syncSelection,
                                         onOpenMediaSuggestion = ::openMediaSuggestion,
                                         onRequestMediaPermission = {
                                             if (services.requestPlatformCapability(PlatformCapability.MediaLibrary)) {
@@ -838,7 +849,11 @@ internal fun FileOfflineCenterScreen(
         }
     }
     }
-
+    editingSyncPair?.let { pair ->
+        FileSyncSettingsEditorRoute(services, session, userId, pair,
+            onDismiss = { editingSyncPairId = null },
+            onApplied = { message -> editingSyncPairId = null; actionMessage = message; refreshAttempt += 1 })
+    }
     removeTarget?.let { item ->
         AlertDialog(
             onDismissRequest = { if (actionKey == null) removeTarget = null },
@@ -1200,6 +1215,10 @@ internal fun FolderSyncSection(
     busyPairId: String?,
     busyPairIds: Set<String> = busyPairId?.let(::setOf).orEmpty(),
     onAdd: () -> Unit,
+    mutationsEnabled: Boolean = true,
+    onEdit: ((FileSyncPairSummary) -> Unit)? = null,
+    detailSheetVisible: Boolean = true,
+    selection: FileSyncWorkspaceSelection = rememberFileSyncWorkspaceSelection(),
     onOpenMediaSuggestion: (MediaSyncFolderSuggestion) -> Unit,
     onRequestMediaPermission: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
@@ -1217,16 +1236,20 @@ internal fun FolderSyncSection(
         MediaFolderSuggestions(
             discovery = mediaDiscovery,
             loading = mediaDiscoveryLoading,
-            enabled = ADD_PAIR_BUSY_ID !in busyPairIds,
+            enabled = mutationsEnabled && ADD_PAIR_BUSY_ID !in busyPairIds,
             onOpen = onOpenMediaSuggestion,
             onRequestPermission = onRequestMediaPermission,
         )
+        if (!mutationsEnabled) Text("Your saved syncs are available. Connect to your account to make changes.", style = MaterialTheme.typography.bodySmall)
         FileSyncWorkspace(
             snapshot = snapshot,
             loading = loading,
             busyPairId = busyPairId,
             busyPairIds = busyPairIds,
-            addEnabled = ADD_PAIR_BUSY_ID !in busyPairIds,
+            addEnabled = mutationsEnabled && ADD_PAIR_BUSY_ID !in busyPairIds,
+            mutationsEnabled = mutationsEnabled, onEdit = onEdit,
+            detailSheetVisible = detailSheetVisible,
+            selection = selection,
             onAdd = onAdd,
             onRun = onRun,
             onRemove = onRemove,
@@ -1241,7 +1264,6 @@ internal fun FolderSyncSection(
         )
     }
 }
-
 
 @Composable
 private fun MediaFolderSuggestions(
@@ -1352,140 +1374,6 @@ private fun MediaFolderSuggestions(
 }
 
 @Composable
-private fun FolderSyncPairCard(
-    pair: FileSyncPairSummary,
-    busy: Boolean,
-    actionsEnabled: Boolean,
-    onRun: () -> Unit,
-    onRemove: () -> Unit,
-    onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
-) {
-    var menuExpanded by remember(pair.id) { mutableStateOf(false) }
-    val menuActions = buildList {
-        add(NextcloudCardAction("Sync now", enabled = actionsEnabled, onClick = onRun))
-        pair.conflicts.take(FILE_SYNC_CONFLICT_PAGE_SIZE).forEach { conflict ->
-            conflict.choices.sortedBy(FileSyncDecisionChoice::ordinal).forEach { choice ->
-                add(
-                    NextcloudCardAction(
-                        label = "${choice.readableDecision()}: ${conflict.relativePath}",
-                        enabled = actionsEnabled,
-                        onClick = { onResolve(conflict, choice) },
-                    ),
-                )
-            }
-        }
-        add(NextcloudCardAction("Remove sync", destructive = true, enabled = actionsEnabled, onClick = onRemove))
-    }
-    Surface(
-        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
-            onOpen = null,
-            onShowActions = { menuExpanded = true },
-            actionsLabel = "Show actions for ${pair.localDisplayName}",
-        ),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Large),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                Text(
-                    pair.localDisplayName,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                NextcloudCardOverflow(
-                    itemLabel = pair.localDisplayName,
-                    actions = menuActions,
-                    expanded = menuExpanded,
-                    onExpandedChange = { menuExpanded = it },
-                )
-            }
-            Text(
-                fileSyncRouteLabel(pair.configuration.direction, pair.remoteRootPath),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "${pair.configuration.direction.readableSyncDirection()} | " +
-                    "${pair.readyCount} pending | ${pair.runningCount} syncing",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "${pair.completedCount} completed | ${pair.conflictCount} conflicts | ${pair.failedCount} failed",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (pair.conflictCount + pair.failedCount > 0) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Text(
-                "${pair.configuration.networkPolicy.readableNetworkPolicy()} | " +
-                    pair.configuration.powerPolicy.readablePowerPolicy(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (
-                pair.configuration.selectedPaths.isNotEmpty() ||
-                pair.configuration.ignoredPatterns.isNotEmpty() ||
-                pair.configuration.priorityRules.isNotEmpty()
-            ) {
-                Text(
-                    buildString {
-                        if (pair.configuration.selectedPaths.isEmpty()) append("Whole folder")
-                        else append(pair.configuration.selectedPaths.size).append(" selected path")
-                            .append(if (pair.configuration.selectedPaths.size == 1) "" else "s")
-                        append("; ").append(pair.configuration.ignoredPatterns.size).append(" ignore rule")
-                            .append(if (pair.configuration.ignoredPatterns.size == 1) "" else "s")
-                        append("; ").append(pair.configuration.priorityRules.size).append(" priority group")
-                            .append(if (pair.configuration.priorityRules.size == 1) "" else "s")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            pair.scheduleDescription?.let { schedule ->
-                Text(
-                    schedule,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            pair.conflicts.take(FILE_SYNC_CONFLICT_PAGE_SIZE).forEach { conflict ->
-                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                Text(
-                    conflict.relativePath,
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    conflict.reason.readableDecisionReason(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            if (pair.conflictCount > pair.conflicts.size) {
-                Text(
-                    "${pair.conflictCount - pair.conflicts.size} more conflicts. " +
-                        "Resolve these first, then refresh.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun MediaFolderPreview(
     suggestion: MediaSyncFolderSuggestion,
     preview: MediaSyncFolderPreview?,
@@ -1511,7 +1399,6 @@ private fun MediaFolderPreview(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
                 error != null -> {
                     Text(error, color = MaterialTheme.colorScheme.error)
                     Text(
@@ -1520,7 +1407,6 @@ private fun MediaFolderPreview(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
                 preview != null -> {
                     val totalLabel = buildString {
                         append(preview.totalItems).append(if (preview.totalItems == 1) " item" else " items")
@@ -1579,7 +1465,6 @@ private fun MediaFolderPreview(
                         )
                     }
                 }
-
                 else -> Text(
                     "${suggestion.imageCount.toLong() + suggestion.videoCount.toLong()} detected items",
                     style = MaterialTheme.typography.bodySmall,
@@ -1801,7 +1686,6 @@ private fun VirtualFileCacheTiersDialog(
     var choosingTier by remember { mutableStateOf<String?>(null) }
     var chooserError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
     fun choose(tier: String, initialPath: String, update: (String) -> Unit) {
         choosingTier = tier
         chooserError = null
@@ -1812,7 +1696,6 @@ private fun VirtualFileCacheTiersDialog(
             choosingTier = null
         }
     }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Cache drives") },
@@ -2357,12 +2240,6 @@ private fun VirtualFileStorageActionResult.virtualFileStorageMessage(): String =
     is VirtualFileStorageActionResult.Unsupported -> reason
 }
 
-private fun FileSyncDirection.readableSyncDirection(): String = when (this) {
-    FileSyncDirection.Bidirectional -> "Two-way"
-    FileSyncDirection.DownloadOnly -> "Nextcloud to device"
-    FileSyncDirection.UploadOnly -> "Device to Nextcloud"
-}
-
 internal fun fileSyncRouteLabel(
     direction: FileSyncDirection,
     remoteRootPath: String,
@@ -2383,29 +2260,7 @@ private fun MediaSyncFolderKind.readableMediaFolderKind(): String = when (this) 
     MediaSyncFolderKind.Mixed -> "Photos and videos"
 }
 
-private fun FileSyncConflictPolicy.readableConflictPolicy(): String = when (this) {
-    FileSyncConflictPolicy.Ask -> "Ask before changing either copy"
-    FileSyncConflictPolicy.KeepBoth -> "Keep both copies"
-    FileSyncConflictPolicy.PreferLocal -> "Prefer this device"
-    FileSyncConflictPolicy.PreferRemote -> "Prefer Nextcloud"
-}
 
-private fun FileSyncDeletionPolicy.readableDeletionPolicy(): String = when (this) {
-    FileSyncDeletionPolicy.Ask -> "Ask"
-    FileSyncDeletionPolicy.Propagate -> "Delete the other copy"
-    FileSyncDeletionPolicy.RestoreMissing -> "Restore the missing copy"
-}
-
-private fun FileSyncNetworkPolicy.readableNetworkPolicy(): String = when (this) {
-    FileSyncNetworkPolicy.AnyConnection -> "Wi-Fi or mobile data"
-    FileSyncNetworkPolicy.Unmetered -> "Unmetered network only"
-}
-
-private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
-    FileSyncPowerPolicy.AnyPower -> "Any battery level"
-    FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
-    FileSyncPowerPolicy.Charging -> "Only while charging"
-}
 
 internal fun fileOfflineRefreshEnabled(
     loading: Boolean,

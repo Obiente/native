@@ -423,7 +423,7 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices {
+interface NextcloudPlatformServices : FileSyncPlatformServices, NextcloudAccountCredentialServices, DeckCardDraftPlatformServices, TextEditorDraftPlatformServices, FileWriteFencePlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -957,75 +957,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         totalBytes = 0L,
         items = emptyList(),
         message = "Media folder previews are not available on this platform.",
-    )
-
-    suspend fun loadFileSyncCenter(
-        session: NextcloudSession,
-        userId: String,
-    ): FileSyncCenterSnapshot = FileSyncCenterSnapshot(
-        support = FileSyncCenterSupport.Unsupported,
-        pairs = emptyList(),
-        limitation = "Bidirectional folder synchronization is not available on this platform.",
-    )
-
-    suspend fun addFileSyncPair(
-        session: NextcloudSession,
-        userId: String,
-        localRoot: FileSyncLocalRoot,
-        remoteRootPath: String,
-        configuration: FileSyncConfiguration,
-    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
-        "Bidirectional folder synchronization is not available on this platform.",
-    )
-
-    /** Scans both roots and executes all conflict-free work with revision guards. */
-    suspend fun runFileSyncPair(
-        session: NextcloudSession,
-        userId: String,
-        pairId: String,
-    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
-        "Bidirectional folder synchronization is not available on this platform.",
-    )
-
-    suspend fun resolveFileSyncConflict(
-        session: NextcloudSession,
-        userId: String,
-        pairId: String,
-        workId: Long,
-        choice: FileSyncDecisionChoice,
-    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
-        "Folder sync conflict review is not available on this platform.",
-    )
-
-    /** Resolves one validated conflict batch and runs the resulting guarded work once. */
-    suspend fun resolveFileSyncConflicts(
-        session: NextcloudSession,
-        userId: String,
-        pairId: String,
-        resolutions: List<FileSyncConflictResolution>,
-    ): FileSyncCenterActionResult {
-        require(resolutions.isNotEmpty() && resolutions.size <= MAX_FILE_SYNC_CONFLICT_BATCH)
-        if (resolutions.size == 1) {
-            val resolution = resolutions.single()
-            return resolveFileSyncConflict(
-                session,
-                userId,
-                pairId,
-                resolution.workId,
-                resolution.choice,
-            )
-        }
-        return FileSyncCenterActionResult.Unsupported(
-            "Atomic folder sync conflict batches are not available on this platform.",
-        )
-    }
-
-    suspend fun removeFileSyncPair(
-        session: NextcloudSession,
-        userId: String,
-        pairId: String,
-    ): FileSyncCenterActionResult = FileSyncCenterActionResult.Unsupported(
-        "Bidirectional folder synchronization is not available on this platform.",
     )
 
     suspend fun listMedia(session: NextcloudSession, userId: String): List<NextcloudFile>
