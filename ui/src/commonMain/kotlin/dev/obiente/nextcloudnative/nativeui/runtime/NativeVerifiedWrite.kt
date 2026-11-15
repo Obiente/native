@@ -253,21 +253,39 @@ internal fun sameWireValue(left: JsonElement?, right: JsonElement?): Boolean = w
     else -> false
 }
 
-/** Whole numbers compare exactly, so integers past 2^53 stay distinct; `5` still equals `5.0`. */
+/**
+ * Numbers compare by their exact decimal value: `5` equals `5.0` and `5e0`, while integers past
+ * 2^53 and values that differ only beyond a double's precision stay distinct.
+ */
 private fun sameWireNumber(left: String?, right: String?): Boolean {
-    if (left == null || right == null) return false
-    val leftWhole = left.wireWholeNumberOrNull()
-    val rightWhole = right.wireWholeNumberOrNull()
-    if (leftWhole != null && rightWhole != null) return leftWhole == rightWhole
-    return left.toDoubleOrNull()?.let { value -> value == right.toDoubleOrNull() } == true
+    val leftValue = left?.wireDecimalOrNull() ?: return false
+    return leftValue == right?.wireDecimalOrNull()
 }
 
-private fun String.wireWholeNumberOrNull(): Long? {
-    toLongOrNull()?.let { return it }
-    val point = indexOf('.')
-    if (point <= 0 || point == lastIndex) return null
-    return if (substring(point + 1).all { it == '0' }) substring(0, point).toLongOrNull() else null
+/**
+ * A JSON number as sign, significant digits, and power of ten, with no leading or trailing zeros,
+ * so equal values have equal forms. Null for text that is not a JSON number.
+ */
+private fun String.wireDecimalOrNull(): Triple<Boolean, String, Long>? {
+    var text = trim()
+    if (text.isEmpty()) return null
+    val negative = text[0] == '-'
+    if (text[0] == '-' || text[0] == '+') text = text.substring(1)
+    val exponentAt = text.indexOfFirst { it == 'e' || it == 'E' }
+    val mantissa = if (exponentAt >= 0) text.substring(0, exponentAt) else text
+    val exponent = if (exponentAt >= 0) text.substring(exponentAt + 1).toLongOrNull() ?: return null else 0L
+    val point = mantissa.indexOf('.')
+    val whole = if (point >= 0) mantissa.substring(0, point) else mantissa
+    val fraction = if (point >= 0) mantissa.substring(point + 1) else ""
+    val digits = whole + fraction
+    if (digits.isEmpty() || digits.length > MAX_WIRE_NUMBER_DIGITS || !digits.all { it in '0'..'9' }) return null
+    val significant = digits.trimStart('0').trimEnd('0')
+    if (significant.isEmpty()) return Triple(false, "", 0L)
+    val trailingZeros = digits.length - digits.trimEnd('0').length
+    return Triple(negative, significant, exponent - fraction.length + trailingZeros)
 }
+
+private const val MAX_WIRE_NUMBER_DIGITS = 400
 
 /** Whether [record] still holds every edited field exactly as the editor read it. */
 internal fun NativeWriteReadBack.editedBaselineHolds(record: NativeRecord): Boolean {

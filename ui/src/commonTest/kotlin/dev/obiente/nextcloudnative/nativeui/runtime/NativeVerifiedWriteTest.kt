@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -156,6 +157,15 @@ class NativeVerifiedWriteTest {
         )
         assertTrue(sameWireValue(JsonPrimitive(9007199254740993), JsonPrimitive(9007199254740993)))
         assertFalse(sameWireValue(JsonPrimitive(5), JsonPrimitive(5.5)))
+        fun number(text: String) = Json.parseToJsonElement(text)
+        assertFalse(
+            sameWireValue(number("9007199254740993"), number("9.007199254740992e15")),
+            "Values that differ only beyond a double's precision are different values.",
+        )
+        assertTrue(sameWireValue(number("9007199254740993"), number("9.007199254740993e15")))
+        assertTrue(sameWireValue(number("1.50"), number("15e-1")))
+        assertTrue(sameWireValue(number("0"), number("-0.0")))
+        assertFalse(sameWireValue(number("0.1"), number("0.10000000000000001")))
         assertFalse(sameWireValue(JsonPrimitive("5"), JsonPrimitive(5)), "A string is not a number.")
         assertFalse(sameWireValue(JsonPrimitive(true), JsonPrimitive("true")))
         assertTrue(sameWireValue(JsonNull, JsonNull))
