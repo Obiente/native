@@ -197,14 +197,18 @@ internal fun parseNativeGridColumn(
                     else -> null
                 }
             }.distinct().singleOrNull()
-            NativeGridColumnKind.DateTime -> samples.firstNotNullOfOrNull { sample ->
-                val text = (sample as? JsonPrimitive)?.contentOrNull.orEmpty()
-                when {
-                    text.length >= 16 && text[10] == ' ' && text.take(10).isGridDate() -> NativeGridCellForm.SpaceDateTime
-                    text.length >= 16 && text[10] == 'T' && text.take(10).isGridDate() -> NativeGridCellForm.IsoDateTime
-                    else -> null
+            // Every stored value must use the one form that is written back. With two forms in the
+            // column, or a value in neither, the form to send would depend on which row came first.
+            NativeGridColumnKind.DateTime -> samples
+                .mapNotNull { sample -> (sample as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotEmpty) }
+                .map { text ->
+                    when {
+                        text.length >= 16 && text[10] == ' ' && text.take(10).isGridDate() -> NativeGridCellForm.SpaceDateTime
+                        text.length >= 16 && text[10] == 'T' && text.take(10).isGridDate() -> NativeGridCellForm.IsoDateTime
+                        else -> null
+                    }
                 }
-            }
+                .distinct().singleOrNull()
             else -> null
         },
     )

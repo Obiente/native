@@ -143,6 +143,16 @@ class NativeGridRowWritesTest {
     }
 
     @Test
+    fun aDateTimeColumnWithTwoStoredFormsIsNotEdited() {
+        val dated = column("11", "Starts", "datetime", "")
+        fun stored(value: String) = """[{"columnId":1,"value":"Synthetic item"},{"columnId":11,"value":"$value"}]"""
+        val mixed = assertNotNull(plan(columns = columns() + dated, rows = listOf(row(stored("2026-01-02T08:30")), row(stored("2026-01-02 08:30")))))
+        assertTrue(mixed.editableColumns.none { it.key == "11" }, "Which form to send would depend on the order of the rows.")
+        val consistent = assertNotNull(plan(columns = columns() + dated, rows = listOf(row(stored("2026-01-02 08:30")), row(stored("2026-01-03 09:00")))))
+        assertTrue(consistent.editableColumns.any { it.key == "11" })
+    }
+
+    @Test
     fun aToggleColumnWithMixedEncodingsIsNotEdited() {
         val mixed = listOf(
             row(ROW_DATA),
