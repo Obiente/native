@@ -83,6 +83,8 @@ internal data class NativeGridRowWritePlan(
     val create: NativeContractAction?,
     val update: NativeItemWrite?,
     val delete: NativeItemWrite?,
+    /** Names the app's own contract uses as path or query parameters, normalized: its navigation context. */
+    val routeParameterNames: Set<String> = emptySet(),
 ) {
     val editableColumns: List<NativeGridColumn> get() = columns.filter(NativeGridColumn::editable)
 }
@@ -134,7 +136,10 @@ internal fun nativeGridRowWritePlan(
     }
     if (columns.isEmpty() || columns.map(NativeGridColumn::key).distinct().size != columns.size) return null
     if (create == null && update == null && delete == null) return null
-    return NativeGridRowWritePlan(route, parent.id, listValues, cellField, columns, create, update, delete)
+    val routeParameters = schema.actions.flatMapTo(hashSetOf()) { action ->
+        (action.binding.pathParameterNames + action.binding.queryParameterNames).map(String::contractKey)
+    }
+    return NativeGridRowWritePlan(route, parent.id, listValues, cellField, columns, create, update, delete, routeParameters)
 }
 
 /** The single body property declared as an open key-value map, which carries the cells. */
@@ -496,16 +501,18 @@ internal fun NativeGridRowWritePlan.updateRequest(row: NativeGridRow, drafts: Ma
 
 /**
  * A cell-map row's representation is its stored cells. A declared body input outside the cell map
- * that is optional, accepts null, and is not part of what the row read returned (such as a view
- * that scopes the request) is a request scope, not stored row data, so it is not echoed or sent.
- * An unreturned input that is required or not nullable still keeps the row read-only.
+ * is a request scope, not stored row data, only when the contract itself uses that name to address
+ * a route (such as a view that scopes the request) and the input is optional, accepts null, and
+ * was not part of what the row read returned. It is then not echoed or sent. Any other unreturned
+ * input, such as an optional description, may hold a stored value and keeps the row read-only.
  */
 private fun NativeGridRowWritePlan.scopingInputs(update: NativeItemWrite, row: NativeGridRow): Set<String> {
     val schema = update.write.action.binding.bodySchema as? JsonObject ?: return emptySet()
     val properties = schema["properties"] as? JsonObject ?: return emptySet()
     val required = (schema["required"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty().toSet()
     return properties.filter { (name, property) ->
-        name != cellField && name !in required && row.wire.valueNamed(name) == null && JsonNull.fitsDeclaredSchema(property)
+        name != cellField && name !in required && name.contractKey() in routeParameterNames &&
+            row.wire.valueNamed(name) == null && JsonNull.fitsDeclaredSchema(property)
     }.keys
 }
 
@@ -519,6 +526,11 @@ private fun NativeGridRowWritePlan.verifyCells(
     stored: Map<String, JsonElement>,
 ): NativeWriteVerification {
     val cells = nativeGridStoredCells(current, cellField) ?: return NativeWriteVerification.Unidentified
+    // An edited cell the read no longer returns shows neither the new value nor the old one.
+    val unreadable = edited.any { (key, value) ->
+        cells[key] == null && value !is JsonNull && (value as? JsonPrimitive)?.contentOrNull != ""
+    }
+    if (unreadable) return NativeWriteVerification.Unidentified
     val adjusted = edited.filter { (key, value) -> !sameWireValue(cells[key], value) }.keys
     val drifted = stored.filter { (key, value) -> key !in edited && !sameWireValue(cells[key], value) }.keys
     val reverted = edited.isNotEmpty() && adjusted.size == edited.size && edited.keys.all { key -> sameWireValue(cells[key], stored[key]) }
