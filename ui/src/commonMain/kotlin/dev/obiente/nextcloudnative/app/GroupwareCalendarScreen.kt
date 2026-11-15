@@ -298,7 +298,7 @@ fun NativeGroupwareCalendarScreen(
                         timeWindow = queryWindow,
                     ),
                 )
-                expandGroupwareCalendarEvents(
+                expandCalendarEventsForWindow(
                     parseGroupwareCalendarEvents(calendar.href, response),
                     queryWindow,
                 ).map(GroupwareCalendarEvent::inDeviceTime)

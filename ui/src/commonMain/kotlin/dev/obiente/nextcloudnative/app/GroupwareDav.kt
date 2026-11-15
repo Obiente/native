@@ -552,7 +552,7 @@ fun expandGroupwareCalendarEvents(
     timeWindow: GroupwareDavTimeWindow,
 ): List<GroupwareCalendarEvent> {
     val windowStart = timeWindow.startUtc.take(8)
-    val windowEnd = timeWindow.endUtc.take(8)
+    val windowEnd = timeWindow.endUtc.let { end -> if (end.drop(8).startsWith("T000000")) end.take(8) else nextIsoDate(end.take(8).compactDateToIso())?.isoDateToCompact() ?: end.take(8) }
     val result = mutableListOf<GroupwareCalendarEvent>()
     events.groupBy { it.href to it.uid }.values.forEach { components ->
         val overrides = components.filter { it.recurrenceId != null }.associateBy { it.recurrenceId }

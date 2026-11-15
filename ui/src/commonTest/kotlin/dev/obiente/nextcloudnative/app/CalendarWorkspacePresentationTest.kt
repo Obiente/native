@@ -71,6 +71,19 @@ class CalendarWorkspacePresentationTest {
     }
 
     @Test
+    fun `an event on the last displayed day is kept and one just past local midnight is not`() {
+        val november = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        fun event(start: String, rule: String? = null) = GroupwareCalendarEvent(
+            href = "/remote.php/dav/calendars/alice/personal/$start.ics", etag = null, calendarHref = "/remote.php/dav/calendars/alice/personal/",
+            uid = start, title = "Synthetic", start = start, end = null, allDay = false, recurrenceRule = rule, rawCalendar = "",
+        )
+        val kept = expandCalendarEventsForWindow(listOf(event("20261130T120000Z"), event("20261130T233000Z")), november)
+        assertEquals(listOf("20261130T120000Z"), kept.map { it.start }, "Noon on 30 November is in the month; 00:30 on 1 December local time is not.")
+        val daily = expandCalendarEventsForWindow(listOf(event("20261129T120000Z", "FREQ=DAILY;COUNT=5")), november)
+        assertEquals(listOf("20261129T120000Z", "20261130T120000Z"), daily.map { it.start })
+    }
+
+    @Test
     fun `retained calendar data must match the requested month and window`() {
         val july = GroupwareDavTimeWindow("20260701T000000Z", "20260801T000000Z")
         val august = GroupwareDavTimeWindow("20260801T000000Z", "20260901T000000Z")

@@ -109,6 +109,22 @@ internal fun calendarWorkspaceQueryWindow(
     return if (start < end) GroupwareDavTimeWindow(start, end) else dates
 }
 
+/**
+ * Expands [events] for [window], whose bounds are midnights on the device and so usually fall
+ * inside a UTC day. The expansion works in whole dates and covers the day the window ends in; a
+ * UTC-timed event or occurrence is then kept only when it starts inside the exact window.
+ */
+internal fun expandCalendarEventsForWindow(
+    events: List<GroupwareCalendarEvent>,
+    window: GroupwareDavTimeWindow,
+): List<GroupwareCalendarEvent> = expandGroupwareCalendarEvents(events, window).filter { event ->
+    val start = event.start
+    // A repeating event's own entry stays as the expansion placed it: when its rule cannot be
+    // read it is shown as it is, wherever it starts.
+    val seriesEntry = event.recurrenceRule != null && !event.isGeneratedOccurrence
+    seriesEntry || start.length < 16 || !start.endsWith('Z') || (start >= window.startUtc && start < window.endUtc)
+}
+
 private fun calendarWorkspaceDateWindow(
     view: CalendarWorkspaceView,
     month: CalendarMonth,
