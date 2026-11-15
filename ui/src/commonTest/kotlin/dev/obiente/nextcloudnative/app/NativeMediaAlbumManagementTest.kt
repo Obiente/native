@@ -94,6 +94,11 @@ class NativeMediaAlbumManagementTest {
             service.executeConfirmed(session, planDeleteOrLeaveMediaAlbum(album("Trip", "alice"), "alice"), confirmed = true)
         }
         assertEquals("You do not have permission to change this album.", failure.message)
+        assertFalse(failure is NativeMediaCollectionOutcomeUnknownException, "A client error is a definite refusal.")
+        status = 503
+        assertFailsWith<NativeMediaCollectionOutcomeUnknownException>("A server failure may follow the change.") {
+            service.executeConfirmed(session, planDeleteOrLeaveMediaAlbum(album("Trip", "alice"), "alice"), confirmed = true)
+        }
         assertFalse(sent.last().relativePath.contains("/files/"))
     }
 }

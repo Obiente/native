@@ -386,8 +386,11 @@ class NativeMediaCollectionMutationService internal constructor(
         require(plan.enabled && request.matches(plan.action)) { "The collection mutation plan is invalid." }
         val response = execute(session, request)
         val alreadyPresent = plan.action == NativeMediaCollectionAction.AddItem && response.status == 409
-        require(response.status in 200..299 || alreadyPresent) {
-            response.collectionMutationError(plan.action)
+        if (response.status !in 200..299 && !alreadyPresent) {
+            val message = response.collectionMutationError(plan.action)
+            // Only a client error is a definite refusal. Any other answer may follow the change.
+            require(response.status !in 400..499) { message }
+            throw NativeMediaCollectionOutcomeUnknownException(message)
         }
         return NativeMediaCollectionMutationResult(
             status = response.status,
@@ -505,3 +508,9 @@ private const val MAX_COLLECTION_DAV_PATH_LENGTH = 4_096
 private const val MAX_COLLECTION_ETAG_LENGTH = 1_024
 private const val MAX_DAV_SEGMENT_LENGTH = 1_024
 private const val DAV_HEX = "0123456789ABCDEF"
+
+/**
+ * The server answered a collection change with something other than success or a client error,
+ * so the change may or may not have been applied. Callers refresh before offering it again.
+ */
+internal class NativeMediaCollectionOutcomeUnknownException(message: String) : IllegalArgumentException(message)

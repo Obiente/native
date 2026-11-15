@@ -107,6 +107,9 @@ internal fun NativeAlbumManagementMenu(
                             null
                         } catch (cancelled: CancellationException) {
                             throw cancelled
+                        } catch (_: NativeMediaCollectionOutcomeUnknownException) {
+                            // A server failure may come after the change was applied.
+                            UNKNOWN_ALBUM_RESULT
                         } catch (failure: IllegalArgumentException) {
                             failure.message ?: "The album was not changed."
                         } catch (_: Exception) {
