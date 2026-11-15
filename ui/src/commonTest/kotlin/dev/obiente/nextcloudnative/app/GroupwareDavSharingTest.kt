@@ -198,6 +198,20 @@ class GroupwareDavSharingTest {
             objectsHref,
         )
         assertEquals(1, objects.size)
+        val partial = ok(
+            """
+            <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:nc="http://nextcloud.com/ns">
+            <d:response><d:href>${objectsHref}13.ics</d:href><d:propstat><d:prop><nc:calendar-uri>personal</nc:calendar-uri>
+            </d:prop></d:propstat></d:response>
+            </d:multistatus>
+            """.trimIndent(),
+        )
+        assertTrue(parseDeletedCalendarObjects(partial, objectsHref).isEmpty())
+        assertEquals(
+            setOf("${objectsHref}13.ics"),
+            unreadableDeletedCalendarObjects(partial, objectsHref),
+            "An item whose content cannot be read is still in the trash bin.",
+        )
         assertEquals("Buy milk", objects.single().name)
         assertEquals(CalendarTrashKind.Task, objects.single().kind)
         assertEquals("personal", objects.single().calendarUri)

@@ -26,6 +26,8 @@ internal data class CalendarTrashContents(
     val items: List<CalendarTrashItem>,
     /** Days items stay before the server removes them, when the server says. */
     val retentionDays: Int?,
+    /** Deleted events and tasks the listing named but whose content could not be read. */
+    val unreadableHrefs: Set<String> = emptySet(),
 )
 
 internal fun calendarTrashHomeHref(userId: String): String = groupwareCalendarHomeHref(userId) + "trashbin/"
@@ -72,6 +74,24 @@ internal fun parseDeletedCalendars(response: NextcloudApiResponse): List<Calenda
             color = block.xmlText("calendar-color")?.trim()?.takeIf(String::isNotBlank),
         )
     }.distinctBy(CalendarTrashItem::href)
+}
+
+/**
+ * The deleted events and tasks [parseDeletedCalendarObjects] leaves out because their content is
+ * missing or cannot be decoded. They are still in the trash bin, so their absence from the item
+ * list shows nothing about a restore or a removal.
+ */
+internal fun unreadableDeletedCalendarObjects(response: NextcloudApiResponse, objectsHref: String): Set<String> {
+    if (response.status !in 200..299) return emptySet()
+    val readable = parseDeletedCalendarObjects(response, objectsHref).mapTo(HashSet(), CalendarTrashItem::href)
+    return response.body.decodeToString().xmlElements("response").mapNotNullTo(LinkedHashSet()) { block ->
+        val href = try {
+            block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+        href?.takeIf { it.startsWith(objectsHref) && !it.endsWith('/') && it !in readable }
+    }
 }
 
 internal fun parseDeletedCalendarObjects(response: NextcloudApiResponse, objectsHref: String): List<CalendarTrashItem> {

@@ -40,6 +40,9 @@ internal class CalendarTrashBinManager(
         private set
     internal var onChanged: () -> Unit = {}
 
+    /** Counts refreshes and changes, so a refresh a change overtook cannot bring its items back. */
+    private var readEpoch = 0
+
     fun show() {
         open = true
         error = null
@@ -56,9 +59,11 @@ internal class CalendarTrashBinManager(
     fun reload() {
         if (loading) return
         loading = true
+        val epoch = ++readEpoch
         scope.launch {
             try {
                 val loaded = read()
+                if (epoch != readEpoch) return@launch
                 if (loaded == null) error = "The trash bin could not be loaded. Check your connection and try again."
                 else contents = loaded
             } finally {
@@ -94,6 +99,8 @@ internal class CalendarTrashBinManager(
         if (busy || items.isEmpty()) return
         busy = true
         error = null
+        // A refresh still in flight read the trash bin from before this change; its answer is dropped.
+        readEpoch++
         scope.launch {
             try {
                 var rejected = 0
@@ -120,10 +127,13 @@ internal class CalendarTrashBinManager(
                     }
                 }
                 val loaded = read()
-                if (loaded != null) contents = loaded
-                val remaining = loaded?.items.orEmpty().count { left -> items.any { it.href == left.href } }
+                // An item the listing names but cannot read is still there; it stays on screen.
+                val unverified = items.filter { it.href in loaded?.unreadableHrefs.orEmpty() }
+                if (loaded != null) contents = loaded.copy(items = loaded.items + unverified)
+                val remaining = loaded?.items.orEmpty().count { left -> items.any { it.href == left.href } } + unverified.size
                 error = when {
                     loaded == null -> "$action finished, but the trash bin could not be checked. Refresh to see the result."
+                    unverified.isNotEmpty() -> "$action could not be confirmed for ${unverified.size} of ${items.size} item(s). Refresh to check."
                     remaining == 0 -> null
                     refused == 403 || refused == 401 -> "$action failed for $remaining of ${items.size} item(s): you don't have permission."
                     rejected > 0 -> "$action failed for $remaining of ${items.size} item(s)."
@@ -140,10 +150,9 @@ internal class CalendarTrashBinManager(
         val calendars = parseDeletedCalendars(
             services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId))),
         )
-        val objects = parseDeletedCalendarObjects(
-            services.executeGroupwareDav(session, calendarTrashObjectsRequest(userId)),
-            calendarTrashHomeHref(userId) + "objects/",
-        )
+        val objectsResponse = services.executeGroupwareDav(session, calendarTrashObjectsRequest(userId))
+        val objectsHref = calendarTrashHomeHref(userId) + "objects/"
+        val objects = parseDeletedCalendarObjects(objectsResponse, objectsHref)
         val retention = try {
             parseCalendarTrashRetentionDays(services.executeGroupwareDav(session, calendarTrashRetentionRequest(userId)))
         } catch (failure: CancellationException) {
@@ -154,6 +163,7 @@ internal class CalendarTrashBinManager(
         CalendarTrashContents(
             (calendars + objects).sortedByDescending { it.deletedAt.orEmpty() },
             retention,
+            unreadableDeletedCalendarObjects(objectsResponse, objectsHref),
         )
     } catch (failure: CancellationException) {
         throw failure
