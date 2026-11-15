@@ -343,13 +343,16 @@ internal class TalkChatController(
             return
         }
         mutate(target.id) {
-            when (val outcome = write(TalkChatRequests.edit(token, target.id, message), ::parseTalkWrittenEntry)) {
-                is TalkWriteOutcome.Confirmed -> {
-                    outcome.value?.let { entry -> updateTimeline { it.applying(listOf(entry), advanceCursor = false) } }
+            val outcome = write(TalkChatRequests.edit(token, target.id, message), ::parseTalkWrittenEntry)
+            val entry = (outcome as? TalkWriteOutcome.Confirmed)?.value
+            when {
+                entry != null -> {
+                    updateTimeline { it.applying(listOf(entry), advanceCursor = false) }
                     finishEdit(target.id)
                 }
-                is TalkWriteOutcome.Rejected -> state = state.copy(notice = outcome.failure.message)
-                TalkWriteOutcome.Unknown -> {
+                outcome is TalkWriteOutcome.Rejected -> state = state.copy(notice = outcome.failure.message)
+                // An unknown result, or a success without the edited message, is checked on the server.
+                else -> {
                     val verified = verifyMessage(target.id)
                     when {
                         verified?.message == message -> {
