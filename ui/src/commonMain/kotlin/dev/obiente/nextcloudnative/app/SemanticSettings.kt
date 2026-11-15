@@ -29,7 +29,10 @@ internal data class SemanticSettingEntry(
     val writable: Boolean,
     /** The value exactly as the server returned it; a replacement sends untouched settings back as this. */
     val stored: JsonPrimitive? = null,
-)
+) {
+    /** The stored JSON value, or the text as a string for an entry that was not read from the server. */
+    val storedValue: JsonPrimitive get() = stored ?: JsonPrimitive(value)
+}
 
 /**
  * An app's settings document read from the server.
@@ -78,7 +81,8 @@ internal class SemanticSettings(
     /** Whether [current] holds every replaced setting at the value [baseline] was built from. */
     fun replacementBaselineHolds(baseline: List<SemanticSettingEntry>, current: List<SemanticSettingEntry>): Boolean {
         val properties = replacementProperties() ?: return true
-        fun List<SemanticSettingEntry>.replaced() = filter { it.key in properties }.associate { it.key to it.value }
+        // The stored JSON value is compared, so a number that became the same digits as text counts as a change.
+        fun List<SemanticSettingEntry>.replaced() = filter { it.key in properties }.associate { it.key to it.storedValue }
         return baseline.replaced() == current.replaced()
     }
 
@@ -89,8 +93,8 @@ internal class SemanticSettings(
         editedKey: String,
     ): List<SemanticSettingEntry> {
         val properties = replacementProperties() ?: return emptyList()
-        val after = stored.associate { it.key to it.value }
-        return baseline.filter { it.key in properties && it.key != editedKey && after[it.key] != it.value }
+        val after = stored.associate { it.key to it.storedValue }
+        return baseline.filter { it.key in properties && it.key != editedKey && after[it.key] != it.storedValue }
     }
 
     /** The declared settings a document replacement must carry, or null for a keyed or merge write. */

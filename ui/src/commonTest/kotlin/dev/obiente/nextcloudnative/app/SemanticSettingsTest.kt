@@ -160,6 +160,17 @@ class SemanticSettingsTest {
     }
 
     @Test
+    fun `a setting that changed type counts as changed`() {
+        val settings = notesSettings()
+        val text = settings.parse(response("""{"notesPath":"Notes","fileSuffix":"1"}"""))
+        val number = settings.parse(response("""{"notesPath":"Notes","fileSuffix":1}"""))
+        assertEquals(text.map { it.value }, number.map { it.value }, "Both read as the same text.")
+        assertFalse(settings.replacementBaselineHolds(number, text), "The stale number is not written over the text stored since.")
+        assertEquals(listOf("fileSuffix"), settings.replacementDrift(number, text, "notesPath").map { it.key })
+        assertTrue(settings.replacementBaselineHolds(number, number))
+    }
+
+    @Test
     fun `a replacement sends untouched settings back exactly as the server returned them`() {
         val settings = notesSettings()
         val entries = settings.parse(response("""{"notesPath":"Notes","fileSuffix":".md"}"""))
