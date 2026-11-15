@@ -189,7 +189,14 @@ internal fun NativeFeedReaderWorkspace(
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     if (open != null) {
                         PlatformBackHandler(enabled = true) { openKey = null }
-                        reader(Modifier.fillMaxSize())
+                        // The article replaces the list here, and a desktop has no system back.
+                        Column(Modifier.fillMaxSize()) {
+                            TextButton(onClick = { openKey = null }, modifier = Modifier.padding(start = NextcloudSpacing.Small)) {
+                                Icon(NextcloudIcons.Back, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Text("Articles", modifier = Modifier.padding(start = NextcloudSpacing.XSmall))
+                            }
+                            reader(Modifier.weight(1f).fillMaxWidth())
+                        }
                     } else {
                         list(Modifier.fillMaxSize())
                     }
