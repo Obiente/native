@@ -62,7 +62,10 @@ internal fun GenericFinanceCollection(
     }
     val recordCreates = rememberNativeCreateAttemptGuard("records:${recordPlan?.create?.write?.action?.id}:${recordPlan?.parentId}")
     val recordEditing = remember(resource.id, recordPlan?.parentId, recordCreates) { NativeChildRecordEditing(recordCreates) }
-    LaunchedEffect(recordEditing, writes?.recordsKey) { recordEditing.session.acceptAuthoritativeRefresh() }
+    LaunchedEffect(recordEditing, writes?.recordsKey) {
+        recordEditing.session.acceptAuthoritativeRefresh()
+        recordCreates.noteRecords(writes?.recordsKey)
+    }
     val noun = resource.name.singularRecordNoun()
     var filter by rememberSaveable(resource.id) { mutableStateOf(NativeFinanceLedgerFilter.All) }
     var categoryFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }

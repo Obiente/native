@@ -35,7 +35,13 @@ class NativeCreateAttemptGuardTest {
         val later = NativeCreateAttemptGuard(store, clock = { 2L })
         val session = NativeEditorWriteSession()
         assertEquals(NativeCreateOutcome.NotSent(null), later.submit(request(), session, lost) {}, "Nothing runs before the record is read.")
+        later.noteRecords(1)
         later.restore()
+        val unread = assertIs<NativeCreateOutcome.NotSent>(later.submit(request(), session, lost) {})
+        assertTrue(unread.message.orEmpty().contains("Refresh"), "Nothing is added before the list was read again.")
+        assertTrue(assertIs<NativeCreateOutcome.NotSent>(later.submit(request(), session, lost) {}).message.orEmpty().contains("Refresh"))
+        assertEquals(1, calls, "Pressing again does not stand in for that read.")
+        later.noteRecords(2)
         val held = assertIs<NativeCreateOutcome.NotSent>(later.submit(request(), session, lost) {})
         assertTrue(held.message.orEmpty().contains("may already have been added"))
         assertEquals(1, calls, "The first press only explains.")
@@ -61,7 +67,9 @@ class NativeCreateAttemptGuardTest {
         val notRecorded = assertIs<NativeCreateOutcome.NotSent>(unwritable.submit(request(), NativeEditorWriteSession(), executor) {})
         assertTrue(notRecorded.message.orEmpty().contains("could not keep a record"))
 
-        val unreadable = NativeCreateAttemptGuard(MemoryAttempts(failLoad = true)).apply { restore() }
+        val unreadable = NativeCreateAttemptGuard(MemoryAttempts(failLoad = true)).apply { noteRecords(1); restore() }
+        assertIs<NativeCreateOutcome.NotSent>(unreadable.submit(request(), NativeEditorWriteSession(), executor) {})
+        unreadable.noteRecords(2)
         assertIs<NativeCreateOutcome.NotSent>(unreadable.submit(request(), NativeEditorWriteSession(), executor) {})
         assertEquals(0, calls)
         assertEquals(NativeCreateOutcome.Ran(confirmed = true), unreadable.submit(request(), NativeEditorWriteSession(), executor) {})

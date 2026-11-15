@@ -75,7 +75,10 @@ internal fun GenericTableCollection(
     val rowPlan = remember(schema, view, datasetContext, records) { nativeGridRowWritePlan(schema, view, datasetContext, records) }
     val rowCreates = rememberNativeCreateAttemptGuard("rows:${rowPlan?.create?.action?.id}:${rowPlan?.parentId}")
     val rowEditing = remember(schema.app.id, view.id, rowPlan?.parentId, rowCreates) { NativeGridRowEditing(rowCreates) }
-    LaunchedEffect(rowEditing, recordsGeneration) { rowEditing.session.acceptAuthoritativeRefresh() }
+    LaunchedEffect(rowEditing, recordsGeneration) {
+        rowEditing.session.acceptAuthoritativeRefresh()
+        rowCreates.noteRecords(recordsGeneration)
+    }
     val rowActions: (NativeRecord) -> List<NextcloudCardAction> = { record ->
         nativeGridRowActions(rowPlan, rowEditing, record, nativeRecordPresentation(projection.resource, record).title)
     }

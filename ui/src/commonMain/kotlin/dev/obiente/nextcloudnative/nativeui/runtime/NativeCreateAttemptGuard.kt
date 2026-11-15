@@ -24,9 +24,11 @@ internal sealed interface NativeCreateOutcome {
  * shown, so a lost answer cannot always be settled by looking.
  *
  * The attempt is recorded in [attempts] before its request leaves the device. An attempt whose
- * result was never learned stays on record across leaving the screen and restarting the app, and
- * the next create is held back once with an explanation; pressing again is the explicit decision
- * to add another. Without a store the same holds for as long as this guard lives.
+ * result was never learned stays on record across leaving the screen and restarting the app.
+ * Another create is then refused until the list has been read again from the server, so the
+ * earlier record can be looked for; after that read the next create is held back once with an
+ * explanation, and pressing again is the decision to add another. Without a store the same holds
+ * for as long as this guard lives.
  */
 @Stable
 internal class NativeCreateAttemptGuard(
@@ -45,6 +47,21 @@ internal class NativeCreateAttemptGuard(
     private var warned = false
     private var running = false
 
+    /** True once the list was read again from the server after an unresolved attempt was found. */
+    private var readSinceRestore = true
+    private var lastGeneration: Any? = null
+    private var generationSeen = false
+
+    /**
+     * Tells the guard which authoritative load of the list is on screen. A load different from
+     * the one shown when an unresolved attempt was restored is the read that attempt waits for.
+     */
+    fun noteRecords(generation: Any?) {
+        if (generationSeen && generation != lastGeneration) readSinceRestore = true
+        lastGeneration = generation
+        generationSeen = true
+    }
+
     /** Reads the attempt recorded before this screen existed. */
     suspend fun restore() {
         val store = attempts ?: return
@@ -56,6 +73,8 @@ internal class NativeCreateAttemptGuard(
             // Persistence fault boundary: an unreadable record may be a record already added.
             unreadable = true
         }
+        // Whatever was read before this point was not read to look for that attempt.
+        if (unconfirmed != null || unreadable) readSinceRestore = false
         restoring = false
     }
 
@@ -67,6 +86,11 @@ internal class NativeCreateAttemptGuard(
     ): NativeCreateOutcome {
         if (running || restoring || !session.canSubmit) return NativeCreateOutcome.NotSent(null)
         val earlier = unconfirmed
+        if ((earlier != null || unreadable) && !readSinceRestore) {
+            return NativeCreateOutcome.NotSent(
+                "An earlier attempt may already have been added. Refresh, then look for it in the list before adding another.",
+            )
+        }
         if ((earlier != null || unreadable) && !warned) {
             warned = true
             return NativeCreateOutcome.NotSent(
