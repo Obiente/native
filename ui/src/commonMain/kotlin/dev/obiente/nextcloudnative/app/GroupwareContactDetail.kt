@@ -189,7 +189,7 @@ private fun ColumnScope.ContactFacts(
     onCopy: ((String, String) -> Boolean)?,
     includeOrganization: Boolean = true,
 ) {
-    val card = remember(contact.rawVCard) { contact.card() }
+    val card = remember(contact) { contact.displayCard() }
     if (includeOrganization) contact.organization?.let { ContactFact("Organization", it) }
     card.jobTitle.takeIf(String::isNotBlank)?.let { ContactFact("Job title", it) }
     // Each way to reach someone is one tap away, handed to the system's mail or phone app.

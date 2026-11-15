@@ -88,6 +88,21 @@ internal data class ContactCard(
     }
 }
 
+/**
+ * The card to show. A contact kept as a summary has no vCard text; what the summary kept (its
+ * addresses, phone numbers, postal address, and birthday) is shown instead of nothing. Editing
+ * always starts from [card] of the fully loaded contact, never from this.
+ */
+internal fun GroupwareContact.displayCard(): ContactCard = if (rawVCard.isNotBlank()) card() else ContactCard(
+    name = displayName,
+    organization = organization.orEmpty(),
+    notes = notes.orEmpty(),
+    birthday = birthday.orEmpty(),
+    emails = emails.map { ContactValue(ContactValueLabel.Other, it) },
+    phones = phones.map { ContactValue(ContactValueLabel.Other, it) },
+    addresses = listOfNotNull(address?.takeIf(String::isNotBlank)?.let { ContactAddress(ContactValueLabel.Other, street = it) }),
+)
+
 internal fun GroupwareContact.card(): ContactCard {
     val properties = rawVCard.unfoldCalendarLines().mapNotNull(::parseICalendarContentLine)
     fun named(name: String) = properties.filter { it.name.substringAfterLast('.').equals(name, ignoreCase = true) }
