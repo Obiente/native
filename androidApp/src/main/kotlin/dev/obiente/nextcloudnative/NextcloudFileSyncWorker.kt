@@ -191,7 +191,7 @@ internal class AndroidFileSyncScheduleRestorationWorker(
                 runAttemptCount = runAttemptCount,
             ) { current ->
                 val userId = services.loadServerInfo(current).userId
-                services.loadFileSyncCenter(current, userId)
+                AndroidFileSyncEngine(applicationContext).restoreSchedules(current, userId)
             }.toWorkerResult()
         } catch (failure: Exception) {
             scheduleRestorationFailureDisposition(runAttemptCount, failure).toWorkerResult()

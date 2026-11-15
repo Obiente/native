@@ -88,7 +88,6 @@ internal class AndroidFileSyncEngine(context: Context) {
     }
     private val reconciliationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val scheduledMediaReconciliations = ConcurrentHashMap.newKeySet<String>()
-    private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
     private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
 
@@ -97,21 +96,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         userId: String,
     ): FileSyncCenterSnapshot {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        val schedulingToken = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.capture(accountId)
-        val persisted = loadFileSyncPresentationSnapshot(
-            lock = ENGINE_LOCK,
-            load = store::load,
-            scheduleWhenIdle = { snapshot ->
-                schedulingToken?.let { token ->
-                    schedulePersistedPairs(snapshot, token, userId)
-                }
-            },
-            scheduleAfterIdle = {
-                schedulingToken?.let { token ->
-                    schedulePersistedPairsAfterIdle(token, userId)
-                }
-            },
-        )
+        val persisted = store.loadForPresentation(activeAndroidFileSyncPairs.toSet())
         return FileSyncCenterSnapshot(
             support = FileSyncCenterSupport.Available,
             pairs = persisted.coordinator.pairs
@@ -122,6 +107,9 @@ internal class AndroidFileSyncEngine(context: Context) {
                         scheduleDescription = pair.configuration.scheduleDescription(),
                         runState = FileSyncPairRunState.Active,
                         networkState = currentNetworkState(pair.configuration),
+                        allowedDirections = FileSyncDirection.entries.filterTo(mutableSetOf()) {
+                            supportsAndroidFileSyncDirection(pair.localRootId, it)
+                        },
                     )
                 },
         )
@@ -224,19 +212,11 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
     }
 
-    private fun schedulePersistedPairsAfterIdle(
-        token: AndroidFileSyncSessionSchedulingToken,
-        userId: String,
-    ) {
-        val scheduling = DeferredFileSyncPairScheduling(token, userId)
-        if (!scheduledPairScheduling.acquire(scheduling)) return
-        deferFileSyncSnapshotActionUntilIdle(
-            lock = ENGINE_LOCK,
-            scope = reconciliationScope,
-            load = store::load,
-            onFinished = { scheduledPairScheduling.release(scheduling) },
-        ) { current ->
-            schedulePersistedPairs(current, token, userId)
+    suspend fun restoreSchedules(session: NextcloudSession, userId: String) {
+        require(userId.isNotBlank())
+        ENGINE_LOCK.withLock {
+            val token = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.capture(NextcloudDocumentIds.accountKey(session))
+            if (token != null) schedulePersistedPairs(store.load(), token, userId)
         }
     }
 
@@ -324,7 +304,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         rejectedResolutionBaseline: FileSyncCoordinatorState? = null,
         startingCoordinatorOverride: FileSyncCoordinatorState? = null,
         transferCancellation: DocumentRequestCancellation,
-    ): FileSyncCenterActionResult {
+    ): FileSyncCenterActionResult = withRecordedAndroidFileSyncFailure(
+        store, NextcloudDocumentIds.accountKey(session), pairId,
+    ) {
         var persisted = store.load().let { loaded ->
             startingCoordinatorOverride?.let { loaded.copy(coordinator = it) } ?: loaded
         }

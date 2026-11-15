@@ -1638,6 +1638,18 @@ internal class AndroidNextcloudServices(
         mediaSyncFolderDetector.preview(suggestion)
     }
 
+    override val supportsFileSyncSettingsEditing: Boolean get() = true
+    override suspend fun updateFileSyncPair(
+        session: NextcloudSession, userId: String, pairId: String,
+        expectedConfiguration: FileSyncConfiguration, configuration: FileSyncConfiguration,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-settings", emptyList()) {
+            updateAndroidFileSyncSettings(appContext, session, userId, pairId, expectedConfiguration, configuration, ::loadSession)
+                .also { recordFileSyncResult(accountIdentity, "sync.pair-settings", emptyList(), it) }
+        }
+    }
+
     override suspend fun loadFileSyncCenter(
         session: NextcloudSession,
         userId: String,
@@ -3596,26 +3608,6 @@ internal class AndroidNextcloudServices(
             )
             throw failure
         }
-    }
-
-    private fun recordFileSyncResult(
-        accountIdentity: String,
-        operation: String,
-        fields: List<SupportDiagnosticFieldDraft>,
-        result: FileSyncCenterActionResult,
-    ) {
-        val diagnostic = result.toFileSyncActionDiagnosticSummary()
-        recordSupportDiagnosticForAccountIdentity(
-            accountIdentity,
-            SupportDiagnosticEventDraft(
-                severity = diagnostic.severity,
-                component = SupportDiagnosticComponent.Sync,
-                operation = operation,
-                outcome = diagnostic.outcome,
-                message = diagnostic.message,
-                fields = fields,
-            ),
-        )
     }
 
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {
