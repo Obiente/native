@@ -427,7 +427,11 @@ internal class SemanticBoardRoutes(val contract: SemanticBoardContract) {
             if (role is BoardValueRole.Field && fields[role.field]?.clearsTo(property) == true) nulls += name
             resolve(role, property, inBody = true)?.let { body[name] = it }
         }
-        if (binding.action.binding.method == HttpMethod.PUT) binding.echoFrom(record, body, nulls)
+        if (binding.action.binding.method == HttpMethod.PUT) {
+            // What the editor supplied is its decision, including a value it chose to leave unsent.
+            val supplied = binding.bodyRoles.filterValues { role -> role is BoardValueRole.Field && role.field in fields }.keys
+            binding.echoFrom(record, body, nulls, supplied)
+        }
         val built = buildDynamicApiRequest(
             descriptor = contract.descriptor,
             action = binding.action,
@@ -449,9 +453,13 @@ private fun BoardOperationBinding.echoFrom(
     record: Map<String, String>,
     values: MutableMap<String, String>,
     nulls: Set<String>,
+    supplied: Set<String>,
 ) {
     val byName = record.entries.associateBy({ it.key.semanticRouteId() }, { it.value })
-    echoedBodyFields.forEach { name ->
+    // A field this client understands but the editor at hand did not supply (a description while
+    // renaming) is kept at its stored value too, not dropped from the replacement.
+    val understood = bodyRoles.filterValues { it is BoardValueRole.Field }.keys - supplied
+    (echoedBodyFields + understood).distinct().forEach { name ->
         if (name !in values && name !in nulls) byName[name.semanticRouteId()]?.let { values[name] = it }
     }
 }
