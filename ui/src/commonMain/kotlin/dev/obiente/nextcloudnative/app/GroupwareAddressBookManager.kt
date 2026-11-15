@@ -67,6 +67,9 @@ internal class AddressBookManager(
     internal var onChanged: () -> Unit = {}
     private var newHref: String? = null
 
+    /** Every address the last address book home listing named, readable or not. */
+    private var listedHrefs = emptySet<String>()
+
     fun show() {
         open = true
         error = null
@@ -158,7 +161,8 @@ internal class AddressBookManager(
                 return null
             }
             addressBooks = listed
-            if (listed.any { it.href == earlier }) {
+            // An address book the listing names but could not describe is still there.
+            if (listed.any { it.href == earlier } || earlier in listedHrefs) {
                 forgetCreation()
                 onChanged()
                 error = "An earlier attempt was created after all and is now in the list. Check it before creating another."
@@ -194,7 +198,7 @@ internal class AddressBookManager(
         change(
             addressBookDeleteRequest(target.href),
             provesRejection = { !groupwareDeleteResponseProvesAbsence(it) && groupwareMutationResponseProvesRejection(it) },
-        ) { books -> books.none { it.href == target.href } }
+        ) { books -> books.none { it.href == target.href } && target.href !in listedHrefs }
     }
 
     private fun change(
@@ -240,10 +244,8 @@ internal class AddressBookManager(
     }
 
     private suspend fun read(): List<ManagedAddressBook>? = try {
-        parseManagedAddressBooks(
-            services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(groupwareAddressBookHomeHref(userId))),
-            userId,
-        )
+        val listing = services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(groupwareAddressBookHomeHref(userId)))
+        parseManagedAddressBooks(listing, userId).also { listedHrefs = groupwareCollectionHrefs(listing) }
     } catch (failure: CancellationException) {
         throw failure
     } catch (_: Exception) {
