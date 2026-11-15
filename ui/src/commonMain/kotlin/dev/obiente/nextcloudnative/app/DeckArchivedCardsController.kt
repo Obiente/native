@@ -138,7 +138,13 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
         val outcome = runVerifiedDeckWrite(
             execute = context.execute,
             request = planned,
-            reread = { fetchGroups(current.board.id) },
+            reread = {
+                val stacks = fetchArchivedStacks(current.board.id)
+                // The card missing from the archive means something only when its own list was
+                // read; a list past the read limit leaves the result unknown.
+                check(stacks.firstOrNull { it.id == card.stackId }?.cardsLoaded != false) { "The card's list was not read." }
+                deckArchivedCardGroups(stacks)
+            },
             verify = { groups ->
                 if (groups.none { group -> group.cards.any { it.id == card.id } }) {
                     DeckWriteVerification.Confirmed
@@ -173,8 +179,6 @@ internal class DeckArchivedCardsController(private val context: DeckBoardToolCon
             )
         }
     }
-
-    private suspend fun fetchGroups(boardId: Long): List<DeckArchivedCardGroup> = deckArchivedCardGroups(fetchArchivedStacks(boardId))
 
     private suspend fun fetchArchivedStacks(boardId: Long): List<DeckStack> = fetchBoardStacks(
         context.execute, context.routes, boardId, authoritative = true, archived = true, separateCardListReads = listReads,
