@@ -82,6 +82,18 @@ class GroupwareDavSharingTest {
     }
 
     @Test
+    fun aResourceThatAnswersWithAFailureIsNotReadAsUnshared() {
+        assertFailsWith<IllegalArgumentException> {
+            parseDavSharingState(
+                ok(
+                    """<d:multistatus xmlns:d="DAV:"><d:response><d:href>$calendar</d:href>""" +
+                        """<d:status>HTTP/1.1 500 Internal Server Error</d:status></d:response></d:multistatus>""",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun anInviteThatCannotBeIdentifiedLeavesTheShareListIncomplete() {
         fun answer(secondHref: String) = ok(
             """

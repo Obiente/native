@@ -53,6 +53,11 @@ internal fun parseDavSharingState(response: NextcloudApiResponse): DavSharingSta
     require(response.status in 200..299) { "Sharing details could not be read (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
     val propstats = xml.xmlElements("propstat").map { it to it.xmlText("status")?.split(' ')?.getOrNull(1)?.toIntOrNull() }
+    // A resource answered with a failure status, or without any property status, tells nothing.
+    val resourceStatus = xml.xmlElements("response").firstOrNull()?.xmlDirectChildText("status")?.split(' ')?.getOrNull(1)?.toIntOrNull()
+    require(propstats.isNotEmpty() && (resourceStatus == null || resourceStatus in 200..299)) {
+        "Sharing details could not be read."
+    }
     val okProperties = propstats.filter { (_, status) -> status in 200..299 }.joinToString("") { it.first }
     // 404 is how the server says a property is not set. Any other failure means its value is
     // unknown, which must never read as "not shared" or "not published".
