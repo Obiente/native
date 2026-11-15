@@ -78,10 +78,15 @@ internal data class NextcloudNotification(
 )
 
 internal sealed interface NotificationsListResult {
-    /** [truncated] is true when the server sent more entries than this client keeps. */
+    /**
+     * [truncated] is true when the server sent more entries than this client keeps. [complete] is
+     * false when an entry could not be decoded: a notification missing from the list may then
+     * still exist.
+     */
     data class Loaded(
         val notifications: List<NextcloudNotification>,
         val truncated: Boolean,
+        val complete: Boolean = true,
     ) : NotificationsListResult
 
     /** HTTP 204: no installed app can create notifications for this account. */
@@ -196,16 +201,15 @@ internal fun parseNotificationsList(response: NextcloudApiResponse): Notificatio
     if (response.status == 204) return NotificationsListResult.NoNotifierApps
     val data = ocsData(response, maximumBytes = MAX_NOTIFICATIONS_RESPONSE_BYTES) as? JsonArray
         ?: throw malformed("The notifications data is not a list.")
-    val notifications = data.asSequence()
-        .take(MAX_NOTIFICATION_ENTRIES * 2)
-        .mapNotNull { (it as? JsonObject)?.let(::parseNotification) }
-        .distinctBy(NextcloudNotification::id)
-        .toList()
+    val considered = data.take(MAX_NOTIFICATION_ENTRIES * 2)
+    val decoded = considered.mapNotNull { (it as? JsonObject)?.let(::parseNotification) }
+    val notifications = decoded.distinctBy(NextcloudNotification::id)
     return NotificationsListResult.Loaded(
         notifications = notifications
             .sortedWith(compareByDescending<NextcloudNotification> { it.publishedAtEpochSeconds ?: 0L }.thenByDescending { it.id })
             .take(MAX_NOTIFICATION_ENTRIES),
         truncated = data.size > MAX_NOTIFICATION_ENTRIES,
+        complete = decoded.size == considered.size,
     )
 }
 
@@ -229,17 +233,27 @@ internal fun notificationWriteFailedAmbiguously(response: NextcloudApiResponse):
     return dynamicOcsFailureOutcome(statusCode) == NativeActionFailureOutcome.Unknown
 }
 
-/** The status code of the OCS envelope, or null when the body has none. */
+/**
+ * Whether a 2xx answer to an OCS request has a body without a readable status code. An OCS route
+ * reports its real outcome there, so such an answer does not show what happened.
+ */
+internal fun notificationOcsAnswerUnreadable(response: NextcloudApiResponse): Boolean =
+    response.status in 200..299 && response.body.isNotEmpty() && notificationOcsStatusCode(response) == null
+
+/** The status code of the OCS envelope, in its JSON or XML form, or null when the body has none. */
 private fun notificationOcsStatusCode(response: NextcloudApiResponse): Long? {
     if (response.body.isEmpty()) return null
+    val text = response.body.decodeToString()
     val root = try {
-        notificationsJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
+        notificationsJson.parseToJsonElement(text) as? JsonObject
     } catch (_: IllegalArgumentException) {
         null
-    } ?: return null
+    } ?: return OCS_XML_STATUS_CODE.find(text)?.groupValues?.get(1)?.toLongOrNull()
     val meta = (root["ocs"] as? JsonObject)?.get("meta") as? JsonObject ?: return null
     return (meta["statuscode"] as? JsonPrimitive)?.longOrNull
 }
+
+private val OCS_XML_STATUS_CODE = Regex("<statuscode>\\s*([0-9]+)\\s*</statuscode>")
 
 private fun parseNotification(entry: JsonObject): NextcloudNotification? {
     val id = (entry["notification_id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull

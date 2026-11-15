@@ -215,6 +215,27 @@ class NotificationsApiTest {
     }
 
     @Test
+    fun `an OCS answer without a readable status code shows nothing and XML envelopes are read`() {
+        assertTrue(notificationOcsAnswerUnreadable(response("<html>gateway</html>")))
+        assertTrue(notificationOcsAnswerUnreadable(response("""{"ocs":{"meta":{},"data":[]}}""")))
+        assertFalse(notificationOcsAnswerUnreadable(NextcloudApiResponse(200, ByteArray(0), null, null)))
+        val xml = "<?xml version=\"1.0\"?><ocs><meta><status>ok</status><statuscode>100</statuscode></meta><data/></ocs>"
+        assertFalse(notificationOcsAnswerUnreadable(response(xml)))
+        assertTrue(notificationWriteSucceeded(response(xml)))
+        assertFalse(notificationWriteSucceeded(response(xml.replace("100", "404"))))
+    }
+
+    @Test
+    fun `a list with an entry that cannot be decoded is not complete`() {
+        val whole = assertIs<NotificationsListResult.Loaded>(parseNotificationsList(response("""{"ocs":{"meta":{"statuscode":200},"data":$DOCUMENTED_NOTIFICATION}}""")))
+        assertTrue(whole.complete)
+        val partial = assertIs<NotificationsListResult.Loaded>(
+            parseNotificationsList(response("""{"ocs":{"meta":{"statuscode":200},"data":[{"notification_id":"not-a-number"}]}}""")),
+        )
+        assertFalse(partial.complete, "The entry that was left out may be a notification with an unresolved action.")
+    }
+
+    @Test
     fun `an embedded OCS server error is ambiguous and an embedded refusal is not`() {
         assertTrue(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":996},"data":[]}}""")))
         assertTrue(notificationWriteFailedAmbiguously(response("""{"ocs":{"meta":{"statuscode":500},"data":[]}}""")))

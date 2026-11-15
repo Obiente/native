@@ -462,7 +462,7 @@ internal class NotificationsInboxController(
         // A notification that is gone can no longer have its action repeated.
         // Only the newest complete list may say so; an older read can miss a notification that
         // arrived since, and with it the action that was started on it.
-        if (newest && (result as? NotificationsListResult.Loaded)?.truncated == false) settleAttempts(recordedAttempts - listed)
+        if (newest && (result as? NotificationsListResult.Loaded)?.let { !it.truncated && it.complete } == true) settleAttempts(recordedAttempts - listed)
         return InboxRead.Loaded(listed)
     }
 
@@ -489,6 +489,8 @@ internal class NotificationsInboxController(
     private suspend fun write(request: NextcloudApiRequest): WriteOutcome = try {
         val response = execute(request)
         when {
+            // An OCS route says what happened in its envelope; without one the result is not known.
+            request.ocsApiRequest && notificationOcsAnswerUnreadable(response) -> WriteOutcome.Unknown
             notificationWriteSucceeded(response) -> WriteOutcome.Confirmed
             response.status == 404 -> WriteOutcome.NotFound
             // A gateway or server failure may come after the request took effect.
