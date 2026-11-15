@@ -1161,7 +1161,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportSettingsDraftState.kt": "7c9bc2dc5024ebcfcfc21ee7e14e1c7e0ea5c7f32ff92afcf50acafbd9a61531",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SystemTags.kt": "452abd9589c627dc7ae9dae03265a3bfdb837809ba0ca82da0698ef73db64332",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkAttachmentReader.kt": "aa8c5adab59da93a84fb86ade68e12cb8455a23d7c847aeb8411c68e49551925",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkChatController.kt": "d1f7ea103d59435ef544eebcbcff2e2b2ef55719cdd707ef6c09fe320cf0b8bf",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkChatController.kt": "24348cc3b336bda40d093b406725582b624448fdc5f148fb7a6fd778a9929d90",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkChatProtocol.kt": "52b48ac6fee845f08535c14ba396df6605592e7376d059b74e63cb58adc1a938",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkChatTimeline.kt": "6af14c62c027ef7d0ca1662853f99bbb4ef2b18524839ffc17262adbe328a2f8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkConversationSettingsController.kt": "4674ad289a3e5c61b5cd2a45ffd058fa5554e6b227e9657fb53e730f2281f82b",
