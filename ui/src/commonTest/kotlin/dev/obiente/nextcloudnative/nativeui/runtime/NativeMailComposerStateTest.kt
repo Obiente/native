@@ -72,7 +72,7 @@ class NativeMailComposerStateTest {
         val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
         val executor = RecoveringExecutor(
             send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
-            read = { NativeResultRecoveryRead.Read(mapOf("status" to "sent")) },
+            read = { NativeResultRecoveryRead.Read(mapOf("status" to "sent", "subject" to "Hello", "body" to "Text", "to" to "grace@example.test")) },
         )
         var sent = 0
         state.send(recoverableCapability(), executor) { sent += 1 }
@@ -542,6 +542,26 @@ class NativeMailComposerStateTest {
         assertEquals("A different message", state.draft?.body, "What was written after the send was never sent.")
         assertIs<NativeMailSendPhase.Editing>(state.phase)
         assertFalse(state.resendNeedsConfirmation)
+    }
+
+    @Test
+    fun `a sent status that names no message, or another one, does not confirm the send`() = runBlocking<Unit> {
+        listOf(
+            mapOf("status" to "sent") to NativeMailSendRecovery.Unavailable,
+            mapOf("status" to "sent", "subject" to "Hello", "body" to "Another text", "to" to "grace@example.test") to
+                NativeMailSendRecovery.NotShownAsSent(null),
+        ).forEach { (fields, expected) ->
+            val state = NativeMailComposerState(store = MemoryDraftStore()).apply { open(readyDraft()) }
+            state.send(
+                recoverableCapability(),
+                RecoveringExecutor(
+                    send = { NativeActionExecutionResult.Failure("timeout", NativeActionFailureOutcome.Unknown) },
+                    read = { NativeResultRecoveryRead.Read(fields) },
+                ),
+            )
+            assertEquals(expected, assertIs<NativeMailSendPhase.Unknown>(state.phase).recovery, "The status may describe an earlier message.")
+            assertNotNull(state.draft)
+        }
     }
 
     @Test

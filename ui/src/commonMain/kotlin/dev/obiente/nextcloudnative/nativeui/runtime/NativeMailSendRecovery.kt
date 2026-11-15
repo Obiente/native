@@ -45,7 +45,8 @@ internal sealed interface NativeMailSendRecovery {
 
 /**
  * Interprets the contract's recovery read for [attempt]. A declared status field decides when it
- * names a sent or in-progress state. Otherwise the read shows the message as sent only when it
+ * names an in-progress or failed state; a sent state counts only together with this attempt's own
+ * text and recipients. Otherwise the read shows the message as sent only when it
  * holds exactly the body (and subject, when both declare one) that the attempt replaced.
  */
 internal fun NativeMailSendCapability.recoveryVerdict(
@@ -59,7 +60,16 @@ internal fun NativeMailSendCapability.recoveryVerdict(
             ?.value?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_STATUS_LENGTH }
         val statusKey = status?.nativeMailRoleKey()
         when {
-            status != null && statusKey in SENT_STATUS_WORDS -> NativeMailSendRecovery.ShownAsSent(status)
+            // "Sent" may describe an earlier message. It counts only when the read also shows this
+            // attempt's own text and recipients; a status alone leaves the result unknown.
+            status != null && statusKey in SENT_STATUS_WORDS -> when {
+                bodyField !in read.fields -> NativeMailSendRecovery.Unavailable
+                else -> when (attemptEvidence(attempt, read.fields)) {
+                    NativeMailAttemptEvidence.Holds -> NativeMailSendRecovery.ShownAsSent(status)
+                    NativeMailAttemptEvidence.Differs -> NativeMailSendRecovery.NotShownAsSent(null)
+                    NativeMailAttemptEvidence.RecipientsNotShown -> NativeMailSendRecovery.Unavailable
+                }
+            }
             status != null && statusKey in IN_PROGRESS_STATUS_WORDS -> NativeMailSendRecovery.InProgress(status)
             status != null -> NativeMailSendRecovery.NotShownAsSent(status)
             else -> when (attemptEvidence(attempt, read.fields)) {
