@@ -46,6 +46,8 @@ data class DeckBoard(
     val acl: List<DeckAcl> = emptyList(),
     /** False when the share list was present but malformed; sharing stays read-only then. */
     val aclReadable: Boolean = true,
+    /** False when the read carried no share list at all; [acl] is then empty without showing there are no shares. */
+    val aclListed: Boolean = true,
     val settings: Map<String, String> = emptyMap(),
     /** Scalar server values, used only to keep unchanged fields in a full-replacement update. */
     val rawFields: Map<String, String> = emptyMap(),
@@ -310,8 +312,9 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
         }
     }.distinctBy(DeckUser::id)
     val boardId = requirePositiveId("id", "Board")
+    val listedAcl = firstArray(SHARE_FIELDS)
     val acl = try {
-        parseDeckBoardAcl(boardId, firstArray(SHARE_FIELDS) ?: JsonArray(emptyList()))
+        parseDeckBoardAcl(boardId, listedAcl ?: JsonArray(emptyList()))
     } catch (_: IllegalArgumentException) {
         null
     } catch (_: IllegalStateException) {
@@ -331,6 +334,7 @@ private fun JsonObject.toDeckBoard(): DeckBoard {
         etag = string("ETag") ?: string("etag"),
         acl = acl.orEmpty(),
         aclReadable = acl != null,
+        aclListed = listedAcl != null,
         settings = (this["settings"] as? JsonObject)?.scalarFields().orEmpty(),
         rawFields = scalarFields(),
     )
