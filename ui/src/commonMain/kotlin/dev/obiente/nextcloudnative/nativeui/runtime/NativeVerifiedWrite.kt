@@ -199,6 +199,12 @@ class NativeWriteExpectation(
 
     private fun verifyFields(target: NativeRecord): NativeWriteVerification {
         val stored = storedValues?.invoke(target) ?: target.wireValues
+        // An edited field the read no longer returns shows neither the new value nor the old one,
+        // so the read cannot say whether the edit was kept.
+        val unreadable = submitted.any { (field, value) ->
+            field !in absentPrevious && value !is JsonNull && stored.valueNamed(field) == null
+        }
+        if (unreadable) return NativeWriteVerification.Unidentified
         val changed = submitted.filterKeys { field -> !sameWireValue(stored.valueNamed(field), submitted.getValue(field)) }
         val drifted = untouchedBaseline.keys.filterTo(linkedSetOf()) { field ->
             field.lowercase().filter(Char::isLetterOrDigit) !in SERVER_BOOKKEEPING_FIELDS &&

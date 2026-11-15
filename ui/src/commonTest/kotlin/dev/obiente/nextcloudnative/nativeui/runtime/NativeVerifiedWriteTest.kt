@@ -157,6 +157,14 @@ class NativeVerifiedWriteTest {
         )
         assertTrue(sameWireValue(JsonPrimitive(9007199254740993), JsonPrimitive(9007199254740993)))
         assertFalse(sameWireValue(JsonPrimitive(5), JsonPrimitive(5.5)))
+        val expectation = NativeWriteExpectation(
+            "7", submitted = mapOf("title" to JsonPrimitive("New")), untouchedBaseline = emptyMap(), previous = mapOf("title" to JsonPrimitive("Old")),
+        )
+        assertEquals(
+            NativeWriteVerification.Unidentified,
+            expectation.verify(listOf(NativeRecord("7", mapOf("id" to "7"), wireValues = mapOf("id" to JsonPrimitive(7))))),
+            "A read that leaves out the edited field does not show whether the edit was kept.",
+        )
         fun number(text: String) = Json.parseToJsonElement(text)
         assertFalse(
             sameWireValue(number("9007199254740993"), number("9.007199254740992e15")),
