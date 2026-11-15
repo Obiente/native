@@ -182,8 +182,12 @@ internal class AddressBookManager(
         return href
     }
 
-    /** The creation was confirmed or refused; its record is dropped. */
+    /**
+     * The creation was confirmed or refused; its record is dropped, and with it the address kept
+     * for this dialog, so a later attempt is recorded again before it is sent.
+     */
     private suspend fun forgetCreation() {
+        newHref = null
         try {
             services.textEditorDraftStore(session, PENDING_ADDRESS_BOOK_PATH)?.remove()
         } catch (failure: CancellationException) {
