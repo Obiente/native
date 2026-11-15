@@ -23,6 +23,11 @@ interface TextEditorDraftStore {
     suspend fun load(): TextEditorDraft?
     suspend fun save(draft: TextEditorDraft)
     suspend fun remove()
+    /**
+     * Bounded account-local maintenance. A recognized draft is removed only when its returned
+     * path matches its stored identity and is absent from [retainedPaths]. Unreadable drafts stay.
+     */
+    suspend fun pruneUnreferenced(retainedPaths: Set<String>, identifyPath: (TextEditorDraft) -> String?): Int = 0
 }
 
 interface TextEditorDraftPlatformServices {

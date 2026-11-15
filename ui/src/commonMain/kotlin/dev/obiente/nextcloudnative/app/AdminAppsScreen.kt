@@ -1,20 +1,24 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import dev.obiente.nextcloudnative.app.design.NextcloudSegmentedControl
+import dev.obiente.nextcloudnative.app.design.NextcloudSegmentedOption
+import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import kotlinx.coroutines.flow.MutableStateFlow
 
 internal sealed interface AdminAppsContent {
     data object Checking : AdminAppsContent
@@ -42,90 +46,89 @@ internal fun adminAppsContent(state: AdministrationAccessState, canAdminister: B
     }
 }
 
+internal enum class AdministrationTab(val label: String) {
+    Apps("Apps"),
+    Accounts("Accounts"),
+    Groups("Groups"),
+    Server("Server"),
+}
+
+/** Settings asks for a starting tab before opening administration; the screen consumes it once. */
+internal object AdministrationTabRequests {
+    private val requested = MutableStateFlow<AdministrationTab?>(null)
+
+    fun request(tab: AdministrationTab) {
+        requested.value = tab
+    }
+
+    fun consume(): AdministrationTab? = requested.value.also { requested.value = null }
+}
+
+/**
+ * Native server administration: apps, accounts, groups, and server information, read-only.
+ * Nothing renders until administrator access is verified. Lifecycle and provisioning changes need a
+ * password confirmation that the app-password sign-in cannot provide, so no change is offered.
+ */
 @Composable
 internal fun AdminAppsScreen(
     access: AdministrationAccessController,
-    onContinueInBrowser: () -> Unit,
+    session: NextcloudSession,
+    execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
     serverInfo: NextcloudServerInfo?,
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onBack: () -> Unit,
 ) {
-    var search by remember { mutableStateOf("") }
-    var catalogFilter by remember { mutableStateOf(NativeAppCatalogFilter.All) }
-    var pendingLifecycleAction by remember(access.state.result) {
-        mutableStateOf<Pair<NativeManagedApp, NativeAppLifecycleAction>?>(null)
-    }
+    var tabName by rememberSaveable { mutableStateOf((AdministrationTabRequests.consume() ?: AdministrationTab.Apps).name) }
+    val tab = AdministrationTab.entries.firstOrNull { it.name == tabName } ?: AdministrationTab.Apps
     val content = adminAppsContent(access.state, access.canAdminister)
+    val currentExecute by rememberUpdatedState(execute)
+    val scope = rememberCoroutineScope()
+    val users = remember(session.accountId) { AdminUsersController(scope) { currentExecute(it) } }
 
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(
-            title = "Server apps",
-            subtitle = "Administrator app management",
-            onBack = onBack,
-        )
+        ScreenHeader(title = "Administration", subtitle = tab.label, onBack = onBack)
         when (content) {
             AdminAppsContent.Checking -> LoadingMessage("Checking administrator access...")
-            is AdminAppsContent.Catalog -> NativeAppCatalogSurface(
-                catalog = content.catalog,
-                query = search,
-                filter = catalogFilter,
-                onQueryChanged = { search = it },
-                onFilterChanged = { catalogFilter = it },
-                onOpenInstalledApp = { managed ->
-                    serverInfo?.apps?.firstOrNull { app -> app.id == managed.id }?.let(onOpenApp)
-                },
-                onLifecycleAction = { app, action ->
-                    if (access.canAdminister) pendingLifecycleAction = app to action
-                },
-            )
-            is AdminAppsContent.Failure -> ErrorMessage(
-                content.message,
-                onRetry = access.refresh,
-            )
+            is AdminAppsContent.Failure -> ErrorMessage(content.message, onRetry = access.refresh)
+            is AdminAppsContent.Catalog -> {
+                NextcloudSegmentedControl(
+                    options = AdministrationTab.entries.map { NextcloudSegmentedOption(it.name, it.label) },
+                    selectedId = tab.name,
+                    onSelected = { tabName = it },
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    accessibilityLabel = "Administration sections",
+                )
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (tab) {
+                        AdministrationTab.Apps -> AdminAppsPane(content.catalog, serverInfo, onOpenApp)
+                        AdministrationTab.Accounts -> AdminUsersPane(users)
+                        AdministrationTab.Groups -> AdminGroupsPane(users)
+                        AdministrationTab.Server -> AdminServerInfoPane(execute = { currentExecute(it) })
+                    }
+                }
+            }
         }
     }
+}
 
-    pendingLifecycleAction?.takeIf { content is AdminAppsContent.Catalog }?.let { (app, action) ->
-        AlertDialog(
-            onDismissRequest = { pendingLifecycleAction = null },
-            title = { Text("${action.uiLabel()} ${app.name}?") },
-            text = {
-                Text(
-                    when (action) {
-                        NativeAppLifecycleAction.InstallAndEnable ->
-                            "This downloads server-side code and enables the app for users."
-                        NativeAppLifecycleAction.Enable ->
-                            "This activates the app and may add navigation, jobs, and integrations for users."
-                        NativeAppLifecycleAction.Disable ->
-                            "This makes the app and its integrations unavailable until an administrator enables it again."
-                        NativeAppLifecycleAction.Update ->
-                            "The server may enter maintenance mode while the app package is updated. Do not interrupt it."
-                        NativeAppLifecycleAction.Uninstall ->
-                            "This removes the app package. App data retention depends on the app and is not guaranteed."
-                    } + "\n\nNextcloud requires administrator password confirmation. Continue in the authenticated server administration page.",
-                )
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingLifecycleAction = null }) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        pendingLifecycleAction = null
-                        if (access.canAdminister) {
-                            onContinueInBrowser()
-                            access.refresh()
-                        }
-                    },
-                    colors = if (action == NativeAppLifecycleAction.Uninstall) {
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    } else {
-                        ButtonDefaults.buttonColors()
-                    },
-                ) {
-                    Text("Continue in browser")
-                }
-            },
+@Composable
+private fun AdminAppsPane(
+    catalog: NativeAppCatalog,
+    serverInfo: NextcloudServerInfo?,
+    onOpenApp: (NextcloudAppEntry) -> Unit,
+) {
+    var search by remember { mutableStateOf("") }
+    var catalogFilter by remember { mutableStateOf(NativeAppCatalogFilter.All) }
+    Column(Modifier.fillMaxSize()) {
+        PasswordConfirmationHandoffNotice(Modifier.padding(horizontal = NextcloudSpacing.Large))
+        NativeAppCatalogSurface(
+            catalog = catalog,
+            query = search,
+            filter = catalogFilter,
+            onQueryChanged = { search = it },
+            onFilterChanged = { catalogFilter = it },
+            onOpenInstalledApp = { managed -> serverInfo?.apps?.firstOrNull { app -> app.id == managed.id }?.let(onOpenApp) },
+            onLifecycleAction = null,
         )
     }
 }

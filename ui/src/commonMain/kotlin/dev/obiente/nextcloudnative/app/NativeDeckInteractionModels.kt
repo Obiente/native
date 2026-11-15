@@ -167,7 +167,7 @@ internal fun reconcileDeckBoardRecovery(
             } else {
                 recovery.copy(
                     verification = null,
-                    errorMessage = "Deck deleted this board. You can restore it.",
+                    errorMessage = "deleted this board. You can restore it.",
                 )
             }
         }

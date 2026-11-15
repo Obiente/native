@@ -6,12 +6,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 
 /** Limit mobile row presentation to projected user columns, retaining the original record for actions. */
-internal fun nativeTableRowCardResource(schema: NativeAppSchema, projection: NativeTableProjection): ResourceSpec? {
-    if (schema.app.id != "tables" || !projection.composite) return null
+internal fun nativeTableRowCardResource(projection: NativeTableProjection): ResourceSpec? {
+    if (!projection.composite) return null
     val fields = projection.resource.fields.filter { it.id in projection.projectedFieldIds }
     return projection.resource.copy(fields = fields).takeIf { fields.isNotEmpty() }
 }

@@ -223,7 +223,8 @@ class FileVerifiedContractCache internal constructor(
     private companion object {
         val lock = Any()
         const val INVALIDATION_SUFFIX = ".invalid"
-        const val CACHE_FORMAT_VERSION = "4"
+        // 5: static contracts carry package route attributes, policy facts, psalm and entity types.
+        const val CACHE_FORMAT_VERSION = "5"
         const val MAX_CONTRACT_CACHE_BYTES = 32L * 1024L * 1024L
         const val MAX_CACHE_AGE_MILLIS = 7L * 24L * 60L * 60L * 1_000L
     }

@@ -21,8 +21,9 @@ import kotlin.test.assertTrue
 
 class MobileCalendarRefinementTest {
     @Test
-    fun fullPhoneShellShowsSelectedDayEventsWithoutScrollingPastTheMonth() {
+    fun phoneMonthShowsEventsInTheirDaysAndOpensADaySchedule() {
         val selectedDate = mutableStateOf("20260804")
+        val view = mutableStateOf(CalendarWorkspaceView.Month)
         var opened: String? = null
         val events = listOf(event("one", "20260804T090000Z"), event("two", "20260805T100000Z"))
         nativeSceneTest(360, 800, content = {
@@ -31,41 +32,57 @@ class MobileCalendarRefinementTest {
                 activeAppId = "calendar") {
                 Column(Modifier.fillMaxSize()) {
                     CalendarPhoneTopBar({}, {}, {}, createEnabled = true)
-                    MobileGroupwareCalendarWorkspace(CalendarMonth(2026, 8), selectedDate.value, CalendarWorkspaceView.Month,
-                        listOf(calendar), events, emptySet(), "", {}, {}, {}, {}, {}, { _, _ -> },
+                    MobileGroupwareCalendarWorkspace(CalendarMonth(2026, 8), selectedDate.value, view.value,
+                        listOf(calendar), events, emptySet(), "", {}, {}, {}, { view.value = it }, {}, { _, _ -> },
                         { selectedDate.value = it }, { opened = it.instanceId }, Modifier.weight(1f), todayDate = "20260804")
                 }
             }
         }) {
-            val eventBounds = assertNotNull(node("Event one")).boundsInRoot
-            assertTrue(eventBounds.top > 0 && eventBounds.bottom < 720, "The first event belongs above the shell's bottom navigation")
-            assertTrue(has("4 August 2026, 1 event, Today"))
-            val day = assertNotNull(node("4 August 2026, 1 event, Today"))
+            // Like a wall calendar, every event is visible in its own day without opening it.
+            listOf("Event one", "Event two").forEach { title ->
+                val bounds = assertNotNull(node(title)).boundsInRoot
+                assertTrue(bounds.top > 0 && bounds.bottom < 720, "$title belongs above the shell's bottom navigation")
+            }
+            val day = assertNotNull(node("4 August 2026, 1 event, today"))
             assertEquals(true, day.config.getOrNull(SemanticsProperties.Selected))
-            click("5 August 2026, 1 event")
-            assertEquals("20260805", selectedDate.value)
-            assertTrue(has("Event two"))
-            assertFalse(has("Event one"))
             click("Event two")
             assertEquals(events[1].instanceId, opened)
+            assertEquals(CalendarWorkspaceView.Month, view.value, "Opening an event keeps the month")
             capture("calendar-phone-month-refined")
+            // Tap the day itself, below its chip; the chip opens its event instead.
+            val nextDay = assertNotNull(node("5 August 2026, 1 event")).boundsInRoot
+            click(androidx.compose.ui.geometry.Offset(nextDay.center.x, nextDay.bottom - 6f))
+            assertEquals("20260805", selectedDate.value)
+            assertEquals(CalendarWorkspaceView.Day, view.value, "Tapping a day opens its schedule")
         }
     }
 
     @Test
-    fun phoneWeekUsesSelectableDaysAndIncludesAnEventStartedBeforeTheWeek() {
+    fun phoneWeekIsATimeGridThatIncludesAnEventStartedBeforeTheWeek() {
         val selectedDate = mutableStateOf("20260801")
+        val view = mutableStateOf(CalendarWorkspaceView.Week)
         val spanning = event("conference", "20260725").copy(end = "20260803", allDay = true)
+        val meeting = event("standup", "20260729T100000Z")
+        var created: String? = null
         nativeSceneTest(390, 700, content = {
-            MobileGroupwareCalendarWorkspace(CalendarMonth(2026, 8), selectedDate.value, CalendarWorkspaceView.Week,
-                listOf(calendar), listOf(spanning), emptySet(), "", {}, {}, {}, {}, {}, { _, _ -> },
-                { selectedDate.value = it }, {}, todayDate = "20260801")
+            MobileGroupwareCalendarWorkspace(CalendarMonth(2026, 8), selectedDate.value, view.value,
+                listOf(calendar), listOf(spanning, meeting), emptySet(), "", {}, {}, {}, { view.value = it }, {}, { _, _ -> },
+                { selectedDate.value = it }, {}, onCreateAt = { created = it }, todayDate = "20260801")
         }) {
-            assertTrue(has("Event conference"))
+            assertTrue(has("Event conference"), "A spanning event sits in the all-day row")
+            val standup = assertNotNull(node("Event standup")).boundsInRoot
+            val tenOClock = assertNotNull(node("10:00")).boundsInRoot
+            assertTrue(kotlin.math.abs(standup.top - tenOClock.top) < 24f, "A timed event sits at its hour")
+            capture("calendar-phone-week-refined")
             click("2 August 2026, 1 event")
             assertEquals("20260802", selectedDate.value)
+            assertEquals(CalendarWorkspaceView.Day, view.value)
+            repeat(4) { settle() }
             assertTrue(has("Event conference"))
-            capture("calendar-phone-week-refined")
+            val day = assertNotNull(node("Schedule for 2 August 2026"))
+            val dayTen = assertNotNull(node("10:00")).boundsInRoot
+            click(androidx.compose.ui.geometry.Offset(day.boundsInRoot.center.x, dayTen.top + 30f))
+            assertEquals(true, created?.startsWith("20260802T10"), "Tapping empty time offers an event starting there: $created")
         }
     }
 
@@ -147,7 +164,7 @@ class MobileCalendarRefinementTest {
                 {}, {}, {}, { view.value = it }, {}, { _, _ -> }, {}, {}, todayDate = "20260804")
         }) {
             val tabs = nodes().filter { it.config.getOrNull(SemanticsProperties.Role) == Role.Tab }
-            assertEquals(3, tabs.size)
+            assertEquals(4, tabs.size, "Month, Week, Day, and Agenda")
             assertEquals(1, tabs.count { it.config.getOrNull(SemanticsProperties.Selected) == true })
             listOf("Previous week", "Next week", "Today", "Choose visible calendars").forEach {
                 val bounds = assertNotNull(node(it)).boundsInRoot

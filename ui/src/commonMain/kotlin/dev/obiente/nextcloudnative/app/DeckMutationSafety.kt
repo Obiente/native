@@ -1,14 +1,15 @@
 package dev.obiente.nextcloudnative.app
 
-internal fun isAmbiguousDeckMutationFailure(responseStatus: Int?): Boolean =
-    responseStatus == null || responseStatus in 200..299 || responseStatus >= 500
+internal fun isAmbiguousDeckMutationFailure(responseStatus: Int?, failure: Throwable? = null): Boolean =
+    failure !is BoardMembershipWriteBlocked && (responseStatus == null || responseStatus in 200..299 || responseStatus >= 500)
 
 internal fun requiresDeckBatchMutationReconciliation(
     confirmedWrites: Int,
     failedResponseStatus: Int?,
+    failure: Throwable? = null,
 ): Boolean {
     require(confirmedWrites >= 0) { "Confirmed writes cannot be negative." }
-    return confirmedWrites > 0 || isAmbiguousDeckMutationFailure(failedResponseStatus)
+    return confirmedWrites > 0 || isAmbiguousDeckMutationFailure(failedResponseStatus, failure)
 }
 
 internal fun DeckCard.hasSameAuthoritativeRevision(other: DeckCard): Boolean =

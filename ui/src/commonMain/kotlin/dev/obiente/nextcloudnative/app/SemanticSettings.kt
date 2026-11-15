@@ -1,0 +1,376 @@
+package dev.obiente.nextcloudnative.app
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.runtime.SemanticSettingsContract
+import dev.obiente.nextcloudnative.nativeui.runtime.SemanticSettingsWrite
+import dev.obiente.nextcloudnative.nativeui.runtime.declaredEnumValues
+import dev.obiente.nextcloudnative.nativeui.runtime.declaredJsonType
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+
+internal enum class SemanticSettingKind { Toggle, Choice, Folder, Text }
+
+/** One server setting, presented by its value type and the choices the contract declares. */
+internal data class SemanticSettingEntry(
+    val key: String,
+    val label: String,
+    val kind: SemanticSettingKind,
+    val value: String,
+    val options: List<String> = emptyList(),
+    val writable: Boolean,
+    /** The value exactly as the server returned it; a replacement sends untouched settings back as this. */
+    val stored: JsonPrimitive? = null,
+) {
+    /** The stored JSON value, or the text as a string for an entry that was not read from the server. */
+    val storedValue: JsonPrimitive get() = stored ?: JsonPrimitive(value)
+}
+
+/**
+ * An app's settings document read from the server.
+ *
+ * Every key and value comes from the server's own response. A keyed write uses exactly the key the
+ * server returned; the client never composes a key format of its own.
+ */
+internal class SemanticSettings(
+    private val descriptor: DynamicAppDescriptor,
+    val contract: SemanticSettingsContract,
+) {
+    /** Identifies this settings route of this app version; a new version is a new route. */
+    val routeKey: String get() = "${descriptor.app.id}\u0000${descriptor.app.version}\u0000${contract.read.id}"
+
+    fun readRequest(): NextcloudApiRequest =
+        buildDynamicApiRequest(descriptor, contract.read, emptyMap())
+            .copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork, maximumResponseBytes = SETTINGS_RESPONSE_BYTES)
+
+    fun parse(response: NextcloudApiResponse): List<SemanticSettingEntry> {
+        require(response.status in 200..299) { "Settings could not be loaded (HTTP ${response.status})." }
+        require(response.body.size <= SETTINGS_RESPONSE_BYTES) { "Settings returned too much data." }
+        val root = runCatching { settingsJson.parseToJsonElement(response.body.decodeToString()) }.getOrNull()
+            ?: error("Settings returned invalid JSON.")
+        val document = ((root as? JsonObject)?.get("ocs") as? JsonObject)?.get("data") as? JsonObject
+            ?: root as? JsonObject
+            ?: error("Settings returned an unexpected response.")
+        val entries = document.entries.asSequence()
+            .mapNotNull { (key, element) ->
+                val primitive = element as? JsonPrimitive ?: return@mapNotNull null
+                if (element is JsonNull || key.isBlank() || key.length > MAX_SETTING_KEY_CHARS) return@mapNotNull null
+                entry(key, primitive)
+            }
+            .take(MAX_SETTINGS)
+            .toList()
+        // A replacement sends the whole document. When any declared setting is not held here as
+        // a plain value, it could not be sent back unchanged, so nothing is offered for editing.
+        val readable = entries.mapTo(hashSetOf(), SemanticSettingEntry::key)
+        val complete = replacementProperties()?.all { it in readable } != false
+        return (if (complete) entries else entries.map { it.copy(writable = false) })
+            .sortedWith(compareByDescending<SemanticSettingEntry> { it.writable }.thenBy { it.label })
+    }
+
+    /** True when a write replaces the whole settings document instead of one key or a merge. */
+    val replacesDocument: Boolean get() = replacementProperties() != null
+
+    /** Whether [current] holds every replaced setting at the value [baseline] was built from. */
+    fun replacementBaselineHolds(baseline: List<SemanticSettingEntry>, current: List<SemanticSettingEntry>): Boolean {
+        val properties = replacementProperties() ?: return true
+        // The stored JSON value is compared, so a number that became the same digits as text counts as a change.
+        fun List<SemanticSettingEntry>.replaced() = filter { it.key in properties }.associate { it.key to it.storedValue }
+        return baseline.replaced() == current.replaced()
+    }
+
+    /** The other replaced settings whose stored value no longer matches [baseline] after a write. */
+    fun replacementDrift(
+        baseline: List<SemanticSettingEntry>,
+        stored: List<SemanticSettingEntry>,
+        editedKey: String,
+    ): List<SemanticSettingEntry> {
+        val properties = replacementProperties() ?: return emptyList()
+        val after = stored.associate { it.key to it.storedValue }
+        return baseline.filter { it.key in properties && it.key != editedKey && after[it.key] != it.storedValue }
+    }
+
+    /** The declared settings a document replacement must carry, or null for a keyed or merge write. */
+    private fun replacementProperties(): Set<String>? =
+        (contract.write as? SemanticSettingsWrite.Document)
+            ?.takeIf { it.action.binding.method != HttpMethod.PATCH }
+            ?.properties?.keys
+
+    fun writeRequest(entry: SemanticSettingEntry, value: String, current: List<SemanticSettingEntry>): NextcloudApiRequest {
+        require(entry.writable) { "This setting cannot be changed from here." }
+        if (entry.kind == SemanticSettingKind.Choice) require(value in entry.options) { "Choose one of the offered values." }
+        require(value.length <= MAX_SETTING_VALUE_CHARS && value.none(Char::isISOControl)) { "The value is invalid." }
+        val request = when (val write = checkNotNull(contract.write)) {
+            is SemanticSettingsWrite.Keyed -> buildDynamicApiRequest(
+                descriptor,
+                write.action,
+                mapOf(write.keyParameter to entry.key, write.valueField to value),
+                mapOf(write.keyParameter to entry.key),
+            )
+            is SemanticSettingsWrite.Document -> {
+                // A replacement keeps every other declared setting at the value the server returned.
+                val unchanged = if (write.action.binding.method == HttpMethod.PATCH) {
+                    emptyList()
+                } else {
+                    current.filter { it.key in write.properties && it.key != entry.key }
+                }
+                // Untouched settings travel as the exact JSON the server returned. Going through
+                // their text could change them, such as a number too large to convert exactly.
+                buildDynamicApiRequest(
+                    descriptor,
+                    write.action,
+                    unchanged.associate { it.key to it.value } + (entry.key to value),
+                    exactBodyValues = unchanged.mapNotNull { other -> other.stored?.let { other.key to it } }.toMap(),
+                )
+            }
+        }
+        return request.copy(maximumResponseBytes = SETTINGS_RESPONSE_BYTES)
+    }
+
+    private fun entry(key: String, primitive: JsonPrimitive): SemanticSettingEntry {
+        val value = primitive.contentOrNull.orEmpty()
+        val declared = when (val write = contract.write) {
+            is SemanticSettingsWrite.Document -> write.properties[key]
+            is SemanticSettingsWrite.Keyed -> write.valueSchema
+            null -> null
+        }
+        val writable = when (val write = contract.write) {
+            is SemanticSettingsWrite.Document -> key in write.properties
+            is SemanticSettingsWrite.Keyed -> write.valueSchema.accepts(primitive)
+            null -> false
+        }
+        val options = declared?.declaredEnumValues().orEmpty()
+        val kind = when {
+            primitive.booleanOrNull != null && !primitive.isString -> SemanticSettingKind.Toggle
+            options.isNotEmpty() && contract.write is SemanticSettingsWrite.Document -> SemanticSettingKind.Choice
+            key.lowercase().let { name -> FOLDER_WORDS.any { it in name } } -> SemanticSettingKind.Folder
+            else -> SemanticSettingKind.Text
+        }
+        return SemanticSettingEntry(
+            key = key,
+            label = key.humanizedSettingLabel(),
+            kind = kind,
+            value = value,
+            options = if (kind == SemanticSettingKind.Choice) options else emptyList(),
+            writable = writable,
+            stored = primitive,
+        )
+    }
+
+    private fun JsonObject.accepts(primitive: JsonPrimitive): Boolean = when (declaredJsonType()) {
+        null -> true
+        "boolean" -> primitive.booleanOrNull != null && !primitive.isString
+        "string" -> primitive.isString
+        "integer", "number" -> !primitive.isString && primitive.contentOrNull?.toDoubleOrNull() != null
+        else -> false
+    }
+}
+
+internal data class SemanticSettingsUiState(
+    val loading: Boolean = true,
+    val entries: List<SemanticSettingEntry> = emptyList(),
+    val busyKey: String? = null,
+    val errorMessage: String? = null,
+    val notice: String? = null,
+    /** A write could not be confirmed. Changes stay blocked until settings load again. */
+    val outcomeUnknown: Boolean = false,
+    /**
+     * A replacement changed settings it was not asked to change. The route cannot be trusted to
+     * keep the rest of the document, so changes stay off here even after a reload.
+     */
+    val changesPaused: Boolean = false,
+) {
+    val canChange: Boolean get() = !loading && busyKey == null && !outcomeUnknown && !changesPaused
+}
+
+/**
+ * Loads settings and changes one at a time. Each change is verified by reading the settings again,
+ * so the dialog always shows what the server stored and never assumes its own request was kept.
+ */
+internal class SemanticSettingsController(
+    private val execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
+    private val settings: SemanticSettings,
+    private val onChanged: (key: String) -> Unit = {},
+    /** Without a store, the pause after a drifted replacement lasts only as long as this controller. */
+    private val pauses: SemanticSettingsPauseStore? = null,
+) {
+    var state: SemanticSettingsUiState by mutableStateOf(SemanticSettingsUiState())
+        private set
+
+    suspend fun load() {
+        state = state.copy(loading = true, errorMessage = null)
+        // The pause is read while the sheet still shows as loading, so no change can be made
+        // between the settings appearing and the pause being known.
+        val paused = state.changesPaused || try {
+            pauses?.isPaused() == true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Persistence fault boundary: an unreadable record may be a pause, so it counts as one.
+            true
+        }
+        val pausedMessage = "Changes are paused here: saving a setting earlier also changed others. Set these in the app's own settings."
+            .takeIf { paused && !state.changesPaused }
+        state = try {
+            state.copy(
+                loading = false,
+                entries = settings.parse(execute(settings.readRequest())),
+                outcomeUnknown = false,
+                changesPaused = paused,
+                errorMessage = pausedMessage,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            state.copy(loading = false, changesPaused = paused, errorMessage = failure.message ?: "Settings could not be loaded.")
+        }
+    }
+
+    suspend fun change(entry: SemanticSettingEntry, value: String) {
+        val current = state
+        if (!current.canChange || value == entry.value) return
+        val request = try {
+            settings.writeRequest(entry, value, current.entries)
+        } catch (invalid: IllegalArgumentException) {
+            state = current.copy(errorMessage = invalid.message)
+            return
+        }
+        state = current.copy(busyKey = entry.key, errorMessage = null, notice = null)
+        if (settings.replacesDocument) {
+            // The request carries every other setting as loaded; send nothing if any changed since.
+            val fresh = try {
+                settings.parse(execute(settings.readRequest()))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                state = state.copy(busyKey = null, errorMessage = "The current settings could not be checked, so nothing was saved.")
+                return
+            }
+            if (!settings.replacementBaselineHolds(current.entries, fresh)) {
+                state = state.copy(
+                    busyKey = null,
+                    entries = fresh,
+                    errorMessage = "These settings changed elsewhere, so nothing was saved. Review the current values, then change the setting again.",
+                )
+                return
+            }
+        }
+        var status: Int? = null
+        val writeFailure: Exception? = try {
+            status = execute(request).status
+            check(status in 200..299) { "The app refused this setting (HTTP $status)." }
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            failure
+        }
+        if (writeFailure != null && status != null && status in 400..499) {
+            state = state.copy(busyKey = null, errorMessage = writeFailure.message)
+            return
+        }
+        val stored = try {
+            settings.parse(execute(settings.readRequest()))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            state = state.copy(
+                busyKey = null,
+                outcomeUnknown = true,
+                errorMessage = "The app may have saved this setting. Reload settings before changing anything else.",
+            )
+            return
+        }
+        val storedValue = stored.firstOrNull { it.key == entry.key }?.value
+        val drifted = settings.replacementDrift(current.entries, stored, entry.key)
+        if (drifted.isNotEmpty()) {
+            // The values on screen are the stored ones; nothing is written over them from here.
+            state = state.copy(
+                busyKey = null,
+                entries = stored,
+                changesPaused = true,
+                notice = null,
+                errorMessage = "Saving ${entry.label} also changed ${drifted.joinToString { it.label }}. " +
+                    "The current values are shown. Changes are paused here; set these in the app's own settings.",
+            )
+            try {
+                pauses?.pause()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The pause still holds for this controller; only its durability is lost.
+            }
+            onChanged(entry.key)
+            return
+        }
+        state = state.copy(
+            busyKey = null,
+            entries = stored,
+            errorMessage = when {
+                storedValue == entry.value -> writeFailure?.message ?: "The app kept the previous value."
+                else -> null
+            },
+            notice = when (storedValue) {
+                entry.value -> null
+                value -> "${entry.label} saved"
+                else -> "The app stored ${entry.label} as \"$storedValue\"."
+            },
+        )
+        if (storedValue != entry.value) onChanged(entry.key)
+    }
+}
+
+private fun String.humanizedSettingLabel(): String {
+    val words = replace(Regex("[_:.-]+"), " ")
+        .replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
+        .trim()
+        .lowercase()
+    return words.replaceFirstChar(Char::uppercase).ifBlank { this }
+}
+
+private val settingsJson = Json { ignoreUnknownKeys = true }
+private val FOLDER_WORDS = listOf("path", "folder", "directory")
+private const val SETTINGS_RESPONSE_BYTES = 256L * 1024L
+private const val MAX_SETTINGS = 64
+private const val MAX_SETTING_KEY_CHARS = 128
+private const val MAX_SETTING_VALUE_CHARS = 1_024
+
+/**
+ * Durable record that a settings route of one app version changed settings it was not asked to
+ * change. The route is not written through again until the app's version changes.
+ */
+internal interface SemanticSettingsPauseStore {
+    suspend fun isPaused(): Boolean
+
+    suspend fun pause()
+}
+
+/**
+ * Keeps the pause in the platform's encrypted text draft storage, bound to the account. Null when
+ * the platform keeps no draft storage.
+ */
+internal fun semanticSettingsPauseStore(
+    services: TextEditorDraftPlatformServices,
+    session: NextcloudSession,
+    settings: SemanticSettings,
+): SemanticSettingsPauseStore? {
+    val path = SETTINGS_PAUSE_PATH_PREFIX + publicContentSha256(settings.routeKey.encodeToByteArray())
+    if (services.textEditorDraftStore(session, path) == null) return null
+    return object : SemanticSettingsPauseStore {
+        override suspend fun isPaused(): Boolean = services.textEditorDraftStore(session, path)?.load() != null
+
+        override suspend fun pause() {
+            checkNotNull(services.textEditorDraftStore(session, path)) { "Settings pause storage is unavailable." }
+                .save(TextEditorDraft(originalText = "", text = "paused", etag = null))
+        }
+    }
+}
+
+private const val SETTINGS_PAUSE_PATH_PREFIX = "nextcloud-native:settings-route-paused:"

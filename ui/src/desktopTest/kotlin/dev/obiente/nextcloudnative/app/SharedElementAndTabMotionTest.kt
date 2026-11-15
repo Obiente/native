@@ -169,8 +169,11 @@ class SharedElementAndTabMotionTest {
     }
 
     private fun NativeSceneTestDriver.frames() {
-        scene.render(System.nanoTime()).close()
-        scene.render(System.nanoTime() + 16_000_000L).close()
+        // One clock reading for both frames: a slow first frame must not let the second land
+        // after the animation has already finished.
+        val firstFrame = System.nanoTime()
+        scene.render(firstFrame).close()
+        scene.render(firstFrame + 16_000_000L).close()
     }
 
     private fun NativeSceneTestDriver.left(label: String): Float = assertNotNull(node(label), label).boundsInRoot.left

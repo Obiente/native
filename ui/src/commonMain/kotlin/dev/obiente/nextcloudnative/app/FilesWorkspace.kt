@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -93,10 +94,21 @@ internal fun NativeFilesWorkspace(
     onCreate: () -> Unit,
     onRefresh: () -> Unit,
     onAction: (NextcloudFile, FileMenuAction) -> Unit,
+    deletes: FileDeleteCoordinator? = null,
 ) {
     var navigationCollapsed by remember { mutableStateOf(false) }
     var inspectorClosed by remember { mutableStateOf(false) }
+    var trashOpen by rememberSaveable { mutableStateOf(false) }
+    var selecting by remember(path) { mutableStateOf(false) }
     val desktopPresentation = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+    if (trashOpen && userId != null) {
+        FileTrashbinScreen(services, session, userId, onBack = { trashOpen = false }, onItemsRestored = onRefresh)
+        return
+    }
+    if (selecting && userId != null && deletes != null) {
+        FilesSelectionWorkspace(files, path, services, session, userId, deletes, onExit = { selecting = false }, onChanged = onRefresh)
+        return
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val panes = resolveFilesWorkspacePanes(
             maxWidth.value.toInt(), desktopPresentation, navigationCollapsed,
@@ -152,6 +164,8 @@ internal fun NativeFilesWorkspace(
                 onRefresh = onRefresh,
                 onOpenPath = onOpenPath,
                 desktop = desktop,
+                onOpenTrash = { trashOpen = true }.takeIf { userId != null },
+                onSelect = { selecting = true }.takeIf { userId != null && deletes != null },
                 paneActions = {
                     FilesPaneControls(
                         panes = panes,
@@ -175,6 +189,7 @@ internal fun NativeFilesWorkspace(
                             offlineAvailability = offlineAvailability,
                             onFilterChanged = onFilterChanged,
                             onOpenPath = onOpenPath,
+                            onOpenTrash = { trashOpen = true }.takeIf { userId != null },
                         )
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
@@ -222,6 +237,7 @@ private fun FilesNavigationPane(
     offlineAvailability: Map<String, FileOfflineAvailability>,
     onFilterChanged: (FileWorkspaceFilter) -> Unit,
     onOpenPath: (String) -> Unit,
+    onOpenTrash: (() -> Unit)?,
 ) {
     val pinnedFolders = files.filter {
         it.isDirectory && offlineAvailability[it.path] == FileOfflineAvailability.Available
@@ -270,6 +286,9 @@ private fun FilesNavigationPane(
             modifier = highlight.entryModifier(filesNavigationKey(FileWorkspaceFilter.Offline, currentPath)),
             onClick = { onFilterChanged(FileWorkspaceFilter.Offline) },
         )
+        if (onOpenTrash != null) {
+            FilesNavItem(label = "Deleted files", icon = NextcloudIcons.Empty, selected = false, count = null, onClick = onOpenTrash)
+        }
         if (pinnedFolders.isNotEmpty()) {
             Spacer(Modifier.height(NextcloudSpacing.Medium))
             Text(

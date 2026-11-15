@@ -1,0 +1,7 @@
+Source: openapi.json at the nextcloud/tables v2.4.0 release tag
+https://github.com/nextcloud/tables/blob/v2.4.0/openapi.json
+Retrieved: 2026-10-31
+
+This excerpt keeps the API v1 table, view, column, and row operations unmodified, with every
+component schema they reference. It verifies that the reviewed Tables row editor selects only
+operations present in the contract.

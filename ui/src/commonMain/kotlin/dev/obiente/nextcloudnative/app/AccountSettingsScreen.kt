@@ -29,6 +29,8 @@ internal fun SettingsScreen(
     onThemePreferenceChanged: (ThemePreference) -> Unit,
     canAdminister: Boolean,
     onAdminApps: () -> Unit,
+    onOpenStatus: (() -> Unit)?,
+    onOpenApp: (NextcloudAppEntry) -> Unit,
     onOfflineCenter: () -> Unit,
     onTransfers: () -> Unit,
     onProjectNews: () -> Unit,
@@ -62,7 +64,10 @@ internal fun SettingsScreen(
         hasDeviceSettings = platformCapabilities.isNotEmpty(),
         hasDesktopAppSettings = hasDesktopAppSettings,
         canAdminister = canAdminister,
+        hasTalk = serverInfo?.apps.orEmpty().any { it.id == "spreed" },
     )
+    val profileController = rememberAccountProfileController(services, session)
+    val talkSettings = rememberTalkUserSettingsController(services, session)
     val selectedSection = selectedSectionName?.let { restoredName ->
         resolveSettingsWorkspaceSection(restoredName, visibleSections)
     }
@@ -169,6 +174,22 @@ internal fun SettingsScreen(
                 },
             )
 
+            SettingsWorkspaceSection.PersonalInfo -> PersonalInfoSettingsSection(profileController, onOpenStatus)
+
+            SettingsWorkspaceSection.AppSettings -> SettingsAppSettingsSectionContent(
+                entries = appSettingsHubEntries(
+                    serverInfo?.apps.orEmpty(), nativeAppIds, SettingsWorkspaceSection.Talk in visibleSections,
+                ),
+                onOpen = { target ->
+                    when (target) {
+                        is AppSettingsTarget.Section -> selectedSectionName = target.section.name
+                        is AppSettingsTarget.OpenApp -> onOpenApp(target.app)
+                    }
+                },
+            )
+
+            SettingsWorkspaceSection.Talk -> SettingsTalkSectionContent(talkSettings)
+
             SettingsWorkspaceSection.Appearance -> SettingsAppearanceSectionContent(
                 selectedTheme = themePreference,
                 onThemeSelected = onThemePreferenceChanged,
@@ -247,7 +268,7 @@ internal fun SettingsScreen(
 
             SettingsWorkspaceSection.Administration -> SettingsAdministrationSectionContent(
                 state = SettingsAdministrationSectionState(
-                    serverAppsDescription = "Install, update, enable, or disable apps as an administrator",
+                    serverAppsDescription = "Review installed and available apps, versions, and updates",
                     serverAppsStatus = serverInfo?.apps?.size?.let { "$it active" },
                     installedApps = serverInfo?.apps.orEmpty()
                         .filterNot { app -> app.id == "dashboard" }
@@ -260,7 +281,10 @@ internal fun SettingsScreen(
                             )
                         },
                 ),
-                onOpenServerApps = onAdminApps,
+                onOpenAdministration = { tab ->
+                    AdministrationTabRequests.request(tab)
+                    onAdminApps()
+                },
             )
         }
     }
@@ -301,6 +325,20 @@ internal fun SettingsScreen(
                 content = sectionContent,
             )
         }
+    }
+}
+
+@Composable
+private fun rememberTalkUserSettingsController(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+): TalkUserSettingsController {
+    val currentServices by androidx.compose.runtime.rememberUpdatedState(services)
+    // The controller lives per account; requests read the newest session for that account.
+    val currentSession by androidx.compose.runtime.rememberUpdatedState(session)
+    val scope = rememberCoroutineScope()
+    return remember(session.accountId) {
+        TalkUserSettingsController(scope) { request -> currentServices.executeTalkRequest(currentSession, request) }
     }
 }
 

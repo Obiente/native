@@ -173,6 +173,13 @@ internal fun FilesInspector(
                 Text("View version history")
             }
         }
+        val fileId = file.fileId
+        if (fileId != null && !userId.isNullOrBlank()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FileSystemTagsSection(services, session, fileId)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            FileCommentsSection(services, session, userId, fileId)
+        }
     }
 }
 

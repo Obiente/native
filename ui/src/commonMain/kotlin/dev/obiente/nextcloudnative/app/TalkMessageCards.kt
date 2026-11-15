@@ -35,13 +35,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 
 /**
- * Native, read-only Talk message renderer.
+ * What the viewer may do with one message. Writes appear only when the caller derived them from
+ * server capabilities and conversation permissions.
+ */
+class TalkMessageInteractions(
+    val actions: List<NextcloudCardAction> = emptyList(),
+    /** Toggles this account's reaction with an emoji, or null when reacting is not allowed. */
+    val onToggleReaction: ((String) -> Unit)? = null,
+    /** A change to this message is waiting for the server. */
+    val pending: Boolean = false,
+)
+
+/**
+ * Native Talk message renderer.
  *
  * It performs only authenticated core-preview reads. Original attachment access is delegated to
  * the caller and never offered when Talk's rich-object parameter says `hide-download=yes`.
@@ -54,23 +67,28 @@ fun TalkMessageCard(
     mine: Boolean,
     onOpenAttachment: (TalkAttachmentRenderModel) -> Unit,
     modifier: Modifier = Modifier,
+    interactions: TalkMessageInteractions = TalkMessageInteractions(),
 ) {
     when (val model = remember(message) { message.toRenderModel() }) {
-        is TalkMessageRenderModel.Text -> TalkNativeTextBubble(
-            message = message,
-            model = model,
-            mine = mine,
-            modifier = modifier,
-        )
-        is TalkMessageRenderModel.Attachments -> TalkAttachmentsBubble(
-            services = services,
-            session = session,
-            message = message,
-            model = model,
-            mine = mine,
-            onOpenAttachment = onOpenAttachment,
-            modifier = modifier,
-        )
+        is TalkMessageRenderModel.Text -> TalkMessageActionHost(message, mine, interactions.actions, modifier) {
+            TalkNativeTextBubble(
+                message = message,
+                model = model,
+                mine = mine,
+                interactions = interactions,
+            )
+        }
+        is TalkMessageRenderModel.Attachments -> TalkMessageActionHost(message, mine, interactions.actions, modifier) {
+            TalkAttachmentsBubble(
+                services = services,
+                session = session,
+                message = message,
+                model = model,
+                mine = mine,
+                onOpenAttachment = onOpenAttachment,
+                interactions = interactions,
+            )
+        }
         is TalkMessageRenderModel.Event -> TalkNativeEventCard(model, modifier)
         is TalkMessageRenderModel.SharedObject -> TalkNativeEventCard(
             model = TalkMessageRenderModel.Event(
@@ -100,10 +118,10 @@ private fun TalkNativeTextBubble(
     message: TalkMessage,
     model: TalkMessageRenderModel.Text,
     mine: Boolean,
-    modifier: Modifier,
+    interactions: TalkMessageInteractions,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
@@ -122,7 +140,7 @@ private fun TalkNativeTextBubble(
                 } else {
                     Text(model.summary, style = MaterialTheme.typography.bodyMedium)
                 }
-                TalkMessageFooter(message)
+                TalkMessageFooter(message, interactions)
             }
         }
     }
@@ -136,10 +154,10 @@ private fun TalkAttachmentsBubble(
     model: TalkMessageRenderModel.Attachments,
     mine: Boolean,
     onOpenAttachment: (TalkAttachmentRenderModel) -> Unit,
-    modifier: Modifier,
+    interactions: TalkMessageInteractions,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
@@ -173,7 +191,7 @@ private fun TalkAttachmentsBubble(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TalkMessageFooter(message)
+                TalkMessageFooter(message, interactions)
             }
         }
     }
@@ -209,7 +227,7 @@ private fun TalkReplyPreview(parent: TalkMessageQuote?) {
 }
 
 @Composable
-private fun TalkMessageFooter(message: TalkMessage) {
+private fun TalkMessageFooter(message: TalkMessage, interactions: TalkMessageInteractions) {
     val timestamp = formatTalkMessageTimeUtc(message.timestamp)
     if (
         timestamp == null &&
@@ -227,24 +245,7 @@ private fun TalkMessageFooter(message: TalkMessage) {
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
     ) {
         if (message.reactions.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-                message.reactions.take(MAX_VISIBLE_REACTIONS).forEach { reaction ->
-                    Surface(
-                        color = if (reaction.reactedByMe) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                        } else {
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.66f)
-                        },
-                        shape = CircleShape,
-                    ) {
-                        Text(
-                            "${reaction.emoji} ${reaction.count}",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-            }
+            TalkReactionChips(message.reactions, interactions)
         }
         val context = buildList {
             timestamp?.let(::add)
@@ -482,8 +483,6 @@ private fun TalkAttachmentVisual.displayLabel(): String = when (this) {
     TalkAttachmentVisual.VideoRecording -> "Video recording"
     TalkAttachmentVisual.File -> "File"
 }
-
-private const val MAX_VISIBLE_REACTIONS = 5
 
 private sealed interface TalkAttachmentPreviewState {
     data object None : TalkAttachmentPreviewState

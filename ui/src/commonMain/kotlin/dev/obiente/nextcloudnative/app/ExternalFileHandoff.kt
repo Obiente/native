@@ -121,13 +121,13 @@ fun verifyDownloadedDeckAttachmentSize(
     downloadedByteCount: Long,
 ) {
     require(declaredByteCount == null || declaredByteCount >= 0L) {
-        "The Deck attachment has an invalid declared size."
+        "The attachment has an invalid declared size."
     }
     require(downloadedByteCount >= 0L) {
-        "The downloaded Deck attachment has an invalid size."
+        "The downloaded attachment has an invalid size."
     }
     check(declaredByteCount == null || downloadedByteCount == declaredByteCount) {
-        "The downloaded Deck attachment does not match its declared size."
+        "The downloaded attachment does not match its declared size."
     }
 }
 

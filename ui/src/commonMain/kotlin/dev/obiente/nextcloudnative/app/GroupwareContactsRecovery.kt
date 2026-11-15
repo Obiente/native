@@ -13,6 +13,8 @@ internal data class ContactDraft(
     val organization: String,
     val address: String,
     val notes: String,
+    /** The full card the editor saved; null in records written before typed fields existed. */
+    val card: ContactCard? = null,
 ) {
     fun normalizedForDav(): ContactDraft = copy(
         name = name.normalizeGroupwareTextLineEndings(),
@@ -38,6 +40,8 @@ internal sealed interface ContactMutationPostcondition {
         val draft: ContactDraft,
         val expectedPrimaryEmail: String = draft.email.trim(),
         val expectedPrimaryPhone: String = draft.phone.trim().normalizeGroupwareTextLineEndings(),
+        /** Every typed field as it reads back from the content that was sent. */
+        val expectedCard: ContactCard? = null,
     ) : ContactMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
@@ -48,6 +52,9 @@ internal sealed interface ContactMutationPostcondition {
                 etag = response.etag,
                 content = response.body.decodeToString(),
             ) ?: return false
+            if (expectedCard != null) {
+                return contact.href == href && contact.uid == expectedUid && contact.card().normalized() == expectedCard.normalized()
+            }
             return contact.href == href &&
                 contact.uid == expectedUid &&
                 contact.displayName == expected.name &&
@@ -103,8 +110,41 @@ internal fun contactUpdatePostcondition(
         draft = draft,
         expectedPrimaryEmail = expected.emails.firstOrNull().orEmpty(),
         expectedPrimaryPhone = expected.phones.firstOrNull().orEmpty(),
+        expectedCard = expected.card().takeIf { draft.card != null },
     )
 }
+
+/** What a newly created contact must read back as, from the content that is sent. */
+internal fun contactCreatePostcondition(
+    href: String,
+    addressBookHref: String,
+    uid: String,
+    draft: ContactDraft,
+    content: String,
+): ContactMutationPostcondition.Upsert? {
+    val expected = parseGroupwareContact(addressBookHref, href, null, content) ?: return null
+    return ContactMutationPostcondition.Upsert(
+        href = href,
+        addressBookHref = addressBookHref,
+        expectedUid = uid,
+        previousEtag = null,
+        draft = draft,
+        expectedPrimaryEmail = expected.emails.firstOrNull().orEmpty(),
+        expectedPrimaryPhone = expected.phones.firstOrNull().orEmpty(),
+        expectedCard = expected.card().takeIf { draft.card != null },
+    )
+}
+
+/** The editor draft for [card], with the legacy single-value fields filled from its first entries. */
+internal fun ContactCard.toContactDraft(): ContactDraft = ContactDraft(
+    name = name,
+    email = emails.firstOrNull()?.value.orEmpty(),
+    phone = phones.firstOrNull()?.value.orEmpty(),
+    organization = organization,
+    address = addresses.firstOrNull()?.singleLine.orEmpty(),
+    notes = notes,
+    card = this,
+)
 
 internal fun decodeContactMutationRecoveryState(
     encoded: String,

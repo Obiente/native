@@ -92,6 +92,8 @@ class DynamicContractInfoTest {
                 "server-probe-inconclusive", "server-probe-access-denied", "server-contract-unsupported",
                 "verified-static-read-routes", "verified-read-fallbacks", "signed-package-imported",
                 "linked-source-tag-imported", "contract-invalid", "metadata-only",
+                "write-quarantined", "write-postcondition-mismatch", "write-rule-confirmed",
+                "write-recovery-stopped", "write-rule-probation", "identity-binding-refused",
             ),
             DynamicDiagnosticCode.entries.map(DynamicDiagnosticCode::code),
         )

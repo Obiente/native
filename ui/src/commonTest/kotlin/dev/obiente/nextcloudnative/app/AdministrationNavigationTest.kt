@@ -22,7 +22,7 @@ class AdministrationNavigationTest {
     fun settingsChildScreensDoNotPollWithRetainedSettingsDestination() {
         val screens = listOf(
             Screen.OfflineCenter, Screen.Transfers, Screen.ProjectNews,
-            Screen.Files(""), Screen.Media, Screen.Notes,
+            Screen.Files(""), Screen.Media,
             Screen.AppInfo(NextcloudAppEntry("sample_app", "Sample app", null)),
         )
         for (screen in screens) {

@@ -14,6 +14,12 @@ data class NativeAppSchema(
     val actions: List<ActionSpec> = emptyList(),
     val relationships: List<ResourceRelationshipSpec> = emptyList(),
     val warnings: List<CompilerWarning> = emptyList(),
+    /**
+     * Operations no generic form, record action, or menu may offer (see
+     * [requiresDedicatedWriteSurface]). Only a surface that applies their class's safeguards, such
+     * as the exactly-once mail composer, looks here.
+     */
+    val dedicatedActions: List<ActionSpec> = emptyList(),
 ) {
     fun resource(id: String): ResourceSpec? = resources.firstOrNull { it.id == id }
 
@@ -139,6 +145,7 @@ enum class NativeComponent {
     documentEditor,
     conversationList,
     chatThread,
+    feedReader,
 }
 
 @Serializable
@@ -156,6 +163,14 @@ data class ActionSpec(
     val effect: ActionEffect = ActionEffect.unspecified,
     /** Exact same-route GET action that can reconcile an unknown idempotent replacement result. */
     val resultRecoveryActionId: String? = null,
+    /** Risk class R0-R10. Null only in hand-built schemas; see [operationRiskClass]. */
+    val riskClass: DynamicOperationRiskClass? = null,
+    /** Verified route-family read used for identity binding and read-back. */
+    val readBackActionId: String? = null,
+    /** Exact name of a declared Idempotency-Key request header. */
+    val idempotencyKeyHeader: String? = null,
+    /** Declared field proving the actor may share (R8 only). */
+    val sharePermissionFieldId: String? = null,
 )
 
 @Serializable
@@ -173,6 +188,8 @@ data class ApiBinding(
     /** Exact validated request-body schema retained for semantic, schema-gated native writes. */
     val bodySchema: JsonElement? = null,
     val allowsObservedBodyFields: Boolean = false,
+    /** Declared types retained for per-action observed identity proof. */
+    val pathParameterTypes: Map<String, String?> = emptyMap(),
 )
 
 @Serializable

@@ -166,6 +166,27 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
                     add("Result recovery requires trusted mutation and read evidence: ${action.id} -> $recoveryId")
             }
         }
+        action.readBackActionId?.let { readId ->
+            val read = actionsById[readId]
+            when {
+                read == null -> add("Missing read-back action reference: $readId")
+                action.binding.method == HttpMethod.GET -> add("Read-back is only valid for a write: ${action.id}")
+                !read.isVerifiedFamilyRead() -> add("Read-back must target a declared visible read: ${action.id} -> $readId")
+                dynamicRouteFamilyRelation(action.binding.path, read.binding.path) == null ->
+                    add("Read-back must be in the write's route family: ${action.id} -> $readId")
+            }
+        }
+        action.idempotencyKeyHeader?.let { header ->
+            if (!header.isIdempotencyKeyHeader() || action.binding.method == HttpMethod.GET) {
+                add("Invalid idempotency key header: ${action.id}")
+            }
+        }
+        action.sharePermissionFieldId?.let { fieldId ->
+            val read = action.readBackActionId?.let(actionsById::get)
+            if (action.operationRiskClass != DynamicOperationRiskClass.sharing || read == null || fieldId !in read.responseFieldIds) {
+                add("Share permission must be a declared field of the route-family read: ${action.id}")
+            }
+        }
         if (action.fallbackOnly && action.binding.method != HttpMethod.GET) {
             add("Hidden fallback action is not read-only: ${action.id}")
         }
@@ -198,6 +219,7 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
 
 private fun Provenance.isTrustedResultRecoveryEvidence(): Boolean =
     kind in setOf(
+        ProvenanceKind.advertisedOpenApi,
         ProvenanceKind.verifiedAppPackage,
         ProvenanceKind.appStoreLinkedSourceTag,
     )

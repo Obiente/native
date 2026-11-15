@@ -97,6 +97,28 @@ class JvmTextEditorDraftStorage(
                 check(!Files.isSymbolicLink(file.toPath())) { "Text draft storage must not be a symbolic link." }
                 if (Files.deleteIfExists(file.toPath())) syncDirectory()
             }
+
+            override suspend fun pruneUnreferenced(retainedPaths: Set<String>, identifyPath: (TextEditorDraft) -> String?): Int = access {
+                if (!root.exists()) return@access 0
+                val retained = retainedPaths.mapTo(mutableSetOf()) { "${accountStorageKey}_${digest(it)}.draft" }
+                val candidates = checkNotNull(root.listFiles()).filter {
+                    it.name.startsWith("${accountStorageKey}_") && it.name.endsWith(".draft") && it.name !in retained
+                }.sortedBy { it.name }.take(MAX_DRAFTS)
+                var removed = 0
+                for (candidate in candidates) {
+                    val recovered = try { read(candidate) }
+                    catch (_: java.io.IOException) { continue }
+                    catch (_: java.security.GeneralSecurityException) { continue }
+                    catch (_: IllegalArgumentException) { continue }
+                    catch (_: IllegalStateException) { continue }
+                    val identified = identifyPath(recovered) ?: continue
+                    // Content alone never authorizes deletion of a different resource's draft.
+                    if (candidate.name == "${accountStorageKey}_${digest(identified)}.draft" &&
+                        Files.deleteIfExists(candidate.toPath())) removed++
+                }
+                if (removed > 0) syncDirectory()
+                removed
+            }
         }
     }
 

@@ -3,7 +3,15 @@ package dev.obiente.nextcloudnative.app
 internal enum class CalendarWorkspaceView {
     Month,
     Week,
+    Day,
     Agenda,
+}
+
+/** Week and Day move by days; Month and Agenda move by months. */
+internal fun CalendarWorkspaceView.navigationDays(): Int? = when (this) {
+    CalendarWorkspaceView.Week -> 7
+    CalendarWorkspaceView.Day -> 1
+    CalendarWorkspaceView.Month, CalendarWorkspaceView.Agenda -> null
 }
 
 internal data class CalendarWorkspacePresentation(
@@ -83,12 +91,49 @@ internal fun calendarWeekDates(selectedDate: String): List<String> {
     return (0..6).map { offset -> monday.plusDays(offset).compactValue }
 }
 
+/**
+ * The time range to read for what [view] shows. The views show days on the device, so the range
+ * runs between midnights there, not midnights in UTC: an event at 00:30 local time on the first
+ * day would otherwise fall just outside it. [deviceZone] is null for the device's own zone.
+ */
 internal fun calendarWorkspaceQueryWindow(
     view: CalendarWorkspaceView,
     month: CalendarMonth,
     selectedDate: String,
+    deviceZone: String? = null,
 ): GroupwareDavTimeWindow {
-    if (view != CalendarWorkspaceView.Week) {
+    val dates = calendarWorkspaceDateWindow(view, month, selectedDate)
+    fun String.atDeviceMidnight() = calendarConvertWallTime(take(15), deviceZone, CALENDAR_UTC_ZONE)?.let { "${it}Z" }
+    val start = dates.startUtc.atDeviceMidnight() ?: return dates
+    val end = dates.endUtc.atDeviceMidnight() ?: return dates
+    return if (start < end) GroupwareDavTimeWindow(start, end) else dates
+}
+
+/**
+ * Expands [events] for [window], whose bounds are midnights on the device and so usually fall
+ * inside a UTC day. The expansion works in whole dates and covers the day the window ends in; a
+ * UTC-timed event or occurrence is then kept only when it starts inside the exact window.
+ */
+internal fun expandCalendarEventsForWindow(
+    events: List<GroupwareCalendarEvent>,
+    window: GroupwareDavTimeWindow,
+): List<GroupwareCalendarEvent> = expandGroupwareCalendarEvents(events, window).filter { event ->
+    val start = event.start
+    // A repeating event's own entry stays as the expansion placed it: when its rule cannot be
+    // read it is shown as it is, wherever it starts.
+    val seriesEntry = event.recurrenceRule != null && !event.isGeneratedOccurrence
+    // An event that began before the window but ends inside it still shows on its last day.
+    val reachesWindow = (event.end?.takeIf { it.length >= 16 && it.endsWith('Z') } ?: start).let { it > window.startUtc || start >= window.startUtc }
+    seriesEntry || start.length < 16 || !start.endsWith('Z') || (reachesWindow && start < window.endUtc)
+}
+
+private fun calendarWorkspaceDateWindow(
+    view: CalendarWorkspaceView,
+    month: CalendarMonth,
+    selectedDate: String,
+): GroupwareDavTimeWindow {
+    // A day reads its whole week, so moving between neighboring days paints from the same load.
+    if (view != CalendarWorkspaceView.Week && view != CalendarWorkspaceView.Day) {
         return GroupwareDavTimeWindow(month.compactStart, month.next().compactStart)
     }
     val week = calendarWeekDates(selectedDate)

@@ -9,19 +9,14 @@ class NativePantryCollectionTest {
         FieldSpec("done", "Done", FieldKind.boolean, false, false))
     private val resource = ResourceSpec("items", "Items", Confidence.high, fields,
         listOf(Evidence(EvidenceSource.verifiedAppPackage, "Synthetic reviewed contract")))
-    private val schema = NativeAppSchema("test", AppIdentity("pantry", "Pantry", "0.34.0"),
-        Confidence.high, resources = listOf(resource))
-
-    @Test fun onlyReviewedShapesUsePantryCards() {
-        assertEquals(NativePantryCollectionKind.Item, nativePantryCollectionKind(schema, resource))
-        assertEquals(NativePantryCollectionKind.Household, nativePantryCollectionKind(schema, resource.copy(id = "houses")))
-        assertEquals(NativePantryCollectionKind.List, nativePantryCollectionKind(schema, resource.copy(id = "lists")))
-        assertNull(nativePantryCollectionKind(schema.copy(app = schema.app.copy(version = "0.35.0")), resource))
-        assertNull(nativePantryCollectionKind(schema.copy(app = schema.app.copy(id = "other")), resource))
+    @Test fun householdListAndItemShapesUseTheirCardsWhateverAppDeclaresThem() {
+        assertEquals(NativePantryCollectionKind.Item, nativePantryCollectionKind(resource))
+        assertEquals(NativePantryCollectionKind.Household, nativePantryCollectionKind(resource.copy(id = "houses")))
+        assertEquals(NativePantryCollectionKind.List, nativePantryCollectionKind(resource.copy(id = "lists")))
         listOf(resource.copy(evidence = emptyList()), resource.copy(confidence = Confidence.low),
             resource.copy(id = "notes"), resource.copy(fields = fields.filterNot { it.id == "done" }),
             resource.copy(fields = fields.map { if (it.id == "done") it.copy(kind = FieldKind.string) else it })
-        ).forEach { assertNull(nativePantryCollectionKind(schema, it)) }
+        ).forEach { assertNull(nativePantryCollectionKind(it)) }
     }
 
     @Test fun completionAndQuantityDoNotInferMissingStatusOrChangeAuthoritativeRecords() {

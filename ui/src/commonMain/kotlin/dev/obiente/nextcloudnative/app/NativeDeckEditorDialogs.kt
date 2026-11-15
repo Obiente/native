@@ -197,6 +197,9 @@ fun DeckUiCardEditorDialog(
     onDiscardRecoveredDraft: (DeckUiCardDraft) -> Unit = {},
     onResetDraftRecovery: (DeckUiCardDraft) -> Unit = {},
     onDraftChange: (DeckUiCardDraft) -> Unit = {},
+    /** False when the app contract has no field to store this value, so it is not offered. */
+    allowsDescription: Boolean = true,
+    allowsDueDate: Boolean = true,
     onSubmit: (DeckUiCardDraft) -> Unit,
 ) {
     var pendingDestructiveAction by remember(stack, card) {
@@ -316,7 +319,7 @@ fun DeckUiCardEditorDialog(
                     supportingText = { Text("${draft.title.length}/255") },
                 )
             }
-            item {
+            if (allowsDescription) item {
                 OutlinedTextField(
                     value = draft.descriptionMarkdown,
                     onValueChange = { draft = draft.copy(descriptionMarkdown = it) },
@@ -328,7 +331,7 @@ fun DeckUiCardEditorDialog(
                     supportingText = { Text("Markdown supported") },
                 )
             }
-            item {
+            if (allowsDueDate) item {
                 DeckUiDueDateFields(
                     dueDate = draft.dueDate,
                     dueTime = draft.dueTime,

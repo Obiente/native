@@ -36,6 +36,15 @@ internal class NativeSceneTestDriver(val scene: ImageComposeScene) {
         while (!condition() && System.nanoTime() < deadline) settle()
     }
 
+    /** Renders until [label] stops moving, such as a control in a sheet that is still sliding in. */
+    suspend fun settleAt(label: String, maxFrames: Int = 30) {
+        var frames = 0
+        do {
+            val before = node(label)?.boundsInRoot
+            settle()
+        } while (node(label)?.boundsInRoot != before && ++frames < maxFrames)
+    }
+
     fun nodes(): List<SemanticsNode> = buildList {
         fun visit(node: SemanticsNode) {
             add(node)
@@ -50,6 +59,11 @@ internal class NativeSceneTestDriver(val scene: ImageComposeScene) {
     }
 
     fun has(label: String): Boolean = node(label) != null
+
+    /** Whether a text field currently holds exactly [value]; [has] matches labels, not field contents. */
+    fun hasFieldText(value: String): Boolean = nodes().any { candidate ->
+        candidate.config.getOrNull(SemanticsProperties.EditableText)?.text == value
+    }
 
     suspend fun click(label: String) {
         val target = assertNotNull(node(label), "No rendered native control labeled '$label'")

@@ -191,6 +191,7 @@ private suspend fun capture(
             rawMediaCapture?.isSettled() ?: nativeTiffCapture?.isSettled() ?: true
         }
         settleShellSwitcherCapture(scenario, scene)
+        settleConversationCapture(scenario, scene)
         val rendered = scene.render()
         try {
             rawMediaCapture?.verify()

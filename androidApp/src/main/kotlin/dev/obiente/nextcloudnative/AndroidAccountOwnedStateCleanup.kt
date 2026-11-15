@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import dev.obiente.nextcloudnative.app.AccountPrivateMemoryLifecycle
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
+import dev.obiente.nextcloudnative.app.FileDynamicWriteQuarantineStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.removeAndroidHomeWorkspaceAccountPreferences
@@ -36,6 +37,7 @@ internal class AndroidAccountOwnedStateCleanup(
     private val mutationRecovery = AndroidAccountMutationRecoveryCleanup(appContext)
     private val textEditorDrafts = AndroidTextEditorDrafts(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
+    private val writeQuarantine = FileDynamicWriteQuarantineStore(File(appContext.filesDir, ANDROID_WRITE_SAFETY_DIRECTORY))
 
     suspend fun remove(session: NextcloudSession) {
         dev.obiente.nextcloudnative.app.sharedJvmAuthenticatedAppReadSessions.retireAccount(session.accountId.storageKey)
@@ -74,6 +76,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { textEditorDrafts.removeAccount(session.accountId.storageKey) },
+                { writeQuarantine.removeAccount(session.accountId.storageKey) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
@@ -122,6 +125,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { textEditorDrafts.removeAccount(session.accountId.storageKey) },
+                { writeQuarantine.removeAccount(session.accountId.storageKey) },
                 { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
@@ -176,6 +180,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { removeAndroidFileSyncAccountStaging(File(appContext.cacheDir, "file-sync-staging"), accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { textEditorDrafts.removeAccount(accountStorageKey) },
+                { writeQuarantine.removeAccount(accountStorageKey) },
                 { deckCardDrafts.removeAccount(accountStorageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
@@ -225,3 +230,6 @@ internal suspend fun retireAndroidFileSyncBeforeGrantRevocation(
     retire()
     revoke()
 }
+
+/** Device-local write probation and quarantine state, one file per account identity digest. */
+internal const val ANDROID_WRITE_SAFETY_DIRECTORY = "write-safety-v1"

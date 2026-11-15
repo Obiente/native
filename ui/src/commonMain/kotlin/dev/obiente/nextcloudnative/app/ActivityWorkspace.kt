@@ -26,8 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -148,7 +146,7 @@ internal fun ActivityDesktopWorkspace(
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
     previewCacheScope: String = "synthetic",
-    onOpenSettings: (ActivitySettingsDestination) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showSummary by remember { mutableStateOf(false) }
@@ -259,7 +257,7 @@ internal fun ActivityMobileWorkspace(
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
     previewCacheScope: String = "synthetic",
-    onOpenSettings: (ActivitySettingsDestination) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val attention = remember(feed.groups) {
@@ -406,7 +404,7 @@ private fun ActivityMobileHeader(
     eventCount: Int,
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    onOpenSettings: (ActivitySettingsDestination) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(
@@ -431,7 +429,7 @@ private fun ActivityMobileHeader(
                     contentDescription = if (refreshing) "Refreshing activity" else "Refresh activity",
                 )
             }
-            ActivitySettingsMenu(onOpenSettings)
+            ActivitySettingsButton(onOpenSettings)
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -617,7 +615,7 @@ private fun ActivityMobileAutomationBundle(
 private fun ActivityDesktopHeader(
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    onOpenSettings: (ActivitySettingsDestination) -> Unit,
+    onOpenSettings: () -> Unit,
     showSummary: Boolean,
     onToggleSummary: () -> Unit,
 ) {
@@ -641,53 +639,16 @@ private fun ActivityDesktopHeader(
             IconButton(enabled = !refreshing, onClick = onRefresh) {
                 Icon(NextcloudIcons.Refresh, contentDescription = if (refreshing) "Refreshing activity" else "Refresh activity")
             }
-            ActivitySettingsMenu(onOpenSettings)
+            ActivitySettingsButton(onOpenSettings)
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
-private fun ActivitySettingsMenu(onOpenSettings: (ActivitySettingsDestination) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { expanded = true }) {
-            Icon(NextcloudIcons.Settings, contentDescription = "Activity settings")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text("Notification settings")
-                        Text(
-                            "Opens your Nextcloud settings",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                onClick = {
-                    expanded = false
-                    onOpenSettings(ActivitySettingsDestination.Notifications)
-                },
-            )
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text("RSS feed settings")
-                        Text(
-                            "Opens Activity settings in your browser",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                onClick = {
-                    expanded = false
-                    onOpenSettings(ActivitySettingsDestination.RssFeed)
-                },
-            )
-        }
+private fun ActivitySettingsButton(onOpenSettings: () -> Unit) {
+    IconButton(onClick = onOpenSettings) {
+        Icon(NextcloudIcons.Settings, contentDescription = "Notification settings")
     }
 }
 

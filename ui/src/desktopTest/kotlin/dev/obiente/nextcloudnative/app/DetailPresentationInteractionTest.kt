@@ -25,7 +25,8 @@ class DetailPresentationInteractionTest {
         }) {
             assertFalse(has("Close card"))
             click("Draft the agenda")
-            settleUntil { has("Close card") && has("Agenda body") }
+            // Generous limits: a loaded machine renders the sheet's animation in few, slow frames.
+            settleUntil(SheetTimeoutMillis) { has("Close card") && has("Agenda body") }
             assertTrue(has("Agenda body"), "The sheet shows the card details")
             assertTrue(has("Write the notes"), "The board stays behind the sheet")
             // Under load the sheet may still be sliding in; tap Close where it rests, not mid-flight.
@@ -33,9 +34,9 @@ class DetailPresentationInteractionTest {
             do {
                 val before = node("Close card")?.boundsInRoot
                 settle()
-            } while (node("Close card")?.boundsInRoot != before && ++frames < 20)
+            } while (node("Close card")?.boundsInRoot != before && ++frames < 60)
             click("Close card")
-            settleUntil { !has("Close card") && dismissals > 0 }
+            settleUntil(SheetTimeoutMillis) { !has("Close card") && dismissals > 0 }
             assertEquals(1, dismissals)
             assertEquals(null, selected.value)
         }
@@ -200,6 +201,7 @@ class DetailPresentationInteractionTest {
     )
 
     private companion object {
+        const val SheetTimeoutMillis = 10_000L
         const val DraftCardId = 11L
         const val NotesCardId = 12L
     }

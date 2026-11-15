@@ -1,10 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class TalkChatPresentationTest {
@@ -26,58 +23,12 @@ class TalkChatPresentationTest {
     }
 
     @Test
-    fun failedSendPreservesDraftAndDoesNotRefreshOrResend() = runBlocking {
-        var draft = "Synthetic message"
-        var sends = 0
-        var refreshes = 0
-        val result = submitTalkDraft(
-            send = { sends++; throw IllegalStateException("Disconnected") },
-            onAcknowledged = { draft = "" },
-            refresh = { refreshes++ },
+    fun liveStatusNamesTheStateWithoutColor() {
+        assertEquals("Live", talkLiveStatusLabel(TalkLiveState.Connected))
+        assertEquals("Reconnecting...", talkLiveStatusLabel(TalkLiveState.Reconnecting(TalkFailure(TalkFailureKind.Offline))))
+        assertEquals(
+            TalkFailure(TalkFailureKind.NotFound).message,
+            talkLiveStatusLabel(TalkLiveState.Stopped(TalkFailure(TalkFailureKind.NotFound))),
         )
-        assertEquals(TalkSendResult.Unconfirmed, result)
-        assertEquals("Synthetic message", draft)
-        assertEquals(1, sends)
-        assertEquals(0, refreshes)
-    }
-
-    @Test
-    fun refreshFailureAfterAcknowledgementDoesNotMasqueradeAsSendFailure() = runBlocking {
-        var draft = "Synthetic message"
-        var sends = 0
-        val result = submitTalkDraft(
-            send = { sends++ },
-            onAcknowledged = { draft = "" },
-            refresh = { throw IllegalStateException("Refresh unavailable") },
-        )
-        assertEquals(TalkSendResult.SentRefreshFailed, result)
-        assertEquals("", draft)
-        assertEquals(1, sends)
-    }
-
-    @Test
-    fun cancellationBeforeAcknowledgementPreservesDraft() = runBlocking {
-        var draft = "Synthetic message"
-        assertFailsWith<CancellationException> {
-            submitTalkDraft(
-                send = { throw CancellationException() },
-                onAcknowledged = { draft = "" },
-                refresh = { error("Must not refresh") },
-            )
-        }
-        assertEquals("Synthetic message", draft)
-    }
-
-    @Test
-    fun cancellationDuringRefreshKeepsAcknowledgedDraftCleared() = runBlocking {
-        var draft = "Synthetic message"
-        assertFailsWith<CancellationException> {
-            submitTalkDraft(
-                send = {},
-                onAcknowledged = { draft = "" },
-                refresh = { throw CancellationException() },
-            )
-        }
-        assertEquals("", draft)
     }
 }

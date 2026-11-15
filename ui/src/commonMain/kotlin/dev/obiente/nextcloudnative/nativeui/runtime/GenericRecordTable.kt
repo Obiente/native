@@ -26,14 +26,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
@@ -58,6 +64,7 @@ internal fun GenericRecordTable(
     loadMoreError: String?,
     modifier: Modifier = Modifier,
     recordsGeneration: Long = 0L,
+    rowActions: (NativeRecord) -> List<NextcloudCardAction> = { emptyList() },
 ) {
     val composite = view.compositeDataGrid
     val columnResource = composite?.let { schema.resource(it.columnResourceId) }
@@ -121,18 +128,23 @@ internal fun GenericRecordTable(
             modifier = Modifier.weight(1f),
         ) {
             items(projectedRecords, key = NativeRecord::id) { record ->
+                val actions = rowActions(record)
+                var actionsExpanded by remember(record.id) { mutableStateOf(false) }
+                val rowTitle = nativeRecordPresentation(projectedResource, record).title
                 Column(genericRecordItemMotion()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .then(
-                                onSelectRecord?.let { callback -> Modifier.clickable { callback(record) } } ?: Modifier,
+                            .nextcloudCardInteractions(
+                                onOpen = onSelectRecord?.let { callback -> { callback(record) } },
+                                onShowActions = { actionsExpanded = true }.takeIf { actions.isNotEmpty() },
+                                actionsLabel = "Show actions for $rowTitle",
                             )
                             .heightIn(min = 50.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         frozenField?.let { field ->
-                            val plan = nativeCellEditPlan(schema, resource, projection, record, field)
+                            val plan = nativeInlineCellEditPlan(schema, resource, projection, record, field)
                             GenericTableValueCell(
                                 field = field,
                                 rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
@@ -147,7 +159,7 @@ internal fun GenericRecordTable(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             scrollingFields.forEachIndexed { index, field ->
-                                val plan = nativeCellEditPlan(schema, resource, projection, record, field)
+                                val plan = nativeInlineCellEditPlan(schema, resource, projection, record, field)
                                 GenericTableValueCell(
                                     field = field,
                                     rawValue = cellEdits.savedValue(record.id, field.id) ?: record.presentationValue(field.id),
@@ -157,10 +169,16 @@ internal fun GenericRecordTable(
                                     onEdit = cellEdits::begin,
                                 )
                             }
+                            NextcloudCardOverflow(
+                                itemLabel = rowTitle,
+                                actions = actions,
+                                expanded = actionsExpanded,
+                                onExpandedChange = { actionsExpanded = it },
+                            )
                             if (onSelectRecord != null) {
                                 Icon(
                                     NextcloudIcons.ChevronRight,
-                                    contentDescription = "Open ${nativeRecordPresentation(projectedResource, record).title}",
+                                    contentDescription = "Open $rowTitle",
                                     modifier = Modifier.width(actionWidth).padding(NextcloudSpacing.Small),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

@@ -60,6 +60,29 @@ class DesktopDeckCardDraftStoreTest {
         }
 
     @Test
+    fun `drafts are scoped by app while existing deck drafts keep their storage identity`() =
+        withStore { root, key, store ->
+            val session = session()
+            val deck = persisted()
+            val other = deck.copy(key = deck.key.copy(appId = "kanban_x"))
+            val legacyScope = "7:11:42"
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(legacyScope.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+
+            assertEquals("deck", DeckCardDraftKey(7L, 11L, 42L).appId)
+            assertEquals(legacyScope, deck.key.storageScope)
+            assertTrue(store.storageFileName(session, deck.key).contains(digest))
+            assertFalse(store.storageFileName(session, deck.key) == store.storageFileName(session, other.key))
+            store.save(session, deck)
+            store.save(session, other)
+
+            val reopened = DesktopDeckCardDraftStore(root, fixedKey(key))
+            assertEquals(deck, reopened.load(session, deck.key))
+            assertEquals(other, reopened.load(session, other.key))
+            assertFailsWith<IllegalArgumentException> { DeckCardDraftKey(7L, 11L, 42L, appId = "bad id") }
+        }
+
+    @Test
     fun `malformed ciphertext is preserved across load save clear and pruning`() =
         withStore { root, _, store ->
             val session = session()

@@ -101,6 +101,22 @@ class NoteDeletionRecoveryTest {
     }
 
     @Test
+    fun `a deletion recovery belongs to the notes app that wrote it`() {
+        val scope = "b".repeat(64)
+        val encoded = NoteDeletionRecoveryState(scope, noteId = 7L, appId = "jotter").encodeForDurableStorage()
+        val legacy = NoteDeletionRecoveryState(scope, noteId = 7L).encodeForDurableStorage()
+
+        assertEquals(7L, decodeNoteDeletionRecoveryState(encoded, scope, "jotter")?.noteId)
+        assertNull(decodeNoteDeletionRecoveryState(encoded, scope, "scribble"))
+        assertNull(
+            decodeNoteDeletionRecoveryState(legacy, scope, "scribble"),
+            "A record from before app scoping is a Notes deletion; another app must not reconcile or clear it.",
+        )
+        assertEquals(7L, decodeNoteDeletionRecoveryState(legacy, scope, "notes")?.noteId)
+        assertEquals(7L, decodeNoteDeletionRecoveryState(legacy, scope)?.noteId)
+    }
+
+    @Test
     fun `legacy note deletion recovery remains readable but cannot claim an original precondition`() {
         val scope = "a".repeat(64)
         val legacy = """{"accountScope":"$scope","noteId":42}"""

@@ -59,4 +59,8 @@ class DynamicContractWriteGate {
         val outcome = state.first { it != State.Checking }
         return outcome is State.Settled && outcome.authorized == descriptor
     }
+
+    /** Final non-suspending send check. A new discovery check invalidates earlier admission. */
+    internal fun authorizesWriteNow(risk: ActionRisk, descriptor: DynamicAppDescriptor): Boolean =
+        risk == ActionRisk.readOnly || (state.value as? State.Settled)?.authorized == descriptor
 }

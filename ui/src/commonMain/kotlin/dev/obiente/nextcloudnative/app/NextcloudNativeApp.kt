@@ -380,18 +380,6 @@ private class PhotoFolderViewportUiState(
     var browseState by mutableStateOf(initialBrowseState)
 }
 
-internal val nativeAppIds = setOf(
-    "files",
-    "photos",
-    "memories",
-    "spreed",
-    "talk",
-    "activity",
-    "notes",
-    "dashboard",
-    "user_status",
-)
-
 enum class NextcloudNativeRoute {
     Home,
     Settings,
@@ -685,7 +673,7 @@ private fun AuthenticatedApp(
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
-    val newsController = rememberNewsWorkspaceController(services, session)
+    val notificationsInbox = rememberNotificationsInboxController(services, session)
     val fileDeletes = rememberFileDeleteCoordinator(session, services.fileWriteFences)
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -838,7 +826,6 @@ private fun AuthenticatedApp(
             ?.takeIf { it.sequence > handledNavigationRequestSequence }
             ?: return@LaunchedEffect
         if (
-            screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
             screen is Screen.Calendar ||
@@ -956,7 +943,6 @@ private fun AuthenticatedApp(
             "files" -> Screen.Files("")
             "photos", "memories" -> Screen.Media
             "spreed", "talk" -> Screen.Talk
-            "notes" -> Screen.Notes
             "dashboard" -> {
                 destination = NextcloudDestination.Home
                 Screen.Root
@@ -965,8 +951,6 @@ private fun AuthenticatedApp(
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
             "tasks" -> Screen.Tasks
-            "deck" -> Screen.Deck
-            NEWS_APP_ID -> Screen.News
             "activity" -> {
                 destination = NextcloudDestination.Activity
                 Screen.Root
@@ -1373,14 +1357,11 @@ private fun AuthenticatedApp(
             Screen.Search,
             Screen.Media,
             Screen.Talk,
-            Screen.Notes,
             Screen.Dashboard,
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
             Screen.Tasks,
-            Screen.Deck,
-            Screen.News,
             is Screen.AppInfo,
             -> {
                 leaveAppWorkspace()
@@ -1406,7 +1387,6 @@ private fun AuthenticatedApp(
             is Screen.ProjectNewsArticleView -> screen = Screen.ProjectNews
             is Screen.PersonMedia -> screen = Screen.Media
             is Screen.Chat -> screen = Screen.Talk
-            is Screen.NoteEditor -> screen = Screen.Notes
             is Screen.MediaViewer -> {
                 mediaViewerNavigationRepository.release(session.accountId, current.navigationKey)
                 screen = current.returnTo
@@ -1419,7 +1399,7 @@ private fun AuthenticatedApp(
 
     PlatformBackHandler(
         enabled = !groupwareMutationInProgress && when (screen) {
-            is Screen.NoteEditor, is Screen.TextEditor -> false
+            is Screen.TextEditor -> false
             Screen.Root -> destination != NextcloudDestination.Home
             else -> true
         },
@@ -1523,6 +1503,7 @@ private fun AuthenticatedApp(
             } else {
                 null
             },
+            destinationBadges = notificationsShellBadges(notificationsInbox.state.badgeCount),
         )
     }
     val screenContent: @Composable (Screen) -> Unit = { shown ->
@@ -1566,7 +1547,10 @@ private fun AuthenticatedApp(
                     onSearch = ::openSearch,
                     onOpenApp = { openApp(it, NextcloudDestination.Apps) },
                 )
-                RootDestinationContent.Activity -> ActivityScreen(
+                RootDestinationContent.Activity -> ActivityDestinationScreen(
+                    session, notificationsInbox, activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
+                    onOpenLink = { link -> launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp) },
+                ) { openSettings -> ActivityScreen(
                     services = services,
                     session = session,
                     activityInstalled = serverInfo?.apps?.any { it.id == "activity" } == true,
@@ -1580,7 +1564,8 @@ private fun AuthenticatedApp(
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
                     },
-                )
+                    onOpenSettings = openSettings,
+                ) }
                 RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
                     session = session,
@@ -1590,6 +1575,8 @@ private fun AuthenticatedApp(
                     onThemePreferenceChanged = onThemePreferenceChanged,
                     canAdminister = administration.canAdminister,
                     onAdminApps = { if (administration.canAdminister) screen = Screen.AdminApps },
+                    onOpenStatus = serverInfo?.apps?.firstOrNull { it.id == "user_status" }?.let { app -> { openApp(app, NextcloudDestination.Settings) } },
+                    onOpenApp = { openApp(it, NextcloudDestination.Settings) },
                     onOfflineCenter = {
                         if (presentation == NextcloudPresentation.Desktop) {
                             screen = Screen.Root
@@ -1746,20 +1733,9 @@ private fun AuthenticatedApp(
             pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
             ::cancelPendingNavigationRequest, linkNavigationJob != null,
         ) { groupwareMutationInProgress = it }
-        Screen.News -> NewsWorkspaceScreen(services = services, controller = newsController, onBack = ::navigateBack)
-        Screen.Deck -> NativeDeckScreen(
-            services = services,
-            session = session,
-            currentUserId = serverInfo?.userId ?: session.loginName,
-            onBack = ::navigateBack,
-            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-        )
         Screen.AdminApps -> AdminAppsScreen(
-            access = administration,
-            onContinueInBrowser = {
-                services.openExternalUrl(session.serverUrl.trimEnd('/') + "/index.php/settings/apps")
-            },
-            serverInfo = serverInfo,
+            access = administration, session = session,
+            execute = { services.executeNextcloudApi(session, it) }, serverInfo = serverInfo,
             onOpenApp = { openApp(it, NextcloudDestination.Settings) },
             onBack = ::navigateBack,
         )
@@ -1802,40 +1778,18 @@ private fun AuthenticatedApp(
                 openMediaViewer(media, file, current)
             },
         )
-        Screen.Talk -> TalkScreen(
-            services = services,
-            session = session,
-            onBack = ::navigateBack,
-            onOpenRoom = { screen = Screen.Chat(it) },
-        )
-        Screen.Notes -> NextcloudNotesScreen(
-            services = services,
-            session = session,
-            onBack = ::navigateBack,
-            onOpenNote = { screen = Screen.NoteEditor(it) },
-            navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it },
-        )
-        is Screen.NoteEditor -> NextcloudNoteEditor(
-            services = services,
-            session = session,
-            note = current.note,
-            onBack = ::navigateBack,
-            navigationRequest = pendingEditorNavigationRequest,
-            onNavigationConfirmed = ::applyPendingNavigationRequest,
-            onNavigationCancelled = ::cancelPendingNavigationRequest,
-            navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it },
-        )
-        is Screen.Chat -> ChatScreen(
+        Screen.Talk, is Screen.Chat -> TalkWorkspaceScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId.orEmpty(),
-            room = current.room,
-            onBack = ::navigateBack,
-            onOpenAttachment = { file ->
-                openMediaViewer(listOf(file), file, current)
+            selectedRoom = (current as? Screen.Chat)?.room,
+            onSelectRoom = { screen = Screen.Chat(it) },
+            onCloseRoom = { screen = Screen.Talk },
+            onExit = {
+                screen = Screen.Talk
+                navigateBack()
             },
+            onOpenAttachment = { file -> openMediaViewer(listOf(file), file, current) },
         )
         is Screen.AppInfo -> {
             val resumePlan = planDynamicContractResume(
@@ -1882,6 +1836,8 @@ private fun AuthenticatedApp(
                 },
                 onOpenAccountSettings = ::openAccountSettings,
                 onBack = ::navigateBack,
+                notesFilesAccess = serverInfo?.notesFilesAccess(),
+                onMutationInProgressChanged = { groupwareMutationInProgress = it },
             )
         }
         is Screen.MediaViewer -> {
@@ -2054,44 +2010,6 @@ private fun AuthenticatedApp(
 }
 
 @Composable
-internal fun RootShell(
-    presentation: NextcloudPresentation,
-    selected: NextcloudDestination,
-    desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
-    navigationEnabled: Boolean = true,
-    onSelected: (NextcloudDestination) -> Unit,
-    identity: NextcloudDesktopIdentity?,
-    onOpenApp: (String) -> Unit = {},
-    activeAppId: String? = null,
-    content: @Composable () -> Unit,
-) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        if (presentation == NextcloudPresentation.Desktop) {
-            NextcloudDesktopShell(
-                selected = selected,
-                onSelected = onSelected,
-                identity = identity,
-                onOpenApp = onOpenApp,
-                activeAppId = activeAppId,
-                workspaceKind = desktopWorkspaceKind,
-                navigationEnabled = navigationEnabled,
-                content = content,
-            )
-        } else {
-            dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell(
-                selected = selected,
-                onSelected = onSelected,
-                identity = identity,
-                activeAppId = activeAppId,
-                onOpenApp = onOpenApp,
-                navigationEnabled = navigationEnabled,
-                content = content,
-            )
-        }
-    }
-}
-
-@Composable
 private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
@@ -2134,6 +2052,8 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onOpenAccountSettings: () -> Unit,
     onBack: () -> Unit,
+    notesFilesAccess: NotesFilesAccess?,
+    onMutationInProgressChanged: (Boolean) -> Unit,
 ) {
     if (isOfficeWorkspaceAppId(app.id)) {
         OfficeWorkspaceScreen(
@@ -2183,6 +2103,7 @@ private fun AppInfoScreen(
     }
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         val resolved = discovery
+        val semanticWorkspace = remember(resolved) { resolved?.let(::selectSemanticAppWorkspace) }
         // The discovered screen owns its own contextual header. Keeping the
         // discovery header around would stack two toolbars on every native app
         // (and makes the back action ambiguous). The outer header is only needed
@@ -2203,6 +2124,11 @@ private fun AppInfoScreen(
             } else {
                 Spacer(modifier = Modifier.weight(1f))
             }
+        } else if (semanticWorkspace != null) {
+            SemanticAppWorkspaceScreen(
+                semanticWorkspace, services, session, currentUserId, writeGate, notesFilesAccess,
+                onMutationInProgressChanged, onBack, Modifier.weight(1f), navigation, onNavigationChanged,
+            )
         } else {
             DynamicDiscoveredAppScreen(
                 services = services,
@@ -2467,10 +2393,11 @@ private fun DynamicDiscoveredAppScreen(
     val selectedView = schema.views.firstOrNull { it.id == selectedViewId }
         ?: schema.views.firstOrNull()
     val formRelationValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
-    val formRelationRequests = remember(schema, selectedView, formRelationValues) {
-        selectedView?.let { view ->
-            dynamicFormRelationLoadRequests(schema, view, formRelationValues)
-        }.orEmpty()
+    val feedReaderSourceRequests = remember(schema, selectedView, formRelationValues) {
+        selectedView?.let { view -> dynamicFeedReaderSourceLoadRequests(schema, view, formRelationValues) }.orEmpty()
+    }
+    val formRelationRequests = remember(schema, selectedView, formRelationValues, feedReaderSourceRequests) {
+        selectedView?.let { view -> dynamicFormRelationLoadRequests(schema, view, formRelationValues) }.orEmpty() + feedReaderSourceRequests
     }
     val audioSourceCapability = remember(discovery) {
         descriptor.actions.firstNotNullOfOrNull { action ->
@@ -3155,18 +3082,15 @@ private fun DynamicDiscoveredAppScreen(
             )
         }.toMap()
     }
-    val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests)
-    val executor = remember(services, session, descriptor, runtimeValues, discovery.versionStatus) {
-        DynamicNextcloudActionExecutor(
-            services = services,
-            session = session,
-            descriptor = descriptor,
-            runtimeContext = runtimeValues,
-            versionStatus = discovery.versionStatus,
-            writeGate = writeGate,
-            onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
-        )
+    LaunchedEffect(feedReaderSourceRequests) {
+        val outcomes = loadDynamicFeedReaderSources(services, session, descriptor, formRelationCache.pendingRequests(feedReaderSourceRequests), formRelationValues, dynamicReadCachePolicy)
+        formRelationCache = formRelationCache.withDynamicRelationOutcomes(outcomes)
     }
+    val failedFormRelationRequests = formRelationCache.failedRequests(formRelationRequests) - feedReaderSourceRequests.toSet()
+    val executor = rememberDynamicActionExecutor(
+        services, session, descriptor, runtimeValues, discovery.versionStatus, writeGate,
+        viewState, selectedView?.sourceActionId, ::releaseSelectedDynamicUploadFile,
+    )
     val pendingMutationStore = remember(services, session, descriptor, schema) {
         object : NativePendingMutationStore {
             override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
@@ -3845,6 +3769,7 @@ private fun DynamicDiscoveredAppScreen(
     }
     val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
+    var contractInfoOpen by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
     }
@@ -4513,10 +4438,6 @@ private fun DynamicDiscoveredAppScreen(
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
         val headerKeys = dev.obiente.nextcloudnative.nativeui.runtime.genericHeaderSharedKeys(selectedRecord?.id, selectedRecordResourceId, selectedContextLabel, activeContentTitle, activeContentSubtitle, showFallbackRecordDetail || selectedView.component == NativeComponent.detail)
-        val hasHeaderActions = collectionCreateControl.action != null ||
-            overflowActionViews.isNotEmpty() ||
-            secondaryNavigationDestinations.isNotEmpty()
-
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
             mode = if (musicWorkspaceIntent == null && !choresWorkspaceActive) {
@@ -4547,7 +4468,13 @@ private fun DynamicDiscoveredAppScreen(
                     ?.dynamicCollectionNavigationIcon()
             },
             headerActions = {
-                if (!showContextDestinationMenu && hasHeaderActions) {
+                if (contractInfoOpen) {
+                    DynamicContractInfoHost(
+                        remember(discovery) { discovery.toContractInfo(null) }, services.dynamicWriteQuarantineStore(),
+                        session.accountId.storageKey, descriptor.app.id, onDismiss = { contractInfoOpen = false }, onStopChecking = executor::stopCheckingRuleOperation,
+                    )
+                }
+                if (!showContextDestinationMenu) {
                     DynamicCollectionHeaderActions(
                         schema = schema,
                         appName = descriptor.app.name,
@@ -4558,6 +4485,7 @@ private fun DynamicDiscoveredAppScreen(
                         onMenuExpandedChange = { actionMenuExpanded = it },
                         onActionSelected = ::selectDynamicAction,
                         onDestinationSelected = ::selectCollectionDestination,
+                        onCompatibilityDetails = { actionMenuExpanded = false; contractInfoOpen = true },
                     )
                 }
             },
@@ -4665,7 +4593,7 @@ private fun DynamicDiscoveredAppScreen(
                     LocalNativeFinanceCurrency provides buildNativeBudgetDashboardModel(
                         dashboardReads = nativeBudgetDashboardReads(descriptor.app.id, descriptor.actions),
                         dashboardRecordsByActionId = budgetDashboardRecordsByActionId,
-                    ).currency,
+                    ).currency, dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeSendAttemptStores provides remember(services, session, descriptor.app.id) { nativeSendAttemptStores(services, session, descriptor.app.id) },
                 ) {
                     GenericNativeAppScreen(
                     schema = schema,
@@ -4726,11 +4654,8 @@ private fun DynamicDiscoveredAppScreen(
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
-                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
-                        ::selectChoresDestination
-                    } else {
-                        null
-                    },
+                    onWorkspaceNavigate = ::selectChoresDestination.takeIf { choresWorkspaceActive && choresNavigationItems.size > 1 },
+                    mailComposerRetention = remember(services, session) { NativeMailComposerRegistry.retention(services, session) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -5314,61 +5239,6 @@ private const val MAX_DYNAMIC_ARTWORK_DECODED_BYTES = 32L * 1024L * 1024L
 private const val MAX_DYNAMIC_ARTWORK_DIMENSION = 1_024
 private const val ARGB_8888_BYTES_PER_PIXEL = 4L
 
-@Composable
-private fun DynamicContractInfoDialog(
-    info: DynamicContractInfo,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Contract info") },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                ContractInfoSection("Acquisition", info.acquisition)
-                ContractInfoSection("App version", info.appVersion)
-                ContractInfoSection("Source spec", info.sourceSpecFile)
-                ContractInfoSection("Descriptor", info.countSummary())
-                ContractInfoSection("Resources", info.resourceIds.safeContractList())
-                ContractInfoSection("Layouts", info.layoutIds.safeContractList())
-                ContractInfoSection("Links", info.linkIds.safeContractList())
-                ContractInfoSection("Actions", info.actionIds.safeContractList())
-                ContractInfoSection(
-                    "Diagnostics",
-                    info.diagnosticCodes.ifEmpty { listOf("none") }.joinToString(", "),
-                )
-                if (info.childCandidates.isNotEmpty()) {
-                    Text("Current record navigation", style = MaterialTheme.typography.titleSmall)
-                    info.childCandidates.forEach { child ->
-                        val missing = child.missingContextParameters.takeIf(List<String>::isNotEmpty)
-                            ?.joinToString(", ", prefix = " · needs ")
-                            .orEmpty()
-                        Text(
-                            "${child.resourceId} · ${child.reasonLabel()}$missing",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                } else {
-                    ContractInfoSection("Current record navigation", "No child collection candidates")
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
-}
-
-@Composable
-private fun ContractInfoSection(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Text(value, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
-private fun List<String>.safeContractList(): String = ifEmpty { listOf("none") }.joinToString(", ")
-
 internal data class DynamicCollectionDestinationSelectionPlan(
     val pathParameterValues: Map<String, String>,
     val clearHierarchyContext: Boolean,
@@ -5798,6 +5668,7 @@ private fun ViewSpec.dynamicDestinationSupportingText(
 
         NativeComponent.board -> "Organize work across lanes"
         NativeComponent.mailbox -> "Read and manage messages"
+        NativeComponent.feedReader -> "Read articles from your feeds"
         NativeComponent.contactList -> "Browse people and contact details"
         NativeComponent.dataTable -> subject?.let { "Review and edit $it" }
             ?: "Review and edit records"
@@ -5986,6 +5857,7 @@ private fun ViewSpec.dynamicCollectionNavigationIcon(): ImageVector = when (comp
 
     NativeComponent.board -> NextcloudIcons.Board
     NativeComponent.mailbox -> NextcloudIcons.Mail
+    NativeComponent.feedReader -> NextcloudIcons.Feed
     NativeComponent.taskList -> NextcloudIcons.Task
     NativeComponent.dataTable -> NextcloudIcons.Table
     NativeComponent.recipeList -> NextcloudIcons.Recipe
@@ -6103,6 +5975,7 @@ private fun ActivityScreen(
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenFilesPath: (String) -> Unit,
     onOpenLink: (String) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     var selectedServerFilterId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("all") }
     var serverFilters by remember(session, activityInstalled) {
@@ -6279,9 +6152,7 @@ private fun ActivityScreen(
                         services.loadPreview(session, preview.fileId, width = 160, height = 160)
                     },
                     previewCacheScope = previewCacheDigest(session),
-                    onOpenSettings = { settings ->
-                        services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
-                    },
+                    onOpenSettings = onOpenSettings,
                 )
             } else ActivityMobileWorkspace(
                 timeline = timeline,
@@ -6306,9 +6177,7 @@ private fun ActivityScreen(
                     services.loadPreview(session, preview.fileId, width = 160, height = 160)
                 },
                 previewCacheScope = previewCacheDigest(session),
-                onOpenSettings = { settings ->
-                    services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
-                },
+                onOpenSettings = onOpenSettings,
             )
         }
     }
@@ -6946,6 +6815,7 @@ internal fun FilesScreen(
                     },
                     onRefresh = { loadAttempt += 1 },
                     onAction = { file, action -> dispatchFileAction(file, action, loadedFiles) },
+                    deletes = fileDeletes,
                 )
             }
         }
@@ -8299,7 +8169,13 @@ private fun MediaScreen(
                     NativeMediaCollectionType.SystemTag -> "Tagged media"
                 },
                 onBack = ::closeCollection,
-            )
+            ) {
+                NativeAlbumManagementMenu(collection, userId, catalog?.albums.orEmpty(), session, collectionMutationService) {
+                    closeCollection()
+                    catalog = null
+                    loadAttempt += 1
+                }
+            }
             when {
                 error != null && collectionItems.isEmpty() -> ErrorMessage(requireNotNull(error)) {
                     scope.launch { loadCollectionPage(collection, reset = true) }
@@ -8639,7 +8515,7 @@ private fun MediaScreen(
                                             }
                                             mediaToAdd = null
                                         }
-                                        NativeMediaCollectionAction.RemoveItem -> Unit
+                                        else -> Unit
                                     }
                                     pendingAction = null
                                     mutationRunning = false
@@ -10338,138 +10214,6 @@ internal enum class MediaTileLayout {
     SquareCrop,
     FullWidthFit,
 }
-
-@Composable
-private fun FileInfoScreen(
-    services: NextcloudPlatformServices, writeFence: FileWriteFence,
-    session: NextcloudSession,
-    userId: String,
-    file: NextcloudFile,
-    onBack: () -> Unit,
-    showVersions: Boolean,
-    onVersionRestored: () -> Unit,
-    onEdit: (() -> Unit)?,
-) {
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(file.name, if (file.isDirectory) "Folder details" else "File details", onBack,
-            titleSharedKey = SharedElementKeys.fileName(file.path))
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XLarge),
-        ) {
-            item {
-                FileAudioPlaybackOrIcon(session, userId, file,
-                    if (file.isDirectory) NextcloudIcons.Folder else fileIcon(file))
-            }
-            item {
-                Text(file.name, style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    file.path,
-                    modifier = Modifier.padding(top = NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = NextcloudTheme.colors.appTile,
-                    shape = RoundedCornerShape(NextcloudRadii.Card),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(NextcloudSpacing.Large),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                    ) {
-                        FileMetadataLine("Type", if (file.isDirectory) "Folder" else file.mimeType ?: "Unknown")
-                        if (!file.isDirectory) FileMetadataLine("Size", formatOptionalByteSize(file.size))
-                        file.lastModified?.let { FileMetadataLine("Modified", it) }
-                        if (!file.isDirectory) {
-                            FileMetadataLine("Image preview", if (file.hasPreview) "Available" else "Unavailable")
-                        }
-                    }
-                }
-            }
-            if (!file.isDirectory && file.fileId != null) {
-                item {
-                    FileVersionHistorySection(
-                        services = services, writeFence = writeFence,
-                        session = session,
-                        userId = userId,
-                        file = file,
-                        initiallyExpanded = showVersions,
-                        onVersionRestored = onVersionRestored,
-                    )
-                }
-            }
-            onEdit?.let { edit ->
-                item {
-                    Button(onClick = edit) {
-                        Icon(NextcloudIcons.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text("Edit text")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileMetadataLine(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            value,
-            modifier = Modifier.padding(start = NextcloudSpacing.Large),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
-internal fun TalkScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    onBack: () -> Unit,
-    onOpenRoom: (TalkRoom) -> Unit,
-) {
-    var rooms by remember(session) { mutableStateOf(TalkWorkspaceMemoryCache.rooms(session)) }
-    var error by remember(session) { mutableStateOf<String?>(null) }
-    var refreshing by remember(session) { mutableStateOf(false) }
-    var loadAttempt by remember(session) { mutableStateOf(0) }
-    LaunchedEffect(loadAttempt) {
-        val cacheProducer = TalkWorkspaceMemoryCache.producer(session)
-        refreshing = rooms != null
-        error = null
-        runCatching { services.listTalkRooms(session) }
-            .onSuccess {
-                rooms = it
-                TalkWorkspaceMemoryCache.storeRooms(session, it, cacheProducer)
-            }
-            .onFailure { error = it.message ?: "Could not load Talk conversations." }
-        refreshing = false
-    }
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader("Talk", "Conversations", onBack)
-        NextcloudRefreshBar(refreshing)
-        if (error != null && rooms != null) {
-            RetainedRefreshError(message = requireNotNull(error), onRetry = { loadAttempt += 1 })
-        }
-        when {
-            error != null && rooms == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-            rooms == null -> LoadingMessage("Loading conversations...")
-            rooms?.isEmpty() == true -> EmptyMessage("No Talk conversations yet.")
-            else -> LazyColumn(contentPadding = PaddingValues(bottom = NextcloudSpacing.XXLarge)) {
-                listItems(requireNotNull(rooms), key = TalkRoom::token) { room ->
-                    TalkRoomRow(room, onOpenRoom, nextcloudItemMotion())
-                }
-            }
-        }
-    }
-}
-
 
 @Composable
 private fun ProjectNewsScreen(

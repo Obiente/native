@@ -1133,10 +1133,6 @@ private fun ApiBinding.isProvenNativeCreateParentAlias(parameterName: String): B
     }
 }
 
-fun interface NativeActionExecutor {
-    suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
-}
-
 data class NativePendingMutationKey(
     val actionId: String,
     val targetRecordId: String,
@@ -1154,19 +1150,6 @@ interface NativePendingMutationStore {
     ): Boolean = false
 
     suspend fun clear(key: NativePendingMutationKey)
-}
-
-enum class NativeActionFailureOutcome {
-    Rejected,
-    Unknown,
-}
-
-sealed interface NativeActionExecutionResult {
-    data class Success(val message: String? = null) : NativeActionExecutionResult
-    data class Failure(
-        val message: String,
-        val outcome: NativeActionFailureOutcome = NativeActionFailureOutcome.Unknown,
-    ) : NativeActionExecutionResult
 }
 
 sealed interface NativeActionExecutionState {

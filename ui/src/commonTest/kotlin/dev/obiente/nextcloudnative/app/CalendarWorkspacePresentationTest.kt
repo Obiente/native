@@ -51,10 +51,39 @@ class CalendarWorkspacePresentationTest {
             view = CalendarWorkspaceView.Week,
             month = CalendarMonth(2026, 8),
             selectedDate = "20260801",
+            deviceZone = "UTC",
         )
 
         assertEquals("20260727T000000Z", window.startUtc)
         assertEquals("20260803T000000Z", window.endUtc)
+    }
+
+    @Test
+    fun `the query runs between midnights on the device`() {
+        // Monday 9 November 2026 starts at 23:00 UTC on Sunday in Amsterdam, so an event at
+        // 23:30 UTC on Sunday, shown on Monday at 00:30, is inside the week that is read.
+        val week = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Week, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        assertEquals("20261108T230000Z", week.startUtc)
+        assertEquals("20261115T230000Z", week.endUtc)
+        val month = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        assertEquals("20261031T230000Z", month.startUtc)
+        assertEquals("20261130T230000Z", month.endUtc)
+    }
+
+    @Test
+    fun `an event on the last displayed day is kept and one just past local midnight is not`() {
+        val november = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 11), "20261109", "Europe/Amsterdam")
+        fun event(start: String, rule: String? = null) = GroupwareCalendarEvent(
+            href = "/remote.php/dav/calendars/alice/personal/$start.ics", etag = null, calendarHref = "/remote.php/dav/calendars/alice/personal/",
+            uid = start, title = "Synthetic", start = start, end = null, allDay = false, recurrenceRule = rule, rawCalendar = "",
+        )
+        val kept = expandCalendarEventsForWindow(listOf(event("20261130T120000Z"), event("20261130T233000Z")), november)
+        assertEquals(listOf("20261130T120000Z"), kept.map { it.start }, "Noon on 30 November is in the month; 00:30 on 1 December local time is not.")
+        val december = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 12), "20261201", "America/New_York")
+        val lateNight = event("20261201T043000Z").copy(end = "20261201T053000Z")
+        assertEquals(1, expandCalendarEventsForWindow(listOf(lateNight), december).size, "An event that ends after local midnight shows on the first day.")
+        val daily = expandCalendarEventsForWindow(listOf(event("20261129T120000Z", "FREQ=DAILY;COUNT=5")), november)
+        assertEquals(listOf("20261129T120000Z", "20261130T120000Z"), daily.map { it.start })
     }
 
     @Test

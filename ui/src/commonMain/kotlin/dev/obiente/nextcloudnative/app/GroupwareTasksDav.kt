@@ -16,6 +16,11 @@ data class GroupwareTask(
     val description: String? = null,
     val priority: Int? = null,
     val rawCalendar: String,
+    val start: String? = null,
+    val percentComplete: Int? = null,
+    val categories: List<String> = emptyList(),
+    /** The UID of the parent task (RELATED-TO, RELTYPE=PARENT), when this is a subtask. */
+    val parentUid: String? = null,
 ) {
     /** Stable across refreshes when one DAV object contains a recurring master and exceptions. */
     val instanceId: String
@@ -52,6 +57,7 @@ internal fun parseGroupwareTasksFromContent(
     val due = property("DUE")
     val status = property("STATUS")?.value?.trim()
     val percentComplete = property("PERCENT-COMPLETE")?.value?.trim()?.toIntOrNull()
+    val direct = lines.taskDirectProperties()
     GroupwareTask(
         href = href.requireSafeDavHref(),
         etag = etag,
@@ -68,6 +74,10 @@ internal fun parseGroupwareTasksFromContent(
         description = property("DESCRIPTION")?.value?.decodeCalendarText()?.takeIf(String::isNotEmpty),
         priority = property("PRIORITY")?.value?.trim()?.toIntOrNull()?.takeIf { it in 0..9 },
         rawCalendar = content,
+        start = property("DTSTART")?.value?.trim()?.takeIf(String::isNotBlank),
+        percentComplete = percentComplete?.takeIf { it in 0..100 },
+        categories = direct.taskCategories(),
+        parentUid = direct.taskParentUid(),
     )
 }.requireUniqueTaskIdentities()
 

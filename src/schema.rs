@@ -128,6 +128,7 @@ pub enum NativeComponent {
     DocumentEditor,
     ConversationList,
     ChatThread,
+    FeedReader,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,6 +145,133 @@ pub struct ActionSpec {
     pub input_schema: Option<Value>,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+    /// Risk class R0-R10; absent in schemas produced before the class existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_class: Option<OperationRiskClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_back_action_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_permission_field_id: Option<String>,
+}
+
+/// What can go wrong when an operation runs; mirrors the Kotlin `DynamicOperationRiskClass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationRiskClass {
+    Read,
+    IdempotentStateSet,
+    ReversibleScalarEdit,
+    PartialUpdate,
+    Replacement,
+    Create,
+    ExternalEffect,
+    Destructive,
+    Sharing,
+    Administration,
+    Credential,
+}
+
+impl OperationRiskClass {
+    /// The R0-R10 code used in diagnostics and documentation.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Read => "R0",
+            Self::IdempotentStateSet => "R1",
+            Self::ReversibleScalarEdit => "R2",
+            Self::PartialUpdate => "R3",
+            Self::Replacement => "R4",
+            Self::Create => "R5",
+            Self::ExternalEffect => "R6",
+            Self::Destructive => "R7",
+            Self::Sharing => "R8",
+            Self::Administration => "R9",
+            Self::Credential => "R10",
+        }
+    }
+
+    /// Classifies from the method and the operation's own words; never from an app identity.
+    /// Route placeholders are ignored so `{token}` is not mistaken for a credential.
+    ///
+    /// This is a reference subset of the authoritative Kotlin `dynamicOperationRiskClass`: it does
+    /// not consult the action effect, the destructive risk, or the package access rule, so a POST
+    /// toggle is `Create` here and `IdempotentStateSet` in Kotlin. See NATIVE_SCHEMA.md.
+    pub fn classify(
+        method: HttpMethod,
+        path: &str,
+        operation_id: &str,
+        label: &str,
+        has_body: bool,
+    ) -> Self {
+        if method == HttpMethod::Get {
+            return Self::Read;
+        }
+        let mut words = std::collections::BTreeSet::new();
+        let literal_path = path
+            .split('/')
+            .filter(|segment| !(segment.starts_with('{') && segment.ends_with('}')))
+            .collect::<Vec<_>>()
+            .join("/");
+        for source in [literal_path.as_str(), operation_id, label] {
+            let mut current = String::new();
+            let mut previous_lower = false;
+            for character in source.chars() {
+                if character.is_ascii_alphanumeric() {
+                    if character.is_ascii_uppercase() && previous_lower && !current.is_empty() {
+                        words.insert(std::mem::take(&mut current));
+                    }
+                    previous_lower = character.is_ascii_lowercase() || character.is_ascii_digit();
+                    current.push(character.to_ascii_lowercase());
+                } else {
+                    previous_lower = false;
+                    if !current.is_empty() {
+                        words.insert(std::mem::take(&mut current));
+                    }
+                }
+            }
+            if !current.is_empty() {
+                words.insert(current);
+            }
+        }
+        let any = |candidates: &[&str]| candidates.iter().any(|word| words.contains(*word));
+        if any(&[
+            "password",
+            "passwords",
+            "passphrase",
+            "credential",
+            "credentials",
+            "secret",
+            "secrets",
+            "apikey",
+            "apikeys",
+        ]) || (words.contains("api") && any(&["key", "keys"]))
+        {
+            Self::Credential
+        } else if any(&[
+            "admin",
+            "administration",
+            "administrator",
+            "provisioning",
+            "install",
+            "uninstall",
+        ]) {
+            Self::Administration
+        } else if any(&["share", "shares", "sharing", "reshare", "unshare"]) {
+            Self::Sharing
+        } else if any(&["send", "merge", "notify", "invite", "publish"]) {
+            Self::ExternalEffect
+        } else {
+            match method {
+                HttpMethod::Get => Self::Read,
+                HttpMethod::Delete => Self::Destructive,
+                HttpMethod::Patch => Self::PartialUpdate,
+                HttpMethod::Put if has_body => Self::Replacement,
+                HttpMethod::Put => Self::IdempotentStateSet,
+                HttpMethod::Post => Self::Create,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

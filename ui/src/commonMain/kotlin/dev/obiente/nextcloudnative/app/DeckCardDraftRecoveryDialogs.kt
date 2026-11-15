@@ -27,7 +27,7 @@ internal fun DeckUiDraftRecoveryConfirmationDialog(
             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
                 Text(
                     if (resetAll) {
-                        "This permanently removes every saved Deck card draft from this device."
+                        "This permanently removes every saved card draft from this device."
                     } else {
                         "This permanently removes the saved recovery copy from this device."
                     },
