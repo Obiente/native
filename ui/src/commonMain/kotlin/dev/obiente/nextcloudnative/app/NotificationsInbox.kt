@@ -406,6 +406,8 @@ internal class NotificationsInboxController(
         val remaining = state.notifications?.filterNot { it.id in ids } ?: return
         state = state.copy(notifications = remaining, selectedId = state.selectedId?.takeUnless { it in ids })
         storeInCache(remaining, state.truncated)
+        // A read that began before the dismissal still lists these notifications; it is dropped.
+        appliedSequence = ++readSequence
     }
 
     private suspend fun verificationRead(): InboxRead = readInbox(verification = true)
