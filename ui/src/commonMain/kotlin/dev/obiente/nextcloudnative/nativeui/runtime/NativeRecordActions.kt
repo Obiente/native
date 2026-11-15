@@ -2,7 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import dev.obiente.nextcloudnative.nativeui.model.isSupportedChoresVersion
 import dev.obiente.nextcloudnative.nativeui.model.hasVerifiedChoresCompletionContract
-
+import dev.obiente.nextcloudnative.nativeui.rules.requiresPatternRulePlan
 import dev.obiente.nextcloudnative.nativeui.model.ActionEffect
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
@@ -416,8 +416,7 @@ internal fun nativeRecordActions(
         includeRecordValues = true,
     ) ?: return emptyNativeRecordActionCapabilities()
     val resourceActions = schema.actions.filter { action ->
-        action.resourceId == authoritativeResource.id &&
-            action.confidence.isSafeRecordActionConfidence()
+        action.resourceId == authoritativeResource.id && action.confidence.isSafeRecordActionConfidence() && !schema.requiresPatternRulePlan(action)
     }
     val permittedRecordActions = if (record == null) {
         resourceActions
@@ -430,7 +429,7 @@ internal fun nativeRecordActions(
         emptyList()
     } else {
         schema.actions.filter { action ->
-            action.confidence.isSafeRecordActionConfidence() &&
+            action.confidence.isSafeRecordActionConfidence() && !schema.requiresPatternRulePlan(action) &&
                 action.binding.singleRecordPathIdentityName(authoritativeResource) != null &&
                 record.permits(action, authoritativeResource, authorityContext)
         }

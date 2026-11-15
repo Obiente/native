@@ -212,7 +212,7 @@ class ExternalFileHandoffTest {
     private fun attachment(byteCount: Long?): DeckAttachment = DeckAttachment(
         id = 7L,
         cardId = 11L,
-        type = DeckAttachmentType.DeckFile,
+        type = DeckAttachmentType("deck_file"),
         name = "report.pdf",
         mimeType = "application/pdf",
         byteCount = byteCount,

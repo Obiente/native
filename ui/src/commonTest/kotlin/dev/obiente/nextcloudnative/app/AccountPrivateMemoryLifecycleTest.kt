@@ -29,14 +29,14 @@ class AccountPrivateMemoryLifecycleTest {
                 dynamicProducer,
             )
             sharedPreviewMemoryCache.put(previewKey, byteArrayOf(1), previewProducer)
-            sharedNextcloudNotesCache.storeDetail(session, note(1, "Before"), notesProducer)
+            sharedNextcloudNotesCache.storeDetail(session, "notes", note(1, "Before"), notesProducer)
             drafts.updateReportDraft("Private report")
 
             AccountPrivateMemoryLifecycle.retireAccount(account)
 
             assertNull(sharedDynamicNativeMemoryCache.screen(dynamicKey))
             assertNull(sharedPreviewMemoryCache.get(previewKey))
-            assertNull(sharedNextcloudNotesCache.detail(session, 1L))
+            assertNull(sharedNextcloudNotesCache.detail(session, "notes", 1L))
             assertFalse(drafts.hasDraftContent())
 
             AccountPrivateMemoryLifecycle.activateAccount(account)
@@ -52,17 +52,17 @@ class AccountPrivateMemoryLifecycleTest {
                 currentDynamicProducer,
             )
             sharedPreviewMemoryCache.put(previewKey, byteArrayOf(2), currentPreviewProducer)
-            sharedNextcloudNotesCache.storeDetail(session, note(1, "Current"), currentNotesProducer)
+            sharedNextcloudNotesCache.storeDetail(session, "notes", note(1, "Current"), currentNotesProducer)
             currentDrafts.updateReportDraft("Current report")
 
             sharedDynamicNativeMemoryCache.storeScreen(dynamicKey, dynamicSnapshot(3), dynamicProducer)
             sharedPreviewMemoryCache.put(previewKey, byteArrayOf(3), previewProducer)
-            sharedNextcloudNotesCache.storeDetail(session, note(1, "Late"), notesProducer)
+            sharedNextcloudNotesCache.storeDetail(session, "notes", note(1, "Late"), notesProducer)
             drafts.updateReportDraft("Late report")
 
             assertEquals(2, sharedDynamicNativeMemoryCache.screen(dynamicKey)?.pagination?.nextPageNumber)
             assertContentEquals(byteArrayOf(2), sharedPreviewMemoryCache.get(previewKey))
-            assertEquals("Current", sharedNextcloudNotesCache.detail(session, 1L)?.title)
+            assertEquals("Current", sharedNextcloudNotesCache.detail(session, "notes", 1L)?.title)
             assertEquals("Current report", currentDrafts.reportDraft)
         } finally {
             AccountPrivateMemoryLifecycle.retireAccount(account)

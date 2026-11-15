@@ -61,6 +61,7 @@ internal fun GenericMailMessageDetail(
     actionExecutor: NativeActionExecutor,
     onActionSucceeded: ((ActionSpec) -> Unit)?,
     onInlineActionSucceeded: ((ActionSpec) -> Unit)?,
+    composer: NativeMailComposerHost? = null,
 ) {
     val threadMessages = remember(resource, record) { nativeMailThreadPresentations(resource, record) }
     val attachments = remember(record) { nativeMailAttachments(record) }
@@ -201,7 +202,8 @@ internal fun GenericMailMessageDetail(
                 )
             }
         }
-        if (messageActions.all.isEmpty()) {
+        composer?.let { host -> NativeMailResponseActions(host, resource, record) }
+        if (messageActions.all.isEmpty() && composer == null) {
             Text(
                 "Reading view. Message actions are unavailable here.",
                 style = MaterialTheme.typography.bodySmall,

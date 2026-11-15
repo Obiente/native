@@ -5,7 +5,9 @@ use serde_json::Value;
 use thiserror::Error;
 use url::Url;
 
-use crate::{ActionIntent, ActionRisk, AppIdentity, Confidence, FieldKind, HttpMethod};
+use crate::{
+    ActionIntent, ActionRisk, AppIdentity, Confidence, FieldKind, HttpMethod, OperationRiskClass,
+};
 
 pub const DYNAMIC_APP_DESCRIPTOR_VERSION: &str = "1.0";
 
@@ -468,6 +470,18 @@ pub struct DynamicAction {
     pub confidence: Confidence,
     #[serde(default)]
     pub provenance: Vec<Provenance>,
+    /// Risk class R0-R10; absent in descriptors produced before the class existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_class: Option<OperationRiskClass>,
+    /// Verified read in the write's route family used for identity binding and read-back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_back_action_id: Option<String>,
+    /// Exact name of a declared Idempotency-Key request header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key_header: Option<String>,
+    /// Declared field of the route-family read proving the actor may share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_permission_field_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

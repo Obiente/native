@@ -41,7 +41,8 @@ class AdminAppsScreenRecoveryTest {
                             access = AdministrationAccessController(
                                 state.value, permissionCheck = { state.value.canAdminister }, refresh = { retries++ },
                             ),
-                            onContinueInBrowser = { error("A failed check must never open administration") },
+                            session = NextcloudSession("https://cloud.example.test", "admin", "synthetic-token"),
+                            execute = { error("A failed check must never load administration data") },
                             serverInfo = null,
                             onOpenApp = {},
                             onBack = { backCalls++ },

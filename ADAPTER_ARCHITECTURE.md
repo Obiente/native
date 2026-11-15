@@ -139,7 +139,45 @@ entries and successful guesses do not prove that an operation is safe.
 - Revalidate cached descriptors when the server version, app version,
   capability fingerprint, OpenAPI fingerprint, or adapter version changes.
 - Treat response-shape inference as read-only evidence.
-- Require advertised OpenAPI or a reviewed adapter for writes.
+- Require the installed app's own published contract for writes: an
+  advertised OpenAPI document, or the verified package or exact source tag
+  acquired for that installation. A replacement (PUT) edit additionally needs
+  the same-route read that the descriptor compiler pairs with it for that
+  declared contract, and it sends the complete representation (full echo).
+  Every write carries its evidence tier and risk class, passes the admission
+  matrix at the transport boundary, and, where its surface opts in, is read
+  back and verified; a contradiction quarantines the route on that device.
+  Registered item-state and bounded LABEL rules rebuild typed execution plans from
+  current authority, save encrypted recovery before reserving a durable token,
+  and force network confirmation. Both rule kinds recheck current contract
+  authorization immediately before sending after network and disk suspensions.
+  Membership uses exact item-read authority,
+  separate parent/record/member identities and full bounded raw set observations.
+  The shared typed postcondition executor verifies the requested delta and every
+  untouched member; it never restores drift automatically. Recovery format 2
+  retains version-1 Boolean decoding. A narrow board controller sends only
+  contract-proven candidates through this path, serializes batches and guards
+  proven same-target legacy siblings. Cards retain their source read and bound
+  request path; missing proof is never fabricated from cross-family IDs. The
+  picker keeps its unsaved selection separate from the refreshed server baseline.
+  Pending tokens cannot be cleared by ordinary
+  Resume changes or version observation. Explicitly stopping recovery resolves
+  only the chosen token as unknown and keeps its route quarantined until a
+  separate Resume confirmation. See
+  [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification).
+  Dynamic app behavior
+  follows semantic patterns over that contract and its data, not an app ID,
+  an exact version, a version range, or a pinned source tag; see
+  [contract-driven record writes](DYNAMIC_APP_DESCRIPTOR.md#contract-driven-record-writes)
+  for the remaining app-specific exceptions awaiting conversion.
+- Treat facts read from the verified package (route attributes, access and
+  policy attributes, psalm types, entity serialization, capability keys, and
+  the merge hint) as declaration evidence. They are read without running PHP,
+  they never invent an endpoint, parameter, or value, and they do not by
+  themselves publish a write; see
+  [package declaration evidence](DYNAMIC_APP_DESCRIPTOR.md#package-declaration-evidence).
+  The verified contract cache format version changes whenever this evidence
+  changes shape, so older cached contracts are derived again.
 - Keep dynamic endpoints relative and inside approved same-origin prefixes.
 - Omit behavior whose provenance or permission model is ambiguous.
 
@@ -193,7 +231,7 @@ Every operation declares its risk before it reaches the UI:
 | Reversible | Small, visible, reversible write | Direct user intent and rollback on failure. |
 | Guarded | Content change with concurrency risk | Permission check, revision guard, conflict UI. |
 | Destructive | Delete, overwrite, or hard-to-reverse change | Target-specific confirmation and no blind background retry. |
-| Privileged handoff | Server administration or primary-password confirmation | Explain the effect and open authenticated server administration. |
+| Privileged handoff | Server administration or primary-password confirmation | Explain why the change is unavailable. Perform it only through an explicit authenticated handoff, which is not built yet. |
 
 Runtime evidence may raise the risk level, for example when a move would
 overwrite an existing target. It must never lower the declared level silently.
@@ -241,9 +279,14 @@ may be queued when their base revision and payload are durable. Deletes,
 administrator actions, Talk messages, and hard-to-reverse recognition changes
 are not queued by default.
 
-Notes mutation validators keep valid quoted opaque ETags verbatim, including
+Note mutation validators keep valid quoted opaque ETags verbatim, including
 backslashes and HTTP `obs-text` bytes, without quoted-string unescaping. Bare
-Notes API validators are quoted once. Malformed and oversized validators are
+validators are quoted once. The shared request type carries the validator as an
+`If-Match` precondition, which both platform transports send unchanged. A
+read may carry a cached validator as `If-None-Match`; the shared request type
+accepts it only on `GET`, and a conditional read bypasses the shared dynamic
+read cache and request coalescing so a `304` answers only for the caller's own
+cached copy. Malformed and oversized validators are
 rejected before a request. The grammar follows
 [HTTP entity-tags](https://httpwg.org/specs/rfc9110.html#field.etag).
 
@@ -576,62 +619,31 @@ Invalid actionable links reject the response; invalid optional widget, item,
 and overlay icons are omitted. This policy does not change transport consent
 or authorize requests to another HTTP origin.
 
-### News reading
+### Mailboxes and feed readers
 
-News publishes no OpenAPI document. Its verified route contract lets the
-generic workspace list feeds, folders, and items as records, but it cannot
-express a reading workflow: unread and starred views, an article reader, and
-read state. A reviewed adapter in
-[`NewsApi.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NewsApi.kt)
-therefore implements the documented
-[v1-3 API](https://nextcloud.github.io/news/api/api-v1-3/) through the shared
-same-origin transport.
+Mail, News, and other apps with the same data structures have no dedicated
+adapter. The dynamic descriptor selects a mailbox or feed reader from the
+contract's resources, field names, and wording, and offers only the writes the
+installed app's own contract describes. No app identifier, exact version, or
+version range enables a write. The rules are in
+[DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#mailbox-composing) and
+[DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#feed-readers); the
+current state for Mail and News is in [COMPATIBILITY.md](COMPATIBILITY.md).
 
-- The adapter first reads the API version index and reports an unsupported
-  version, without retrying, when `v1-3` is absent.
-- Feeds, folders, and article pages are typed and bounded. Feed text is
-  normalized; only HTTP(S) article, favicon, and enclosure links are kept.
-- Article bodies render through the same HTML sanitizer as Mail, so scripts,
-  forms, embeds, and images are removed and opening an article does not contact
-  the publisher.
-- The only writes are the idempotent per-article read, unread, star, and unstar
-  routes. A change is applied optimistically and rolled back for that article
-  alone when the server rejects it or does not confirm it. Read state and star
-  state change independently, so opening an article while its star is
-  pending still marks it read. While a change is
-  pending, refreshed or newly selected pages show the requested state, and a
-  confirmed change is reapplied, so a read that raced the change cannot show
-  the opposite of the server state. Each pending change records the unread
-  and starred count adjustment it made, so a rejection reverses the counts
-  even after the user moved to another view. Counts read while a change is in
-  flight may or may not include it, so they are shown as read and read again
-  once every change has settled. Feed, folder, filter, and mark-all
-  operations stay in the web interface.
-- `NewsWorkspaceController` fences every load by generation, so a late response
-  for an earlier selection, refresh, or page cannot overwrite newer state. When
-  a refresh finds that the selected feed or folder was removed, it falls back
-  to Unread and loads it, invalidating the removed selection's page. A failed
-  refresh keeps the articles as they are, including changes made while it ran,
-  and offers a refresh retry separately from the older-page retry.
-- The account shell retains the controller, so switching to another app and
-  back keeps the selected view, the open article, and loaded pages. The list
-  scroll position is held above the list and reader switch, so returning from
-  the compact reader keeps the reading position. The open article is kept apart
-  from the list, so a refresh that drops it from the list (an opened article
-  is read and leaves Unread) does not close the reader. Each fetched page that
-  contains the open article updates the reader's copy, so it keeps the latest
-  server state after a later page omits it. The reader's scroll
-  position belongs to the open article and is held above the pane-layout
-  switch, so returning to News or resizing across the two-pane width resumes
-  where the reader stopped, and another article starts at the top. Only the
-  selected view is saved across process recreation; the open article is not
-  restored, because a fresh Unread list no longer contains an article that
-  opening marked read.
-
-`NewsApiTest`, `NewsWorkspaceControllerTest`, and `NewsPresentationTest` cover
-request shapes, parsing of malformed and adversarial input, stale completion,
-pending changes racing a refresh, failed refreshes, removed selections,
-rollback, and paging.
+- Sending is offered only for a send the descriptor retained because its
+  unknown result can be checked. An unknown result keeps the draft and runs
+  the declared recovery read; another attempt is offered only when that read
+  does not show the message as sent, and needs an explicit confirmation.
+  Drafts and running sends belong to a per-account owner outside every screen
+  and are saved in the encrypted text draft storage.
+- Message state changes read the mailbox again after the server confirms
+  them and show the failure otherwise. Article state changes are idempotent;
+  they apply optimistically and roll back for that article alone when the
+  server rejects them or the result is unknown, and an unknown result also
+  reads the articles again. Only routes bound to one article's identity are
+  used.
+- When a contract lacks an operation, the workspace stays a native read-only
+  view and says so, rather than reporting a version error.
 
 ### Administration visibility
 
@@ -657,8 +669,51 @@ instead of navigating away silently when permission revalidation fails. An
 explicit refresh removes old access before requesting new evidence. Concurrent
 checks share the cached result, and cancellation cannot publish a late success.
 The ordinary Apps workspace remains available to regular users. Cached visibility
-never authorizes a mutation; strict operations still use authenticated browser
-handoff and server-side authorization.
+never authorizes a mutation; administration stays read-only until an explicit
+authenticated handoff exists, as described below.
+
+### Account settings, administration, and Talk settings
+
+Nextcloud marks every profile edit and every user, group, and app
+administration route `PasswordConfirmationRequired`: the provisioning
+[`UsersController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/UsersController.php),
+[`GroupsController`](https://github.com/nextcloud/server/blob/master/apps/provisioning_api/lib/Controller/GroupsController.php),
+and `AppsController`, and the app store `ApiController`. The
+[`PasswordConfirmationMiddleware`](https://github.com/nextcloud/server/blob/master/lib/private/AppFramework/Middleware/Security/PasswordConfirmationMiddleware.php)
+does not accept an app-password sign-in as that confirmation, and the
+provisioning Preferences API accepts only keys that the theming and DAV apps
+validate. nati.ve signs in with an app password and never collects the
+primary account password, so these surfaces are read-only until an explicit
+authenticated handoff exists. Each one explains that state instead of offering
+an action.
+
+- Personal info (`AccountProfileProtocol.kt`, `AccountProfileController.kt`)
+  reads `GET cloud/user` with each field's visibility scope, plus language,
+  locale, time zone, groups, quota, and additional email addresses.
+- Administration (`AdminUsersProtocol.kt`, `AdminUsersController.kt`) reads
+  accounts with search and paging from `cloud/users/details`, one account from
+  `cloud/users/{userId}`, and groups from `cloud/groups/details`. A newer search
+  or selection discards an older completion. The app catalog keeps its
+  lifecycle plans but offers no action. Server information is read from the
+  Monitoring app's `apps/serverinfo/api/v1/info` route.
+- Talk conversation settings (`TalkConversationSettingsProtocol.kt`,
+  `TalkConversationSettingsController.kt`) work with the app password and use
+  the Talk mutation transport for rename, description, notification level,
+  read-only, lobby, guest access, moderator role, and participant removal,
+  gated by participant and conversation type, and re-read the conversation
+  after each change. Read receipt and typing privacy use `POST settings/user`
+  and the `chat-read-status` and `typing-privacy` capabilities.
+
+Devices, sessions, and app passwords are not listed: Nextcloud serves them only
+to the web settings page, and `AuthSettingsController` refuses app-password
+sessions. Avatar upload is not implemented.
+
+Open investigation: `PUT core/apppassword/confirm`
+([`AppPasswordController::confirmUserPassword`](https://github.com/nextcloud/server/blob/master/core/Controller/AppPasswordController.php))
+records a confirmation in a server session. Whether a client could reuse that
+session cookie for non-strict routes is unverified, the endpoint itself takes
+the account password, and strict routes still read the password from the
+request, so it does not satisfy the handoff rule as it stands.
 
 ## Account removal and recovery
 
@@ -917,4 +972,3 @@ recovery.
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
 - [Nextcloud Client Integration API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/ClientIntegration/index.html)
 - [Notes API](https://github.com/nextcloud/notes/blob/main/docs/api/README.md)
-- [News external API v1-3](https://nextcloud.github.io/news/api/api-v1-3/)

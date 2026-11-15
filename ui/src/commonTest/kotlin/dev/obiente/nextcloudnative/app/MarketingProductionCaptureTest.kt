@@ -91,7 +91,10 @@ class MarketingProductionCaptureTest {
             marketingDashboardSnapshot.itemsByWidget[widget.id].orEmpty().size >= 2
         })
         assertTrue(marketingDashboardSnapshot.itemsByWidget.values.sumOf { it.size } >= 25)
-        assertEquals(6, marketingHomepageTalkPage.messages.size)
+        val history = parseTalkChatRead(
+            TalkTransportResponse(200, marketingHomepageTalkHistory.toString().encodeToByteArray(), chatLastGiven = null),
+        )
+        assertEquals(6, (history as TalkChatRead.Messages).entries.size)
     }
 
     @Test

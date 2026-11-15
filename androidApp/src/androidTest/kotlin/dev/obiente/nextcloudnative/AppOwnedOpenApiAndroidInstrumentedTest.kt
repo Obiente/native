@@ -57,10 +57,14 @@ class AppOwnedOpenApiAndroidInstrumentedTest {
         listOf(
             "AppOwnedOpenApiContractKt", "AppStoreCatalogCacheKt", "AppStoreCatalogReleasesKt",
             "ContractAcquisitionFailureKt", "ContractAcquisitionOutcomeKt", "JsonEquivalenceKt", "LinkedSourceArchiveKt",
-            "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "SignedAppStoreContractAcquirerKt",
-            "SignedPackageTarReaderKt", "StaticPhpParametersKt", "StaticRouteContractKt", "StrictJsonValuesKt",
+            "NextcloudAppPackageTrustVerifierKt", "OpenApiYamlParserKt", "PhpDeclarationParserKt",
+            "PhpDocBlockKt", "PhpTokenLexerKt", "PsalmSchemaKt", "PsalmTypesKt", "SignedAppStoreContractAcquirerKt",
+            "SignedPackageTarReaderKt", "StaticApiControllerParserKt", "StaticAttributeRoutesKt",
+            "StaticCapabilityFactsKt", "StaticEntitySerializationKt", "StaticOperationFactsKt",
+            "StaticOperationPolicyKt", "StaticPackageEvidenceKt", "StaticPhpParametersKt", "StaticRequestInputsKt",
+            "StaticRouteContractKt", "StaticRouteManifestKt", "StaticScalarWriteContractKt", "StrictJsonValuesKt",
             "TarArchivePathKt", "VerifiedChoresContractKt", "VerifiedContractCacheKt", "VerifiedExactWriteAdaptersKt",
-            "SignedAppStoreContractAcquirer",
+            "VerifiedRouteMergeKt", "SignedAppStoreContractAcquirer",
             "FileAppStoreCatalogCache", "DynamicApiResponseCache", "FileVerifiedContractCache",
         ).forEach { name -> Class.forName("dev.obiente.nextcloudnative.contracts.$name") }
         Class.forName("dev.obiente.nextcloudnative.app.JvmAppStoreContractAcquisitionKt")

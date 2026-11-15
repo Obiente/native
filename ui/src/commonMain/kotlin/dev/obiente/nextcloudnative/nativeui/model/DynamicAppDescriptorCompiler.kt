@@ -19,10 +19,6 @@ private const val DESCRIPTION_INFERRED_MULTIPART_EXTENSION =
     "x-nextcloud-native-description-inferred-multipart"
 private const val MAX_MULTIPART_DESCRIPTION_CHARACTERS = 2_048
 private const val MAX_INFERRED_MULTIPART_TEXT_FIELDS = 16
-private const val MAX_SIGNED_DESCRIPTION_ENUM_CHARACTERS = 2_048
-private const val MAX_SIGNED_DESCRIPTION_ENUM_FIELD_LENGTH = 128
-private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUES = 16
-private const val MAX_SIGNED_DESCRIPTION_ENUM_VALUE_LENGTH = 128
 
 private val INFERRED_MULTIPART_SCALAR_TYPES = setOf("string", "integer", "number", "boolean")
 private val EDITABLE_DYNAMIC_STRING_ARRAY_SCHEMA_KEYS = setOf(
@@ -229,18 +225,6 @@ class DynamicAppDescriptorCompiler {
                         message = "Ignored documented $methodName $path because generic credential mutations require a dedicated trusted workflow.",
                     )
                     return@operationLoop
-                }
-                if (
-                    method != HttpMethod.GET &&
-                    operation.requiresAmbiguousResultRecoveryPolicy(path, operationId)
-                ) {
-                    if (state.exactIdempotentResultRecoveryActionId(path, method) == null) {
-                        state.warnings += DynamicWarning(
-                            code = "ignored-ambiguous-result-write",
-                            message = "Ignored documented $methodName $path because generic send, share, and merge mutations require an exact verified read recovery surface.",
-                        )
-                        return@operationLoop
-                    }
                 }
                 state.addOperation(
                     path = path,
@@ -738,41 +722,14 @@ private class KotlinCompilerState(
     val warnings = mutableListOf<DynamicWarning>()
 
     /**
-     * An ambiguous semantic write is recoverable only when PUT makes the operation idempotent and a
-     * trusted, already-compiled GET reads the exact same route without additional required query
-     * input. The returned action ID is retained as executable recovery evidence.
+     * A replacement (PUT) is recoverable when a declared (E2 or E3), already-compiled GET reads the
+     * exact same route without additional required query input. The returned action ID is
+     * retained as executable recovery and pre-read evidence.
      */
-    fun exactIdempotentResultRecoveryActionId(
-        path: String,
-        method: HttpMethod,
-    ): String? {
-        if (
-            method != HttpMethod.PUT ||
-            source.kind !in setOf(
-                ProvenanceKind.verifiedAppPackage,
-                ProvenanceKind.appStoreLinkedSourceTag,
-            )
-        ) {
-            return null
-        }
-        return readActionIdsByExactContractPath[path]
-            .orEmpty()
-            .mapNotNull(actions::get)
-            .singleOrNull { candidate ->
-                candidate.binding.method == HttpMethod.GET &&
-                candidate.binding.body == null &&
-                candidate.binding.queryParameters.none(HttpParameter::required) &&
-                candidate.intent in setOf(ActionIntent.read, ActionIntent.list) &&
-                candidate.risk == ActionRisk.readOnly &&
-                !candidate.fallbackOnly &&
-                candidate.provenance.any { provenance ->
-                    provenance.kind in setOf(
-                        ProvenanceKind.verifiedAppPackage,
-                        ProvenanceKind.appStoreLinkedSourceTag,
-                    )
-                }
-            }
-            ?.id
+    fun exactIdempotentResultRecoveryActionId(path: String, method: HttpMethod): String? {
+        if (method != HttpMethod.PUT || source.kind.evidenceTier()?.declaresOperation != true) return null
+        return readActionIdsByExactContractPath[path].orEmpty().mapNotNull(actions::get)
+            .singleOrNull(DynamicAction::isVerifiedFamilyRead)?.id
     }
 
     /**
@@ -818,7 +775,7 @@ private class KotlinCompilerState(
         readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
         resultRecoveryActionId: String?,
     ) {
-        val declaredBody = body(operation)
+        val declaredBody = body(operation, path, method)
         if ("requestBody" in operation && declaredBody == null) {
             return
         }
@@ -995,6 +952,11 @@ private class KotlinCompilerState(
             provenance = listOf(source),
             effect = effect,
             resultRecoveryActionId = resultRecoveryActionId,
+            riskClass = staticContractFacts(operation, source).withAccessRule(
+                dynamicOperationRiskClass(method, effect, risk, boundPath, operationId, label, body != null),
+            ),
+            idempotencyKeyHeader = idempotencyKeyHeader(inheritedParameters, operation["parameters"] as? JsonArray),
+            contractFacts = staticContractFacts(operation, source),
         )
         actions[actionId] = action
         if (
@@ -1078,15 +1040,19 @@ private class KotlinCompilerState(
     }
 
     fun finish(): DynamicAppDescriptor {
-        val completedActions = actions.mapValues { (actionId, action) ->
-            action.copy(
-                fallbackActionIds = fallbackOperationIds[actionId]
-                    .orEmpty()
-                    .mapNotNull(operationActionIds::get)
-                    .filter { fallbackId -> fallbackId != actionId }
-                    .distinct(),
-            )
-        }
+        val completedActions = completeDynamicWritePolicies(
+            actions.mapValues { (actionId, action) ->
+                action.copy(
+                    fallbackActionIds = fallbackOperationIds[actionId]
+                        .orEmpty()
+                        .mapNotNull(operationActionIds::get)
+                        .filter { fallbackId -> fallbackId != actionId }
+                        .distinct(),
+                )
+            },
+        )
+        val dedicatedActionIds = completedActions.values.filter(DynamicAction::requiresDedicatedWriteSurface).map(DynamicAction::id)
+        forms.values.removeAll { form -> form.actionId in dedicatedActionIds }
         val completedResources = resources.values.map(KotlinResourceBuilder::finish).map { resource ->
             val preview = recordImagePreviewCandidates[resource.id]
                 .orEmpty()
@@ -1333,6 +1299,11 @@ private class KotlinCompilerState(
         return path.values.sortedBy(HttpParameter::name) to query.values.sortedBy(HttpParameter::name)
     }
 
+    private fun idempotencyKeyHeader(inherited: JsonArray?, operation: JsonArray?): String? =
+        inherited.orEmpty().plus(operation.orEmpty()).mapNotNull { element ->
+            (resolveLocal(element) as? JsonObject)?.takeIf { it.string("in") == "header" }?.string("name")
+        }.firstOrNull(String::isIdempotencyKeyHeader)
+
     private fun hasApiRequestHeader(inherited: JsonArray?, operation: JsonArray?): Boolean =
         inherited.orEmpty().plus(operation.orEmpty()).any { element ->
             val parameter = resolveLocal(element) as? JsonObject ?: return@any false
@@ -1340,7 +1311,7 @@ private class KotlinCompilerState(
                 parameter.string("name")?.equals("OCS-APIRequest", ignoreCase = true) == true
         }
 
-    private fun body(operation: JsonObject): HttpBody? {
+    private fun body(operation: JsonObject, path: String, method: HttpMethod): HttpBody? {
         val request = operation["requestBody"]?.let(::resolveLocal) as? JsonObject
         val content = request?.objectValue("content")
         inferredSignedDescriptionMultipartBody(operation, request, content)?.let { return it }
@@ -1362,10 +1333,15 @@ private class KotlinCompilerState(
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
         val normalizedObjectSchema = if (jsonBody) {
-            declaredSchema.flattenDynamicObjectComposition(
-                allowImplicitlyOpenFragments = cookbookRecipeWriteOperationId(operation) != null,
-            )
-                ?.withCookbookRecipeWriteCompatibility(operation)
+            val recipeWrite = schemaOrgRecipeWriteKind(path, method)
+            // Recipe documents commonly compose schema.org fragments without closing them; only
+            // that recognized vocabulary may be flattened from implicitly open fragments.
+            (
+                declaredSchema.flattenDynamicObjectComposition(allowImplicitlyOpenFragments = false)
+                    ?: declaredSchema.flattenDynamicObjectComposition(allowImplicitlyOpenFragments = true)
+                        ?.takeIf { recipeWrite != null && it.declaresSchemaOrgRecipe() }
+                )
+                ?.withSchemaOrgRecipeWriteVocabulary(recipeWrite)
                 ?: return null
         } else {
             null
@@ -1429,29 +1405,22 @@ private class KotlinCompilerState(
         )
     }
 
-    private fun JsonObject.withCookbookRecipeWriteCompatibility(operation: JsonObject): JsonObject {
-        val operationId = cookbookRecipeWriteOperationId(operation) ?: return this
+    /**
+     * Narrows a schema.org Recipe write body to the recipe's editable text vocabulary.
+     *
+     * Recipe contracts commonly reuse their stored schema.org Recipe model as the request body,
+     * so its required list and server-maintained properties (dates, images, nutrition) describe
+     * the stored document rather than what a person supplies. The rule is recognized from the
+     * vocabulary and the route shape, never from an app identity or version: a create (POST on a
+     * collection) omits the server-assigned `id`, and an update (PUT or PATCH on an item) keeps
+     * `id` read-only so it is bound from the selected recipe.
+     */
+    private fun JsonObject.withSchemaOrgRecipeWriteVocabulary(kind: SchemaOrgRecipeWriteKind?): JsonObject {
+        kind ?: return this
+        if (!declaresSchemaOrgRecipe()) return this
         val properties = objectValue("properties") ?: return this
-        if (!setOf("id", "name", "recipeIngredient", "recipeInstructions", "tool").all(properties::containsKey)) {
-            return this
-        }
-        val allowed = setOf(
-            "id",
-            "name",
-            "description",
-            "keywords",
-            "prepTime",
-            "cookTime",
-            "totalTime",
-            "recipeYield",
-            "recipeCategory",
-            "url",
-            "tool",
-            "recipeIngredient",
-            "recipeInstructions",
-        )
         val compatibleProperties = properties
-            .filterKeys(allowed::contains)
+            .filterKeys(SCHEMA_ORG_RECIPE_WRITE_PROPERTIES::contains)
             .mapValues { (id, value) ->
                 if (id != "id") value else {
                     val idSchema = resolveFieldSchema(value) as? JsonObject ?: return this
@@ -1459,27 +1428,18 @@ private class KotlinCompilerState(
                 }
             }
             .toMutableMap()
-        if (operationId == "newrecipe") compatibleProperties.remove("id")
+        if (kind == SchemaOrgRecipeWriteKind.Create) compatibleProperties.remove("id")
         return JsonObject(
             filterKeys { key -> key !in setOf("properties", "required", "additionalProperties") } +
                 ("properties" to JsonObject(compatibleProperties)) +
                 ("required" to JsonArray(
-                    listOfNotNull("id".takeIf { operationId == "updaterecipe" }, "name")
-                        .map(::JsonPrimitive),
+                    listOfNotNull(
+                        "id".takeIf { kind == SchemaOrgRecipeWriteKind.Update && "id" in compatibleProperties },
+                        "name",
+                    ).map(::JsonPrimitive),
                 )) +
                 ("additionalProperties" to JsonPrimitive(false)),
         )
-    }
-
-    private fun cookbookRecipeWriteOperationId(operation: JsonObject): String? {
-        if (
-            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
-            source.kind != ProvenanceKind.appStoreLinkedSourceTag
-        ) {
-            return null
-        }
-        return operation.string("operationId")?.stableId()
-            ?.takeIf { operationId -> operationId in setOf("newrecipe", "updaterecipe") }
     }
 
     private fun JsonElement.hasUnnormalizableReadOnlyRepeatableObjectProperty(): Boolean {
@@ -2117,82 +2077,6 @@ private val SENSITIVE_CREDENTIAL_MUTATION_CONCEPTS = setOf(
     "reset",
     "rotate",
 )
-
-/**
- * Some mutations produce externally visible or non-repeatable effects whose result cannot be
- * recovered safely by the generic request pipeline after a timeout or disconnect. Keep those
- * operations out of generic discovery until the operation declares a dedicated ambiguous-result
- * policy. Exact semantic words avoid withholding unrelated concepts such as senders, shared
- * preferences, or mergeable records.
- */
-private fun JsonObject.requiresAmbiguousResultRecoveryPolicy(
-    path: String,
-    operationId: String,
-): Boolean {
-    val words = actionSemanticWords(
-        path = path,
-        operationId = operationId,
-        label = string("summary").orEmpty(),
-    )
-    return words.any(AMBIGUOUS_RESULT_MUTATION_WORDS::contains)
-}
-
-private val AMBIGUOUS_RESULT_MUTATION_WORDS = setOf(
-    "merge",
-    "send",
-    "share",
-)
-
-/**
- * Recovers only the narrow signed prose shape `field ('first' or 'second')`.
- *
- * The field name must occur exactly once as a complete word, the parenthesized expression must
- * immediately follow it, and every alternative must be a quoted bounded scalar. General prose,
- * examples, comma lists, and unquoted words remain non-authoritative.
- */
-private fun String.exactSignedDescriptionEnum(fieldId: String): List<String>? {
-    if (
-        length !in 1..MAX_SIGNED_DESCRIPTION_ENUM_CHARACTERS ||
-        fieldId.isBlank() ||
-        fieldId.length > MAX_SIGNED_DESCRIPTION_ENUM_FIELD_LENGTH
-    ) {
-        return null
-    }
-    val occurrences = indices.filter { index ->
-        index + fieldId.length <= length &&
-            regionMatches(index, fieldId, 0, fieldId.length, ignoreCase = true) &&
-            (index == 0 || !this[index - 1].isLetterOrDigit()) &&
-            (index + fieldId.length == length || !this[index + fieldId.length].isLetterOrDigit())
-    }
-    val start = occurrences.singleOrNull() ?: return null
-    val tail = substring(start + fieldId.length).trimStart()
-    if (!tail.startsWith('(')) return null
-    val close = tail.indexOf(')')
-    if (close <= 1) return null
-    val expression = tail.substring(1, close)
-    val tokens = expression.split(Regex("""\s+or\s+""", RegexOption.IGNORE_CASE))
-    if (tokens.size !in 2..MAX_SIGNED_DESCRIPTION_ENUM_VALUES) return null
-    val values = tokens.mapNotNull { token ->
-        val quoted = token.trim()
-        if (
-            quoted.length < 3 ||
-            quoted.first() !in setOf('\'', '"') ||
-            quoted.last() != quoted.first()
-        ) {
-            return@mapNotNull null
-        }
-        quoted.substring(1, quoted.lastIndex).takeIf { value ->
-            value.length in 1..MAX_SIGNED_DESCRIPTION_ENUM_VALUE_LENGTH &&
-                value.all { character ->
-                    character.isLetterOrDigit() || character in setOf('-', '_', '.', ' ')
-                }
-        }
-    }
-    return values.takeIf {
-        it.size == tokens.size &&
-            it.distinct().size == it.size
-    }
-}
 
 /**
  * Filter endpoints often use a taxonomy noun in their route even though their response is a

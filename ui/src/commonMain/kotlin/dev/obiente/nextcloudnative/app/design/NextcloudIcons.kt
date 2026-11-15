@@ -83,6 +83,8 @@ import androidx.compose.material.icons.outlined.LocalDrink
 import androidx.compose.material.icons.outlined.LocalPizza
 import androidx.compose.material.icons.outlined.LocalPharmacy
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Phone
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LunchDining
 import androidx.compose.material.icons.outlined.Liquor
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -173,6 +175,10 @@ object NextcloudIcons {
     val ListView: ImageVector = Icons.AutoMirrored.Outlined.ViewList
     val Board: ImageVector = Icons.Outlined.ViewKanban
     val Mail: ImageVector = Icons.Outlined.Email
+    val Feed: ImageVector = Icons.Outlined.RssFeed
+    val Phone: ImageVector = Icons.Outlined.Phone
+    val Copy: ImageVector = Icons.Outlined.ContentCopy
+    val Place: ImageVector = Icons.Outlined.LocationOn
     val Task: ImageVector = Icons.Outlined.TaskAlt
     val Table: ImageVector = Icons.Outlined.TableChart
     val Recipe: ImageVector = Icons.Outlined.RestaurantMenu

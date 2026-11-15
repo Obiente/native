@@ -1,7 +1,7 @@
 use nextcloud_native_runtime::{
     ActionIntent, AuthKind, DescriptorValidationError, DynamicAppDescriptor, DynamicCompileError,
     DynamicDescriptorCompiler, DynamicDiscoveryInput, DynamicLinkTarget, HttpMethod, LayoutKind,
-    OpenApiTrust, ProvenanceKind,
+    OpenApiTrust, OperationRiskClass, ProvenanceKind,
 };
 use pretty_assertions::assert_eq;
 
@@ -319,4 +319,138 @@ fn serialized_descriptor_cannot_escape_approved_paths() {
         descriptor.validate(),
         Err(DescriptorValidationError::UnapprovedEndpoint(_))
     ));
+}
+
+#[test]
+fn compiled_actions_carry_a_risk_class_that_survives_serialization() {
+    let descriptor = DynamicDescriptorCompiler
+        .compile(&openapi_input())
+        .expect("advertised OpenAPI should compile");
+    for action in &descriptor.actions {
+        let expected = OperationRiskClass::classify(
+            action.binding.method,
+            &action.binding.path,
+            &action.id,
+            &action.label,
+            action.binding.body.is_some(),
+        );
+        assert_eq!(action.risk_class, Some(expected), "{}", action.id);
+    }
+    let json = serde_json::to_value(&descriptor).expect("descriptor serializes");
+    let reparsed: DynamicAppDescriptor = serde_json::from_value(json).expect("descriptor reparses");
+    assert_eq!(reparsed, descriptor);
+}
+
+#[test]
+fn descriptors_without_write_policy_fields_remain_valid() {
+    let mut json = serde_json::to_value(
+        DynamicDescriptorCompiler
+            .compile(&openapi_input())
+            .expect("advertised OpenAPI should compile"),
+    )
+    .expect("descriptor serializes");
+    for action in json["actions"].as_array_mut().expect("actions") {
+        let object = action.as_object_mut().expect("action object");
+        object.remove("riskClass");
+        assert!(!object.contains_key("readBackActionId"));
+    }
+    let descriptor: DynamicAppDescriptor =
+        serde_json::from_value(json).expect("older descriptor parses");
+    assert!(
+        descriptor
+            .actions
+            .iter()
+            .all(|action| action.risk_class.is_none())
+    );
+    descriptor.validate().expect("older descriptor stays valid");
+}
+
+#[test]
+fn risk_classes_come_from_method_and_operation_words_not_placeholders() {
+    use OperationRiskClass::*;
+    let cases = [
+        (HttpMethod::Get, "/apps/x/api/items", "items-list", Read),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/messages",
+            "messages.sendNow",
+            ExternalEffect,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/records/{recordId}/merge",
+            "records-combine",
+            ExternalEffect,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/records/{recordId}/share",
+            "share-create",
+            Sharing,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/senders",
+            "sender-create",
+            Create,
+        ),
+        (
+            HttpMethod::Patch,
+            "/apps/x/api/preferences/shared",
+            "shared-preferences-update",
+            PartialUpdate,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/room/{token}/message",
+            "message-create",
+            Create,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/admin/settings",
+            "settings-update",
+            Administration,
+        ),
+        (
+            HttpMethod::Post,
+            "/apps/x/api/app-password",
+            "password-rotate",
+            Credential,
+        ),
+        (
+            HttpMethod::Delete,
+            "/apps/x/api/items/{id}",
+            "items-delete",
+            Destructive,
+        ),
+    ];
+    for (method, path, operation_id, expected) in cases {
+        assert_eq!(
+            OperationRiskClass::classify(method, path, operation_id, "", true),
+            expected,
+            "{path} {operation_id}"
+        );
+    }
+    assert_eq!(
+        OperationRiskClass::classify(
+            HttpMethod::Put,
+            "/apps/x/api/items/{id}",
+            "items-update",
+            "",
+            true
+        ),
+        Replacement
+    );
+    assert_eq!(
+        OperationRiskClass::classify(
+            HttpMethod::Put,
+            "/apps/x/api/items/{id}/read",
+            "items-read",
+            "",
+            false
+        ),
+        IdempotentStateSet
+    );
+    assert_eq!(Credential.code(), "R10");
 }

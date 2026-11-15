@@ -17,6 +17,8 @@ internal sealed interface CalendarMutationPostcondition {
         val expectedUid: String,
         val previousEtag: String?,
         val draft: EventDraft,
+        /** Set when one occurrence of a series was changed: the exception that must hold the draft. */
+        val expectedRecurrenceId: String? = null,
     ) : CalendarMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
@@ -27,8 +29,14 @@ internal sealed interface CalendarMutationPostcondition {
                 etag = response.etag,
                 content = response.body.decodeToString(),
             ).firstOrNull { candidate ->
-                candidate.uid == expectedUid && candidate.recurrenceId == null
+                candidate.uid == expectedUid && candidate.recurrenceId == expectedRecurrenceId
             } ?: return false
+            if (expected.reminderMinutes != null && event.reminderMinutes() != expected.reminderMinutes) return false
+            if (expected.attendees != null &&
+                event.invitation().attendees.map(CalendarEventParticipant::address).sorted() != expected.attendees
+            ) {
+                return false
+            }
             return event.href == href &&
                 event.uid == expectedUid &&
                 event.title == expected.title &&
@@ -38,6 +46,41 @@ internal sealed interface CalendarMutationPostcondition {
                 event.recurrenceRule == expected.recurrenceRule &&
                 event.start == expected.startValue() &&
                 event.end == expected.endValue()
+        }
+    }
+
+    /** One occurrence removed from a series: it is excluded and no exception keeps it alive. */
+    @Serializable
+    data class ExcludeOccurrence(
+        override val href: String,
+        val calendarHref: String,
+        val expectedUid: String,
+        val occurrence: String,
+    ) : CalendarMutationPostcondition {
+        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
+            if (response.status !in 200..299) return false
+            val components = parseGroupwareCalendarEventsFromContent(calendarHref, href, response.etag, response.body.decodeToString())
+                .filter { it.uid == expectedUid }
+            val master = components.firstOrNull { it.recurrenceId == null } ?: return false
+            return occurrence in master.excludedStarts && components.none { it.recurrenceId == occurrence }
+        }
+    }
+
+    /** The user's answer to an invitation is stored on their attendee entry. */
+    @Serializable
+    data class Respond(
+        override val href: String,
+        val calendarHref: String,
+        val expectedUid: String,
+        val recurrenceId: String?,
+        val address: String,
+        val participation: String,
+    ) : CalendarMutationPostcondition {
+        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
+            if (response.status !in 200..299) return false
+            val event = parseGroupwareCalendarEventsFromContent(calendarHref, href, response.etag, response.body.decodeToString())
+                .firstOrNull { it.uid == expectedUid && it.recurrenceId == recurrenceId } ?: return false
+            return event.invitation().attendees.any { it.address == address && it.participation.icalValue == participation }
         }
     }
 

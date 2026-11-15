@@ -24,18 +24,22 @@ internal data class NativePlaylistTracks(
     val records: List<NativeRecord>,
 )
 
-/** Display-only expansion of the reviewed complete playlist response; record URIs are never executed. */
+/**
+ * Display-only expansion of one playlist read whose response embeds its complete track list.
+ * The shape (an item read returning one record with a complete `tracks` list that matches the
+ * contract's track resource) decides it, not an app identity; record URIs are never executed.
+ */
 internal fun nativePlaylistTracks(
     schema: NativeAppSchema,
     view: ViewSpec,
     records: List<NativeRecord>,
 ): NativePlaylistTracks? {
-    if (schema.app.id != "music" || schema.app.version != "3.2.1") return null
     val action = schema.actions.singleOrNull { it.id == view.sourceActionId } ?: return null
     if (action.binding.method != HttpMethod.GET || action.risk != ActionRisk.readOnly ||
-        action.binding.path.removePrefix("/index.php") != "/apps/music/api/playlists/{id}" ||
-        "fulltree" !in action.binding.queryParameterNames || action.confidence < Confidence.high ||
-        action.evidence.none { it.source == EvidenceSource.verifiedAppPackage }) return null
+        !action.binding.path.substringBefore('?').trimEnd('/').substringAfterLast('/').let { it.startsWith('{') && it.endsWith('}') } ||
+        action.confidence < Confidence.high ||
+        action.evidence.none { it.source in setOf(EvidenceSource.verifiedAppPackage, EvidenceSource.openApi,
+            EvidenceSource.appStoreLinkedSourceTag) }) return null
     val parent = records.singleOrNull()?.takeIf { it.actionBindingProvenanceValid } ?: return null
     val tracks = parent.structuredValues["tracks"] as? NativeStructuredValue.ListValue ?: return null
     if (tracks.omittedItems != 0 || tracks.items.size > 128) return null

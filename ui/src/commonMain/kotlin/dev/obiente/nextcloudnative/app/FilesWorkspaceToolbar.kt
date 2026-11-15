@@ -54,6 +54,8 @@ internal fun FilesCommandBar(
     onRefresh: () -> Unit,
     onOpenPath: (String) -> Unit,
     desktop: Boolean,
+    onOpenTrash: (() -> Unit)? = null,
+    onSelect: (() -> Unit)? = null,
     paneActions: @Composable () -> Unit = {},
 ) {
     Column(
@@ -85,6 +87,7 @@ internal fun FilesCommandBar(
                 else Icon(NextcloudIcons.Refresh, contentDescription = "Refresh files")
             }
             LayoutControl(layout, onLayoutChanged)
+            if (onOpenTrash != null || onSelect != null) FilesMoreMenu(onSelect, onOpenTrash.takeIf { !desktop })
             paneActions()
         }
         if (!desktop) {
@@ -201,6 +204,36 @@ private fun FilesBreadcrumbs(path: String, onOpenPath: (String) -> Unit) {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                     maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilesMoreMenu(onSelect: (() -> Unit)?, onOpenTrash: (() -> Unit)?) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(NextcloudIcons.More, contentDescription = "More Files options") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            onSelect?.let { select ->
+                DropdownMenuItem(
+                    text = { Text("Select items") },
+                    leadingIcon = { Icon(NextcloudIcons.CheckCircle, contentDescription = null) },
+                    onClick = {
+                        open = false
+                        select()
+                    },
+                )
+            }
+            onOpenTrash?.let { openTrash ->
+                DropdownMenuItem(
+                    text = { Text("Deleted files") },
+                    leadingIcon = { Icon(NextcloudIcons.Empty, contentDescription = null) },
+                    onClick = {
+                        open = false
+                        openTrash()
+                    },
                 )
             }
         }

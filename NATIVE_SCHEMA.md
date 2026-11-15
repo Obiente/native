@@ -1,7 +1,8 @@
 # nati.ve Schema 0.1
 
 The native schema is the trust boundary between discovery and presentation.
-Discovery may use deterministic inspection, verified adapters, or local AI, but
+Discovery may use deterministic inspection of the installed app's published
+contract, version-agnostic semantic patterns over its data, or local AI, but
 the renderer accepts only this typed document. Read this before changing a
 schema field, a component family, or how the renderer presents records and
 forms.
@@ -46,12 +47,13 @@ Rules for changing the contract:
 | `views` | Select reusable native components for resources and actions. |
 | `relationships` | Bind parent and child resources. Kotlin runtime only. |
 | `warnings` | Explain missing or ambiguous semantics. |
+| `dedicatedActions` | Operations no generic form, record action, or menu may offer: external effects, administration, credentials, and sharing without a declared permission field. Only a surface that applies their safeguards, such as the exactly-once mail composer, reads them. Kotlin runtime only; absent means empty. |
 
 ## Confidence
 
 | Level | Meaning |
 | --- | --- |
-| `verified` | A signed or reviewed adapter confirmed the semantics. |
+| `verified` | The installed app's signed package contract or a verified protocol confirmed the semantics. |
 | `high` | Typed API metadata provides strong evidence. |
 | `medium` | Deterministic inference selected a likely interpretation. |
 | `low` | The evidence is insufficient for normal interaction. |
@@ -71,6 +73,40 @@ inference engine cannot invent these values.
 | `mutating` | Requires confirmation while inferred. |
 | `destructive` | Always requires confirmation and explicit visual treatment. |
 
+The `risk` field stays the wire field for confirmation and styling. Each action
+also carries optional write-policy fields, absent in schemas produced before
+they existed and mirrored by the Rust reference model:
+
+| Field | Meaning |
+| --- | --- |
+| `riskClass` | The operation's risk class, R0 (`read`) to R10 (`credential`); see [AGENTS.md section 4](AGENTS.md#4-dynamic-app-intelligence). |
+| `readBackActionId` | The verified read in the write's route family, used to bind identities and read the result back. |
+| `idempotencyKeyHeader` | The exact name of a declared `Idempotency-Key` request header. |
+| `sharePermissionFieldId` | The declared field of the route-family read that proves the actor may share. |
+
+The Kotlin classification in
+[`DynamicOperationRiskClass.kt`](ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicOperationRiskClass.kt)
+is authoritative; the Rust `OperationRiskClass::classify` is a reference
+subset (Last reviewed: 2026-11-02; check both sources, this may have changed).
+Both read the method, the literal route words, the operation ID, the label,
+and whether a body is declared, and both apply the same credential,
+administration, sharing, and external-effect words, except that Kotlin also
+treats `app` with `password` as a credential. Rust does not consult the
+action's effect, its destructive `risk`, or the verified package's access
+rule, so the two can differ:
+
+- a toggle, archive, unarchive, assign, or restore keeps its method class in
+  Rust (`create` (R5) for a POST, R3 for a PATCH, R4 for a PUT with a body)
+  and is `idempotentStateSet` (R1) in Kotlin;
+- a reorder or move keeps its method class in Rust and is
+  `reversibleScalarEdit` (R2) in Kotlin;
+- a POST or PUT whose effect or risk is destructive, such as empty, leave, or
+  clear, keeps its method class in Rust and is `destructive` (R7) in Kotlin;
+- a write the package limits to administrators keeps its word-derived class
+  in Rust and is `administration` (R9) in Kotlin.
+
+Never admit a write from a Rust-produced `riskClass`.
+
 An adapter may improve labels, component choice, and field semantics. It may
 not add an operation that was absent from the discovery snapshot.
 
@@ -79,11 +115,18 @@ not add an operation that was absent from the discovery snapshot.
 The `NativeComponent` grammar covers dashboards, file browsers, collection
 lists, media grids, details, forms, timelines, calendars, boards, mailboxes,
 contact lists, task lists, data tables, media libraries, recipe lists, document
-editors, conversation lists, and chat threads.
+editors, conversation lists, chat threads, and feed readers.
+
+`feedReader` marks an article collection: its records have a title, a link,
+content, and a publication marker or feed reference, or, when a sparse contract
+declares no response fields, the collection is named as articles or items
+beside a feed collection. Records are checked again when they arrive, and a
+collection whose records are not articles keeps the ordinary list.
 
 A new component should represent an interaction pattern shared by more than one
-app. App-specific behavior belongs in a verified adapter, not in the generic
-component library.
+app. Behavior is chosen by semantic patterns over contracts and data, never by
+app identity or version. When a contract cannot express a behavior, the
+component stays read-only and explains why.
 
 ## Adaptive collection presentation
 
@@ -101,12 +144,48 @@ component library.
 - Permission summaries use explicit known boolean fields and never infer a role
   or grant.
 
-**Boards and Mail**
+**Boards, mailboxes, and feed readers**
 
 - Boards share lane navigation and action state, with widths adapted to the
   window.
-- Compact Mail exposes the same loaded accounts and mailboxes as the desktop
-  rail. Message actions stay limited to verified available contracts.
+- A board-shaped or notes-shaped contract opens the full board or notes
+  workspace instead of the generic component. The choice comes from route
+  shape and field roles, never from the app ID or version; see
+  [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#semantic-surfaces-boards-and-notes).
+- LABEL command plans have typed item-read authority independent of a collection.
+  Their exact read, generation and parent bindings prove only the selected write.
+  Complete bounded membership observations live separately from display fields;
+  absent/null/malformed/truncated/duplicate arrays do not mean an empty set.
+  String and integer identities remain distinct, and member IDs never bind the
+  record slot. The shared typed postcondition verifies both the requested member
+  and unchanged other members. Board pickers use a conditional controller with
+  durable recovery and verified card read provenance; unrelated route families
+  retain their documented behavior. A refreshed baseline does not replace the
+  unsaved selection, and status or repeat completion does not close the picker.
+  This is bounded source/deterministic coverage, not live Deck qualification
+  (Last reviewed: 2026-11-07; may change; see
+  [write admission and verification](DYNAMIC_APP_DESCRIPTOR.md#write-admission-and-verification)).
+- Compact mailboxes expose the same loaded accounts and mailboxes as the
+  desktop rail. Message actions stay limited to verified available contracts.
+- A mailbox offers composing only for one verified send write that the
+  descriptor retained (see
+  [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md#mailbox-composing))
+  and whose body declares recipients and a message body. Every
+  required input must map to a mail role: recipients (declared object or
+  string arrays, or a single address string), subject, body, an HTML flag
+  sent as false, the sending account's identity or address from a loaded
+  account record, or In-Reply-To and References headers. Each identity input
+  takes the one value its own role names; a required sender-identity (alias)
+  input, any other required input, an undeclared recipient shape, or two equal
+  candidates offers nothing.
+- A feed reader offers read, unread, star, and unstar only for idempotent
+  verified writes with a current per-action identity proof. Both body-free
+  inverse commands must be declared under the same item route, or the item
+  update must declare a single supported boolean state field. The Kotlin
+  binding retains `pathParameterTypes` for typed identity checks; a schema
+  without those types cannot enable these rules. Separate read bindings and
+  exact boolean read-back are required, with encrypted pending recovery. Routes for every article or a whole feed, and broader updates that
+  would resend other fields, are not used.
 
 **Editing**
 

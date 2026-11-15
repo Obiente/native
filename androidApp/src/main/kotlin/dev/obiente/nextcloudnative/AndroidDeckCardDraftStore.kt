@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import dev.obiente.nextcloudnative.app.DeckCardDraftCapacityException
 import dev.obiente.nextcloudnative.app.DeckCardDraftKey
+import dev.obiente.nextcloudnative.app.LEGACY_CARD_DRAFT_APP_ID
 import dev.obiente.nextcloudnative.app.DeckCardDraftRetention
 import dev.obiente.nextcloudnative.app.DeckUiCardDraft
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -158,6 +159,7 @@ internal class AndroidDeckCardDraftStore(
             .put("boardId", persisted.key.boardId)
             .put("stackId", persisted.key.stackId)
             .put("cardId", persisted.key.cardId)
+            .put("appId", persisted.key.appId)
             .put("title", persisted.draft.title)
             .put("descriptionMarkdown", persisted.draft.descriptionMarkdown)
             .put("dueDate", persisted.draft.dueDate)
@@ -286,6 +288,7 @@ internal class AndroidDeckCardDraftStore(
                     boardId = value.getLong("boardId"),
                     stackId = value.getLong("stackId"),
                     cardId = if (value.isNull("cardId")) null else value.getLong("cardId"),
+                    appId = value.optString("appId", LEGACY_CARD_DRAFT_APP_ID),
                 ),
                 draft = DeckUiCardDraft(
                     title = value.getString("title"),
@@ -407,21 +410,12 @@ internal class AndroidDeckCardDraftStore(
     }
 
     private fun storageKey(accountStorageKey: String, key: DeckCardDraftKey): String {
-        val scope = listOf(
-            key.boardId.toString(),
-            key.stackId.toString(),
-            key.cardId?.toString() ?: "new",
-        ).joinToString(separator = ":")
+        val scope = key.storageScope
         return "${accountDraftPrefix(accountStorageKey)}${sha256(scope)}"
     }
 
     private fun legacyStorageKey(accountIdentity: String, key: DeckCardDraftKey): String {
-        val scope = listOf(
-            accountIdentity,
-            key.boardId.toString(),
-            key.stackId.toString(),
-            key.cardId?.toString() ?: "new",
-        ).joinToString(separator = ":")
+        val scope = "$accountIdentity:${key.storageScope}"
         return "$LEGACY_KEY_PREFIX${sha256(scope)}"
     }
 

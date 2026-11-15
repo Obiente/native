@@ -436,7 +436,8 @@ test("homepage captures route synthetic fixtures through production app surfaces
   const sourceFiles = await discoverCaptureSources();
 
   assert.match(appSource, /HomepageFilesDesktopDark,[\s\S]*?FilesScreen\(/u);
-  assert.match(appSource, /HomepageConversationsDesktopDark,[\s\S]*?ChatScreen\(/u);
+  assert.match(appSource, /HomepageConversationsDesktopDark,[\s\S]*?MarketingDesktopConversationsScenario\(fixture, assets\)/u);
+  assert.match(appSource, /fun MarketingDesktopConversationsScenario\([\s\S]*?TalkWorkspaceScreen\(/u);
   assert.match(appSource, /HomepagePhotosDesktopDark,[\s\S]*?MarketingPhotoFolderScenario\(scenario, assets\)/u);
   assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(scenario\)/u);
   assert.match(appSource, /HomepageAppsDesktopDark,[\s\S]*?MarketingAdaptiveAppScenario\(scenario\)/u);

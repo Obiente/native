@@ -64,6 +64,10 @@ internal fun NextcloudContentEntrance(
     var settledOrder by remember { mutableStateOf(order) }
     // Hide the incoming content on the frame the key changes, before the effect starts.
     val awaitingEntrance = settledKey != key && !reducedMotion
+    // The side is decided here too, so that first frame already starts where the entrance will;
+    // the effect below may not have run before it is drawn.
+    val awaitingBackward = awaitingEntrance && (directional || order != null) &&
+        (settledOrder?.let { previous -> order?.let { it < previous } } ?: history.wouldStepBack(key))
     // Marked when the change is applied, before the new content is laid out, so elements shared
     // with the previous content can fly to their new place.
     SideEffect { if (settledKey != key) sharedElements?.markNavigation() }
@@ -83,7 +87,8 @@ internal fun NextcloudContentEntrance(
             val fraction = if (awaitingEntrance) 0f else progress.value
             val frame = nextcloudDestinationEntranceFrame(fraction)
             alpha = frame.alpha
-            val offset = frame.offsetFraction * distance.toPx() * if (backward) -1f else 1f
+            val fromStart = if (awaitingEntrance) awaitingBackward else backward
+            val offset = frame.offsetFraction * distance.toPx() * if (fromStart) -1f else 1f
             when (axis) {
                 NextcloudEntranceAxis.Vertical -> translationY = offset
                 NextcloudEntranceAxis.Horizontal -> translationX = offset
@@ -99,6 +104,9 @@ internal fun NextcloudContentEntrance(
  */
 internal class NextcloudEntranceHistory(initial: Any?) {
     private val keys = ArrayDeque<Any?>().apply { addLast(initial) }
+
+    /** Whether showing [key] next would be a step back, without recording it. */
+    fun wouldStepBack(key: Any?): Boolean = keys.size >= 2 && keys.last() != key && keys[keys.size - 2] == key
 
     /** Records [key] as shown and reports whether reaching it was a step back. */
     fun visit(key: Any?): Boolean {

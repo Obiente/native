@@ -36,6 +36,7 @@ internal fun EventDetailDialog(
     error: String?,
     embedded: Boolean = false,
     inPlace: Boolean = false,
+    invitation: CalendarInvitationActions? = null,
 ) {
     CalendarEventSurface(
         embedded = embedded,
@@ -44,22 +45,17 @@ internal fun EventDetailDialog(
         title = { Text(event.title) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                CalendarEventDetailsBody(event)
+                CalendarEventDetailsBody(event, invitation = invitation)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
-            if (canEdit) TextButton(onClick = onEdit) {
-                Text(if (event.recurrenceRule != null) "Edit series" else "Edit")
-            }
+            if (canEdit) TextButton(onClick = onEdit) { Text("Edit") }
             else TextButton(onClick = onDismiss) { Text("Close") }
         },
         dismissButton = {
             if (canEdit) TextButton(onClick = onDelete) {
-                Text(
-                    if (event.recurrenceRule != null) "Delete series" else "Delete",
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Text("Delete", color = MaterialTheme.colorScheme.error)
             }
         },
     )
@@ -67,7 +63,11 @@ internal fun EventDetailDialog(
 
 /** The inspector and full-page event view share the same facts and series scope. */
 @Composable
-internal fun CalendarEventDetailsBody(event: GroupwareCalendarEvent, modifier: Modifier = Modifier) {
+internal fun CalendarEventDetailsBody(
+    event: GroupwareCalendarEvent,
+    modifier: Modifier = Modifier,
+    invitation: CalendarInvitationActions? = null,
+) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         CalendarEventFact(NextcloudIcons.Calendar, "Date", event.displayDateRange())
         CalendarEventFact(NextcloudIcons.Clock, "Time",
@@ -78,13 +78,13 @@ internal fun CalendarEventDetailsBody(event: GroupwareCalendarEvent, modifier: M
         event.recurrenceRule?.let {
             CalendarEventFact(NextcloudIcons.Refresh, "Repeats", calendarRecurrenceDescription(it))
         }
-        if (event.recurrenceRule != null || event.isGeneratedOccurrence) {
+        CalendarEventInvitationSection(event, invitation)
+        if (event.isPartOfSeries) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp)) {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(NextcloudIcons.Info, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        if (event.isGeneratedOccurrence) "This occurrence is read-only to protect the complete recurring series."
-                        else "Editing or deleting applies to the complete series.",
+                        "This event repeats. When you edit or delete it, you choose this occurrence or the whole series.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

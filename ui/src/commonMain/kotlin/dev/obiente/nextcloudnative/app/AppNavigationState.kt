@@ -24,8 +24,6 @@ internal sealed interface Screen {
     @Serializable
     data object Talk : Screen
     @Serializable
-    data object Notes : Screen
-    @Serializable
     data object Dashboard : Screen
     @Serializable
     data object UserStatus : Screen
@@ -35,10 +33,6 @@ internal sealed interface Screen {
     data object Contacts : Screen
     @Serializable
     data object Tasks : Screen
-    @Serializable
-    data object Deck : Screen
-    @Serializable
-    data object News : Screen
     @Serializable
     data object AdminApps : Screen
     @Serializable
@@ -51,8 +45,6 @@ internal sealed interface Screen {
     data class ProjectNewsArticleView(val article: ProjectNewsArticle) : Screen
     @Serializable
     data class Chat(val room: TalkRoom) : Screen
-    @Serializable
-    data class NoteEditor(val note: NextcloudNote) : Screen
     @Serializable
     data class AppInfo(
         val app: NextcloudAppEntry,
@@ -86,14 +78,11 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     is Screen.Files,
     Screen.Media,
     Screen.Talk,
-    Screen.Notes,
     Screen.Dashboard,
     Screen.UserStatus,
     Screen.Calendar,
     Screen.Contacts,
     Screen.Tasks,
-    Screen.Deck,
-    Screen.News,
     Screen.AdminApps,
     Screen.OfflineCenter,
     Screen.Transfers,
@@ -104,7 +93,6 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     is Screen.PersonMedia,
     is Screen.ProjectNewsArticleView,
     is Screen.Chat,
-    is Screen.NoteEditor,
     is Screen.MediaViewer,
     is Screen.FileInfo,
     is Screen.DocumentPreview,
@@ -114,7 +102,6 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
 
 internal fun Screen.requiresPendingNavigationGuard(groupwareMutationInProgress: Boolean): Boolean =
     groupwareMutationInProgress ||
-        this is Screen.NoteEditor ||
         this is Screen.TextEditor ||
         this is Screen.MediaViewer ||
         this is Screen.Calendar ||
@@ -187,18 +174,11 @@ internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
             .take(MAX_SAVED_ROUTE_LABEL_CHARS)
             .takeIf(String::isNotBlank),
     )
-    Screen.Notes -> SavedScreen("notes")
-    is Screen.NoteEditor -> SavedScreen(
-        kind = "note-editor",
-        noteId = note.id.takeIf { it >= 0L },
-    )
     Screen.Dashboard -> SavedScreen("dashboard")
     Screen.UserStatus -> SavedScreen("user-status")
     Screen.Calendar -> SavedScreen("calendar")
     Screen.Contacts -> SavedScreen("contacts")
     Screen.Tasks -> SavedScreen("tasks")
-    Screen.Deck -> SavedScreen("deck")
-    Screen.News -> SavedScreen("news")
     Screen.AdminApps -> SavedScreen("admin-apps")
     Screen.OfflineCenter -> SavedScreen("offline-center")
     Screen.Transfers -> SavedScreen("transfers")
@@ -238,28 +218,19 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
             )
         }
         ?: Screen.Talk
-    "notes" -> Screen.Notes
-    "note-editor" -> noteId?.takeIf { it >= 0L }?.let { restoredId ->
-        Screen.NoteEditor(
-            NextcloudNote(
-                id = restoredId,
-                title = "",
-                modified = 0L,
-                category = "",
-                favorite = false,
-                readOnly = true,
-                content = null,
-                etag = null,
-            ),
-        )
-    } ?: Screen.Notes
+    // Screens saved before boards and notes became contract-selected surfaces reopen the same
+    // installed app through discovery, which picks its native surface from the contract again.
+    "notes" -> legacySemanticAppScreen("notes", "Notes")
+    "note-editor" -> legacySemanticAppScreen("notes", "Notes", legacyOpenNoteNavigation(noteId))
     "dashboard" -> Screen.Dashboard
     "user-status" -> Screen.UserStatus
     "calendar" -> Screen.Calendar
     "contacts" -> Screen.Contacts
     "tasks" -> Screen.Tasks
-    "deck" -> Screen.Deck
-    "news" -> Screen.News
+    "deck" -> legacySemanticAppScreen("deck", "Deck")
+    // Mail and News once had dedicated routes. Their saved routes now open the app's dynamic
+    // workspace, which chooses the mailbox or feed reader from the installed app's contract.
+    "news", "mail" -> Screen.AppInfo(app = NextcloudAppEntry(id = kind, name = kind.replaceFirstChar(Char::uppercase), href = null))
     "admin-apps" -> Screen.AdminApps
     "offline-center" -> Screen.OfflineCenter
     "transfers" -> Screen.Transfers
@@ -284,6 +255,19 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
     }
     else -> Screen.Root
 }
+
+private fun legacySemanticAppScreen(
+    appId: String,
+    appName: String,
+    navigation: DynamicAppNavigationState = DynamicAppNavigationState(),
+): Screen = Screen.AppInfo(app = NextcloudAppEntry(id = appId, name = appName, href = null), navigation = navigation)
+
+/**
+ * A note editor saved before notes became a contract-selected surface reopens that note when its
+ * id is valid and the app still opens as notes; otherwise the notes app opens at its root.
+ */
+private fun legacyOpenNoteNavigation(noteId: Long?): DynamicAppNavigationState =
+    noteId?.takeIf { it >= 0L }?.let(::openNoteNavigation) ?: DynamicAppNavigationState()
 
 internal val screenSaver = Saver<Screen, String>(
     save = { screen -> navigationStateJson.encodeToString(screen.toSavedScreen()) },

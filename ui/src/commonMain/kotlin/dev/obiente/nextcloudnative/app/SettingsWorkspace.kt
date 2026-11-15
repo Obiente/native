@@ -61,14 +61,17 @@ internal enum class SettingsWorkspaceSection(
     val icon: ImageVector,
 ) {
     Account("Account", "Identity, server, and security", NextcloudIcons.Profile),
+    PersonalInfo("Personal info", "Profile, visibility, and online status", NextcloudIcons.People),
     Appearance("Appearance", "Theme and workspace presentation", NextcloudIcons.LightMode),
     SyncAndStorage("Sync & storage", "Folders, offline files, and transfers", NextcloudIcons.Cloud),
     NotificationsAndDevice("Notifications & device", "Permissions and background features", NextcloudIcons.Activity),
+    AppSettings("App settings", "Settings for each installed app", NextcloudIcons.Apps),
+    Talk("Talk", "Read receipts and typing privacy", NextcloudIcons.Send),
     DesktopApp("Desktop app", "Startup and local integration", NextcloudIcons.Settings),
     Updates("Updates", "Release channel and installation", NextcloudIcons.Refresh),
     Support("Support", "Create reports, review diagnostics, and follow up", NextcloudIcons.Activity),
     HelpAndGuides("Help & guides", "Learn workflows and find project help", NextcloudIcons.Info),
-    Administration("Administration", "Server apps and capabilities", NextcloudIcons.Apps),
+    Administration("Administration", "Apps, accounts, groups, and server", NextcloudIcons.Settings),
 }
 
 internal fun visibleSettingsSections(
@@ -76,9 +79,11 @@ internal fun visibleSettingsSections(
     hasDeviceSettings: Boolean,
     hasDesktopAppSettings: Boolean = isDesktop,
     canAdminister: Boolean = false,
+    hasTalk: Boolean = false,
 ): List<SettingsWorkspaceSection> = SettingsWorkspaceSection.entries.filter { section ->
     when (section) {
         SettingsWorkspaceSection.Administration -> canAdminister
+        SettingsWorkspaceSection.Talk -> hasTalk
         SettingsWorkspaceSection.DesktopApp -> isDesktop && hasDesktopAppSettings
         SettingsWorkspaceSection.NotificationsAndDevice -> hasDeviceSettings
         else -> true

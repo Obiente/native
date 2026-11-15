@@ -16,7 +16,7 @@ internal data class DeckUiCardDropZone(
     val insertionIndex: Int,
 ) {
     init {
-        require(insertionIndex >= 0) { "A Deck card drop-zone index cannot be negative." }
+        require(insertionIndex >= 0) { "A card drop-zone index cannot be negative." }
     }
 }
 

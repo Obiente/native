@@ -136,11 +136,11 @@ internal fun nativeCollectionCardPrimaryContent(
     schema: NativeAppSchema,
     resource: ResourceSpec,
 ): (@Composable (NativeRecord) -> Unit)? {
-    if (schema.app.id == "tables" && resource.id == "tables") {
+    if (schema.containsGridsIn(resource)) {
         return { record ->
             NativeTableInventoryContent(requireNotNull(nativeTableInventoryPresentation(schema, resource, record)))
         }
     }
-    val pantryKind = nativePantryCollectionKind(schema, resource) ?: return null
+    val pantryKind = nativePantryCollectionKind(resource) ?: return null
     return { record -> NativePantryRecordContent(pantryKind, record) }
 }

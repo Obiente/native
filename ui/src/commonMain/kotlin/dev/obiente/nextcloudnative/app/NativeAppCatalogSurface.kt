@@ -64,7 +64,8 @@ fun NativeAppCatalogSurface(
     onQueryChanged: (String) -> Unit,
     onFilterChanged: (NativeAppCatalogFilter) -> Unit,
     onOpenInstalledApp: (NativeManagedApp) -> Unit,
-    onLifecycleAction: (NativeManagedApp, NativeAppLifecycleAction) -> Unit,
+    /** Null keeps the catalog read-only: no lifecycle actions are offered. */
+    onLifecycleAction: ((NativeManagedApp, NativeAppLifecycleAction) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val apps = filterNativeAppCatalog(catalog, query, filter)
@@ -108,7 +109,7 @@ fun NativeAppCatalogSurface(
                     catalog = catalog,
                     app = app,
                     onOpen = { onOpenInstalledApp(app) },
-                    onLifecycleAction = { action -> onLifecycleAction(app, action) },
+                    onLifecycleAction = onLifecycleAction?.let { handler -> { action -> handler(app, action) } },
                 )
             }
         }
@@ -120,15 +121,15 @@ private fun NativeManagedAppCard(
     catalog: NativeAppCatalog,
     app: NativeManagedApp,
     onOpen: () -> Unit,
-    onLifecycleAction: (NativeAppLifecycleAction) -> Unit,
+    onLifecycleAction: ((NativeAppLifecycleAction) -> Unit)?,
 ) {
-    val actions = availableNativeAppLifecycleActions(catalog, app)
+    val actions = if (onLifecycleAction == null) emptySet() else availableNativeAppLifecycleActions(catalog, app)
     var menuExpanded by remember(app.id) { mutableStateOf(false) }
     val menuActions = actions.sortedBy(NativeAppLifecycleAction::ordinal).map { action ->
         NextcloudCardAction(
             label = action.uiLabel(),
             destructive = action == NativeAppLifecycleAction.Uninstall,
-            onClick = { onLifecycleAction(action) },
+            onClick = { onLifecycleAction?.invoke(action) },
         )
     }
     Card(

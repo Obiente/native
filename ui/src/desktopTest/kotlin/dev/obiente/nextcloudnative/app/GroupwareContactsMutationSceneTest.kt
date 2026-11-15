@@ -28,7 +28,11 @@ class GroupwareContactsMutationSceneTest {
             // The list appears only after the recovery read and the DAV discovery and listing requests.
             settleUntil(SCENE_TIMEOUT_MILLIS) { has("Synthetic contact") }
             click("Synthetic contact")
+            // Phone-width details open in a sheet; tap Delete once it has finished sliding in.
+            settleUntil { has("Delete") }
+            settleAt("Delete")
             click("Delete")
+            settleUntil { has("Delete Synthetic contact?") }
             click("Delete")
             settleUntil(SCENE_TIMEOUT_MILLIS) {
                 fixture.deletes > 0 && fixture.recovery == null && !blocked && !has("Synthetic contact")
@@ -76,7 +80,11 @@ class GroupwareContactsMutationSceneTest {
             assertFalse(blocked.value)
             assertFalse(has("Resolve contact recovery"))
             click("Synthetic contact")
+            // Phone-width details open in a sheet; tap Delete once it has finished sliding in.
+            settleUntil { has("Delete") }
+            settleAt("Delete")
             click("Delete")
+            settleUntil { has("Delete Synthetic contact?") }
             click("Delete")
             settleUntil(SCENE_TIMEOUT_MILLIS) {
                 fixture.deletes > 0 && fixture.recovery == null && !blocked.value && !has("Synthetic contact")

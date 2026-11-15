@@ -226,6 +226,43 @@ fun parseTalkMessageJson(rawJson: String): TalkMessage? = runCatching {
     parseTalkMessage(talkJson.parseToJsonElement(rawJson).jsonObject)
 }.getOrNull()
 
+/**
+ * One chat entry as returned by the Talk chat API.
+ *
+ * Edit, delete, and reaction system messages are not shown; Talk sends them so clients replace
+ * their copy of [updatedParent], the message the change applies to.
+ */
+internal data class TalkChatEntry(
+    val message: TalkMessage,
+    val updatedParent: TalkMessage?,
+    /** False when the parent omits `reactionsSelf`, so its own-reaction flags are unknown. */
+    val parentIncludesOwnReactions: Boolean,
+) {
+    val isTimelineUpdate: Boolean get() = message.systemMessage in TALK_TIMELINE_UPDATE_SYSTEM_MESSAGES
+}
+
+internal val TALK_TIMELINE_UPDATE_SYSTEM_MESSAGES = setOf(
+    TalkSystemMessageType.MessageEdited,
+    TalkSystemMessageType.MessageDeleted,
+    TalkSystemMessageType.Reaction,
+    TalkSystemMessageType.ReactionDeleted,
+    TalkSystemMessageType.ReactionRevoked,
+)
+
+internal fun parseTalkChatEntry(json: JsonObject): TalkChatEntry {
+    val message = parseTalkMessage(json)
+    val parent = json.objectValue("parent")?.takeIf { it.containsKey("message") }
+    val updatedParent = parent
+        ?.takeIf { message.systemMessage in TALK_TIMELINE_UPDATE_SYSTEM_MESSAGES }
+        ?.let(::parseTalkMessage)
+        ?.takeIf { it.id > 0L }
+    return TalkChatEntry(
+        message = message,
+        updatedParent = updatedParent,
+        parentIncludesOwnReactions = parent?.containsKey("reactionsSelf") == true,
+    )
+}
+
 /** Merges an older Talk history page without duplicating the cursor boundary message. */
 fun mergeTalkMessageHistory(
     current: List<TalkMessage>,
@@ -336,7 +373,8 @@ private fun JsonObject.toTalkMessageQuote(): TalkMessageQuote {
         id = longValue("id") ?: 0L,
         actorDisplayName = stringValue("actorDisplayName").orEmpty().ifBlank { "Nextcloud" },
         summary = summary.ifBlank { "Message" },
-        deleted = booleanValue("deleted") ?: false,
+        deleted = booleanValue("deleted") == true ||
+            stringValue("messageType") == TalkMessageType.CommentDeleted.wireValue,
     )
 }
 

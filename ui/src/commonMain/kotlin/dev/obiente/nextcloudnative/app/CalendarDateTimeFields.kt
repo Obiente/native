@@ -30,26 +30,40 @@ import kotlin.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun CalendarDateField(date: String, onDateChanged: (String) -> Unit, enabled: Boolean) {
+internal fun CalendarDateField(
+    date: String,
+    onDateChanged: (String) -> Unit,
+    enabled: Boolean,
+    label: String = "Date",
+    chooseLabel: String = "Choose event date",
+    optional: Boolean = false,
+) {
     var choosing by remember { mutableStateOf(false) }
+    // An optional date may stay empty; a typed date must still be a real one.
+    val invalid = !(optional && date.isBlank()) && !date.isIsoCalendarDate()
     OutlinedTextField(
         value = date,
         onValueChange = onDateChanged,
         enabled = enabled,
-        label = { Text("Date") },
+        label = { Text(label) },
         placeholder = { Text("YYYY-MM-DD") },
-        supportingText = if (!date.isIsoCalendarDate()) ({ Text("Use YYYY-MM-DD") }) else null,
-        isError = !date.isIsoCalendarDate(),
+        supportingText = if (invalid) ({ Text("Use YYYY-MM-DD") }) else null,
+        isError = invalid,
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         trailingIcon = {
-            IconButton(enabled = enabled, onClick = { choosing = true }) {
-                Icon(NextcloudIcons.Calendar, contentDescription = "Choose event date")
+            Row {
+                if (optional && date.isNotBlank()) IconButton(enabled = enabled, onClick = { onDateChanged("") }) {
+                    Icon(NextcloudIcons.Close, contentDescription = "Clear ${label.lowercase()}")
+                }
+                IconButton(enabled = enabled, onClick = { choosing = true }) {
+                    Icon(NextcloudIcons.Calendar, contentDescription = chooseLabel)
+                }
             }
         },
     )
     if (choosing) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = calendarDateEpochMillis(date), yearRange = 1..9999)
+        val state = rememberDatePickerState(initialSelectedDateMillis = calendarDateEpochMillis(date.ifBlank { currentCalendarDate().compactDateToIso() }), yearRange = 1..9999)
         DatePickerDialog(
             onDismissRequest = { choosing = false },
             confirmButton = {
@@ -75,13 +89,13 @@ internal fun CalendarTimeRangeFields(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         if (maxWidth < 300.dp || fontScale >= 1.3f) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                CalendarTimeField("Starts (UTC)", startTime, onStartChanged, enabled, Modifier.fillMaxWidth())
-                CalendarTimeField("Ends (UTC)", endTime, onEndChanged, enabled, Modifier.fillMaxWidth())
+                CalendarTimeField("Starts", startTime, onStartChanged, enabled, Modifier.fillMaxWidth())
+                CalendarTimeField("Ends", endTime, onEndChanged, enabled, Modifier.fillMaxWidth())
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CalendarTimeField("Starts (UTC)", startTime, onStartChanged, enabled, Modifier.weight(1f))
-                CalendarTimeField("Ends (UTC)", endTime, onEndChanged, enabled, Modifier.weight(1f))
+                CalendarTimeField("Starts", startTime, onStartChanged, enabled, Modifier.weight(1f))
+                CalendarTimeField("Ends", endTime, onEndChanged, enabled, Modifier.weight(1f))
             }
         }
     }

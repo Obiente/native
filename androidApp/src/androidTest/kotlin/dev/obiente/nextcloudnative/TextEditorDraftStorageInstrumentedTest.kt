@@ -53,6 +53,18 @@ class TextEditorDraftStorageInstrumentedTest {
             assertEquals(draft, newStorage().bind(account, "/example.txt").load())
             assertNull(newStorage().bind(otherAccount, "/example.txt").load())
             newStorage().bind(otherAccount, "/example.txt").save(draft.copy(text = "other account"))
+            val retainedPath = "nextcloud-native:rule-operation:pending-test"
+            val orphanPath = "nextcloud-native:rule-operation:resolved-test"
+            val recovery = TextEditorDraft("", "synthetic recovery", null, true)
+            newStorage().bind(account, retainedPath).save(recovery)
+            newStorage().bind(account, orphanPath).save(recovery)
+            assertEquals(1, stale.pruneUnreferenced(setOf(retainedPath)) {
+                if (it == recovery) orphanPath else null
+            })
+            assertNull(newStorage().bind(account, orphanPath).load())
+            assertEquals(recovery, newStorage().bind(account, retainedPath).load())
+            assertEquals(draft, stale.load())
+            assertEquals("other account", newStorage().bind(otherAccount, "/example.txt").load()!!.text)
             newStorage().removeAccount(account)
             assertNull(newStorage().bind(account, "/example.txt").load())
             assertEquals("other account", newStorage().bind(otherAccount, "/example.txt").load()!!.text)
