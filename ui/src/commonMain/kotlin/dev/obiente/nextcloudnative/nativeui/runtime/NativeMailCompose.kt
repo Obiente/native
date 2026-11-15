@@ -242,7 +242,7 @@ private fun NativeMailOriginal.toQuote(forward: Boolean): NativeMailQuote {
         val who = sender?.label?.takeIf(String::isNotBlank) ?: sender?.email ?: "the sender"
         if (dateLabel != null) "On $dateLabel, $who wrote:" else "$who wrote:"
     }
-    return NativeMailQuote(header = header, text = bodyText, forward = forward)
+    return NativeMailQuote(header = header.take(MAX_NATIVE_MAIL_QUOTE_HEADER_CHARACTERS), text = bodyText, forward = forward)
 }
 
 private fun List<NativeMailAddress>.withoutOwn(own: Set<String>, keepIfOnlyOwn: Boolean = false): List<NativeMailAddress> {
@@ -321,3 +321,6 @@ private const val MAX_MESSAGE_ID_LENGTH = 998
 private const val MAX_REFERENCES = 20
 private const val MAX_REFERENCES_FIELD_LENGTH = 64_000
 internal const val MAX_NATIVE_MAIL_QUOTE_CHARACTERS = 200_000
+
+/** The longest quote header that is built and that a stored draft may carry. */
+internal const val MAX_NATIVE_MAIL_QUOTE_HEADER_CHARACTERS = 64_000

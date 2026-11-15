@@ -395,6 +395,19 @@ class NativeMailComposerStateTest {
     }
 
     @Test
+    fun `a forward of a message to many people can be stored and read back`() {
+        val many = (1..140).joinToString(", ") { "Synthetic Recipient Number $it <recipient$it@example.test>" }
+        val draft = readyDraft().copy(quote = NativeMailQuote(header = "To: $many", text = "Quoted", forward = true))
+        assertTrue(draft.quote!!.header.length > 4_096)
+        val stored = NativeMailStoredComposer(draft)
+        assertEquals(stored, decodeNativeMailStoredComposer(encodeNativeMailStoredComposer(stored)))
+        val tooLong = stored.copy(draft = draft.copy(quote = draft.quote!!.copy(header = "x".repeat(MAX_NATIVE_MAIL_QUOTE_HEADER_CHARACTERS + 1))))
+        assertFailsWith<IllegalStateException>("A draft that could not be read back is refused when it is saved.") {
+            encodeNativeMailStoredComposer(tooLong)
+        }
+    }
+
+    @Test
     fun `stored composers round-trip and reject unknown versions`() {
         val stored = NativeMailStoredComposer(
             readyDraft().copy(

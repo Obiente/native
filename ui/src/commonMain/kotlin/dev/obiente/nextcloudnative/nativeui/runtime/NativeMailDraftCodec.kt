@@ -17,6 +17,8 @@ internal fun encodeNativeMailStoredComposer(value: NativeMailStoredComposer): St
     check(encoded.length <= MAX_STORED_CHARACTERS && encoded.encodeToByteArray().size <= MAX_STORED_BYTES) {
         "This draft is too large to keep on the device."
     }
+    // What is written must be what can be read back; otherwise the draft would be lost on restart.
+    checkNotNull(decodeNativeMailStoredComposer(encoded)) { "This draft cannot be kept on the device." }
     return encoded
 }
 
@@ -79,8 +81,10 @@ private fun NativeMailComposeDraft.toStored() = StoredDraft(
 
 private fun StoredDraft.toDraft(): NativeMailComposeDraft? {
     val mode = NativeMailComposeMode.entries.firstOrNull { it.name == mode } ?: return null
-    val shortFields = listOfNotNull(senderId, inReplyTo, quote?.header)
+    val shortFields = listOfNotNull(senderId, inReplyTo)
     if (shortFields.any { it.length > MAX_SHORT_FIELD }) return null
+    // A forwarded message's header lists its recipients, so it follows their limit.
+    if ((quote?.header?.length ?: 0) > MAX_NATIVE_MAIL_QUOTE_HEADER_CHARACTERS) return null
     if (listOf(to, cc, bcc, subject).any { it.length > MAX_RECIPIENT_OR_SUBJECT }) return null
     if ((references?.length ?: 0) > MAX_REFERENCES_LENGTH) return null
     if ((quote?.text?.length ?: 0) > MAX_NATIVE_MAIL_QUOTE_CHARACTERS) return null
