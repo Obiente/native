@@ -294,8 +294,9 @@ class FileCommentsController(
                 else -> when (val read = readFirstPage()) {
                     is CommentsRead.Loaded -> when {
                         read.page.comments.any { it.id == id } -> "The comment was not deleted. You can try again."
-                        // An older comment is not on the first page whether or not it still exists.
-                        read.page.mayHaveMore -> {
+                        // An older comment is not on the first page whether or not it still exists, and
+                        // an entry that could not be read may be this comment.
+                        read.page.mayHaveMore || read.page.skippedEntries > 0 -> {
                             state = state.copy(unconfirmedIds = state.unconfirmedIds + id)
                             "Couldn't confirm whether the comment was deleted. Load older comments to check before trying again."
                         }
