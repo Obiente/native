@@ -133,6 +133,9 @@ internal class TalkChatController(
     private var liveRequested = false
     private var restoreJob: Job? = null
 
+    /** Counts confirmed sends, edits, and deletes, so a history read from before one is not shown over it. */
+    private var confirmedChanges = 0L
+
     /** Orders every write to [unconfirmedStore], so a late cleanup cannot erase a newer attempt. */
     private val storeGate = Mutex()
 
@@ -176,6 +179,7 @@ internal class TalkChatController(
             historyFailure = null,
             live = if (state.live is TalkLiveState.Stopped) TalkLiveState.Paused else state.live,
         )
+        val changesAtStart = confirmedChanges
         loadJob = scope.launch {
             val (abilities, page) = coroutineScope {
                 val capabilities = async { readCapabilities() }
@@ -184,6 +188,11 @@ internal class TalkChatController(
                 TalkChatAbilities(capabilities.await() ?: state.abilities.capabilities, access.await()) to page.await()
             }
             if (current != generation) return@launch
+            if (changesAtStart != confirmedChanges) {
+                // The page was read before a message changed; it is read again instead of shown.
+                refresh()
+                return@launch
+            }
             state = state.copy(abilities = abilities, refreshing = false)
             when (page) {
                 is TalkChatRead.Failed -> {
@@ -434,6 +443,7 @@ internal class TalkChatController(
     }
 
     private fun markDeleted(messageId: Long, entry: TalkChatEntry?) {
+        confirmedChanges++
         if (entry?.updatedParent != null) {
             updateTimeline { it.applying(listOf(entry), advanceCursor = false) }
         } else {
@@ -456,6 +466,7 @@ internal class TalkChatController(
     }
 
     private fun finishEdit(messageId: Long) {
+        confirmedChanges++
         if (state.editing?.id == messageId) state = state.copy(editing = null)
     }
 
@@ -539,6 +550,7 @@ internal class TalkChatController(
     }
 
     private fun confirmSent(attempt: TalkUnconfirmedSend) {
+        confirmedChanges++
         state = state.copy(
             send = TalkSendState.Idle,
             unconfirmed = state.unconfirmed?.takeIf { it != attempt },
