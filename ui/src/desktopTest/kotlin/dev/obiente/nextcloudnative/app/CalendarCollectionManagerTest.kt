@@ -40,6 +40,17 @@ class CalendarCollectionManagerTest {
     }
 
     @Test
+    fun aCalendarTheListingNamesButCannotDescribeIsStillListed() {
+        val listing = NextcloudApiResponse(207, (
+            "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>${home}work/</d:href>" +
+                "<d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 500 Internal Server Error</d:status></d:propstat>" +
+                "</d:response></d:multistatus>"
+            ).encodeToByteArray(), "application/xml", null)
+        assertTrue(parseGroupwareCalendarsForComponent(listing, componentName = null).isEmpty())
+        assertEquals(setOf("${home}work/"), groupwareCollectionHrefs(listing), "Its absence from the calendars does not mean it was deleted.")
+    }
+
+    @Test
     fun aCreatedCalendarIsConfirmedByTheCalendarList() = runBlocking<Unit> {
         val server = FakeCalendarHome()
         val manager = manager(server)

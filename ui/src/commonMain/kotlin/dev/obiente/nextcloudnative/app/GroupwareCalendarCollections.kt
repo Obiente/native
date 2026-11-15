@@ -13,6 +13,17 @@ enum class GroupwareCalendarKind {
  * it is null. Subscribed feeds count as event calendars and are read-only. Calendars waiting in
  * Nextcloud's trash bin are left out, since they are deleted as far as the user is concerned.
  */
+/**
+ * Every collection address a calendar home listing names, whether or not its properties could be
+ * read. A calendar missing from the parsed list but named here still exists.
+ */
+internal fun groupwareCollectionHrefs(response: NextcloudApiResponse): Set<String> {
+    if (response.status !in 200..299) return emptySet()
+    return response.body.decodeToString().xmlElements("response").mapNotNullTo(LinkedHashSet()) { block ->
+        block.xmlDirectChildText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
+    }
+}
+
 internal fun parseGroupwareCalendarsForComponent(
     response: NextcloudApiResponse,
     componentName: String?,

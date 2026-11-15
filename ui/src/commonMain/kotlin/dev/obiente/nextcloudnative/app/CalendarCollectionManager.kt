@@ -57,6 +57,9 @@ internal class CalendarCollectionManager(
     internal var onChanged: () -> Unit = {}
     private var newHref: String? = null
 
+    /** Every address the last calendar home listing named, readable or not. */
+    private var listedHrefs = emptySet<String>()
+
     val actions = CalendarCollectionActions(
         onCreate = { subscription -> if (!busy) open(CalendarCollectionEdit.New(subscription)) },
         onManage = { calendar ->
@@ -167,18 +170,17 @@ internal class CalendarCollectionManager(
             return null
         }
         if (earlier != null) {
-            val listed = try {
-                parseGroupwareCalendarsForComponent(
-                    services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(home)),
-                    componentName = null,
-                )
+            val named = try {
+                groupwareCollectionHrefs(services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(home)).also {
+                    require(it.status in 200..299) { "Calendar discovery failed." }
+                })
             } catch (failure: CancellationException) {
                 throw failure
             } catch (_: Exception) {
                 error = "An earlier attempt could not be checked. Refresh your calendars before trying again."
                 return null
             }
-            if (listed.any { it.href == earlier }) {
+            if (earlier in named) {
                 forgetCreation()
                 onChanged()
                 error = "An earlier attempt was created after all and is now in your list. Check it before creating another."
@@ -222,7 +224,8 @@ internal class CalendarCollectionManager(
             calendarCollectionDeleteRequest(calendar.href),
             provesRejection = { status -> !groupwareDeleteResponseProvesAbsence(status) && groupwareMutationResponseProvesRejection(status) },
             applied = { true },
-            confirmed = { calendars -> calendars.none { it.href == calendar.href } },
+            // A calendar the listing names but could not describe is still there.
+            confirmed = { calendars -> calendars.none { it.href == calendar.href } && calendar.href !in listedHrefs },
         )
     }
 
@@ -265,10 +268,8 @@ internal class CalendarCollectionManager(
                     return@launch
                 }
                 val listed = try {
-                    parseGroupwareCalendarsForComponent(
-                        services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId))),
-                        componentName = null,
-                    )
+                    val listing = services.executeGroupwareDav(session, groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId)))
+                    parseGroupwareCalendarsForComponent(listing, componentName = null).also { listedHrefs = groupwareCollectionHrefs(listing) }
                 } catch (failure: CancellationException) {
                     throw failure
                 } catch (_: Exception) {
