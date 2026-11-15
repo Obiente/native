@@ -265,7 +265,8 @@ internal fun NativeChildRecordWritePlan.deleteRequest(record: NativeChildRecord)
     val delete = delete ?: return NativeChildRecordRequestResult.Unavailable("Deleting is not offered here.")
     val identities = delete.values(listValues, parentId, record.id, record.namesParent)
         ?: return NativeChildRecordRequestResult.Unavailable("This record cannot be matched to its parent safely.")
-    return ready(delete.write, identities)
+    // The deletion is done when a fresh read no longer returns the record.
+    return ready(delete.write, identities, readBack = NativeWriteReadBack(record.id, emptyMap(), emptyMap(), echoUntouched = false, expectAbsent = true))
 }
 
 private fun validate(fields: List<NativeRecordField>, draft: Map<String, String>, existing: NativeChildRecord?): Map<String, String> =

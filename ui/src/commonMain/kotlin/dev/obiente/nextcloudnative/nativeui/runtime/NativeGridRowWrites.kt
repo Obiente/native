@@ -548,7 +548,8 @@ internal val NativeGridRowWritePlan.updateRetry: NativeEditorWriteRetry
 internal fun NativeGridRowWritePlan.deleteRequest(row: NativeGridRow): NativeGridRowRequestResult {
     val delete = delete ?: return unavailable("This table's contract does not offer deleting rows.")
     val values = itemValues(delete, row) ?: return unavailable("This row cannot be matched to its table safely.")
-    return ready(delete.write.action, values)
+    // The deletion is done when a fresh read no longer returns the row.
+    return ready(delete.write.action, values, readBack = NativeWriteReadBack(row.rowId, emptyMap(), emptyMap(), echoUntouched = false, expectAbsent = true))
 }
 
 internal fun NativeGridRowWritePlan.itemValues(write: NativeItemWrite, row: NativeGridRow): Map<String, String>? =

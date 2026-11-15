@@ -327,9 +327,22 @@ private suspend fun executeVerified(
         readBack = {
             val read = buildDynamicApiRequest(context.descriptor, readAction, request.values, context.runtimeContext + request.values)
                 .copy(cachePolicy = NextcloudApiCachePolicy.ForceNetwork)
-            parseDynamicRecords(readAction, context.services.executeNextcloudApi(context.session, read), readAction.responseFieldIds.toSet())
+            val response = context.services.executeNextcloudApi(context.session, read)
+            // After a deletion, the record's own read answering "not found" is the absence looked for.
+            if (readBack.expectAbsent && (response.status == 404 || response.status == 410)) {
+                emptyList()
+            } else {
+                parseDynamicRecords(readAction, response, readAction.responseFieldIds.toSet())
+            }
         },
-        verify = { records ->
+        verify = verify@{ records ->
+            if (readBack.expectAbsent) {
+                return@verify if (records.none { it.id == readBack.targetId }) {
+                    NativeWriteVerification.Confirmed
+                } else {
+                    NativeWriteVerification.Unconfirmed("The app accepted the deletion, but still lists the item. Refresh to check before deleting it again.")
+                }
+            }
             val untouched = readBack.untouched.filterKeys { it !in readBack.customFields }
             val verification = NativeWriteExpectation(
                 readBack.targetId, submitted, untouched, readBack.previous, readBack.verifyTarget, readBack.absentPrevious,

@@ -49,6 +49,9 @@ sealed interface NativeWriteVerification {
 
     /** The read-back could not identify exactly one target. Nothing is known. */
     data object Unidentified : NativeWriteVerification
+
+    /** The read-back does not show the requested state yet, and does not rule it out either. */
+    data class Unconfirmed(val message: String) : NativeWriteVerification
 }
 
 enum class NativeNotAppliedReason {
@@ -158,6 +161,7 @@ suspend fun <T> runNativeVerifiedWrite(
         NativeWriteVerification.Unidentified -> NativeVerifiedWriteOutcome.Unknown(
             "The app's current state does not identify this record, so the change could not be confirmed.",
         )
+        is NativeWriteVerification.Unconfirmed -> NativeVerifiedWriteOutcome.Unknown(verification.message)
     }
 }
 
@@ -233,6 +237,8 @@ private val SERVER_BOOKKEEPING_FIELDS = setOf(
 
 private fun combineVerifications(first: NativeWriteVerification, second: NativeWriteVerification): NativeWriteVerification = when {
     first == NativeWriteVerification.Unidentified || second == NativeWriteVerification.Unidentified -> NativeWriteVerification.Unidentified
+    first is NativeWriteVerification.Unconfirmed -> first
+    second is NativeWriteVerification.Unconfirmed -> second
     first == NativeWriteVerification.Confirmed -> second
     second == NativeWriteVerification.Confirmed -> first
     first is NativeWriteVerification.NotApplied && second is NativeWriteVerification.NotApplied -> first
@@ -328,6 +334,11 @@ class NativeWriteReadBack(
      * route-family read first and sends nothing when an edited field no longer holds [previous].
      */
     val preReadBaseline: Boolean = false,
+    /**
+     * A deletion: the read-back must no longer return [targetId]. A record that is still returned
+     * leaves the result unconfirmed, since an accepted deletion may still be pending.
+     */
+    val expectAbsent: Boolean = false,
     /** The pre-read comparison for custom-shaped fields, such as the edited cells of a grid row. */
     val customBaselineHolds: ((NativeRecord) -> Boolean)? = null,
     /**
