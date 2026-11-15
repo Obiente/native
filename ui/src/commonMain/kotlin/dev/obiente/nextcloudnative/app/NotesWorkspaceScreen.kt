@@ -156,6 +156,9 @@ internal fun NextcloudNotesScreen(
     }
     val currentShowNote by rememberUpdatedState(::showNote)
 
+    // Counts confirmed list changes, so a list read that began before one is not shown over it.
+    val listChanges = remember(session, noteStore.appId) { intArrayOf(0) }
+
     fun toggleFavorite(note: NextcloudNote) {
         if (interactionBlocked || note.id == openNoteId) return
         val cacheProducer = sharedNextcloudNotesCache.producer(session)
@@ -166,6 +169,7 @@ internal fun NextcloudNotesScreen(
                 val outcome = setNoteFavorite(noteStore, note.id, !note.favorite)
                 val latest = (outcome as? NoteFavoriteOutcome.Saved)?.note ?: (outcome as? NoteFavoriteOutcome.Failed)?.latest
                 latest?.let { updated ->
+                    listChanges[0]++
                     notes = notes?.map { listed -> if (listed.id == updated.id) updated else listed }
                     sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
                 }
@@ -200,6 +204,7 @@ internal fun NextcloudNotesScreen(
         scope.launch {
             try {
                 val created = noteStore.createNote(NEW_NOTE_TITLE, "", category)
+                listChanges[0]++
                 notes = (notes.orEmpty() + created).distinctBy(NextcloudNote::id)
                 sharedNextcloudNotesCache.storeList(session, noteStore.appId, notes.orEmpty(), cacheProducer)
                 sharedNextcloudNotesCache.storeDetail(session, noteStore.appId, created, cacheProducer)
@@ -265,9 +270,13 @@ internal fun NextcloudNotesScreen(
         refreshing = true
         // Revalidate only a list that is on screen; a 304 then keeps the cached list as current.
         val cachedEtag = notes?.let { sharedNextcloudNotesCache.listEtag(session, noteStore.appId) }
+        val changesAtStart = listChanges[0]
         runCatching {
             when (val result = noteStore.listNotesConditionally(cachedEtag)) {
-                is NextcloudConditionalRead.Modified -> {
+                // A note changed while this list was on its way; it is read again instead of shown.
+                is NextcloudConditionalRead.Modified -> if (changesAtStart != listChanges[0]) {
+                    loadAttempt += 1
+                } else {
                     notes = result.value
                     sharedNextcloudNotesCache.storeList(session, noteStore.appId, result.value, cacheProducer, result.responseEtag)
                 }
