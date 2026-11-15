@@ -122,7 +122,9 @@ internal fun expandCalendarEventsForWindow(
     // A repeating event's own entry stays as the expansion placed it: when its rule cannot be
     // read it is shown as it is, wherever it starts.
     val seriesEntry = event.recurrenceRule != null && !event.isGeneratedOccurrence
-    seriesEntry || start.length < 16 || !start.endsWith('Z') || (start >= window.startUtc && start < window.endUtc)
+    // An event that began before the window but ends inside it still shows on its last day.
+    val reachesWindow = (event.end?.takeIf { it.length >= 16 && it.endsWith('Z') } ?: start).let { it > window.startUtc || start >= window.startUtc }
+    seriesEntry || start.length < 16 || !start.endsWith('Z') || (reachesWindow && start < window.endUtc)
 }
 
 private fun calendarWorkspaceDateWindow(

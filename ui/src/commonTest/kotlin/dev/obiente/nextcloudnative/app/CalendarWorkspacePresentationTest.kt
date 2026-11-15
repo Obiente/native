@@ -79,6 +79,9 @@ class CalendarWorkspacePresentationTest {
         )
         val kept = expandCalendarEventsForWindow(listOf(event("20261130T120000Z"), event("20261130T233000Z")), november)
         assertEquals(listOf("20261130T120000Z"), kept.map { it.start }, "Noon on 30 November is in the month; 00:30 on 1 December local time is not.")
+        val december = calendarWorkspaceQueryWindow(CalendarWorkspaceView.Month, CalendarMonth(2026, 12), "20261201", "America/New_York")
+        val lateNight = event("20261201T043000Z").copy(end = "20261201T053000Z")
+        assertEquals(1, expandCalendarEventsForWindow(listOf(lateNight), december).size, "An event that ends after local midnight shows on the first day.")
         val daily = expandCalendarEventsForWindow(listOf(event("20261129T120000Z", "FREQ=DAILY;COUNT=5")), november)
         assertEquals(listOf("20261129T120000Z", "20261130T120000Z"), daily.map { it.start })
     }
