@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-09-14
+lastUpdated: 2026-11-13
 captureScenarios: guide-android-folder-sync-locations, guide-android-folder-sync-rules, guide-android-folder-sync-status
 prerequisites: A connected Android account, A device folder you can safely test, Enough local and server storage for the first scan
 ---
 
 # Sync an Android device folder with Nextcloud
 
-**Last reviewed: 2026-09-14.** The software and published packages may have
+**Last reviewed: 2026-11-13.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -46,11 +46,38 @@ Select any ignored patterns or a bounded subset, then choose network and power c
 
 Create the pair, then run or wait for the first scan while connected. Review the queued operation count before treating the mapping as safe. No pending work describes the observed queue. Last checked is the scan timestamp, not proof that every file completed synchronization or that the next Android schedule will run at an exact minute.
 
+In the source implementation, a failed scan appears as **Needs review** and
+**Check failed**, with a recovery message in the pair's Overview and Activity.
+It remains visible after reopening the app. It does not count as a failed
+file transfer or advance Last checked. If folder access expired, choose
+**Add sync** and select the same device folder to restore access, then run
+the existing pair again. Saved pairs remain readable while account discovery
+is unavailable; connect before changing settings or starting work.
+
 If both sides changed, open the pair and compare the device and Nextcloud type, size, and modification details before choosing an action. Select a choice to read its consequences, then choose **Review this choice** and confirm. **Keep both copies** is the conservative recovery. When every conflict on the displayed page allows the same choice, open **Apply a choice** to submit that reviewed page as one preflight-validated batch. The app checks every selected generation before any operation starts; if one item changed, none starts and the page returns to review. After that preflight, operations run separately, so a later transfer failure does not roll back an earlier successful transfer. Additional conflicts are loaded as earlier pages are resolved.
 
 If a result is unknown after interruption, let the durable coordinator reconcile it rather than creating a second pair or repeatedly retrying. Use **Settings** in the pair detail to remove a sync. Removing the pair removes its configuration and schedule; the current implementation does not delete local or server files when the pair itself is removed.
 
 The **Review** setup step keeps direction, conflict policy and deletion policy visible before you start. In **Choose what syncs**, a partial checkbox means only some descendants are selected; opening that folder does not expand the sync scope. Removal is under the selected pair's **Settings** tab and still requires confirmation.
+
+### Change a saved pair's settings
+
+The Android source implementation adds **Settings > Edit settings**. Review
+direction, conflict handling, deletion, connection, power, and device label,
+then choose **Save changes** and **Apply changes**. Closing a changed draft
+requires an explicit discard decision; **Keep editing** leaves the draft open.
+Rotating your device keeps the draft visible. Leaving the editor returns to
+the selected sync's Settings tab.
+These changes are not a release claim;
+check the [release notes](https://github.com/obiente/native/releases) for a
+published build containing them.
+
+The next check rebuilds queued work using the saved settings. Existing
+baselines and content-selection rules are preserved. Finish a running sync or
+recover unfinished uploads before editing. If another action changed the
+settings, reopen the editor to review the saved version. If Android cannot
+update the background schedule immediately, the app reports that the settings
+were saved and provides the next recovery step.
 
 ### Recovery from an older Files-provider pair
 
