@@ -87,6 +87,16 @@ class FileSystemTagAssignmentsTest {
     }
 
     @Test
+    fun aTagEntryWithoutReadablePropertiesIsNotReadAsUnassigned() {
+        val relations = "/remote.php/dav/systemtags-relations/files/42"
+        val body = """<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">""" +
+            """<d:response><d:href>$relations/</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>""" +
+            """<d:response><d:href>$relations/1</d:href><d:propstat><d:prop><oc:id/></d:prop><d:status>HTTP/1.1 500 Internal Server Error</d:status></d:propstat></d:response>""" +
+            "</d:multistatus>"
+        assertFailsWith<FilesDavProtocolException>("The tag may still be assigned.") { parseFileTagAssignments(response(207, body)) }
+    }
+
+    @Test
     fun offersOnlyVisibleAssignableTagsAndKeepsRestrictedAssignedTagsReadOnly() {
         val controller = controller(FakeTags()).also { it.start() }
         val offered = controller.state.offered

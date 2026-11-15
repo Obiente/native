@@ -65,8 +65,14 @@ fun fileTagNameProblem(name: String): String? {
 
 fun parseFileTagAssignments(response: NextcloudApiResponse): List<NextcloudSystemTag> {
     val records = parseFilesDavMultistatus(response, MAX_FILE_TAGS)
+    // The collection answers for itself with the shortest address and no tag properties. Any other
+    // entry without them is a tag that could not be read, which must not look like "not assigned".
+    val collectionHref = records.minByOrNull { it.href.trimEnd('/').length }?.href
     return try {
         records.mapNotNull { record ->
+            check(record.href == collectionHref || record.text("id") != null || record.text("display-name") != null) {
+                "A tag entry could not be read."
+            }
             SystemTagDavRecord(
                 href = record.href,
                 id = record.text("id"),
