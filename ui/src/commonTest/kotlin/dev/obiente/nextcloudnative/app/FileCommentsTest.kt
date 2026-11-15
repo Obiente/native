@@ -223,6 +223,20 @@ class FileCommentsTest {
     }
 
     @Test
+    fun deletingALoadedCommentMovesTheOlderPageOffsetWithIt() {
+        val fake = FakeComments().apply {
+            comments.clear()
+            repeat(FILE_COMMENTS_PAGE_SIZE + 50) { index -> comments += Comment(1_000L + index, "alice", "Comment $index") }
+            pageLimit = FILE_COMMENTS_PAGE_SIZE
+        }
+        val controller = controller(fake).also { it.start() }
+        assertEquals(FILE_COMMENTS_PAGE_SIZE, controller.state.serverOffset)
+        controller.requestDelete(controller.state.comments!!.first())
+        controller.confirmDelete()
+        assertEquals(FILE_COMMENTS_PAGE_SIZE - 1, controller.state.serverOffset, "The first older comment is now one place earlier.")
+    }
+
+    @Test
     fun anOlderPageThatARefreshOvertookIsNotAppended() {
         val hold = kotlinx.coroutines.CompletableDeferred<Unit>()
         val fake = FakeComments().apply {

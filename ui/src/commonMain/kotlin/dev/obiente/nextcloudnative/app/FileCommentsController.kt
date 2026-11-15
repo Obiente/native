@@ -282,7 +282,11 @@ class FileCommentsController(
             val notice = when {
                 outcome is FilesDavWriteOutcome.Confirmed ||
                     (outcome as? FilesDavWriteOutcome.Rejected)?.kind == FilesDavFailureKind.NotFound -> {
-                    state = state.copy(comments = state.comments?.filterNot { it.id == id })
+                    // The comments after it moved up by one on the server; the next older page starts there.
+                    state = state.copy(
+                        comments = state.comments?.filterNot { it.id == id },
+                        serverOffset = (state.serverOffset - 1).coerceAtLeast(0),
+                    )
                     supersedePendingReads()
                     null
                 }
