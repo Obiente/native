@@ -2,7 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
-import dev.obiente.nextcloudnative.app.decodeFileSyncCoordinatorSnapshot
+import dev.obiente.nextcloudnative.app.decodeFileSyncCoordinatorSnapshotForPresentation
 import dev.obiente.nextcloudnative.app.encodeFileSyncCoordinatorSnapshot
 import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
 import java.io.BufferedInputStream
@@ -71,7 +71,12 @@ internal class AndroidFileSyncStore internal constructor(
     constructor(context: Context) : this(File(context.filesDir, STATE_FILE_NAME))
 
     @Synchronized
-    fun load(): AndroidFileSyncPersistedState {
+    fun load(): AndroidFileSyncPersistedState = readSnapshot(emptySet())
+
+    @Synchronized
+    fun loadForPresentation(activePairIds: Set<String>): AndroidFileSyncPersistedState = readSnapshot(activePairIds)
+
+    private fun readSnapshot(activePairIds: Set<String>): AndroidFileSyncPersistedState {
         if (!stateFile.exists()) return AndroidFileSyncPersistedState()
         if (!stateFile.isFile || stateFile.length() !in 1..MAX_STATE_BYTES) {
             throw IllegalStateException("Folder sync state exceeds its safe storage limit.")
@@ -82,7 +87,9 @@ internal class AndroidFileSyncStore internal constructor(
                 check(input.readInt() == FORMAT_VERSION) { "Folder sync state version is unsupported." }
                 val snapshotLength = input.readInt()
                 check(snapshotLength in 1..maximumSnapshotBytes) { "Folder sync snapshot has an invalid size." }
-                val coordinator = decodeFileSyncCoordinatorSnapshot(ByteArray(snapshotLength).also(input::readFully))
+                val coordinator = decodeFileSyncCoordinatorSnapshotForPresentation(
+                    ByteArray(snapshotLength).also(input::readFully), activePairIds,
+                )
                 val nameCount = input.readInt()
                 check(nameCount in 0..MAX_PAIR_COUNT) { "Folder sync metadata contains too many pairs." }
                 val names = buildMap {

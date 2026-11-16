@@ -47,11 +47,14 @@ internal fun FileSyncPairInspector(
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
     onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
     modifier: Modifier = Modifier,
+    onEdit: (() -> Unit)? = null,
+    selectedTabName: String? = null,
+    onTabSelected: ((String) -> Unit)? = null,
 ) {
-    var selectedTabName by rememberSaveable(pair?.id) {
+    var localTabName by rememberSaveable(pair?.id) {
         mutableStateOf(FileSyncInspectorTab.Overview.name)
     }
-    val selectedTab = FileSyncInspectorTab.entries.firstOrNull { it.name == selectedTabName }
+    val selectedTab = FileSyncInspectorTab.entries.firstOrNull { it.name == (selectedTabName ?: localTabName) }
         ?: FileSyncInspectorTab.Overview
     Surface(
         modifier = modifier,
@@ -87,7 +90,7 @@ internal fun FileSyncPairInspector(
                     FileSyncInspectorTab.entries.forEach { tab ->
                         Tab(
                             selected = selectedTab == tab,
-                            onClick = { selectedTabName = tab.name },
+                            onClick = { if (onTabSelected != null) onTabSelected(tab.name) else localTabName = tab.name },
                             text = { Text(tab.title, maxLines = 1) },
                         )
                     }
@@ -113,6 +116,9 @@ internal fun FileSyncPairInspector(
                                 FileSyncInspectorTab.Activity -> FileSyncInspectorActivity(pair)
                                 FileSyncInspectorTab.Rules -> FileSyncInspectorRules(pair)
                                 FileSyncInspectorTab.Settings -> {
+                                    if (onEdit != null) TextButton(enabled = actionsEnabled, onClick = onEdit, modifier = Modifier.padding(16.dp)) {
+                                        Text("Edit settings")
+                                    }
                                     FileSyncInspectorSettings(pair)
                                     TextButton(enabled = actionsEnabled, onClick = onRemove, modifier = Modifier.padding(16.dp)) {
                                         Text("Remove sync", color = MaterialTheme.colorScheme.error)
@@ -133,6 +139,10 @@ internal fun FileSyncInspectorActivity(pair: FileSyncPairSummary) {
         modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
+        pair.runFailure?.let { failure -> FileSyncDetailBlock("Last attempt", attention = true) {
+            Text(failure.recoveryMessage())
+            Text(fileSyncCheckedTime(failure.occurredAtEpochMillis), style = MaterialTheme.typography.bodySmall)
+        } }
         FileSyncDetailBlock("Transfer activity") {
             FileSyncHealthLine("Running now", pair.runningCount.toString(), problem = false)
             FileSyncHealthLine("Waiting", pair.readyCount.toString(), problem = false)
@@ -227,6 +237,10 @@ internal fun FileSyncPairDetails(
         modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
         verticalArrangement = Arrangement.spacedBy(if (compact) NextcloudSpacing.Medium else NextcloudSpacing.Small),
     ) {
+        pair.runFailure?.let { failure -> FileSyncDetailBlock("Check needs attention", attention = true) {
+            Text(failure.recoveryMessage())
+            Text("Attempted: ${fileSyncCheckedTime(failure.occurredAtEpochMillis)}", style = MaterialTheme.typography.bodySmall)
+        } }
         FileSyncDetailBlock("Current work") {
             Text(pair.syncWorkSummary(), fontWeight = FontWeight.SemiBold)
             Text("Last checked: ${fileSyncCheckedTime(pair.lastScanEpochMillis)}",

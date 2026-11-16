@@ -423,6 +423,16 @@ interaction validation is still required.
   is never presented as a completed sync. Phone pair rows open dedicated
   details; desktop keeps a pair table and inspector. Conflict choices explain
   their consequences before the existing confirmation and revision checks.
+- **Last reviewed: 2026-11-13.** Android folder sync retains typed scan failures
+  and saved pairs while account discovery is unavailable. Writes remain disabled
+  until identity is available. The selected pair and detail tab survive
+  recreation, settings saves, and layout changes; long phone lists are
+  virtualized. Android's Settings editor changes direction, conflict, deletion,
+  connection, power, and device-label policies with explicit Apply and discard
+  confirmation. It preserves content-selection rules and rejects stale edits.
+  These are source behaviors, not a claim of availability in a published build.
+  The state may have changed; see the [current work](https://github.com/Obiente/native/issues/110)
+  and [published releases](https://github.com/Obiente/native/releases).
 - Storage distinguishes integration availability, connection state, and
   retained edits. Transfer history uses the verified receipt time for completed
   uploads.

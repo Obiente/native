@@ -1,4 +1,4 @@
-androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|3899
+androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|3891
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidProjectContentClient.kt|985
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/NextcloudDocumentsProvider.kt|900
 contractAcquisition/src/test/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirerTest.kt|1798
@@ -7,9 +7,8 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt|11
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|864
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1800
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2028
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2417
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|960
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt|1380
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2272
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt|926
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt|847
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt|1096
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MediaSearchDav.kt|1172
@@ -19,7 +18,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckScreen.kt|167
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt|1047
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|10535
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1557
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1488
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoEditing.kt|847
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowsing.kt|895
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt|860

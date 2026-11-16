@@ -83,22 +83,6 @@ internal suspend fun runFileSyncActionWhenSourceWorkIdle(
     }
 }
 
-internal fun <T> deferFileSyncSnapshotActionUntilIdle(
-    lock: Mutex,
-    scope: CoroutineScope,
-    load: () -> T,
-    onFinished: () -> Unit = {},
-    action: (T) -> Unit,
-): Job {
-    val job = scope.launch {
-        lock.withLock {
-            action(load())
-        }
-    }
-    job.invokeOnCompletion { onFinished() }
-    return job
-}
-
 internal suspend fun reconcileFileSyncCapabilities(
     lock: Mutex,
     load: () -> AndroidFileSyncPersistedState,
@@ -191,31 +175,8 @@ internal fun committedFileSyncPairResult(schedule: () -> Unit): FileSyncCenterAc
     return FileSyncCenterActionResult.Completed(if (scheduled) {
         "Folder sync pair added. Run it to review the first sync."
     } else {
-        "Folder sync pair added. Automatic checks will retry when folder sync status is loaded."
+        "Folder sync pair added. Automatic checks could not be scheduled. Reopen the app to retry."
     })
-}
-
-/**
- * Reads a complete atomic snapshot without waiting for active execution.
- *
- * Scheduling is allowed only from a snapshot loaded after acquiring [lock], so a concurrent pair
- * removal cannot be followed by stale work being re-enqueued. A busy read requests a deferred
- * post-idle reload rather than scheduling from the displayed, potentially stale snapshot.
- */
-internal fun <T> loadFileSyncPresentationSnapshot(
-    lock: Mutex,
-    load: () -> T,
-    scheduleWhenIdle: (T) -> Unit,
-    scheduleAfterIdle: () -> Unit = {},
-): T {
-    if (!lock.tryLock()) {
-        return load().also { scheduleAfterIdle() }
-    }
-    return try {
-        load().also(scheduleWhenIdle)
-    } finally {
-        lock.unlock()
-    }
 }
 
 internal suspend fun removeConfiguredFileSyncPair(

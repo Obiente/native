@@ -831,6 +831,24 @@ Queued uploads keep their rows while saved credentials need recovery.
 
 **Schedule restoration**
 
+Status reads are passive: they load the account-scoped persisted pairs even
+before server user discovery succeeds, and never enqueue or update schedules.
+Application startup requests schedule restoration once for saved pairs belonging
+to the active account; an empty store does not load credentials or enqueue work.
+Presentation decoding preserves running work only for pair IDs owned by the
+live process. Restart decoding still marks interrupted work for reconciliation.
+An unsuccessful scan stores a bounded failure kind and attempt timestamp,
+separately from per-file failures and the last successful scan timestamp. It
+does not store exception text. A fresh successful scan clears that run failure.
+
+Android settings updates hold the exact account lease and coordinator lock,
+compare the reviewed configuration with the saved configuration, and reject
+unfinished upload ownership. The atomic snapshot update preserves identities,
+baselines, and recovery records while invalidating the old plan. WorkManager
+constraints are updated after the commit; scheduling failure never rolls back
+or misreports the saved settings. Cancellation before commit performs no write,
+and cancellation after commit lets bounded schedule reconciliation finish.
+
 Restoring a folder-sync schedule validates the exact session while holding the
 account operation lease, including server discovery. Permanent protocol or
 malformed-state failures stop the one-time job. Temporary transport failures,

@@ -813,83 +813,6 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
-    fun staleSnapshotReadDuringRemovalDefersSchedulingFromAFreshSnapshot() = runBlocking {
-        val lock = Mutex(locked = true)
-        var persistedPairIds = listOf("pair-1")
-        val schedulingSnapshots = mutableListOf<List<String>>()
-        var deferredScheduling: Job? = null
-
-        val snapshotWhileRemovalOwnsLock = loadFileSyncPresentationSnapshot(
-            lock = lock,
-            load = { persistedPairIds.toList() },
-            scheduleWhenIdle = { schedulingSnapshots += it.toList() },
-            scheduleAfterIdle = {
-                deferredScheduling = deferFileSyncSnapshotActionUntilIdle(
-                    lock = lock,
-                    scope = CoroutineScope(coroutineContext),
-                    load = { persistedPairIds.toList() },
-                    action = { schedulingSnapshots += it },
-                )
-            },
-        )
-
-        assertEquals(listOf("pair-1"), snapshotWhileRemovalOwnsLock)
-        assertTrue(schedulingSnapshots.isEmpty())
-        assertTrue(deferredScheduling != null)
-
-        persistedPairIds = emptyList()
-        lock.unlock()
-        requireNotNull(deferredScheduling).join()
-
-        assertEquals(listOf(emptyList()), schedulingSnapshots)
-    }
-
-    @Test
-    fun busyPresentationReadSchedulesPersistedPairsAfterIdle() = runBlocking {
-        val lock = Mutex(locked = true)
-        val scheduledSnapshots = mutableListOf<List<String>>()
-        var deferredScheduling: Job? = null
-
-        val displayedSnapshot = loadFileSyncPresentationSnapshot(
-            lock = lock,
-            load = { listOf("pair-1") },
-            scheduleWhenIdle = { scheduledSnapshots += it },
-            scheduleAfterIdle = {
-                deferredScheduling = deferFileSyncSnapshotActionUntilIdle(
-                    lock = lock,
-                    scope = CoroutineScope(coroutineContext),
-                    load = { listOf("pair-1") },
-                    action = { scheduledSnapshots += it },
-                )
-            },
-        )
-
-        assertEquals(listOf("pair-1"), displayedSnapshot)
-        assertTrue(scheduledSnapshots.isEmpty())
-        lock.unlock()
-        requireNotNull(deferredScheduling).join()
-        assertEquals(listOf(listOf("pair-1")), scheduledSnapshots)
-    }
-
-    @Test
-    fun cancelledDeferredSnapshotSchedulingReleasesItsDedupeMarker() = runBlocking {
-        val lock = Mutex(locked = true)
-        var finished = false
-
-        val deferred = deferFileSyncSnapshotActionUntilIdle(
-            lock = lock,
-            scope = CoroutineScope(coroutineContext),
-            load = { emptyList<String>() },
-            onFinished = { finished = true },
-            action = {},
-        )
-
-        deferred.cancelAndJoin()
-        assertTrue(finished)
-        lock.unlock()
-    }
-
-    @Test
     fun logoutInvalidatesDeferredSchedulingBeforeCancelAllReturns() {
         val guard = AndroidFileSyncSessionSchedulingGuard()
         guard.restorePersistedSession(load = { "account-old" }, accountIdOf = { it })
@@ -1040,27 +963,6 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertEquals(listOf("clear-session", "publish-none", "diagnose", "cancel-all", "diagnose"), events)
         assertEquals(null, guard.capture("account-old"))
-    }
-
-    @Test
-    fun newSessionGenerationCanScheduleWhileOldDedupeEntryFinishes() {
-        val guard = AndroidFileSyncSessionSchedulingGuard()
-        val registry = DeferredFileSyncPairSchedulingRegistry()
-        guard.restorePersistedSession(load = { "account" }, accountIdOf = { it })
-        val oldToken = requireNotNull(guard.capture("account"))
-        val oldScheduling = DeferredFileSyncPairScheduling(oldToken, "user")
-        assertTrue(registry.acquire(oldScheduling))
-
-        guard.clearSession(persist = {}, cancelAll = {})
-        guard.restorePersistedSession(load = { "account" }, accountIdOf = { it })
-        val newToken = requireNotNull(guard.capture("account"))
-        val newScheduling = DeferredFileSyncPairScheduling(newToken, "user")
-
-        assertTrue(registry.acquire(newScheduling))
-        registry.release(oldScheduling)
-        assertFalse(registry.acquire(newScheduling))
-        registry.release(newScheduling)
-        assertTrue(registry.acquire(newScheduling))
     }
 
     @Test

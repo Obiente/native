@@ -23,7 +23,7 @@ internal enum class FileSyncObservedState(val label: String) {
 }
 
 internal fun FileSyncPairSummary.observedSyncState(): FileSyncObservedState = when {
-    conflictCount > 0 || failedCount > 0 -> FileSyncObservedState.Attention
+    needsSyncAttention() -> FileSyncObservedState.Attention
     runningCount > 0 -> FileSyncObservedState.Syncing
     runState == FileSyncPairRunState.Paused -> FileSyncObservedState.Paused
     networkState == FileSyncNetworkState.WaitingForNetwork -> FileSyncObservedState.Offline
@@ -34,6 +34,7 @@ internal fun FileSyncPairSummary.observedSyncState(): FileSyncObservedState = wh
 }
 
 internal fun FileSyncPairSummary.syncWorkSummary(): String = buildList {
+    if (runFailure != null) add("Check failed")
     if (runningCount > 0) add("$runningCount active")
     if (readyCount > 0) add("$readyCount queued")
     if (conflictCount > 0) add("$conflictCount ${if (conflictCount == 1) "conflict" else "conflicts"}")
@@ -43,7 +44,7 @@ internal fun FileSyncPairSummary.syncWorkSummary(): String = buildList {
 
 internal fun fileSyncWorkspaceSummary(pairs: List<FileSyncPairSummary>): String {
     if (pairs.isEmpty()) return "Keep chosen folders in sync with Nextcloud"
-    val attention = pairs.count { it.conflictCount > 0 || it.failedCount > 0 }
+    val attention = pairs.count(FileSyncPairSummary::needsSyncAttention)
     val active = pairs.sumOf { it.runningCount }
     val queued = pairs.sumOf { it.readyCount }
     return buildList {

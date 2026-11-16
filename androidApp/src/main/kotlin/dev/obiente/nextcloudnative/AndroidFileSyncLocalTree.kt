@@ -41,11 +41,9 @@ internal class AndroidSafFileSyncLocalTree(
 
     init {
         require(rootId.startsWith("content://")) { "The local sync root is not a document-tree grant." }
-        require(
-            resolver.persistedUriPermissions.any {
+        if (resolver.persistedUriPermissions.none {
                 it.uri == treeUri && it.isReadPermission && it.isWritePermission
-            },
-        ) { "Access to the selected local folder has expired. Select it again." }
+            }) throw AndroidFileSyncFolderAccessException()
     }
 
     override fun scan(

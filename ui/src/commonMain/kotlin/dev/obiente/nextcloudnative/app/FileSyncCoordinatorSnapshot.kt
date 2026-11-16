@@ -23,7 +23,19 @@ fun encodeFileSyncCoordinatorSnapshot(state: FileSyncCoordinatorState): ByteArra
     }
 }
 
-fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorState {
+fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorState =
+    recoverInterruptedFileSyncWork(decodeLiveFileSyncCoordinatorSnapshot(bytes))
+
+/** The platform supplies only pair IDs with a live executor in this process. This is a passive read. */
+fun decodeFileSyncCoordinatorSnapshotForPresentation(bytes: ByteArray, activePairIds: Set<String>): FileSyncCoordinatorState {
+    val live = decodeLiveFileSyncCoordinatorSnapshot(bytes)
+    val recovered = recoverInterruptedFileSyncWork(live).pairs.associateBy { it.id }
+    return FileSyncCoordinatorState(live.pairs.map { pair ->
+        if (pair.id in activePairIds) pair else recovered.getValue(pair.id)
+    })
+}
+
+internal fun decodeLiveFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorState {
     require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_SNAPSHOT_BYTES) {
         "The sync snapshot has an invalid size."
     }
@@ -34,9 +46,7 @@ fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorStat
         "The sync snapshot version is unsupported."
     }
     require(snapshot.pairs.size <= MAX_FILE_SYNC_PAIRS) { "The sync snapshot contains too many pairs." }
-    return recoverInterruptedFileSyncWork(
-        FileSyncCoordinatorState(snapshot.pairs.map(FileSyncPairSnapshotV1::toDomain)),
-    )
+    return FileSyncCoordinatorState(snapshot.pairs.map(FileSyncPairSnapshotV1::toDomain))
 }
 
 internal fun encodeFileSyncPairRecord(pair: FileSyncPair): ByteArray {
@@ -154,6 +164,7 @@ private data class FileSyncPairSnapshotV1(
     val pendingUploadCleanups: List<FileSyncPendingUploadCleanupSnapshotV1> = emptyList(),
     val nextWorkId: Long,
     val lastScanEpochMillis: Long?,
+    val runFailure: FileSyncRunFailure? = null,
 )
 
 @Serializable
@@ -293,6 +304,7 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
         },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
+    runFailure = runFailure,
 )
 
 private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
@@ -328,6 +340,7 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
     },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
+    runFailure = runFailure,
 )
 
 private fun FileSyncContentVerificationProgress.toSnapshot() = FileSyncContentVerificationProgressSnapshotV1(

@@ -38,6 +38,7 @@ class NextcloudNativeApplication : Application() {
         val capabilityStore = AndroidFileSyncStore(this)
         startAndroidFileSyncCapabilityRecovery(this, startupRecoveryScope,
             capabilityStore::loadAndReconcileUploadCleanups, AndroidFileSyncCapabilityLifecycle(this))
+        startAndroidFileSyncScheduleRecovery(this, startupRecoveryScope)
         accountCleanupListener = installAndroidAccountRemovalCleanupRecovery(this)
         startupRecoveryScope.launch {
             val recordRecoveryFailure = {

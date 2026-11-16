@@ -16,10 +16,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -44,6 +47,7 @@ import androidx.compose.ui.unit.dp
  *
  * Give [bodyHeightFraction] when the body needs a bounded height, such as a tabbed inspector
  * with its own scrolling region; otherwise the sheet wraps its content.
+ * [canDismiss] keeps a guarded editor visible while [onDismiss] asks for confirmation.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,12 +56,20 @@ fun NextcloudDetailSheet(
     onDismiss: () -> Unit,
     closeLabel: String = "Close details",
     bodyHeightFraction: Float? = null,
+    canDismiss: () -> Boolean = { true },
     headerActions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val currentCanDismiss by rememberUpdatedState(canDismiss)
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { target ->
+            if (target == SheetValue.Hidden && !currentCanDismiss()) {
+                currentOnDismiss()
+                false
+            } else true
+        }),
     ) {
         // Focus moves into the sheet so keyboard and screen reader users land on the details.
         val focus = remember { FocusRequester() }

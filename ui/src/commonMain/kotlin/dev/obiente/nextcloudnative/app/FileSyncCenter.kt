@@ -180,6 +180,8 @@ data class FileSyncPairSummary(
     val skippedReasons: List<String> = emptyList(),
     val runState: FileSyncPairRunState = FileSyncPairRunState.Active,
     val networkState: FileSyncNetworkState = FileSyncNetworkState.Unknown,
+    val runFailure: FileSyncRunFailure? = null,
+    val allowedDirections: Set<FileSyncDirection> = FileSyncDirection.entries.toSet(),
 ) {
     init {
         require(id.isSafeFileSyncCenterText(256))
@@ -292,6 +294,7 @@ fun FileSyncPair.toCenterSummary(
     }.distinct().take(20),
     runState: FileSyncPairRunState,
     networkState: FileSyncNetworkState,
+    allowedDirections: Set<FileSyncDirection> = FileSyncDirection.entries.toSet(),
 ): FileSyncPairSummary =
     FileSyncPairSummary(
         id = id,
@@ -339,6 +342,8 @@ fun FileSyncPair.toCenterSummary(
         skippedReasons = skippedReasons,
         runState = runState,
         networkState = networkState,
+        runFailure = runFailure,
+        allowedDirections = allowedDirections,
     )
 
 const val MAX_PRESENTED_FILE_SYNC_CONFLICTS = 5

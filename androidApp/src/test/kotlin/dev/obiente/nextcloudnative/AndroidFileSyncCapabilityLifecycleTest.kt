@@ -845,7 +845,7 @@ class AndroidFileSyncCapabilityLifecycleTest {
 
         assertEquals(2, attempts)
         assertEquals(
-            "Folder sync pair added. Automatic checks will retry when folder sync status is loaded.",
+            "Folder sync pair added. Automatic checks could not be scheduled. Reopen the app to retry.",
             (failedScheduleResult as FileSyncCenterActionResult.Completed).message,
         )
         assertEquals(

@@ -15,7 +15,6 @@ import androidx.work.await
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncNetworkPolicy
 import dev.obiente.nextcloudnative.app.FileSyncPowerPolicy
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -128,21 +127,6 @@ internal class AndroidFileSyncSessionSchedulingGuard {
     }
 }
 
-internal data class DeferredFileSyncPairScheduling(
-    val token: AndroidFileSyncSessionSchedulingToken,
-    val userId: String,
-)
-
-internal class DeferredFileSyncPairSchedulingRegistry {
-    private val scheduled = ConcurrentHashMap.newKeySet<DeferredFileSyncPairScheduling>()
-
-    fun acquire(scheduling: DeferredFileSyncPairScheduling): Boolean = scheduled.add(scheduling)
-
-    fun release(scheduling: DeferredFileSyncPairScheduling) {
-        scheduled.remove(scheduling)
-    }
-}
-
 internal val ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD = AndroidFileSyncSessionSchedulingGuard()
 
 /** Durable WorkManager schedule for one sync pair. WorkManager restores it after reboot. */
@@ -154,7 +138,7 @@ internal class AndroidFileSyncScheduler(context: Context) {
         accountId: String,
         userId: String,
         configuration: FileSyncConfiguration,
-    ) {
+    ): androidx.work.Operation {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(
                 when (configuration.networkPolicy) {
@@ -181,7 +165,7 @@ internal class AndroidFileSyncScheduler(context: Context) {
             .addTag(TAG)
             .addTag(pairTag(pairId))
             .build()
-        workManager.enqueueUniquePeriodicWork(
+        return workManager.enqueueUniquePeriodicWork(
             workName(pairId),
             ExistingPeriodicWorkPolicy.UPDATE,
             request,
